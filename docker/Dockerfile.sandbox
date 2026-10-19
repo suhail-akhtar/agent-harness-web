@@ -1,0 +1,15 @@
+# The per-session sandbox. Commands the agent runs execute here, as the
+# server's uid, with no capabilities and (by default) no network.
+FROM node:22-bookworm-slim
+ARG EXTRA_CA=""
+RUN set -eux; \
+    if [ -n "$EXTRA_CA" ]; then printf '%s\n' "$EXTRA_CA" > /usr/local/share/ca-certificates/extra.crt; fi; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates git ripgrep python3 python3-pip python3-venv curl jq procps less build-essential; \
+    update-ca-certificates; \
+    rm -rf /var/lib/apt/lists/*; \
+    git config --system init.defaultBranch main; \
+    git config --system --add safe.directory '*'
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
+WORKDIR /workspace
+CMD ["sleep", "infinity"]

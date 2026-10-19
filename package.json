@@ -1,0 +1,29 @@
+{
+  "name": "harness-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A browser-based agent harness: one model-driven loop, cache-first context, sandboxed tools.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "NODE_USE_ENV_PROXY=1 node --disable-warning=ExperimentalWarning --disable-warning=UNDICI-EHPA src/server/main.ts",
+    "dev": "npm run build && npm start",
+    "cli": "NODE_USE_ENV_PROXY=1 node --disable-warning=ExperimentalWarning --disable-warning=UNDICI-EHPA src/cli.ts",
+    "bench": "NODE_USE_ENV_PROXY=1 node --disable-warning=ExperimentalWarning --disable-warning=UNDICI-EHPA bench/run.ts",
+    "test": "node --test --disable-warning=ExperimentalWarning 'test/**/*.test.ts'",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p ui/tsconfig.json --noEmit",
+    "sandbox:image": "docker build -t harness-sandbox:latest -f docker/Dockerfile.sandbox docker"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.135.0",
+    "preact": "^11.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
+  }
+}
