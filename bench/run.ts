@@ -20,13 +20,14 @@ const TASKS: Task[] = [
       'stats.js': 'function mean(xs) {\n  let s = 0;\n  for (let i = 0; i <= xs.length; i++) s += xs[i];\n  return s / xs.length;\n}\nfunction median(xs) {\n  const a = xs.sort();\n  const m = Math.floor(a.length / 2);\n  return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;\n}\nmodule.exports = { mean, median };\n',
       'test.js': "const assert = require('assert');\nconst { mean, median } = require('./stats');\nassert.strictEqual(mean([1, 2, 3, 4]), 2.5);\nassert.strictEqual(median([10, 2, 33]), 10);\nassert.strictEqual(median([4, 1, 3, 2]), 2.5);\nconsole.log('ok');\n",
     },
-    check: "node test.js && node -e \"const {median}=require('./stats');const a=[3,1,2];median(a);if(a.join()!=='3,1,2')process.exit(1);if(median([])===undefined){}\"",
+    // Hidden cases of the same kind as the visible tests (nothing the prompt did not ask for).
+    check: "node test.js && node -e \"const {mean,median}=require('./stats');if(median([100,9,20,3])!==14.5||mean([10,20])!==15||median([7])!==7)process.exit(1)\"",
   },
   {
     id: 'slugify',
     prompt: 'Implement slugify(text, options) in slug.js (CommonJS export). Lowercase; transliterate accented Latin letters to ASCII (é→e, ß→ss, ø→o); replace any run of non-alphanumeric characters with a single separator (options.separator, default "-"); trim separators from both ends; if options.maxLength is set, cut to at most that length without leaving a trailing separator. Add your own tests and make sure they pass.',
     files: { 'package.json': '{ "name": "slug", "version": "1.0.0" }\n' },
-    check: "node -e \"const s=require('./slug.js');const slugify=s.slugify||s;const eq=(a,b)=>{if(a!==b){console.error(JSON.stringify(a),'!==',JSON.stringify(b));process.exit(1)}};eq(slugify('Hello, World!'),'hello-world');eq(slugify('  Crème Brûlée  '),'creme-brulee');eq(slugify('Straße & Søren',{separator:'_'}),'strasse_soren');eq(slugify('a---b___c'),'a-b-c');eq(slugify('The quick brown fox',{maxLength:12}),'the-quick');eq(slugify('***'),'');\"",
+    check: "node -e \"const s=require('./slug.js');const slugify=s.slugify||s;const eq=(a,b)=>{if(a!==b){console.error(JSON.stringify(a),'!==',JSON.stringify(b));process.exit(1)}};eq(slugify('Hello, World!'),'hello-world');eq(slugify('  Crème Brûlée  '),'creme-brulee');eq(slugify('Straße & Søren',{separator:'_'}),'strasse_soren');eq(slugify('a---b___c'),'a-b-c');eq(slugify('***'),'');const t=slugify('The quick brown fox',{maxLength:12});if(t.length>12||t.endsWith('-')||!'the-quick-brown-fox'.startsWith(t)||t.length<9){console.error('maxLength gave',JSON.stringify(t));process.exit(1)}\"",
   },
   {
     id: 'rest-api',

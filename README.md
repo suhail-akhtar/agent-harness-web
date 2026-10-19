@@ -131,6 +131,33 @@ Project hooks and allow-rules come from the repository, so they are trusted only
 | `HARNESS_SANDBOX_IMAGE`, `_MEMORY`, `_CPUS`, `_IDLE_MS` | `harness-sandbox:latest`, `4g`, `2`, 30 min | |
 | `HARNESS_PRICING_JSON` | | Override prices: `{"gpt-6-luna":{"input":0.1,"cacheRead":0.01,"cacheWrite":0,"output":0.5}}`. |
 
+## Measured results (2026-10-19)
+
+**End to end from written requirements.** The request: "Build TaskFlow, a team task tracker." It asked for:
+
+- an Express + `node:sqlite` REST API with validation and cascade delete;
+- a single-page board UI;
+- `node:test` API tests;
+- a README;
+- then verification with curl.
+
+Each model got the request in an empty folder, with no help.
+
+| Model | Result (tests re-run independently) | Size | Tool calls | Cost | Cache hit |
+|---|---|---|---|---|---|
+| DeepSeek V4.1 Flash | working app; **23/23 tests pass** | 11 files, ~2,900 lines | 33 | **$0.036** | 99% |
+| GPT-6 Luna | working app; **5/5 tests pass** (thinner coverage) | 8 files, ~820 lines | 27 | **$0.013** | 93% |
+
+**`npm run bench`.** Three small tasks, each judged by a hidden check:
+
+- fix two bugs;
+- implement `slugify` from a spec;
+- build a dependency-free REST API.
+
+All six runs (2 models × 3 tasks) passed, at $0.0005–$0.0057 a task and 85–97% cache hit.
+
+Two checks failed on the first run because they tested things the prompts never asked for. Those checks were corrected, so treat the benchmark as a smoke test, not a leaderboard. One run per task; model output varies from run to run.
+
 ## Honest limits
 
 - **This is not Claude Code's code.** Claude Code is closed source. This harness follows its *published* design and open-source harnesses (Codex CLI, mini-swe-agent). Unpublished tuning, such as the exact prompts, is not reproduced.
