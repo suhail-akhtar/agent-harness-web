@@ -8,7 +8,7 @@ import type { ToolDisplay } from '../core/types.ts';
 //   companion - a process on the user's own machine; whole tool calls are
 //               dispatched to it and it runs the same tool code locally.
 
-export interface ExecResult { stdout: string; stderr: string; code: number | null; timedOut: boolean }
+export interface ExecResult { stdout: string; stderr: string; code: number | null; timedOut: boolean; orphansKilled?: boolean }
 export interface ExecOptions { timeoutMs: number; signal?: AbortSignal; stdin?: string; cwd?: string; env?: NodeJS.ProcessEnv }
 
 /**
@@ -62,8 +62,11 @@ export function run(cmd: string, args: string[], opts: ExecOptions): Promise<Exe
     const so = { n: 0 }; const se = { n: 0 };
     let timedOut = false;
     let done = false;
+    let orphans = false;
+    // Kill the whole process GROUP, even after the shell itself has exited:
+    // `server &` leaves a child in the group that still holds our pipes.
     const kill = () => {
-      if (child.pid === undefined || child.exitCode !== null) return;
+      if (child.pid === undefined) return;
       try {
         if (win) spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { windowsHide: true });
         else process.kill(-child.pid, 'SIGKILL');
@@ -81,10 +84,21 @@ export function run(cmd: string, args: string[], opts: ExecOptions): Promise<Exe
       done = true;
       clearTimeout(timer);
       opts.signal?.removeEventListener('abort', onAbort);
-      resolve({ stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8'), code, timedOut });
+      resolve({ stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8'), code, timedOut, ...(orphans ? { orphansKilled: true } : {}) });
     };
     child.on('error', (e) => { err.push(Buffer.from(String(e.message))); finish(127); });
     child.on('close', (code) => finish(code));
+    // The command is over when its process exits. If 'close' does not follow
+    // shortly, something it started in the background still holds the pipes:
+    // stop it and return, rather than wait for it forever.
+    child.on('exit', (code) => {
+      setTimeout(() => {
+        if (done) return;
+        orphans = true;
+        kill();
+        setTimeout(() => { child.stdout.destroy(); child.stderr.destroy(); finish(code); }, 500);
+      }, 1500);
+    });
   });
 }
 

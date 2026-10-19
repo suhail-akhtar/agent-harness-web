@@ -34,6 +34,7 @@ export const bashTool: Tool = {
     if (r.stdout.trim()) parts.push(clip(r.stdout.trimEnd(), MAX_OUTPUT, 'filter the output to see this part'));
     if (r.stderr.trim()) parts.push(`stderr:\n${clip(r.stderr.trimEnd(), Math.floor(MAX_OUTPUT / 2))}`);
     if (!r.stdout.trim() && !r.stderr.trim()) parts.push('(no output)');
+    if (r.orphansKilled) parts.push('Note: processes this command left running in the background (`&`) were stopped when it finished. Start servers with run_in_background instead.');
     if (ctx.host.networkPolicy === 'none' && /could not resolve|network is unreachable|temporary failure in name resolution|ENOTFOUND|EAI_AGAIN/i.test(r.stderr + r.stdout)) {
       parts.push('Note: this sandbox has no network access. The user can enable it in the session settings.');
     }
