@@ -73,6 +73,10 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   await sessions.load();
   return {
     registry, sessions, companions, mcp, dataDir: opts.dataDir,
-    async close() { await sessions.close(); await mcp.closeAll(); },
+    async close() {
+      await sessions.close();
+      await mcp.closeAll();
+      for (const c of registry.closers) await Promise.resolve(c()).catch(() => {});
+    },
   };
 }

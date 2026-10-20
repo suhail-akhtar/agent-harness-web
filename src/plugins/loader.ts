@@ -92,6 +92,7 @@ export async function loadPlugin(reg: Registry, dir: string, log: (m: string) =>
       log: (msg) => log(`[${m.name}] ${msg}`),
     };
     await def.setup(api);
+    if (typeof def.close === 'function') reg.closers.push(() => def.close!());
   }
   reg.plugins.push({ name: m.name, version: m.version ?? '0.0.0', description: m.description ?? '', dir, trusted: true, contributes: [...new Set(contributes)] });
 }

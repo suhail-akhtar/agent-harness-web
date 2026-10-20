@@ -31,6 +31,8 @@ export class Registry {
   readonly hooks: InProcessHook[] = [];
   readonly shellHooks: Partial<Record<HookEvent, HookSpec[]>> = {};
   readonly plugins: LoadedPlugin[] = [];
+  /** Plugin teardown, run by harness.close(). */
+  readonly closers: (() => void | Promise<void>)[] = [];
   private instances = new Map<string, Provider>();
 
   model(id: string): ModelSpec {

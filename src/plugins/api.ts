@@ -75,6 +75,8 @@ export interface PluginDefinition {
   name: string;
   version?: string;
   setup(api: PluginAPI): void | Promise<void>;
+  /** Called when the harness closes: stop processes, close connections. */
+  close?(): void | Promise<void>;
 }
 
 export function definePlugin(p: PluginDefinition): PluginDefinition {
