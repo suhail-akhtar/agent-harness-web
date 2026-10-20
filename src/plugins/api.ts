@@ -58,7 +58,10 @@ export interface ProviderDef {
 export interface PluginAPI {
   readonly pluginName: string;
   readonly pluginDir: string;
-  registerTool(tool: Tool): void;
+  /** A Tool, or a plain definition ({ name, description, parameters, kind?, run }): plugins need no imports. */
+  registerTool(tool: Tool | ToolDefinition): void;
+  /** Resolves a path inside the session's workspace (symlink-safe); throws if it leaves it. */
+  workspacePath(host: ToolHost, p: string): Promise<string>;
   registerModel(spec: ModelSpec): void;
   registerProvider(id: string, def: ProviderDef): void;
   registerAgent(def: AgentDef): void;
@@ -84,7 +87,7 @@ export function definePlugin(p: PluginDefinition): PluginDefinition {
 }
 
 /** Sugar for writing a tool: a JSON-schema'd function with a permission class. */
-export function defineTool(t: {
+export interface ToolDefinition {
   name: string;
   description: string;
   parameters: JsonSchema;
@@ -92,7 +95,9 @@ export function defineTool(t: {
   parallelSafe?: boolean;
   summarize?: (input: Record<string, unknown>) => string;
   run(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutcome | string>;
-}): Tool {
+}
+
+export function defineTool(t: ToolDefinition): Tool {
   return {
     spec: { name: t.name, description: t.description, input_schema: t.parameters },
     kind: t.kind ?? 'exec',

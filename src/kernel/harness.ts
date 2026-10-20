@@ -4,11 +4,13 @@ import { BUILTIN_MODELS } from '../core/models.ts';
 import { SessionManager } from '../core/manager.ts';
 import { McpManager } from '../mcp/manager.ts';
 import type { McpServerConfig } from '../plugins/api.ts';
-import { findPluginDirs, loadPlugin } from '../plugins/loader.ts';
+import { findPluginDirs, loadPlugin, readManifest } from '../plugins/loader.ts';
+import { loadTrustedKeys, SIG_FILE, verifyPlugin } from '../plugins/signing.ts';
+import { OtelExporter, parseHeaders } from './otel.ts';
 import { BUILTIN_PROVIDERS } from '../providers/index.ts';
 import { CompanionHub } from '../runtime/companion.ts';
 import { BUILTIN_TOOLS } from '../tools/index.ts';
-import { Registry } from './registry.ts';
+import { Registry, type LoadedPlugin } from './registry.ts';
 
 // The harness as a library: one call assembles the registry (built-ins, then
 // plugins), the MCP manager, the companion hub and the session manager.
@@ -26,8 +28,24 @@ export interface HarnessOptions {
   mcp?: string | Record<string, McpServerConfig>;
   /** Skip the built-in models/providers/tools (for a fully custom harness). */
   bare?: boolean;
+  /** Plugin folders shipped with the application: loaded without a signature check. */
+  shippedPlugins?: string[];
+  /**
+   * Trusted public keys (a .pem file or a folder of them). When set, every
+   * plugin that is not shipped must be signed by one of them, or it is refused.
+   * Default: HARNESS_PLUGIN_KEYS.
+   */
+  pluginKeys?: string;
+  /** A folder of signed plugins people can install from. Default: HARNESS_PLUGIN_CATALOGUE. */
+  catalogue?: string;
+  /** Where catalogue installs go. Default: <dataDir>/plugins (loaded on the next start too). */
+  installDir?: string;
+  /** OTLP/HTTP endpoint for trace spans. Default: HARNESS_OTEL_ENDPOINT. */
+  otelEndpoint?: string;
   log?: (message: string) => void;
 }
+
+export interface CatalogueEntry { name: string; version: string; description: string; signature: string; verified: boolean; installed: boolean }
 
 export interface Harness {
   registry: Registry;
@@ -35,6 +53,10 @@ export interface Harness {
   companions: CompanionHub;
   mcp: McpManager;
   dataDir: string;
+  /** Signed plugins available to install (empty without a catalogue). */
+  catalogue(): Promise<CatalogueEntry[]>;
+  /** Verifies, copies and loads a catalogue plugin; new sessions get it. */
+  install(name: string): Promise<LoadedPlugin>;
   close(): Promise<void>;
 }
 
@@ -49,16 +71,43 @@ export function builtinRegistry(): Registry {
 export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   const log = opts.log ?? (() => {});
   const registry = opts.bare ? new Registry() : builtinRegistry();
-  for (const root of opts.plugins ?? []) {
+  const keysPath = opts.pluginKeys ?? process.env.HARNESS_PLUGIN_KEYS;
+  const keys = keysPath ? await loadTrustedKeys(keysPath) : null;
+  if (keys) log(`plugin signatures required (${keys.length} trusted key(s))`);
+  const shipped = (opts.shippedPlugins ?? []).map((d) => path.resolve(d));
+  const isShipped = (dir: string) => shipped.some((s) => dir === s || dir.startsWith(s + path.sep));
+
+  /** Decides whether a plugin folder may load; returns how it was admitted. */
+  async function admit(dir: string): Promise<string> {
+    if (isShipped(dir)) return 'shipped with the harness';
+    if (keys) {
+      const v = await verifyPlugin(dir, keys);
+      if (!v.ok) throw new Error(`refused: ${v.reason}`);
+      return `signed by ${v.keyName} (${v.keyId})`;
+    }
+    return (await fs.stat(path.join(dir, SIG_FILE)).catch(() => null)) ? 'signed, not checked (no trust list)' : 'unsigned';
+  }
+  async function load(dir: string): Promise<LoadedPlugin> {
+    const signature = await admit(dir);
+    await loadPlugin(registry, dir, log);
+    const p = registry.plugins.at(-1)!;
+    p.signature = signature;
+    return p;
+  }
+
+  const installDir = path.resolve(opts.installDir ?? path.join(opts.dataDir, 'plugins'));
+  for (const root of [...(opts.plugins ?? []), installDir]) {
     for (const dir of await findPluginDirs(path.resolve(root))) {
       try {
-        await loadPlugin(registry, dir, log);
-        log(`plugin loaded: ${dir}`);
+        const p = await load(dir);
+        log(`plugin loaded: ${dir} (${p.signature})`);
       } catch (err) {
         log(`plugin FAILED (${dir}): ${(err as Error).message}`);
       }
     }
   }
+  const cataloguePath = opts.catalogue ?? process.env.HARNESS_PLUGIN_CATALOGUE;
+  const catalogueDirs = async () => (cataloguePath ? findPluginDirs(path.resolve(cataloguePath)) : []);
   if (opts.mcp) {
     const servers = typeof opts.mcp === 'string'
       ? (JSON.parse(await fs.readFile(opts.mcp, 'utf8')) as { mcpServers?: Record<string, McpServerConfig> }).mcpServers ?? {}
@@ -69,12 +118,49 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   const companions = new CompanionHub(opts.dataDir);
   await companions.load();
   const mcp = new McpManager();
-  const sessions = new SessionManager({ dataDir: opts.dataDir, companions, registry, mcp });
+  const otelEndpoint = opts.otelEndpoint ?? process.env.HARNESS_OTEL_ENDPOINT;
+  const otel = otelEndpoint ? new OtelExporter(otelEndpoint, { headers: parseHeaders(process.env.HARNESS_OTEL_HEADERS), log }) : undefined;
+  const sessions = new SessionManager({ dataDir: opts.dataDir, companions, registry, mcp, onSpan: otel ? (sid, span) => otel.record(sid, span) : undefined });
   await sessions.load();
   return {
     registry, sessions, companions, mcp, dataDir: opts.dataDir,
+    async catalogue() {
+      const out: CatalogueEntry[] = [];
+      for (const dir of await catalogueDirs()) {
+        const m = await readManifest(dir).catch(() => undefined);
+        if (!m) continue;
+        const v = keys ? await verifyPlugin(dir, keys) : null;
+        out.push({
+          name: m.name, version: m.version ?? '0.0.0', description: m.description ?? '',
+          signature: v ? (v.ok ? `signed by ${v.keyName}` : v.reason) : 'not checked (no trust list)',
+          verified: !!v?.ok, installed: registry.plugins.some((p) => p.name === m.name),
+        });
+      }
+      return out;
+    },
+    async install(name) {
+      if (!keys) throw new Error('Installing from the catalogue needs a trust list (HARNESS_PLUGIN_KEYS): plugin code runs in the server.');
+      let src: string | undefined;
+      for (const d of await catalogueDirs()) if ((await readManifest(d).catch(() => undefined))?.name === name) src = d;
+      if (!src) throw new Error(`No plugin "${name}" in the catalogue.`);
+      if (registry.plugins.some((p) => p.name === name)) throw new Error(`Plugin "${name}" is already loaded.`);
+      const v = await verifyPlugin(src, keys);
+      if (!v.ok) throw new Error(`Refused: ${v.reason}`);
+      if (!/^[a-z0-9][a-z0-9._-]*$/i.test(name)) throw new Error(`Bad plugin name "${name}".`);
+      const dest = path.join(installDir, name);
+      if (await fs.stat(dest).catch(() => null)) throw new Error(`${dest} already exists.`);
+      await fs.mkdir(installDir, { recursive: true });
+      await fs.cp(src, dest, { recursive: true });
+      try {
+        return await load(dest); // verified again where it will run from
+      } catch (e) {
+        await fs.rm(dest, { recursive: true, force: true });
+        throw e;
+      }
+    },
     async close() {
       await sessions.close();
+      await otel?.close();
       await mcp.closeAll();
       for (const c of registry.closers) await Promise.resolve(c()).catch(() => {});
     },

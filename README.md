@@ -92,18 +92,21 @@ A plugin is a folder with `harness-plugin.json`. See `examples/plugins/acme` for
 ```
 
 ```js
-// index.mjs — runs in the server (trusted plugins only)
-import { defineTool } from 'harness-web/src/plugins/api.ts';
+// index.mjs — runs in the server (trusted plugins only). No imports from the harness:
+// the plugin works wherever it is installed.
 export default {
   name: 'acme',
   setup(api) {
-    api.registerTool(defineTool({ name: 'acme_status', description: '...', parameters: { type: 'object', properties: {} }, kind: 'read', run: async () => 'green' }));
+    api.registerTool({ name: 'acme_status', description: '...', parameters: { type: 'object', properties: {} }, kind: 'read', run: async () => 'green' });
     api.registerGate({ name: 'acme-no-todo', description: '...', run: async ({ host }) => ({ pass: true, summary: 'ok' }) });
     api.on('PreToolUse', ({ input }) => /--force/.test(String(input?.command)) ? { block: true, feedback: 'no force-push' } : undefined, 'bash');
-    // also: registerModel, registerProvider, registerAgent, registerSkills, registerMcpServer, log
+    // also: registerModel, registerProvider, registerAgent, registerSkills, registerMcpServer,
+    // registerWorkflow, workspacePath(host, p), log; and close() on the plugin for teardown
   },
 };
 ```
+
+**Signed plugins and the catalogue.** A plugin's code runs in the server, so an operator can require signatures. `npm run plugin -- keygen acme` makes a key pair; `npm run plugin -- sign <dir> --key acme.key.pem` writes `harness-plugin.sig` (Ed25519 over the SHA-256 of every file); `verify` checks one. With `HARNESS_PLUGIN_KEYS` (a public key or a folder of them) set, every plugin not shipped with the harness must be signed by a trusted key: a changed, added or removed file, an unknown key or a symbolic link refuses it. `HARNESS_PLUGIN_CATALOGUE` points at a folder of signed plugins: `GET /api/plugins/catalogue` lists them with their verification, `POST /api/plugins/install {name}` verifies, copies into `<data>/plugins`, verifies again where it will run, and loads it for new sessions (installs need a trust list).
 
 **Trust.** Plugins from `HARNESS_PLUGINS` are the operator's and are trusted. Their code runs in the server, and `${VAR}` in their MCP configuration expands from the server's environment, so secrets never enter a repository or the model. A workspace can contribute only declaratively:
 
@@ -233,6 +236,14 @@ In plan mode the agent researches read-only, then presents its plan for approval
 - **Images.** `read` (and `render`, `browser`) show pictures to the model, for checking screenshots, renders and charts. Each provider gets its own format. If a provider rejects an image, it is replaced by a note in the live context and the request goes on.
 - **Networks fail.** A stream that drops mid-way is retried like a failed request, on every provider; a step that still fails is saved and resumes where it stopped (`--resume`, or **Resume** in the UI).
 
+## Evaluations
+
+`npm run eval -- [--packs sdlc,documents,games,3d] [--models a,b] [--repeat 2] [--concurrency 3]` runs each case in `evals/<pack>/<case>/eval.json` on every model and repeat, in fresh workspaces, and judges it with **hidden checks** the agent never sees: shell commands (the URL shortener's 25 HTTP acceptance checks), gates, required files, and hidden playtests in the headless browser. It writes `report.md` (pass rate, checks passed, median cost, time, cache hit, calls, every failed check) and `results.json`. The checks were calibrated against results verified by hand before they were trusted.
+
+## Observability
+
+Every model and tool call is a span in the session's `trace.jsonl` (UI: "Open trace"). With `HARNESS_OTEL_ENDPOINT` (and `HARNESS_OTEL_HEADERS="k=v,k=v"`) they are also exported as OTLP/HTTP JSON: one trace per session, `chat <model>` spans with `gen_ai.*` token attributes plus cache reads, cost and retries, and `execute_tool <name>` spans with errors. Batched off the request path; a failed export is logged and dropped.
+
 ## Measured (2026-10-20)
 
 **Phase 1 validation** (`/tmp`-style scratch run, local workspace). One task needed all of these at once:
@@ -274,7 +285,12 @@ In plan mode the agent researches read-only, then presents its plan for approval
 | `HARNESS_TRUST_PROJECT` | off | Let repository hooks and stdio MCP servers run outside the sandbox. |
 | `HARNESS_AUTO_RESUME` | off | Continue interrupted sessions after a restart. |
 | `HARNESS_GATES_ON_STOP` | off | Refuse to end a turn while a blocking quality gate fails. |
-| `HARNESS_BUNDLED_PLUGINS` | on | `off` skips the bundled `plugins/` (quality gates, SDLC). |
+| `HARNESS_BUNDLED_PLUGINS` | on | `off` skips the bundled `plugins/` (quality gates, SDLC, visual, documents, games3d). |
+| `HARNESS_PLUGIN_KEYS` | | Trusted public keys; when set, every non-bundled plugin must be signed. |
+| `HARNESS_PLUGIN_CATALOGUE` | | A folder of signed plugins that can be installed from the UI/API. |
+| `HARNESS_OTEL_ENDPOINT` / `HARNESS_OTEL_HEADERS` | | OTLP/HTTP trace export. |
+| `HARNESS_RENDER_NETWORK` | off | `on` lets document converters reach the network (they run in an empty network namespace otherwise). |
+| `HARNESS_CHROMIUM` | auto | Chromium for the render and browser tools. |
 | `HARNESS_SHELL_WRITE_GUARD` | on | `off` allows shell file writes. |
 | `HARNESS_SANDBOX_IMAGE`, `_MEMORY`, `_CPUS`, `_IDLE_MS` | `harness-sandbox:latest`, `4g`, `2`, 30 min | |
 | `HARNESS_PRICING_JSON` | | Override prices per model. |
@@ -284,14 +300,13 @@ In plan mode the agent researches read-only, then presents its plan for approval
 - **This is not Claude Code's code.** Claude Code is closed source. This harness follows its published design and open-source harnesses; unpublished tuning (the exact prompts) is not reproduced.
 - **The harness lifts every model but cannot make them equal.** Studies put the harness's effect at 5–30 points on agent benchmarks; the model is still most of the result.
 - **Not built yet:**
-  - packs beyond software delivery: documents and presentations, 3D and games (Phase 3);
-  - evaluation suites per pack (Phase 4);
+  - the render and browser tools on companion sessions (they run on the server, on the workspace folder);
   - background compaction;
   - per-host network allowlists in the sandbox (all or nothing);
   - checkpoints and project MCP servers on companion sessions;
-  - OpenTelemetry export;
   - multi-user accounts (one access token);
-  - plugin signing and a catalogue (Phase 4).
+  - a remote catalogue (the catalogue is a folder; a signed index served over HTTPS would be next);
+  - Blender or Godot integration (3D is Three.js in the headless browser; neither binary was available to test).
 - **Not tested here:**
   - the full sandbox image (this environment's proxy blocks Debian packages, so tests used a plain Node image);
   - prices, which come from the providers' pages on 2026-10-19 and can change.

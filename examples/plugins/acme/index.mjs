@@ -1,19 +1,19 @@
 // An example trusted plugin. Load it with HARNESS_PLUGINS=examples/plugins.
-// Everything a built-in can do goes through the same calls.
-import { defineTool } from '../../../src/plugins/api.ts';
+// Everything a built-in can do goes through the same calls. No imports from
+// the harness: the plugin works wherever it is installed.
 
 export default {
   name: 'acme',
   setup(api) {
     // A tool the model can call. kind decides permissions: 'read' runs freely.
-    api.registerTool(defineTool({
+    api.registerTool({
       name: 'acme_word_count',
       description: 'Count the words in a text. Use it instead of counting yourself.',
       parameters: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
       kind: 'read',
       parallelSafe: true,
       run: async ({ text }) => `${String(text).trim().split(/\s+/).filter(Boolean).length} words`,
-    }));
+    });
 
     // A quality gate: proves something about the work (used by verification workflows).
     api.registerGate({

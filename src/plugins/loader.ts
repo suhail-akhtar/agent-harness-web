@@ -5,7 +5,8 @@ import { loadAgentDir } from '../agents/agents.ts';
 import type { Registry } from '../kernel/registry.ts';
 import type { WorkflowDef } from '../graph/types.ts';
 import { validateWorkflow } from '../graph/validate.ts';
-import type { PluginAPI, PluginDefinition, PluginManifest } from './api.ts';
+import { resolveIn } from '../tools/paths.ts';
+import { defineTool, type PluginAPI, type PluginDefinition, type PluginManifest } from './api.ts';
 
 // Plugins are folders with a harness-plugin.json. The operator lists plugin
 // directories (HARNESS_PLUGINS); those are TRUSTED: their code runs in the
@@ -75,7 +76,8 @@ export async function loadPlugin(reg: Registry, dir: string, log: (m: string) =>
     const api: PluginAPI = {
       pluginName: m.name,
       pluginDir: dir,
-      registerTool: (t) => { reg.addTool(t, m.name); contributes.push(`tool:${t.spec.name}`); },
+      registerTool: (t) => { const tool = 'spec' in t ? t : defineTool(t); reg.addTool(tool, m.name); contributes.push(`tool:${tool.spec.name}`); },
+      workspacePath: (host, p) => resolveIn(host, p),
       registerModel: (spec) => { reg.models.set(spec.id, spec); contributes.push(`model:${spec.id}`); },
       registerProvider: (id, p) => { reg.providers.set(id, p); contributes.push(`provider:${id}`); },
       registerAgent: (a) => { reg.agents.set(a.name, { ...a, source: m.name }); contributes.push(`agent:${a.name}`); },

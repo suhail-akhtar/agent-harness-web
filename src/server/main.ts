@@ -147,8 +147,16 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
       models: registry.listModels().map((m) => ({ id: m.id, label: m.label, provider: m.provider, contextWindow: m.contextWindow, compactAt: m.compactAt, effort: m.effort, efforts: m.efforts, available: m.available, vision: m.vision, notes: m.notes })),
       runtimes: { docker, dockerImage: docker ? (await imageExists(image) ? image : null) : null, local: LOCAL_ROOTS.length > 0, localRoots: LOCAL_ROOTS },
       companions: companions.list(),
-      plugins: registry.plugins.map((x) => ({ name: x.name, version: x.version, description: x.description, contributes: x.contributes })),
+      plugins: registry.plugins.map((x) => ({ name: x.name, version: x.version, description: x.description, contributes: x.contributes, signature: x.signature })),
     });
+  }
+  if (p === '/api/plugins/catalogue' && method === 'GET') return send(res, 200, await harness.catalogue());
+  if (p === '/api/plugins/install' && method === 'POST') {
+    const b = await readJson(req);
+    try {
+      const pl = await harness.install(String(b.name ?? ''));
+      return send(res, 201, { name: pl.name, version: pl.version, contributes: pl.contributes, signature: pl.signature, note: 'Loaded: new sessions can use it.' });
+    } catch (e) { throw new HttpError(409, (e as Error).message); }
   }
 
   if (p === '/api/sessions' && method === 'GET') return send(res, 200, sessions.list().map((m) => ({ ...m, status: sessions.statusOf(m.id) })));
@@ -285,6 +293,7 @@ async function main() {
   harness = await createHarness({
     dataDir: DATA_DIR,
     plugins: PLUGIN_DIRS,
+    shippedPlugins: [path.join(appRoot, 'plugins')],
     mcp: process.env.HARNESS_MCP_CONFIG || undefined,
     log: (m) => console.log(m),
   });

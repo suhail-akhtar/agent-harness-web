@@ -15,6 +15,8 @@ export interface LoadedPlugin {
   dir: string;
   trusted: boolean;
   contributes: string[];
+  /** "shipped with the harness", "signed by <key>", "unsigned", ... */
+  signature?: string;
 }
 
 export interface InProcessHook { event: HookEvent; matcher?: string; handler: HookHandler; plugin: string }

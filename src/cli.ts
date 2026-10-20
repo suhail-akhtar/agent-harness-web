@@ -44,6 +44,7 @@ async function main() {
   const h = await createHarness({
     dataDir,
     plugins: [path.join(appRoot, 'plugins'), ...(process.env.HARNESS_PLUGINS || '').split(path.delimiter).filter(Boolean)],
+    shippedPlugins: [path.join(appRoot, 'plugins')],
     mcp: process.env.HARNESS_MCP_CONFIG || undefined,
   });
   // --resume <runId> --session <id> continues a stopped workflow run from the step it was in.

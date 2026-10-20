@@ -63,7 +63,11 @@ interface PendingRequest {
   event: HarnessEvent;
 }
 
-export interface SessionDeps { dataDir: string; companions: CompanionHub; registry: Registry; mcp: McpManager }
+export interface SessionDeps {
+  dataDir: string; companions: CompanionHub; registry: Registry; mcp: McpManager;
+  /** Every trace span as it is written (OpenTelemetry export). */
+  onSpan?: (sessionId: string, span: TraceSpan & { at: number }) => void;
+}
 
 /** What one session can use, assembled once (the tool list never changes mid-session: it would break the cache). */
 interface Toolbox {
@@ -199,7 +203,9 @@ export class Session {
   }
 
   private trace(span: TraceSpan): void {
-    fs.appendFile(path.join(this.dir, 'trace.jsonl'), JSON.stringify({ at: Date.now(), ...span }) + '\n').catch(() => {});
+    const rec = { at: Date.now(), ...span };
+    fs.appendFile(path.join(this.dir, 'trace.jsonl'), JSON.stringify(rec) + '\n').catch(() => {});
+    this.deps.onSpan?.(this.meta.id, rec);
   }
 
   async readTrace(): Promise<(TraceSpan & { at: number })[]> {

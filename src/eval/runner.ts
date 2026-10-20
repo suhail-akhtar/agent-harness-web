@@ -95,13 +95,13 @@ export async function runChecks(h: Harness, c: EvalCase, ws: string, signal: Abo
 }
 
 /** One case, one model, one repeat, in its own data folder and workspace. */
-export async function runOne(c: EvalCase, model: string, repeat: number, out: string, opts: { plugins: string[]; log?: (s: string) => void; setup?: (h: Harness) => void }): Promise<EvalRun> {
+export async function runOne(c: EvalCase, model: string, repeat: number, out: string, opts: { plugins: string[]; shipped?: string[]; log?: (s: string) => void; setup?: (h: Harness) => void }): Promise<EvalRun> {
   const base = path.join(out, `${c.pack}-${c.name}-${model}-${repeat}`);
   const ws = path.join(base, 'ws');
   await fs.mkdir(ws, { recursive: true });
   if (c.fixtures) await fs.cp(path.join(c.dir, c.fixtures), ws, { recursive: true });
   const t0 = Date.now();
-  const h = await createHarness({ dataDir: path.join(base, 'data'), plugins: opts.plugins });
+  const h = await createHarness({ dataDir: path.join(base, 'data'), plugins: opts.plugins, shippedPlugins: opts.shipped });
   opts.setup?.(h);
   const run: EvalRun = { pack: c.pack, case: c.name, model, repeat, status: 'error', pass: false, checks: [], cost: 0, inputTokens: 0, cacheHit: 0, output: 0, modelCalls: 0, toolCalls: 0, seconds: 0, workspace: ws };
   const ac = new AbortController();
@@ -155,7 +155,7 @@ async function pool<T>(jobs: (() => Promise<T>)[], n: number): Promise<T[]> {
   return out;
 }
 
-export async function runEvals(opts: { cases: EvalCase[]; models: string[]; repeats: number; out: string; concurrency: number; plugins: string[]; log?: (s: string) => void; setup?: (h: Harness) => void }): Promise<EvalRun[]> {
+export async function runEvals(opts: { cases: EvalCase[]; models: string[]; repeats: number; out: string; concurrency: number; plugins: string[]; shipped?: string[]; log?: (s: string) => void; setup?: (h: Harness) => void }): Promise<EvalRun[]> {
   const jobs = opts.cases.flatMap((c) => opts.models.flatMap((m) => Array.from({ length: opts.repeats }, (_, r) => () => runOne(c, m, r + 1, opts.out, opts))));
   const runs = await pool(jobs, opts.concurrency);
   await fs.writeFile(path.join(opts.out, 'results.json'), JSON.stringify(runs, null, 1));

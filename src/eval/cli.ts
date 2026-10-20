@@ -20,6 +20,7 @@ console.log(`${cases.length} case(s) x ${models.length} model(s) x ${repeats} ->
 const runs = await runEvals({
   cases, models, repeats, out, concurrency: Number(arg('concurrency', '3')),
   plugins: [path.join(appRoot, 'plugins'), ...(process.env.HARNESS_PLUGINS || '').split(path.delimiter).filter(Boolean)],
+  shipped: [path.join(appRoot, 'plugins')],
   log: (s) => console.log(s),
 });
 console.log(`\n${runs.filter((r) => r.pass).length}/${runs.length} passed. Report: ${path.join(out, 'report.md')}`);
