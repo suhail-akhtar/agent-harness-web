@@ -1,6 +1,6 @@
 # Harness Web
 
-An agent harness that is also a framework. You give it requirements and it works in a workspace until the job is done: it plans, edits, runs, tests, fixes what fails and reports. You extend what it can do with **plugins**: tools, models, providers, sub-agents, skills, MCP services, quality gates, workflows and hooks. All of it goes through the same registry the built-ins use.
+An agent harness that is also a framework. You give it requirements and it works in a workspace until the job is done: it plans, edits, runs, tests, fixes what fails and reports. It remembers what matters across sessions, researches the web with citations it checks, builds long projects feature by feature, and can publish its work as a pull request. You extend what it can do with **plugins**: tools, models, providers, sub-agents, skills, MCP services, quality gates, workflows, search backends and hooks. All of it goes through the same registry the built-ins use.
 
 It is tuned and tested on three cost-efficient models: **Claude Haiku 5.5**, **DeepSeek V4.1 Flash** (`deepseek-flash`) and **GPT-6 Luna**. Plugins can add more.
 
@@ -88,11 +88,38 @@ await s.send('Fix the failing tests');
 | **Skills** | One line per skill sits in context. The full instructions load only when the task needs them. |
 | **Sub-agents** | Exploration and review run in their own context and return a report, not their transcript. They can run on another model (`HARNESS_SUBAGENT_MODEL`, or a `model:` in the agent definition). |
 | **Context clearing** | Old tool results are cleared in large batches. Claude does it on the server (context editing, so the transcript stays append-only); OpenAI and DeepSeek do it in the harness, only past 60% of the compaction threshold and only if at least 12K tokens are freed. The stored history keeps everything. |
-| **Compaction** | Thresholds are set per model for cost. Haiku 5.5 compacts before 100K tokens, where its price rises five times. The summary request reuses the cached context. |
+| **Compaction** | Thresholds are set per model for cost. Haiku 5.5 compacts before 100K tokens, where its price rises five times. Claude compacts **on the server** (`compact_20260112`): the summary is made inside the request, with no blocking extra call, and the history stays append-only, which Claude 5.5's preserved-thinking check requires. DeepSeek and GPT-6 Luna use the harness's own compaction: one summary request that reuses the cached context, then nothing older is replayed (the shape Anthropic recommends; OpenAI's server compaction was tried and did not shrink what the next request is billed for). |
+| **Code mode** | `run_script`: the model writes a short JavaScript program that calls tools and keeps only what it needs; intermediate results never enter the context. On a 40-file aggregation task it gave the same correct answer at about **half the cost** on all three models. |
 | **Small outputs** | `edit` sends only the changed text and echoes the changed lines (no re-read needed). Command output is trimmed to its head and tail. `read` pages large files. |
 | **Effort** | Per session, per model. Explore sub-agents run at low effort. |
 | **Images leave with their results** | A tool's images ride on its tool result: Claude gets them inside the `tool_result` (server-side clearing removes them with it), OpenAI and DeepSeek get them as following content and harness clearing drops them. A render-review loop no longer carries every old page (~1,200 tokens each). Long pages come back as A4-sized pages, never one giant image. |
 | **Workflow steps start fresh** | Each step of a workflow is a new agent with a short brief and the files on disk, not the whole history. Steps of the same kind share a cache prefix. |
+
+## Memory across sessions
+
+The agent keeps Markdown notes with the `memory` tool (the same commands as Claude's own memory tool: `view`, `create`, `str_replace`, `insert`, `delete`, `rename`), for every provider. Two scopes:
+
+- `/memories/user`: about the person, for every project (per account on a shared server);
+- `/memories/project`: about the project, keyed by its git remote, so every clone of a repository shares it (or by the folder, for a server folder without a remote).
+
+A new session starts with the list of memory files and each scope's `MEMORY.md` index, fenced as *notes, not instructions*, so no round trip is spent looking. Memory is a channel into every future session, so it is guarded:
+- paths are confined, links are refused, sizes are capped, and text that looks like a credential is refused;
+- every change is logged with the session that made it;
+- **once the agent has read untrusted content** (a web page, an MCP result, a sub-agent that did), saving to memory asks the user first, so a page cannot plant instructions for later sessions;
+- sub-agents read memory but never change it.
+
+The UI's **Memory** panel shows, edits and deletes what is remembered. `HARNESS_MEMORY=read` loads memory without letting agents change it; `off` turns it off.
+
+## Research
+
+- **`web_search`** works for every model. It uses Brave, Tavily, Exa or a SearXNG instance when configured, else DeepSeek's search endpoint ($0.75 per 1,000 searches), else the web search built into the Claude or OpenAI API, run by a small model. Its cost is added to the session. Plugins add backends with `api.registerSearchBackend`.
+- **`web_fetch`** returns the readable part of a page (no menus or footers) and PDF text, and records every page it reads as a **session source**. The harness keeps the sources outside the workspace, so an agent cannot fabricate one.
+- **The citation check** compares a report with those sources: every cited page must have been read, every quotation must appear word for word, and every figure in a cited sentence must appear in a source it cites. A computed figure goes in its own sentence marked "(derived: ...)".
+- **The research pack** (`plugins/research`) contains:
+  - agents: `research-lead`, `researcher`, `research-writer` and `fact-checker`;
+  - skills: `research-method` and `cite-sources`;
+  - tools: `check_citations` and `sources`, plus a `citations` gate;
+  - the **`deep-research`** workflow. It plans sub-questions, sends three researchers in parallel, writes a report with numbered citations, passes it through the citation check and an independent fact-check, and revises up to three times. A revision must narrow or cut any claim it cannot support.
 
 ## Plugins
 
@@ -126,7 +153,26 @@ export default {
 };
 ```
 
-**Signed plugins and the catalogue.** A plugin's code runs in the server, so an operator can require signatures. `npm run plugin -- keygen acme` makes a key pair; `npm run plugin -- sign <dir> --key acme.key.pem` writes `harness-plugin.sig` (Ed25519 over the SHA-256 of every file); `verify` checks one. With `HARNESS_PLUGIN_KEYS` (a public key or a folder of them) set, every plugin not shipped with the harness must be signed by a trusted key: a changed, added or removed file, an unknown key or a symbolic link refuses it. `HARNESS_PLUGIN_CATALOGUE` points at a folder of signed plugins: `GET /api/plugins/catalogue` lists them with their verification, `POST /api/plugins/install {name}` verifies, copies into `<data>/plugins`, verifies again where it will run, and loads it for new sessions (installs need a trust list).
+**Signed plugins and the catalogue.** A plugin's code runs in the server, so an operator can require signatures.
+- `npm run plugin -- keygen acme` makes a key pair.
+- `npm run plugin -- sign <dir> --key acme.key.pem` writes `harness-plugin.sig`: Ed25519 over the SHA-256 of every file, `node_modules` included.
+- `verify` checks one.
+
+With `HARNESS_PLUGIN_KEYS` set (a public key or a folder of them), every plugin not shipped with the harness must be signed by a trusted key. A changed, added or removed file, an unknown key or a symbolic link means it is refused.
+
+`HARNESS_PLUGIN_CATALOGUE` is where signed plugins are offered for installation, and only administrators install them:
+- **a folder**: plugins are listed with whether they verified;
+- **an https URL of an `index.json`**: made with `npm run plugin -- pack <dir>` (a reproducible `.tgz`) and `npm run plugin -- index <folder> --base <url>`.
+
+An install from a URL:
+1. downloads the archive and checks its sha256;
+2. unpacks it strictly (plain files and folders only, nothing outside the folder, size limits);
+3. verifies the signature against the trust list;
+4. loads it for new sessions.
+
+The UI's **Plugins** dialog lists what is loaded, how each plugin was admitted, and what it declared it needs.
+
+**Declared permissions are enforced on the channels the harness hands out.** A plugin's `permissions.secrets` are the only secrets `api.secret(name)` returns, and the only `${VAR}`s its MCP servers' configuration expands; an undeclared secret expands to nothing. `api.fetch` reaches only the hosts in `permissions.network`, with redirects re-checked; a private address needs an exact entry. MCP servers never inherit the server's environment. Before this, they received every provider key on the machine. Plugin code still runs in the server process, so code that ignores these channels is not contained: that is what signing and review are for.
 
 **Trust.** Plugins from `HARNESS_PLUGINS` are the operator's and are trusted. Their code runs in the server, and `${VAR}` in their MCP configuration expands from the server's environment, so secrets never enter a repository or the model. A workspace can contribute only declaratively:
 
@@ -159,7 +205,7 @@ A workflow is a graph of steps that the harness drives, not the model. Each step
 | `approval` | Shows a person a message and files; they approve, or send it back with what to change. | `approve`, `reject` |
 | `parallel` | Runs its `branches` at once. | the first negative branch outcome (`REQUEST_CHANGES`, `REJECT`, `FAIL`…), else `all` |
 | `branch` | Routes on a rendered value, e.g. `{{input.approval}}`. | the value |
-| `shell` | Runs a command. A workspace workflow with a shell node loads only where project commands are trusted. | `ok`, `fail` |
+| `shell` | Runs a command. A workspace workflow with a shell node loads only where project commands are trusted. | `ok`, `fail`, or `exit-N` for exit code N when `next` names it |
 | `code` | Runs a function. Plugins only, never from a workspace. | what it returns |
 | `end` | Finishes as `success` or `failed`. | |
 
@@ -184,6 +230,19 @@ requirements → architecture + ADRs → [approve design] → plan → implement
 
 With `approval=manual` (the default) a person approves the requirements and architecture before any code is written, and can send them back.
 
+**`long-task`**: a goal too big for one context, built feature by feature. It follows Anthropic's pattern for long-running agents.
+1. An `initializer` writes:
+   - `.harness/long-task/features.json`, a prioritised list of small features, each with end-to-end steps and `"passes": false`;
+   - an `init.sh` that sets up and smoke-tests;
+   - a progress log, and a first commit.
+2. A fresh agent runs per feature. It reads the log and the git history, builds the first feature that does not pass yet, and verifies it by following its steps as a user would. Only then does it mark the feature as passing, commit, and log what it did. The quality gates run after every feature.
+3. After the last feature, a final review.
+
+Safeguards:
+- A check refuses a feature list changed beyond its `passes` fields.
+- Three sessions in a row without progress stop and ask a person, instead of spending until the run cap.
+- Every step is saved, so a run of hours resumes where it stopped.
+
 ### Quality gates (`plugins/quality-gates`)
 
 Each gate decides for itself whether it applies to the workspace:
@@ -202,7 +261,9 @@ Plugins add gates with `api.registerGate`.
 
 ### Visual verification (`plugins/visual`)
 
-The agent looks at what it made, the way a person will. The renderers run on the server, on the session's workspace folder (sandbox and server-folder sessions).
+The agent looks at what it made, the way a person will. The renderers run on the server, on the session's workspace folder. For a companion session (the folder is on your computer) they work on a server-side copy that is refreshed with the files that changed (node_modules, .git and build output are skipped), and what they write (an exported PDF, saved renders, a browser export) is written back through the companion.
+
+Rendering needs only Chromium for PDF, HTML, SVG and Markdown: pdf.js reads each page's facts (count, size, every word with its font size) and draws the pages in headless Chromium, and `marked` converts Markdown. Checked against poppler on real decks: the same counts and identical images. Only Office files need LibreOffice. poppler and pandoc are fallbacks (`HARNESS_RENDER_PDF=poppler`).
 
 | Tool / gate | What it does |
 |---|---|
@@ -211,7 +272,7 @@ The agent looks at what it made, the way a person will. The renderers run on the
 | `add_library {name}` | `three`, `pptxgenjs`, `docx`, `jszip` copied from the server's install at pinned versions (a sandbox has no network). |
 | gates | `documents-render` (every document opens; no cut-off or tiny slide text), `web-console` (the page opens offline with no errors, missing files or network needs, and draws something), `playtest` (`playtest.json` scenarios: scripted input, then `==`, `>`, `increased`, … on `window` state). |
 
-Converters run without network (`unshare -rn`) where the kernel allows, so a document cannot make the server fetch a URL.
+LibreOffice runs without network (`unshare -rn`) where the kernel allows, so a document cannot make the server fetch a URL; pdf.js pages load nothing but the PDF itself.
 
 ### Documents (`plugins/documents`)
 
@@ -234,12 +295,21 @@ Enforced in code on every call. Order: deny rules, then ask rules, then allow ru
 
 In plan mode the agent researches read-only, then presents its plan for approval. "Always allow" in an approval adds a rule for the session. A prefix rule like `bash(npm test:*)` never covers a compound command.
 
+Two calls are asked about whatever the mode, bypass aside:
+- **Saving to memory after untrusted content**: once a web page or service result is in the context, a memory write needs a yes.
+- **Running a script without network isolation**: `run_script` asks first, like `web_fetch`, where its process cannot be cut off from the network (outside Linux).
+
+A script runs in a fresh V8 context with no `require`, `process`, `fetch` or `eval`. That context runs inside a process under Node's permission model (no files, no child processes) and, on Linux, in a namespace with no network. Every tool it calls goes through these same checks.
+
 ## Where the agent works
 
 - **Sandbox** (Docker; the default)
   - One container per session.
   - No capabilities, `no-new-privileges`, and limits on memory, CPU and processes.
-  - No network unless enabled for the session.
+  - Network per session:
+    - **none**;
+    - **an allowlist** (the default in the UI): the sandbox sits on an internal Docker network with no route out, and no host address on it either. A small proxy container beside it is the only way out and admits only the allowed hosts. The package registries and GitHub are allowed by default (`HARNESS_SANDBOX_ALLOW_HOSTS`). The list can be edited while the session runs, the agent is told what is allowed, and blocked attempts are reported. Tested against real Docker.
+    - **full**.
   - Files sit in a host folder mounted at `/workspace`. The file tools check real paths, so a symlink planted from inside the container cannot reach the host.
 - **Your computer** (companion)
   - Open "Your computers", then run the two lines it shows.
@@ -247,6 +317,23 @@ In plan mode the agent researches read-only, then presents its plan for approval
 - **Server folder**: opt-in with `HARNESS_LOCAL_ROOTS`.
   - Commands are unsandboxed, with credentials stripped from their environment.
   - They can still reach services on the server's network: keep this mode for trusted, single-user machines.
+
+## Publishing: branches and pull requests
+
+`publish_branch {branch, title, body?, commit_message?, draft?}` ends a coding task with a pull request.
+1. It commits in the session's own runtime (for a sandboxed session, in the sandbox).
+2. It copies the commits **out of the workspace** into a repository the harness owns, and pushes from there. So nothing in the workspace's git config runs on the server or redirects the push: no hooks, fsmonitor, url rewrites or filters.
+3. It opens the pull request through the GitHub API, or finds the one already open.
+
+The token (`HARNESS_GITHUB_TOKEN`) goes in a header for that one command; it is never written to disk, the workspace or the model's context. It pushes only to the repository the session was cloned from, or one in `HARNESS_PUBLISH_REPOS`, and never force-pushes or pushes to the base branch.
+
+## Shared servers: accounts and limits
+
+Without accounts the server is single-user: whoever holds `HARNESS_TOKEN`. With accounts (`npm run users -- add alice [--admin]`; tokens are shown once and stored hashed):
+- **Members** see only their own sessions, companions and memory. They cannot run commands on the server itself (server folders are for administrators) or install plugins.
+- **Administrators** see everything and manage accounts (`/api/users`: add, rotate, disable, remove).
+
+Every request and every message is rate-limited per person (`HARNESS_RATE_LIMIT`, `HARNESS_MESSAGE_RATE_LIMIT`). An optional daily spend cap per account (`HARNESS_USER_DAILY_USD`) refuses new messages and stops a running turn at its next step.
 
 ## Durability, checkpoints, trace
 
@@ -336,9 +423,20 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 | `HARNESS_GATES_ON_STOP` | off | Refuse to end a turn while a blocking quality gate fails. |
 | `HARNESS_BUNDLED_PLUGINS` | on | `off` skips the bundled `plugins/` (quality gates, SDLC, visual, documents, games3d). |
 | `HARNESS_PLUGIN_KEYS` | | Trusted public keys; when set, every non-bundled plugin must be signed. |
-| `HARNESS_PLUGIN_CATALOGUE` | | A folder of signed plugins that can be installed from the UI/API. |
+| `HARNESS_PLUGIN_CATALOGUE` | | Signed plugins to install from the UI/API: a folder, or the https URL of an `index.json`. |
+| `HARNESS_MEMORY` | on | `read` (load, never change) or `off`. |
+| `HARNESS_SEARCH` | first available | `brave`, `tavily`, `exa`, `searxng`, `deepseek`, `anthropic`, `openai` or `off`; keys `BRAVE_API_KEY`, `TAVILY_API_KEY`, `EXA_API_KEY`, `HARNESS_SEARXNG_URL`. |
+| `HARNESS_SEARCH_ANTHROPIC_MODEL` / `HARNESS_SEARCH_OPENAI_MODEL` | `claude-haiku-5-5` / `gpt-6-luna` | The small model that runs a provider's built-in search. |
+| `HARNESS_GITHUB_TOKEN`, `HARNESS_PUBLISH_REPOS`, `HARNESS_GITHUB_API`, `HARNESS_GIT_AUTHOR` | | `publish_branch`: token, extra repositories it may push to, API base (GitHub Enterprise), commit author `"Name <email>"`. |
+| `HARNESS_SANDBOX_ALLOW_HOSTS` | registries + GitHub | Comma-separated hosts an allowlist sandbox may reach; `HARNESS_SANDBOX_UPSTREAM_PROXY` chains its proxy through a corporate one. |
+| `HARNESS_USER_DAILY_USD` | none | Daily spend cap per account. |
+| `HARNESS_RATE_LIMIT` / `HARNESS_MESSAGE_RATE_LIMIT` | 600 / 30 | Requests / messages per minute per person (0 = none). |
+| `HARNESS_ANTHROPIC_SERVER_COMPACTION` | on | `off` makes Claude sessions use the harness's own compaction. |
+| `HARNESS_SCRIPT_ISOLATION` | on | `off` runs scripts without the network namespace (they then ask first). |
+| `HARNESS_MIRROR_MAX_MB` | 100 | How much of a companion folder server-side tools may copy. |
 | `HARNESS_OTEL_ENDPOINT` / `HARNESS_OTEL_HEADERS` | | OTLP/HTTP trace export. |
-| `HARNESS_RENDER_NETWORK` | off | `on` lets document converters reach the network (they run in an empty network namespace otherwise). |
+| `HARNESS_RENDER_NETWORK` | off | `on` lets LibreOffice reach the network (it runs in an empty network namespace otherwise). |
+| `HARNESS_RENDER_PDF` | pdf.js | `poppler` draws and measures PDF pages with poppler instead. |
 | `HARNESS_CHROMIUM` | auto | Chromium for the render and browser tools. |
 | `HARNESS_SOFFICE`, `HARNESS_PDFTOPPM`, `HARNESS_PDFTOTEXT`, `HARNESS_PDFINFO`, `HARNESS_PANDOC` | auto | Paths to the document converters (searched on the PATH and in the usual install folders). |
 | `HARNESS_SHELL` | auto | Windows: `powershell`, or the path of a `bash.exe` (default: Git Bash, else PowerShell). |
@@ -351,13 +449,14 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 - **This is not Claude Code's code.** Claude Code is closed source. This harness follows its published design and open-source harnesses; unpublished tuning (the exact prompts) is not reproduced.
 - **The harness lifts every model but cannot make them equal.** Studies put the harness's effect at 5–30 points on agent benchmarks; the model is still most of the result.
 - **Not built yet:**
-  - the render and browser tools on companion sessions (they run on the server, on the workspace folder);
-  - background compaction;
-  - per-host network allowlists in the sandbox (all or nothing);
   - checkpoints and project MCP servers on companion sessions;
-  - multi-user accounts (one access token);
-  - a remote catalogue (the catalogue is a folder; a signed index served over HTTPS would be next);
-  - Blender or Godot integration (3D is Three.js in the headless browser; neither binary was available to test).
+  - credential injection at the sandbox's network proxy (it allows or blocks hosts; it does not add secrets to requests);
+  - Blender or Godot integration (3D is Three.js in the headless browser; neither binary was available to test);
+  - single sign-on (accounts use tokens).
+- **Limits of what was built:**
+  - Plugin code runs in the server process. Declared permissions are enforced on the channels the harness hands out, not on code that ignores them; signing is the control for that.
+  - Scripts (`run_script`) have no network namespace outside Linux, so there they ask before running.
+  - The allowlist network needs Linux Docker networking; it was tested on Linux, not on Docker Desktop.
 - **Not tested here:**
   - the full sandbox image (this environment's proxy blocks Debian packages, so tests used a plain Node image);
   - a real Windows machine (the Windows choices are tested with simulated paths, and the Docker setup ran 80/80 on Windows before the review fixes);
