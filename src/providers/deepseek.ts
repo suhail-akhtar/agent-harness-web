@@ -114,6 +114,9 @@ export function toChat(m: Message): unknown[] {
     if (b.type === 'tool_result') out.push({ role: 'tool', tool_call_id: b.tool_use_id, content: b.is_error ? `ERROR: ${b.content}` : b.content || '(no output)' });
   }
   const text = m.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n\n');
-  if (text) out.push({ role: 'user', content: text });
+  const images = m.content.filter((b) => b.type === 'image') as { media_type: string; data: string }[];
+  if (images.length) {
+    out.push({ role: 'user', content: [...(text ? [{ type: 'text', text }] : []), ...images.map((i) => ({ type: 'image_url', image_url: { url: `data:${i.media_type};base64,${i.data}` } }))] });
+  } else if (text) out.push({ role: 'user', content: text });
   return out;
 }

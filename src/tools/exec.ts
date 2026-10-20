@@ -1,6 +1,28 @@
 import type { Tool, ToolContext, ToolOutcome } from './types.ts';
 import { clip, num, str } from './types.ts';
 
+/**
+ * Shell commands that write file CONTENT the file tools should write instead.
+ * Those go through write/edit so they get a checkpoint (undo), a diff, the
+ * stale-file check and edit permissions - a sandboxed shell would otherwise
+ * be a way around "ask before edits". Build steps, installers and redirects
+ * to /tmp or /dev are not affected. Returns the offending pattern, if any.
+ */
+export function shellFileWrite(cmd: string): string | undefined {
+  if (process.env.HARNESS_SHELL_WRITE_GUARD === 'off') return undefined;
+  const target = (t: string | undefined) => !!t && !/^['"]?\/(tmp|dev)\//.test(t) && !/^&?\d?$/.test(t);
+  let m = /\bcat\s+(?:<<-?\s*['"]?\w+['"]?\s*)?>>?\s*([^\s|&;<>]+)/.exec(cmd) ?? /\bcat\s*>>?\s*([^\s|&;<>]+)\s*<</.exec(cmd);
+  if (m && target(m[1])) return `cat > ${m[1]}`;
+  m = /<<-?\s*['"]?\w+['"]?\s*>>?\s*([^\s|&;<>]+)/.exec(cmd);
+  if (m && target(m[1])) return `heredoc > ${m[1]}`;
+  if (/\b(sed|perl)\s+(?:-[a-zA-Z]*i\b|-i\S*|--in-place)/.test(cmd)) return 'in-place sed/perl edit';
+  m = /\btee\s+(?:-a\s+)?([^\s|&;<>]+)/.exec(cmd);
+  if (m && target(m[1]) && m[1] !== '-a') return `tee ${m[1]}`;
+  m = /\b(?:echo|printf)\b[^|;&]*?>>?\s*([^\s|&;<>]+\.(?:[cm]?[jt]sx?|py|rb|go|rs|java|kt|cs|cpp|cc|c|h|hpp|php|swift|scala|sh|md|html?|css|scss|json|ya?ml|toml|sql|vue|svelte))\b/.exec(cmd);
+  if (m && target(m[1])) return `echo/printf > ${m[1]}`;
+  return undefined;
+}
+
 const DEFAULT_TIMEOUT = 120_000;
 const MAX_TIMEOUT = 600_000;
 const MAX_OUTPUT = 30_000;
@@ -9,7 +31,7 @@ export const bashTool: Tool = {
   kind: 'exec', parallelSafe: false, remoteable: true,
   spec: {
     name: 'bash',
-    description: 'Run a shell command in the workspace and return its exit code and output. For builds, tests, git, package managers and scripts. Use the file tools rather than cat/sed/grep/find to read, edit or search. Each call is a fresh shell (cd does not persist; use `cd dir && cmd`). Default timeout 120s, max 600s. Long output is trimmed to its head and tail, so filter it (| tail -50, | grep) when you can. For servers and watchers set run_in_background: it returns at once with the PID and a log file; check the log with tail and stop it with kill.',
+    description: 'Run a shell command in the workspace and return its exit code and output. For builds, tests, git, package managers and scripts. Use the file tools rather than cat/sed/grep/find to read, edit or search; writing file contents from the shell (cat > file, heredocs, sed -i, tee, echo > file.js) is refused - use write or edit, which record undo checkpoints and show diffs. Each call is a fresh shell (cd does not persist; use `cd dir && cmd`). Default timeout 120s, max 600s. Long output is trimmed to its head and tail, so filter it (| tail -50, | grep) when you can. For servers and watchers set run_in_background: it returns at once with the PID and a log file; check the log with tail and stop it with kill.',
     input_schema: {
       type: 'object',
       properties: {
@@ -25,6 +47,8 @@ export const bashTool: Tool = {
   async run(input, ctx) {
     const command = str(input.command);
     if (!command.trim()) return { content: 'command is empty.', is_error: true };
+    const write = shellFileWrite(command);
+    if (write) return { content: `Not run: this command writes file contents from the shell (${write}). Use the write tool for new or fully rewritten files and edit for changes - they keep undo checkpoints, diffs and edit permissions. Run the rest of the command separately if needed.`, is_error: true };
     if (input.run_in_background === true || input.run_in_background === 'true') return background(command, ctx);
     const timeoutMs = Math.min(MAX_TIMEOUT, Math.max(1000, num(input.timeout_ms) ?? DEFAULT_TIMEOUT));
     const r = await ctx.host.exec(command, { timeoutMs, signal: ctx.signal });

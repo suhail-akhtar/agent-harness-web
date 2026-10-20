@@ -1,4 +1,4 @@
-import type { ProviderId, Usage } from './types.ts';
+import type { Usage } from './types.ts';
 import { promptTokens } from './types.ts';
 
 // The catalog is deliberately small: the three models this harness is tuned
@@ -13,7 +13,12 @@ interface Rate { input: number; cacheRead: number; cacheWrite: number; output: n
 export interface ModelSpec {
   id: string;
   label: string;
-  provider: ProviderId;
+  /** Registered provider id: 'anthropic' | 'openai' | 'deepseek' | a plugin's. */
+  provider: string;
+  /** Accepts images (screenshots, renders) in its input. */
+  vision: boolean;
+  /** Shown in the UI when a capability is weak or untested. */
+  notes?: string;
   contextWindow: number;
   /** max_tokens sent per request (a cap, not a reservation). */
   maxOutput: number;
@@ -37,11 +42,12 @@ export function deepseekPeak(at: Date): boolean {
   return (h >= 1 && h < 4) || (h >= 6 && h < 10);
 }
 
-export const MODELS: ModelSpec[] = [
+export const BUILTIN_MODELS: ModelSpec[] = [
   {
     id: 'claude-haiku-5-5',
     label: 'Claude Haiku 5.5',
     provider: 'anthropic',
+    vision: true,
     contextWindow: 1_000_000,
     maxOutput: 64_000,
     compactAt: 92_000,
@@ -55,6 +61,7 @@ export const MODELS: ModelSpec[] = [
     id: 'deepseek-flash',
     label: 'DeepSeek V4.1 Flash',
     provider: 'deepseek',
+    vision: true,
     contextWindow: 1_048_576,
     maxOutput: 64_000,
     compactAt: 160_000,
@@ -68,6 +75,8 @@ export const MODELS: ModelSpec[] = [
     id: 'gpt-6-luna',
     label: 'GPT-6 Luna',
     provider: 'openai',
+    vision: true,
+    notes: 'Vision was inconsistent in our checks (one simple colour test right, one wrong); confirm visual results another way.',
     // The published rate card covers prompts up to 272K; the harness keeps
     // the context below that so every request stays on it.
     contextWindow: 272_000,
@@ -83,9 +92,10 @@ const overrides = (() => {
   try { return JSON.parse(process.env.HARNESS_PRICING_JSON ?? '{}') as Record<string, Rate>; } catch { return {}; }
 })();
 
+/** Looks up a BUILT-IN model. Sessions resolve models through the registry, which also holds plugins'. */
 export function getModel(id: string): ModelSpec {
-  const m = MODELS.find((x) => x.id === id);
-  if (!m) throw new Error(`Unknown model "${id}". Available: ${MODELS.map((x) => x.id).join(', ')}`);
+  const m = BUILTIN_MODELS.find((x) => x.id === id);
+  if (!m) throw new Error(`Unknown model "${id}". Available: ${BUILTIN_MODELS.map((x) => x.id).join(', ')}`);
   return m;
 }
 
@@ -94,8 +104,3 @@ export function costOf(model: ModelSpec, u: Usage, at = new Date()): number {
   return (u.input * r.input + u.cacheRead * r.cacheRead + u.cacheWrite * r.cacheWrite + u.output * r.output) / 1_000_000;
 }
 
-/** The model a sub-agent runs on: the same provider's catalog model, so one key covers the session. */
-export function subagentModelFor(main: ModelSpec, preferred?: string): ModelSpec {
-  if (preferred) return getModel(preferred);
-  return main;
-}

@@ -5,10 +5,9 @@ import { Agent, type AgentHooks } from '../src/core/agent.ts';
 import { getModel } from '../src/core/models.ts';
 import { defaultSettings, type Settings } from '../src/core/settings.ts';
 import type { Block, HarnessEvent, Message, PermissionMode, Todo, Usage } from '../src/core/types.ts';
-import { setProvider } from '../src/providers/index.ts';
 import type { Provider, ProviderRequest, ProviderResponse, StopKind } from '../src/providers/types.ts';
 import { LocalHost } from '../src/runtime/host.ts';
-import { ALL_TOOLS } from '../src/tools/index.ts';
+import { BUILTIN_TOOLS } from '../src/tools/index.ts';
 import type { FileStamp, Tool } from '../src/tools/types.ts';
 
 export async function tempDir(prefix = 'hw-test-'): Promise<string> {
@@ -53,7 +52,6 @@ export interface Harness {
 
 export async function makeAgent(steps: Step[], opts: { mode?: PermissionMode; settings?: Partial<Settings>; tools?: Tool[]; root?: string } = {}): Promise<Harness> {
   const provider = new FakeProvider(steps);
-  setProvider('deepseek', provider);
   const root = opts.root ?? await tempDir();
   const events: HarnessEvent[] = [];
   const persisted: Message[] = [];
@@ -80,7 +78,7 @@ export async function makeAgent(steps: Step[], opts: { mode?: PermissionMode; se
     latestUserPrompt: () => 'the task',
   };
   const agent = new Agent({
-    name: 'main', model: getModel('deepseek-flash'), effort: 'high', system: 'SYSTEM', tools: opts.tools ?? ALL_TOOLS,
+    name: 'main', model: getModel('deepseek-flash'), provider, effort: 'high', system: 'SYSTEM', tools: opts.tools ?? BUILTIN_TOOLS,
     host: new LocalHost(root), settings, cacheKey: 'test', maxSteps: 20, readFiles: new Map<string, FileStamp>(),
   }, hooks);
   return { agent, provider, events, persisted, root, mode, permissionAnswers, get todos() { return todos; } } as Harness;

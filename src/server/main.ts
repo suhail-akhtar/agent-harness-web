@@ -3,12 +3,10 @@ import fs from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SessionManager } from '../core/manager.ts';
-import { MODELS, type Effort } from '../core/models.ts';
+import type { Effort } from '../core/models.ts';
 import type { SessionMeta } from '../core/session.ts';
 import type { PermissionMode } from '../core/types.ts';
-import { availableModels } from '../providers/index.ts';
-import { CompanionHub } from '../runtime/companion.ts';
+import { createHarness, type Harness } from '../kernel/harness.ts';
 import { dockerAvailable, dockerDefaults, imageExists } from '../runtime/docker.ts';
 import { resolveIn, walk } from '../tools/paths.ts';
 
@@ -27,8 +25,8 @@ const loopback = HOST === '127.0.0.1' || HOST === 'localhost' || HOST === '::1';
 const AUTH_OFF = process.env.HARNESS_AUTH === 'off' && loopback;
 const TOKEN = process.env.HARNESS_TOKEN || crypto.randomBytes(18).toString('base64url');
 
-const companions = new CompanionHub(DATA_DIR);
-const sessions = new SessionManager({ dataDir: DATA_DIR, companions });
+const PLUGIN_DIRS = [path.join(appRoot, 'plugins'), ...(process.env.HARNESS_PLUGINS || '').split(path.delimiter).filter(Boolean)];
+let harness: Harness;
 
 class HttpError extends Error {
   status: number;
@@ -106,6 +104,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
   // ---- companion protocol (its own token) ----
   if (p === '/api/companion/poll' || p === '/api/companion/result') {
     const token = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1] ?? '';
+    const companions = harness.companions;
     const id = token ? companions.authenticate(token) : undefined;
     if (!id) throw new HttpError(401, 'unknown companion token');
     const body = await readJson(req, 20_000_000);
@@ -139,20 +138,22 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
   // Cookie-authenticated writes must come from our own page (JSON content type is enforced too).
   if (method !== 'GET' && req.headers['x-harness'] !== '1') throw new HttpError(403, 'missing x-harness header');
 
+  const { sessions, companions, registry } = harness;
   if (p === '/api/config' && method === 'GET') {
     const docker = await dockerAvailable();
     const image = dockerDefaults().image;
     return send(res, 200, {
-      models: availableModels().map((m) => ({ id: m.id, label: m.label, provider: m.provider, contextWindow: m.contextWindow, compactAt: m.compactAt, effort: m.effort, efforts: m.efforts, available: m.available })),
+      models: registry.listModels().map((m) => ({ id: m.id, label: m.label, provider: m.provider, contextWindow: m.contextWindow, compactAt: m.compactAt, effort: m.effort, efforts: m.efforts, available: m.available, vision: m.vision, notes: m.notes })),
       runtimes: { docker, dockerImage: docker ? (await imageExists(image) ? image : null) : null, local: LOCAL_ROOTS.length > 0, localRoots: LOCAL_ROOTS },
       companions: companions.list(),
+      plugins: registry.plugins.map((x) => ({ name: x.name, version: x.version, description: x.description, contributes: x.contributes })),
     });
   }
 
   if (p === '/api/sessions' && method === 'GET') return send(res, 200, sessions.list().map((m) => ({ ...m, status: sessions.statusOf(m.id) })));
   if (p === '/api/sessions' && method === 'POST') {
     const b = await readJson(req);
-    const model = String(b.model ?? MODELS[0]!.id);
+    const model = String(b.model ?? registry.listModels().find((m) => m.available)?.id ?? '');
     const kind = b.runtime === 'local' || b.runtime === 'companion' ? b.runtime : 'docker';
     const runtime: SessionMeta['runtime'] = { kind, network: b.network === 'full' ? 'full' : 'none' };
     if (kind === 'docker') {
@@ -206,6 +207,15 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
       return send(res, 202, { state: await s.send(b.text.slice(0, 200_000)) });
     }
     if (action === 'abort' && method === 'POST') { s.abort(); return send(res, 200, { ok: true }); }
+    if (action === 'capabilities' && method === 'GET') return send(res, 200, await s.capabilities());
+    if (action === 'checkpoints' && method === 'GET') return send(res, 200, await s.listCheckpoints());
+    if (action === 'rewind' && method === 'POST') {
+      const b = await readJson(req);
+      const turn = Number(b.turn);
+      if (!Number.isInteger(turn) || turn < 1) throw new HttpError(400, 'turn must be a positive integer');
+      try { return send(res, 200, { files: await s.rewind(turn) }); } catch (e) { throw new HttpError(409, (e as Error).message); }
+    }
+    if (action === 'trace' && method === 'GET') return send(res, 200, await s.readTrace());
     if (action === 'respond' && method === 'POST') {
       const b = await readJson(req);
       const ok = s.respond(String(b.requestId), { decision: String(b.decision ?? 'deny'), feedback: typeof b.feedback === 'string' ? b.feedback : undefined, answer: typeof b.answer === 'string' ? b.answer : undefined });
@@ -250,9 +260,12 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
 }
 
 async function main() {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  await companions.load();
-  await sessions.load();
+  harness = await createHarness({
+    dataDir: DATA_DIR,
+    plugins: PLUGIN_DIRS,
+    mcp: process.env.HARNESS_MCP_CONFIG || undefined,
+    log: (m) => console.log(m),
+  });
   const server = http.createServer((req, res) => {
     route(req, res).catch((err) => {
       const status = err instanceof HttpError ? err.status : 500;
@@ -267,8 +280,9 @@ async function main() {
     console.log(`data: ${DATA_DIR}`);
     if (AUTH_OFF) console.log('auth: off (loopback only)');
     else if (!process.env.HARNESS_TOKEN) console.log(`access token (set HARNESS_TOKEN to fix it): ${TOKEN}`);
-    const models = availableModels();
+    const models = harness.registry.listModels();
     console.log(`models: ${models.map((m) => `${m.id}${m.available ? '' : ' (no key)'}`).join(', ')}`);
+    console.log(`plugins: ${harness.registry.plugins.map((x) => x.name).join(', ') || 'none'}`);
   });
 }
 

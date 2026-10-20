@@ -1,4 +1,4 @@
-import type { HarnessEvent, Message, ToolDisplay } from './api.ts';
+import type { HarnessEvent, ImageData, Message, ToolDisplay } from './api.ts';
 
 // The chat view is a list of items rebuilt from the stored history, then kept
 // current by live events. Pure functions, so they are easy to test.
@@ -6,7 +6,7 @@ import type { HarnessEvent, Message, ToolDisplay } from './api.ts';
 export type Item =
   | { kind: 'user'; key: string; text: string }
   | { kind: 'assistant'; key: string; text: string; reasoning: string; streaming: boolean }
-  | { kind: 'tool'; key: string; id: string; name: string; input: Record<string, unknown>; result?: string; isError?: boolean; display?: ToolDisplay; ms?: number; running: boolean; activity: Activity[] }
+  | { kind: 'tool'; key: string; id: string; name: string; input: Record<string, unknown>; result?: string; isError?: boolean; display?: ToolDisplay; ms?: number; running: boolean; activity: Activity[]; images?: ImageData[] }
   | { kind: 'notice'; key: string; level: 'info' | 'warn' | 'error'; text: string }
   | { kind: 'compaction'; key: string; before?: number; after?: number };
 
@@ -31,11 +31,15 @@ export function fromHistory(history: Message[]): Item[] {
   for (const m of history) {
     if (m.compactionSummary) { items.push({ kind: 'compaction', key: key() }); continue; }
     if (m.role === 'user') {
+      let lastTool: Extract<Item, { kind: 'tool' }> | undefined;
       for (const b of m.content) {
         if (b.type === 'tool_result') {
           const t = tools.get(b.tool_use_id);
-          if (t) { t.result = b.content; t.isError = !!b.is_error; t.running = false; }
+          if (t) { t.result = b.content; t.isError = !!b.is_error; t.running = false; lastTool = t; }
+        } else if (b.type === 'image') {
+          if (lastTool) (lastTool.images ??= []).push({ media_type: b.media_type, data: b.data });
         } else if (b.type === 'text') {
+          if (/^Image\(s\) from /.test(b.text)) continue;
           const added = /^The user added while you were working:\n/.exec(b.text);
           const text = added ? b.text.slice(added[0].length) : visibleUserText(b.text);
           if (text) items.push({ kind: 'user', key: key(), text });
@@ -111,7 +115,7 @@ export function apply(live: Live, e: HarnessEvent): Live {
           return copy;
         });
       }
-      return { ...live, items: items.map((i) => (i.kind === 'tool' && i.id === e.id ? { ...i, result: e.content, isError: e.is_error, display: e.display, ms: e.ms, running: false } : i)) };
+      return { ...live, items: items.map((i) => (i.kind === 'tool' && i.id === e.id ? { ...i, result: e.content, isError: e.is_error, display: e.display, ms: e.ms, running: false, images: e.images } : i)) };
     }
     case 'notice':
       if (isSub(e.agent) && e.level === 'info') return live;
@@ -159,6 +163,9 @@ export function summarize(name: string, input: Record<string, unknown>): string 
     case 'agent': return s('description');
     case 'todo_write': return `${Array.isArray(input.todos) ? input.todos.length : 0} items`;
     case 'ask_user': return s('question');
+    case 'skill': return s('name') + (s('file') ? `/${s('file')}` : '');
+    case 'tool_search': return s('query');
+    case 'tool_call': return s('name');
     case 'exit_plan_mode': return 'plan ready for review';
     default: return JSON.stringify(input).slice(0, 80);
   }

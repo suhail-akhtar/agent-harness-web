@@ -6,30 +6,6 @@ import { str } from './types.ts';
 // tool list never changes mid-session, which would break the cache); the
 // harness decides whether a call is valid right now.
 
-export const agentTool: Tool = {
-  kind: 'meta', parallelSafe: true, remoteable: false,
-  spec: {
-    name: 'agent',
-    description: 'Delegate a self-contained task to a sub-agent with its own fresh context; it returns only its final report. Use "explore" (read-only: read/glob/grep/web_fetch) to search a codebase or research broadly without filling your own context; use "general" for an independent piece of work that also edits or runs commands. Write the prompt as a complete brief: the goal, what you already know, and what to report back. Several agent calls in one turn run in parallel.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        description: { type: 'string', description: 'Three to five words, shown to the user.' },
-        prompt: { type: 'string' },
-        type: { type: 'string', enum: ['explore', 'general'] },
-      },
-      required: ['description', 'prompt'],
-    },
-  },
-  summarize: (i) => `${i.type === 'general' ? 'agent' : 'explore'}: ${str(i.description)}`,
-  async run(input, ctx) {
-    if (!ctx.runSubagent) return { content: 'Sub-agents cannot start other sub-agents. Do the work directly.', is_error: true };
-    const type = input.type === 'general' ? 'general' : 'explore';
-    const report = await ctx.runSubagent({ description: str(input.description), prompt: str(input.prompt), type });
-    return { content: report };
-  },
-};
-
 export const askUserTool: Tool = {
   kind: 'meta', parallelSafe: false, remoteable: false,
   spec: {

@@ -1,3 +1,4 @@
+import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import type { ExecOptions, ExecResult, ToolHost } from './host.ts';
 import { run } from './host.ts';
 
@@ -90,6 +91,12 @@ export class DockerHost implements ToolHost {
     const r = await run('docker', ['exec', '-i', '-w', workdir, this.name, 'timeout', '-k', '5', String(secs), 'bash', '-lc', cmd], { ...opts, timeoutMs: opts.timeoutMs + 15_000 });
     if (r.code === 124) r.timedOut = true;
     return r;
+  }
+
+  async spawnStream(command: string, args: string[], env: Record<string, string>): Promise<ChildProcessWithoutNullStreams> {
+    await this.ensure();
+    const envArgs = Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
+    return spawn('docker', ['exec', '-i', ...envArgs, '-w', '/workspace', this.name, command, ...args], { stdio: ['pipe', 'pipe', 'pipe'] });
   }
 
   /** Stops the container (it restarts on next use); the workspace stays. */

@@ -14,10 +14,6 @@ import { ProviderError } from './types.ts';
 const IDLE_MS = Number(process.env.HARNESS_STREAM_IDLE_MS ?? 180_000);
 const BETAS = ['context-management-2025-06-27'];
 
-export function anthropicKey(): string | undefined {
-  return process.env.ANTHROPIC_API_KEY || process.env.GW_ANTHROPIC_API_KEY || undefined;
-}
-
 export class AnthropicProvider implements Provider {
   private client: Anthropic;
   /** Context editing is beta; if the API refuses it we stop sending it for this process. */
@@ -139,6 +135,7 @@ function toAnthropicMessage(m: Message) {
     if (b.type === 'text' && b.text) content.push({ type: 'text', text: b.text });
     else if (b.type === 'tool_use') content.push({ type: 'tool_use', id: b.id, name: b.name, input: b.input });
     else if (b.type === 'tool_result') content.push({ type: 'tool_result', tool_use_id: b.tool_use_id, content: b.content || '(no output)', ...(b.is_error ? { is_error: true } : {}) });
+    else if (b.type === 'image') content.push({ type: 'image', source: { type: 'base64', media_type: b.media_type, data: b.data } });
   }
   if (content.length === 0) content.push({ type: 'text', text: '(empty)' });
   return { role: m.role, content };

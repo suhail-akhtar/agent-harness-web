@@ -9,7 +9,7 @@ import { summarize } from './timeline.ts';
 export const fmtTokens = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(2)}M` : n >= 10_000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 export const fmtCost = (c: number) => (c < 0.01 ? `$${c.toFixed(4)}` : `$${c.toFixed(2)}`);
 
-const TOOL_ICON: Record<string, string> = { bash: '›_', read: '◧', write: '✎', edit: '✎', glob: '⌕', grep: '⌕', web_fetch: '◍', agent: '◈', todo_write: '☑', ask_user: '?', exit_plan_mode: '▤' };
+const TOOL_ICON: Record<string, string> = { bash: '›_', read: '◧', write: '✎', edit: '✎', glob: '⌕', grep: '⌕', web_fetch: '◍', agent: '◈', todo_write: '☑', ask_user: '?', exit_plan_mode: '▤', skill: '✦', tool_search: '⌕', tool_call: '⇄' };
 
 export function ToolCard({ item }: { item: Extract<Item, { kind: 'tool' }> }): VNode {
   const [open, setOpen] = useState(false);
@@ -18,7 +18,7 @@ export function ToolCard({ item }: { item: Extract<Item, { kind: 'tool' }> }): V
   return (
     <div class={`tool tool-${status}`}>
       <button class="tool-head" onClick={() => setOpen(!open)} aria-expanded={open}>
-        <span class="tool-icon">{TOOL_ICON[item.name] ?? '•'}</span>
+        <span class="tool-icon">{TOOL_ICON[item.name] ?? (item.name.startsWith('mcp__') ? '⇄' : '•')}</span>
         <span class="tool-name">{item.name}</span>
         <span class="tool-sum">{summarize(item.name, item.input)}</span>
         <span class="tool-status">{item.running ? <span class="spinner" /> : item.isError ? '✕' : '✓'}{item.ms !== undefined && !item.running ? <span class="tool-ms">{item.ms < 1000 ? `${item.ms}ms` : `${(item.ms / 1000).toFixed(1)}s`}</span> : null}</span>
@@ -29,6 +29,7 @@ export function ToolCard({ item }: { item: Extract<Item, { kind: 'tool' }> }): V
         </div>
       )}
       {item.display?.type === 'diff' && (item.name === 'edit' || !open) && !item.isError && <Diff before={item.display.before} after={item.display.after} />}
+      {item.images?.length ? <div class="tool-images">{item.images.map((im, i) => <img key={i} src={`data:${im.media_type};base64,${im.data}`} alt={`image ${i + 1} from ${item.name}`} />)}</div> : null}
       {open && (
         <div class="tool-body">
           {item.name === 'bash' && <pre class="cmd">$ {s('command')}</pre>}

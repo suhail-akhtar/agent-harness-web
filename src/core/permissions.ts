@@ -21,13 +21,14 @@ export interface PermissionContext {
 }
 
 function parseRule(rule: string): { tool: string; spec?: string } {
-  const m = /^([a-z_]+)(?:\((.*)\))?$/.exec(rule.trim());
+  const m = /^([A-Za-z0-9_*-]+)(?:\((.*)\))?$/.exec(rule.trim());
   return m ? { tool: m[1]!, spec: m[2] } : { tool: rule.trim() };
 }
 
 export function ruleMatches(rule: string, tool: Tool, input: Record<string, unknown>): boolean {
   const { tool: name, spec } = parseRule(rule);
-  if (name !== tool.spec.name) return false;
+  // "mcp__github__*" covers every tool of one MCP server.
+  if (name.endsWith('*') ? !tool.spec.name.startsWith(name.slice(0, -1)) : name !== tool.spec.name) return false;
   if (spec === undefined || spec === '' || spec === '*') return true;
   if (name === 'bash') {
     const cmd = String(input.command ?? '').trim();
@@ -89,6 +90,11 @@ export function decide(tool: Tool, input: Record<string, unknown>, ctx: Permissi
     case 'network':
       if (mode === 'bypass') return { action: 'allow', reason: 'bypass mode' };
       return { action: 'ask', reason: 'fetching a URL needs approval' };
+    case 'external':
+      // Acts on another system (an MCP service): the sandbox does not contain it.
+      if (mode === 'bypass') return { action: 'allow', reason: 'bypass mode' };
+      if (mode === 'plan') return { action: 'deny', reason: 'plan mode: no actions on external services until the plan is approved' };
+      return { action: 'ask', reason: 'actions on external services need approval' };
   }
 }
 

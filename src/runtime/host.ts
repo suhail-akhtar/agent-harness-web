@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import type { ToolDisplay } from '../core/types.ts';
 
 // A ToolHost is where tools touch a filesystem and run commands.
@@ -25,7 +25,8 @@ export function scrubbedEnv(extra: Record<string, string> = {}): NodeJS.ProcessE
   return { ...env, ...extra };
 }
 
-export interface ToolOutcome { content: string; is_error?: boolean; display?: ToolDisplay }
+export interface ImageData { media_type: string; data: string }
+export interface ToolOutcome { content: string; is_error?: boolean; display?: ToolDisplay; images?: ImageData[] }
 
 export interface ToolHost {
   kind: 'docker' | 'local' | 'companion';
@@ -40,6 +41,8 @@ export interface ToolHost {
   sandboxed: boolean;
   networkPolicy: 'none' | 'full';
   exec(cmd: string, opts: ExecOptions): Promise<ExecResult>;
+  /** Starts a long-lived process with piped stdio where tools run (MCP servers). */
+  spawnStream?(command: string, args: string[], env: Record<string, string>): Promise<ChildProcessWithoutNullStreams>;
   /** Present on hosts that run whole tool calls themselves (companion). */
   remoteTool?: (name: string, input: Record<string, unknown>, signal: AbortSignal) => Promise<ToolOutcome>;
   close?(): Promise<void>;
@@ -113,6 +116,9 @@ export class LocalHost implements ToolHost {
   constructor(root: string) {
     this.root = root;
     this.displayRoot = root;
+  }
+  async spawnStream(command: string, args: string[], env: Record<string, string>): Promise<ChildProcessWithoutNullStreams> {
+    return spawn(command, args, { cwd: this.root, env: scrubbedEnv(env), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
   }
   exec(cmd: string, opts: ExecOptions): Promise<ExecResult> {
     const o = { ...opts, cwd: opts.cwd ?? this.root, env: opts.env ?? scrubbedEnv() };

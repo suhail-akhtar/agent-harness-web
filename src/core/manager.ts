@@ -13,11 +13,22 @@ export class SessionManager {
     this.deps = deps;
   }
 
+  get registry() { return this.deps.registry; }
+
   async load(): Promise<void> {
     const dir = path.join(this.deps.dataDir, 'sessions');
     await fs.mkdir(dir, { recursive: true });
+    const resume: Session[] = [];
     for (const id of await fs.readdir(dir)) {
-      try { this.sessions.set(id, await Session.load(this.deps, id)); } catch { /* not a session */ }
+      try {
+        const s = await Session.load(this.deps, id);
+        this.sessions.set(id, s);
+        // Mid-turn when the server stopped: close the turn out cleanly.
+        if (await s.recoverInterrupted()) resume.push(s);
+      } catch { /* not a session */ }
+    }
+    if (process.env.HARNESS_AUTO_RESUME === '1') {
+      for (const s of resume) s.send('The server restarted while you were working. Continue the task from where you left off.').catch(() => {});
     }
     // Stop idle sandboxes; they restart on demand and the workspace persists.
     this.idleTimer = setInterval(() => {
@@ -51,5 +62,10 @@ export class SessionManager {
     await s.destroy();
     this.sessions.delete(id);
     return true;
+  }
+
+  async close(): Promise<void> {
+    clearInterval(this.idleTimer);
+    for (const s of this.sessions.values()) s.abort();
   }
 }

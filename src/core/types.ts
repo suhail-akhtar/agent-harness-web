@@ -1,7 +1,7 @@
 // Provider-neutral transcript, events and usage. Every provider adapter converts
 // to and from these shapes; the loop, the UI and the store only ever see them.
 
-export type ProviderId = 'anthropic' | 'openai' | 'deepseek';
+export type ProviderId = string;
 
 export interface TextBlock { type: 'text'; text: string }
 export interface ToolUseBlock { type: 'tool_use'; id: string; name: string; input: Record<string, unknown>; parseError?: string }
@@ -9,7 +9,10 @@ export interface ToolResultBlock { type: 'tool_result'; tool_use_id: string; con
 /** Model reasoning. `text` is for display only; replay uses the provider-native `raw` on the message. */
 export interface ReasoningBlock { type: 'reasoning'; text: string }
 
-export type Block = TextBlock | ToolUseBlock | ToolResultBlock | ReasoningBlock;
+/** An image the model should see (a screenshot, a render), base64-encoded. */
+export interface ImageBlock { type: 'image'; media_type: string; data: string }
+
+export type Block = TextBlock | ToolUseBlock | ToolResultBlock | ReasoningBlock | ImageBlock;
 
 export interface Message {
   role: 'user' | 'assistant';
@@ -61,7 +64,7 @@ export type HarnessEvent =
   | { kind: 'reasoning_delta'; text: string; agent?: string }
   | { kind: 'assistant_message'; message: Message; agent?: string }
   | { kind: 'tool_call'; id: string; name: string; input: Record<string, unknown>; agent?: string }
-  | { kind: 'tool_result'; id: string; name: string; content: string; is_error: boolean; display?: ToolDisplay; ms: number; agent?: string }
+  | { kind: 'tool_result'; id: string; name: string; content: string; is_error: boolean; display?: ToolDisplay; ms: number; agent?: string; images?: { media_type: string; data: string }[] }
   | { kind: 'permission_request'; requestId: string; tool: string; summary: string; input: Record<string, unknown>; suggestion?: string; agent?: string }
   | { kind: 'question'; requestId: string; question: string; options: string[]; agent?: string }
   | { kind: 'plan_proposed'; requestId: string; plan: string }

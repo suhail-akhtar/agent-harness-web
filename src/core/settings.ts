@@ -51,7 +51,15 @@ export function mergeSettings(base: Settings, project: Partial<Settings>, trustP
       deny: [...base.permissions.deny, ...(Array.isArray(p?.deny) ? p.deny : [])],
       ask: [...base.permissions.ask, ...(Array.isArray(p?.ask) ? p.ask : [])],
     },
-    hooks: trustProject && project.hooks && typeof project.hooks === 'object' ? project.hooks : base.hooks,
+    hooks: { ...base.hooks },
   };
+  // Operator hooks always run; the project's run in addition, when trusted.
+  if (trustProject && project.hooks && typeof project.hooks === 'object') {
+    for (const [ev, specs] of Object.entries(project.hooks)) {
+      if (!Array.isArray(specs)) continue;
+      const k = ev as HookEvent;
+      s.hooks[k] = [...(s.hooks[k] ?? []), ...specs];
+    }
+  }
   return s;
 }

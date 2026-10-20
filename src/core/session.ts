@@ -1,18 +1,25 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { BUILTIN_AGENTS, INTERACTIVE_TOOLS, loadAgentDir, makeAgentTool } from '../agents/agents.ts';
+import type { Registry } from '../kernel/registry.ts';
+import type { McpManager, McpStatus } from '../mcp/manager.ts';
+import { deferredTools, MCP_INLINE_MAX, type McpEntry, mcpTool } from '../mcp/tools.ts';
+import type { AgentDef } from '../plugins/api.ts';
 import type { CompanionHub } from '../runtime/companion.ts';
 import { DockerHost, dockerDefaults } from '../runtime/docker.ts';
 import type { ToolHost } from '../runtime/host.ts';
 import { LocalHost, run } from '../runtime/host.ts';
-import { ALL_TOOLS, EXPLORE_TOOLS } from '../tools/index.ts';
+import { makeSkillTool, type Skill, skillsIn, skillsListing, workspaceSkills } from '../skills/skills.ts';
+import { sortTools } from '../tools/index.ts';
 import type { FileStamp, Tool } from '../tools/types.ts';
-import { Agent, type AgentHooks, type PermissionAnswer } from './agent.ts';
+import { Agent, type AgentHooks, type PermissionAnswer, type TraceSpan } from './agent.ts';
+import { Checkpoints } from './checkpoints.ts';
 import { runHooks } from './hooks.ts';
-import { type Effort, getModel, type ModelSpec } from './models.ts';
+import type { Effort, ModelSpec } from './models.ts';
 import { environmentBlock, firstMessageText, projectInstructions, SUBAGENT_PROMPT, SYSTEM_PROMPT } from './prompt.ts';
 import { defaultSettings, loadProjectSettings, mergeSettings, type Settings } from './settings.ts';
-import type { HarnessEvent, Message, PermissionMode, SessionStatus, Todo, TurnEndReason, Usage } from './types.ts';
+import type { HarnessEvent, Message, PermissionMode, SessionStatus, Todo, ToolUseBlock, TurnEndReason, Usage } from './types.ts';
 import { addUsage, emptyUsage } from './types.ts';
 
 export type RuntimeKind = 'docker' | 'local' | 'companion';
@@ -36,6 +43,10 @@ export interface SessionMeta {
   compactions: number;
   lastPromptTokens: number;
   sessionRules: string[];
+  /** User turns started (checkpoints are numbered by it). */
+  turns?: number;
+  /** True while a turn runs; still true on load means the server stopped mid-turn. */
+  running?: boolean;
 }
 
 export interface StoredEvent { seq: number; at: number; event: HarnessEvent }
@@ -46,9 +57,19 @@ interface PendingRequest {
   event: HarnessEvent;
 }
 
-export interface SessionDeps { dataDir: string; companions: CompanionHub }
+export interface SessionDeps { dataDir: string; companions: CompanionHub; registry: Registry; mcp: McpManager }
+
+/** What one session can use, assembled once (the tool list never changes mid-session: it would break the cache). */
+interface Toolbox {
+  tools: Tool[];
+  agents: AgentDef[];
+  skills: Skill[];
+  mcp: McpStatus[];
+  closeProject(): Promise<void>;
+}
 
 const EVENT_BUFFER = 4000;
+const TRUST_PROJECT = process.env.HARNESS_TRUST_PROJECT === '1';
 
 export class Session {
   meta: SessionMeta;
@@ -58,7 +79,9 @@ export class Session {
   private deps: SessionDeps;
   private host?: ToolHost;
   private settings?: Settings;
+  private toolbox?: Promise<Toolbox>;
   private agent?: Agent;
+  private checkpoints?: Checkpoints;
   private events: StoredEvent[] = [];
   private seq = 0;
   private listeners = new Set<(e: StoredEvent) => void>();
@@ -81,13 +104,13 @@ export class Session {
   }
 
   static async create(deps: SessionDeps, opts: { title?: string; model: string; effort?: Effort; mode?: PermissionMode; runtime: SessionMeta['runtime']; gitUrl?: string }): Promise<Session> {
-    const model = getModel(opts.model);
+    const model = deps.registry.model(opts.model);
     const id = crypto.randomBytes(8).toString('hex');
     const now = Date.now();
     const s = new Session({
       id, title: opts.title?.slice(0, 80) || 'New session', model: model.id, effort: opts.effort && model.efforts.includes(opts.effort) ? opts.effort : model.effort,
       mode: opts.mode ?? 'default', runtime: opts.runtime, createdAt: now, updatedAt: now,
-      usage: emptyUsage(), cost: 0, byModel: {}, todos: [], contextStart: 0, compactions: 0, lastPromptTokens: 0, sessionRules: [],
+      usage: emptyUsage(), cost: 0, byModel: {}, todos: [], contextStart: 0, compactions: 0, lastPromptTokens: 0, sessionRules: [], turns: 0,
     }, deps);
     await fs.mkdir(s.dir, { recursive: true });
     if (opts.runtime.kind !== 'companion') {
@@ -160,7 +183,44 @@ export class Session {
     this.saveTimer = setTimeout(() => { this.saveMeta().catch(() => {}); }, 300);
   }
 
-  // ---------- host & agent ----------
+  private trace(span: TraceSpan): void {
+    fs.appendFile(path.join(this.dir, 'trace.jsonl'), JSON.stringify({ at: Date.now(), ...span }) + '\n').catch(() => {});
+  }
+
+  async readTrace(): Promise<(TraceSpan & { at: number })[]> {
+    try {
+      return (await fs.readFile(path.join(this.dir, 'trace.jsonl'), 'utf8')).split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    } catch { return []; }
+  }
+
+  /**
+   * The server stopped while this session was mid-turn. Close it out in an
+   * append-only way: every tool call left without a result gets one saying
+   * so, and the session is idle again (and can be resumed).
+   */
+  async recoverInterrupted(): Promise<boolean> {
+    if (!this.meta.running) return false;
+    const ctx = this.history.slice(this.meta.contextStart);
+    const last = ctx[ctx.length - 1];
+    if (last?.role === 'assistant') {
+      const dangling = last.content.filter((b): b is ToolUseBlock => b.type === 'tool_use');
+      if (dangling.length) {
+        await this.appendHistory({
+          role: 'user',
+          content: [
+            ...dangling.map((d) => ({ type: 'tool_result' as const, tool_use_id: d.id, is_error: true, content: 'Not run: the server restarted before this call completed.' })),
+            { type: 'text' as const, text: '<system-reminder>The server restarted while you were working. Check the state of anything you were changing before continuing.</system-reminder>' },
+          ],
+        });
+      }
+    }
+    this.meta.running = false;
+    await this.saveMeta();
+    this.emit({ kind: 'notice', level: 'warn', text: 'The server restarted while this session was working. Send "continue" to resume.' });
+    return true;
+  }
+
+  // ---------- host, settings, toolbox ----------
 
   private async getHost(): Promise<ToolHost> {
     if (this.host) return this.host;
@@ -168,15 +228,25 @@ export class Session {
     if (r.kind === 'docker') this.host = new DockerHost(this.meta.id, this.workspace, { ...dockerDefaults(), network: r.network });
     else if (r.kind === 'local') this.host = new LocalHost(this.workspace);
     else this.host = this.deps.companions.host(r.companionId ?? '', this.meta.id);
+    if (this.host.kind !== 'companion') this.checkpoints = new Checkpoints(this.dir, this.workspace);
     return this.host;
   }
 
+  /** Repository content is trusted to run code only inside the sandbox (or when the operator says so). */
+  private projectTrusted(host: ToolHost): boolean {
+    return host.sandboxed || TRUST_PROJECT;
+  }
+
   async stopSandbox(): Promise<void> {
-    if (this.host instanceof DockerHost && this.status === 'idle') await this.host.stop();
+    if (this.host instanceof DockerHost && this.status === 'idle') {
+      if (this.toolbox) { (await this.toolbox).closeProject().catch(() => {}); this.toolbox = undefined; this.agent = undefined; }
+      await this.host.stop();
+    }
   }
 
   async destroy(): Promise<void> {
     this.abort();
+    if (this.toolbox) await (await this.toolbox).closeProject().catch(() => {});
     if (this.host instanceof DockerHost) await this.host.close();
     await fs.rm(this.dir, { recursive: true, force: true });
     if (this.meta.runtime.kind === 'docker' || (this.meta.runtime.kind === 'local' && !this.meta.runtime.path)) {
@@ -187,9 +257,14 @@ export class Session {
   private async getSettings(host: ToolHost): Promise<Settings> {
     if (this.settings) return this.settings;
     const project = host.kind === 'companion' ? {} : await loadProjectSettings(host.root);
+    const base = defaultSettings();
+    // Operator hooks from plugin manifests apply everywhere.
+    for (const [ev, specs] of Object.entries(this.deps.registry.shellHooks)) {
+      (base.hooks[ev as keyof Settings['hooks']] ??= []).push(...(specs ?? []));
+    }
     // Project hooks and allow-rules are repository content: trusted only when
     // commands are sandboxed.
-    this.settings = mergeSettings(defaultSettings(), project, host.sandboxed);
+    this.settings = mergeSettings(base, project, this.projectTrusted(host));
     return this.settings;
   }
 
@@ -198,16 +273,71 @@ export class Session {
     return { ...base, allow: [...base.allow, ...this.meta.sessionRules] };
   }
 
+  private getToolbox(host: ToolHost): Promise<Toolbox> {
+    this.toolbox ??= this.buildToolbox(host).catch((err) => { this.toolbox = undefined; throw err; });
+    return this.toolbox;
+  }
+
+  private async buildToolbox(host: ToolHost): Promise<Toolbox> {
+    const reg = this.deps.registry;
+    const tools: Tool[] = [...reg.tools.values()];
+
+    // Skills: operator plugins first, then the workspace's (a name is taken once).
+    const skills: Skill[] = [];
+    const seen = new Set<string>();
+    for (const sd of reg.skillDirs) for (const s of await skillsIn(sd.dir, sd.source)) if (!seen.has(s.name)) { seen.add(s.name); skills.push(s); }
+    for (const s of await workspaceSkills(host).catch(() => [])) if (!seen.has(s.name)) { seen.add(s.name); skills.push(s); }
+    if (skills.length) tools.push(makeSkillTool(skills));
+
+    // Agents: built-in, plugins, then the workspace's definitions.
+    const agents = new Map<string, AgentDef>();
+    for (const a of BUILTIN_AGENTS) agents.set(a.name, a);
+    for (const a of reg.agents.values()) agents.set(a.name, a);
+    if (host.kind !== 'companion') {
+      for (const rel of ['.claude/agents', '.harness/agents']) {
+        for (const a of await loadAgentDir(path.join(host.root, rel), 'project')) if (!BUILTIN_AGENTS.some((b) => b.name === a.name)) agents.set(a.name, a);
+      }
+    }
+    tools.push(makeAgentTool([...agents.values()]));
+
+    // MCP: operator servers (shared) and the project's (this session's).
+    const server = await this.deps.mcp.serverEntries(new Map([...reg.mcpServers].map(([k, v]) => [k, v])));
+    const project = await this.deps.mcp.projectEntries(host, this.projectTrusted(host));
+    const entries: McpEntry[] = [...server.entries, ...project.entries];
+    if (entries.length && entries.length <= MCP_INLINE_MAX) {
+      const names = new Set(tools.map((t) => t.spec.name));
+      for (const e of entries) if (!names.has(e.qualified)) tools.push(mcpTool(e));
+    } else if (entries.length) {
+      const d = deferredTools(entries);
+      tools.push(d.search, d.call);
+    }
+    const mcp = [...server.status, ...project.status];
+    for (const st of mcp.filter((x) => !x.ok)) this.emit({ kind: 'notice', level: 'warn', text: `MCP server ${st.name} (${st.scope}) is not available: ${st.error}` });
+    return { tools: sortTools(tools), agents: [...agents.values()], skills, mcp, closeProject: project.close };
+  }
+
+  async capabilities(): Promise<{ tools: { name: string; kind: string }[]; agents: { name: string; description: string; source?: string }[]; skills: { name: string; description: string; source: string }[]; mcp: McpStatus[]; plugins: Registry['plugins'] }> {
+    const tb = await this.getToolbox(await this.getHost());
+    return {
+      tools: tb.tools.map((t) => ({ name: t.spec.name, kind: t.kind })),
+      agents: tb.agents.map((a) => ({ name: a.name, description: a.description, source: a.source })),
+      skills: tb.skills.map((s) => ({ name: s.name, description: s.description, source: s.source })),
+      mcp: tb.mcp,
+      plugins: this.deps.registry.plugins,
+    };
+  }
+
   private async preamble(host: ToolHost): Promise<string> {
     let branch: string | undefined;
     if (host.kind !== 'companion') {
       const r = await run('git', ['-C', host.root, 'rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: 5000 });
       if (r.code === 0) branch = r.stdout.trim();
     }
-    return firstMessageText(await environmentBlock(host, { gitBranch: branch }), await projectInstructions(host), '');
+    const tb = await this.getToolbox(host);
+    return firstMessageText(await environmentBlock(host, { gitBranch: branch }), [await projectInstructions(host), skillsListing(tb.skills)].filter(Boolean).join('\n\n'), '');
   }
 
-  private hooksFor(name: string, model: ModelSpec): AgentHooks {
+  private hooksFor(name: string): AgentHooks {
     return {
       emit: (e) => this.emit(name === 'main' ? e : { ...e, agent: name } as HarnessEvent),
       onAppend: (m) => { if (name === 'main') this.appendHistory(m).catch((err) => this.emit({ kind: 'notice', level: 'error', text: `could not save history: ${err.message}` })); },
@@ -228,6 +358,7 @@ export class Session {
         if (name === 'main') this.meta.lastPromptTokens = u.input + u.cacheRead + u.cacheWrite;
         this.scheduleSave();
       },
+      onTrace: (span) => this.trace(span),
       overBudget: () => this.meta.cost >= (this.settings?.maxCostUsd ?? Infinity) ? `Stopped: this session reached its spend limit of $${this.settings!.maxCostUsd.toFixed(2)}. Raise HARNESS_MAX_COST_USD to continue.` : undefined,
       getMode: () => this.meta.mode,
       rules: () => this.rules(),
@@ -243,16 +374,19 @@ export class Session {
   private async mainAgent(): Promise<Agent> {
     const host = await this.getHost();
     const settings = await this.getSettings(host);
-    const model = getModel(this.meta.model);
+    const tb = await this.getToolbox(host);
+    const model = this.deps.registry.model(this.meta.model);
     const cfg = {
-      name: 'main', model, effort: this.meta.effort, system: SYSTEM_PROMPT, tools: ALL_TOOLS, host, settings,
+      name: 'main', model, provider: this.deps.registry.provider(model), effort: this.meta.effort, system: SYSTEM_PROMPT, tools: tb.tools, host, settings,
       cacheKey: `hw-${this.meta.id}`, maxSteps: settings.maxSteps, readFiles: this.readFiles,
-      runSubagent: (a: { description: string; prompt: string; type: 'explore' | 'general' }) => this.runSubagent(a),
+      inProcessHooks: this.deps.registry.hooks,
+      runSubagent: (a: { description: string; prompt: string; type: string }) => this.runSubagent(a),
       askUser: (q: string, o: string[]) => this.ask(q, o),
       proposePlan: (p: string) => this.proposePlan(p),
+      beforeWrite: this.checkpoints ? (p: string) => this.checkpoints!.before(p) : undefined,
     };
     if (!this.agent) {
-      this.agent = new Agent(cfg, this.hooksFor('main', model), this.history.slice(this.meta.contextStart));
+      this.agent = new Agent(cfg, this.hooksFor('main'), this.history.slice(this.meta.contextStart));
       this.agent.lastPromptTokens = this.meta.lastPromptTokens;
     } else {
       // Model or effort may have changed between turns; the context stays.
@@ -261,28 +395,63 @@ export class Session {
     return this.agent;
   }
 
-  private async runSubagent(a: { description: string; prompt: string; type: 'explore' | 'general' }): Promise<string> {
-    const n = ++this.subagents;
-    const name = `${a.type === 'explore' ? 'explore' : 'agent'}-${n}`;
+  private subagentModel(def: AgentDef, settings: Settings): ModelSpec {
+    for (const id of [def.model, settings.subagentModel]) {
+      if (!id) continue;
+      const m = this.deps.registry.listModels().find((x) => x.id === id && x.available);
+      if (m) return m;
+    }
+    return this.deps.registry.model(this.meta.model);
+  }
+
+  private async runSubagent(a: { description: string; prompt: string; type: string }): Promise<string> {
     const host = await this.getHost();
     const settings = await this.getSettings(host);
-    const model = getModel(settings.subagentModel ?? this.meta.model);
-    const tools: Tool[] = ALL_TOOLS.filter((t) => (a.type === 'explore' ? EXPLORE_TOOLS.has(t.spec.name) : !['agent', 'ask_user', 'exit_plan_mode', 'todo_write'].includes(t.spec.name)));
-    const readFiles = new Map<string, FileStamp>();
+    const tb = await this.getToolbox(host);
+    const def = tb.agents.find((x) => x.name === a.type) ?? tb.agents.find((x) => x.name === 'explore')!;
+    const n = ++this.subagents;
+    const name = `${def.name}-${n}`;
+    const model = this.subagentModel(def, settings);
+    const tools = tb.tools.filter((t) => (def.tools ? def.tools.includes(t.spec.name) : !INTERACTIVE_TOOLS.includes(t.spec.name)) && t.spec.name !== 'agent');
+    const effort = def.effort && model.efforts.includes(def.effort) ? def.effort : (model.efforts.includes(this.meta.effort) ? this.meta.effort : model.effort);
     const sub = new Agent({
-      name, model, effort: a.type === 'explore' ? (model.efforts.includes('low') ? 'low' : model.effort) : this.meta.effort,
-      system: SUBAGENT_PROMPT, tools, host, settings: { ...settings, permissions: this.rules() },
-      cacheKey: `hw-${this.meta.id}-${a.type}`, maxSteps: Math.min(60, settings.maxSteps), readFiles,
-    }, this.hooksFor(name, model));
+      name, model, provider: this.deps.registry.provider(model), effort,
+      system: SUBAGENT_PROMPT, tools, host, settings,
+      // One cache key per agent kind: sibling sub-agents share their prefix.
+      cacheKey: `hw-${this.meta.id}-${def.name}`, maxSteps: Math.min(60, settings.maxSteps), readFiles: new Map<string, FileStamp>(),
+      inProcessHooks: this.deps.registry.hooks,
+      beforeWrite: this.checkpoints ? (p: string) => this.checkpoints!.before(p) : undefined,
+    }, this.hooksFor(name));
     const env = await this.preamble(host);
-    sub.append({ role: 'user', content: [{ type: 'text', text: `${env}\n\n<brief>\n${a.prompt}\n</brief>${a.type === 'explore' ? '\n\nYou are read-only: research and report; do not try to change files.' : ''}` }] });
-    this.emit({ kind: 'notice', level: 'info', text: `Started ${name}: ${a.description}`, agent: name });
+    sub.append({ role: 'user', content: [{ type: 'text', text: `${env}${def.prompt ? `\n\n<role>\n${def.prompt}\n</role>` : ''}\n\n<brief>\n${a.prompt}\n</brief>` }] });
+    this.emit({ kind: 'notice', level: 'info', text: `Started ${name} (${model.id}): ${a.description}`, agent: name });
     const reason = await sub.run(this.abortCtl?.signal ?? new AbortController().signal);
     this.emit({ kind: 'turn_end', reason, agent: name });
     const last = [...sub.messages].reverse().find((m) => m.role === 'assistant');
     const text = last?.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n').trim() ?? '';
     const report = text ? (text.length > 16_000 ? text.slice(0, 16_000) + '\n[report truncated]' : text) : 'The sub-agent finished without a report.';
     return reason === 'done' ? report : `${report}\n\n(The sub-agent stopped early: ${reason}.)`;
+  }
+
+  // ---------- checkpoints ----------
+
+  async listCheckpoints() {
+    await this.getHost();
+    return this.checkpoints ? this.checkpoints.list() : [];
+  }
+
+  /** Puts files back as they were before `turn`. The conversation is not edited; the agent is told. */
+  async rewind(turn: number): Promise<string[]> {
+    if (this.status !== 'idle') throw new Error('Stop the agent before rewinding.');
+    await this.getHost();
+    if (!this.checkpoints) throw new Error('Checkpoints are not available for this workspace.');
+    const files = await this.checkpoints.rewind(turn);
+    this.readFiles.clear();
+    if (files.length) {
+      this.queued.push(`<system-reminder>The user rewound these files to how they were before turn ${turn}: ${files.join(', ')}. Your earlier changes to them are gone; read them again before editing.</system-reminder>`);
+      this.emit({ kind: 'notice', level: 'info', text: `Rewound ${files.length} file(s) to before turn ${turn}: ${files.join(', ')}` });
+    }
+    return files;
   }
 
   // ---------- user interaction ----------
@@ -313,7 +482,7 @@ export class Session {
     const r = await this.request('permission', { kind: 'permission_request', requestId, tool: tool.spec.name, summary, input, suggestion, agent: agent === 'main' ? undefined : agent });
     if (r.decision === 'allow_always') {
       if (suggestion === 'edit_all') this.setMode('acceptEdits');
-      else if (!this.meta.sessionRules.includes(suggestion)) { this.meta.sessionRules.push(suggestion); this.settings && this.scheduleSave(); }
+      else if (!this.meta.sessionRules.includes(suggestion)) { this.meta.sessionRules.push(suggestion); this.scheduleSave(); }
       return { allow: true };
     }
     if (r.decision === 'allow') return { allow: true };
@@ -348,13 +517,13 @@ export class Session {
   update(patch: { title?: string; model?: string; effort?: Effort; mode?: PermissionMode }): void {
     if (patch.title) this.meta.title = patch.title.slice(0, 80);
     if (patch.model && patch.model !== this.meta.model) {
-      const m = getModel(patch.model);
+      const m = this.deps.registry.model(patch.model);
       this.meta.model = m.id;
       if (!m.efforts.includes(this.meta.effort)) this.meta.effort = m.effort;
       this.emit({ kind: 'notice', level: 'info', text: `Model switched to ${m.label}. The provider cache starts fresh for this conversation.` });
     }
     if (patch.effort) {
-      const m = getModel(this.meta.model);
+      const m = this.deps.registry.model(this.meta.model);
       if (m.efforts.includes(patch.effort)) this.meta.effort = patch.effort;
     }
     if (patch.mode) this.setMode(patch.mode);
@@ -383,11 +552,16 @@ export class Session {
     this.abortCtl = new AbortController();
     const signal = this.abortCtl.signal;
     this.setStatus('running');
+    this.meta.turns = (this.meta.turns ?? 0) + 1;
+    this.meta.running = true;
+    await this.saveMeta().catch(() => {});
     let reason: TurnEndReason = 'done';
     try {
       const agent = await this.mainAgent();
       const host = await this.getHost();
-      const prompt = await runHooks(this.settings!, host, 'UserPromptSubmit', { prompt: text }, undefined, signal);
+      this.checkpoints?.begin(this.meta.turns, text);
+      const hooks = this.deps.registry.hooks;
+      const prompt = await runHooks(this.settings!, host, 'UserPromptSubmit', { prompt: text }, undefined, signal, hooks);
       if (prompt.blocked) {
         this.emit({ kind: 'notice', level: 'warn', text: `A UserPromptSubmit hook blocked this message: ${prompt.feedback}` });
         return;
@@ -395,7 +569,7 @@ export class Session {
       const first = agent.messages.length === 0;
       let body = text;
       if (first) {
-        const start = await runHooks(this.settings!, host, 'SessionStart', {}, undefined, signal);
+        const start = await runHooks(this.settings!, host, 'SessionStart', {}, undefined, signal, hooks);
         body = firstMessageText(await this.preamble(host), start.feedback ? `<session_start_context>\n${start.feedback}\n</session_start_context>` : '', text);
       }
       if (prompt.feedback) body += `\n\n<system-reminder>${prompt.feedback}</system-reminder>`;
@@ -411,6 +585,7 @@ export class Session {
       }
     } finally {
       this.abortCtl = undefined;
+      this.meta.running = false;
       for (const [id] of this.pending) this.respond(id, { decision: 'deny', feedback: 'turn ended' });
       this.emit({ kind: 'turn_end', reason });
       this.setStatus('idle');

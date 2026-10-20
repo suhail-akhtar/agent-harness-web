@@ -62,3 +62,15 @@ test('pricing: Haiku rate card by prompt size, DeepSeek peak hours', () => {
   const u = { input: 1_000_000, cacheRead: 1_000_000, cacheWrite: 0, output: 1_000_000, reasoning: 0 };
   assert.equal(costOf(ds, u, new Date('2026-10-19T12:00:00Z')).toFixed(3), '0.753');
 });
+
+test('images: each provider gets them in its own shape', async () => {
+  const { anthropicBody } = await import('../src/providers/anthropic.ts');
+  const m: Message = { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'Image attached below.' }, { type: 'text', text: 'Image(s) from read:' }, { type: 'image', media_type: 'image/png', data: 'AAAA' }] };
+  const a = anthropicBody({ model: getModel('claude-haiku-5-5'), system: 'S', tools: [], messages: [m], effort: 'low' }, false) as { messages: { content: unknown[] }[] };
+  assert.deepEqual(a.messages[0]!.content[2], { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } });
+  const o = toInputItems(m) as { content?: unknown[] }[];
+  assert.deepEqual(o[1]!.content![1], { type: 'input_image', image_url: 'data:image/png;base64,AAAA' });
+  const d = toChat(m) as { role: string; content: unknown }[];
+  assert.equal(d[0]!.role, 'tool');
+  assert.deepEqual((d[1]!.content as unknown[])[1], { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } });
+});

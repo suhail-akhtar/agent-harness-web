@@ -1,8 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { Session } from '../src/core/session.ts';
-import { CompanionHub } from '../src/runtime/companion.ts';
+import { createHarness } from '../src/kernel/harness.ts';
 import { run } from '../src/runtime/host.ts';
 
 // A small, honest benchmark: each task starts from fixed files, the agent gets
@@ -57,14 +56,14 @@ async function main() {
   const only = arg('tasks')?.split(',');
   const tasks = TASKS.filter((t) => !only || only.includes(t.id));
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'harness-bench-'));
-  const deps = { dataDir, companions: new CompanionHub(dataDir) };
+  const h = await createHarness({ dataDir });
   const rows: string[][] = [['model', 'task', 'result', 'cost $', 'cache hit', 'tool calls', 'seconds']];
   for (const model of models) {
     for (const task of tasks) {
       const dir = path.join(dataDir, `${model}-${task.id}`);
       await fs.mkdir(dir, { recursive: true });
       for (const [f, c] of Object.entries(task.files)) await fs.writeFile(path.join(dir, f), c);
-      const s = await Session.create(deps, { model, mode: 'bypass', runtime: { kind: 'local', network: 'none', path: dir } });
+      const s = await h.sessions.create({ model, mode: 'bypass', runtime: { kind: 'local', network: 'none', path: dir } });
       const t0 = Date.now();
       let calls = 0;
       const done = new Promise<void>((resolve) => s.subscribe(0, ({ event }) => {

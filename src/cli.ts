@@ -1,8 +1,8 @@
 import os from 'node:os';
 import path from 'node:path';
-import { CompanionHub } from './runtime/companion.ts';
-import { Session } from './core/session.ts';
+import { fileURLToPath } from 'node:url';
 import type { HarnessEvent } from './core/types.ts';
+import { createHarness } from './kernel/harness.ts';
 
 // Headless runs: one prompt, streamed to the terminal, for scripts and benchmarks.
 //   npm run cli -- --model deepseek-flash --runtime docker|local [--dir path] [--mode bypass] "task"
@@ -32,7 +32,13 @@ async function main() {
   const dataDir = path.resolve(arg('data', path.join(os.tmpdir(), 'harness-cli'))!);
   const runtime = (arg('runtime', 'local') === 'docker' ? 'docker' : 'local') as 'docker' | 'local';
   const dir = arg('dir');
-  const s = await Session.create({ dataDir, companions: new CompanionHub(dataDir) }, {
+  const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const h = await createHarness({
+    dataDir,
+    plugins: [path.join(appRoot, 'plugins'), ...(process.env.HARNESS_PLUGINS || '').split(path.delimiter).filter(Boolean)],
+    mcp: process.env.HARNESS_MCP_CONFIG || undefined,
+  });
+  const s = await h.sessions.create({
     model: arg('model', 'deepseek-flash')!,
     mode: (arg('mode', 'bypass') as 'bypass'),
     runtime: { kind: runtime, network: arg('network') === 'full' ? 'full' : 'none', ...(dir ? { path: path.resolve(dir) } : {}) },
@@ -52,6 +58,11 @@ async function main() {
   const u = s.meta.usage;
   const total = u.input + u.cacheRead + u.cacheWrite;
   console.log(`\ntotal: $${s.meta.cost.toFixed(5)} | input ${total} (cache hit ${total ? Math.round((u.cacheRead / total) * 100) : 0}%) | output ${u.output}`);
+  const spans = await s.readTrace();
+  const models = spans.filter((x) => x.type === 'model');
+  const tools = spans.filter((x) => x.type === 'tool');
+  console.log(`trace: ${models.length} model calls (${Math.round(models.reduce((a, x) => a + x.ms, 0) / 1000)}s), ${tools.length} tool calls (${tools.filter((x) => x.type === 'tool' && x.error).length} errors)`);
+  await h.close();
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) main().catch((e) => { console.error(e); process.exit(1); });

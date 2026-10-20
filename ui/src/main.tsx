@@ -2,6 +2,7 @@ import { render, type VNode } from 'preact';
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { api, ApiError, type CompanionInfo, type Config, type Effort, type HarnessEvent, type Mode, type SessionDetail, type SessionMeta, type Usage } from './api.ts';
 import { ContextMeter, fmtCost, Modal, PendingPrompt, Timeline, TodoPanel, UsagePanel } from './components.tsx';
+import { CapabilitiesPanel, CheckpointsPanel, TraceButton } from './panels.tsx';
 import { apply, fromHistory, type Live } from './timeline.ts';
 
 const MODE_LABEL: Record<Mode, string> = { default: 'Ask before edits', acceptEdits: 'Auto-accept edits', plan: 'Plan mode', bypass: 'Bypass permissions' };
@@ -64,6 +65,7 @@ function NewSession({ config, onClose, onCreated, onCompanions }: { config: Conf
           {config.models.map((m) => <option key={m.id} value={m.id} disabled={!m.available}>{m.label}{m.available ? '' : ' (no API key on server)'}</option>)}
         </select>
       </label>
+      {spec?.notes && <div class="notice notice-info small">{spec.notes}</div>}
       {spec && (
         <label class="field"><span>Effort</span>
           <select class="input" value={effort || spec.effort} onChange={(e) => setEffort((e.target as HTMLSelectElement).value as Effort)}>
@@ -217,6 +219,7 @@ function SessionView({ id, config, onMeta }: { id: string; config: Config; onMet
           case 'todos': if (metaRef.current) { metaRef.current = { ...metaRef.current, todos: event.todos }; setMeta(metaRef.current); } break;
           case 'mode': if (metaRef.current) { metaRef.current = { ...metaRef.current, mode: event.mode }; setMeta(metaRef.current); } break;
           case 'tool_result': if (['write', 'edit', 'bash'].includes(event.name)) setFilesKey((k) => k + 1); break;
+          case 'notice': if (/^Rewound/.test(event.text)) setFilesKey((k) => k + 1); break;
           case 'turn_end': if (!event.agent) api.get<SessionDetail>(`/api/sessions/${id}`).then((d) => { metaRef.current = d.meta; setMeta(d.meta); onMeta(d.meta); }).catch(() => {}); break;
         }
       };
@@ -287,10 +290,12 @@ function SessionView({ id, config, onMeta }: { id: string; config: Config; onMet
         <ContextMeter used={live.contextTokens} window={live.contextWindow || spec?.compactAt || 0} />
         <UsagePanel usage={meta.usage} cost={meta.cost} byModel={meta.byModel} />
         <TodoPanel todos={meta.todos} />
+        <CapabilitiesPanel sessionId={id} />
+        {meta.runtime.kind !== 'companion' && <CheckpointsPanel sessionId={id} refreshKey={filesKey} busy={busy} />}
         {meta.runtime.kind !== 'companion' && <FilesPanel sessionId={id} refreshKey={filesKey} />}
         <div class="panel muted small">
           {meta.compactions ? <div>Compacted {meta.compactions}×</div> : null}
-          <div>Session {meta.id}</div>
+          <div>Session {meta.id} · <TraceButton sessionId={id} /></div>
           <button class="link danger" onClick={async () => { if (confirm('Delete this session and its workspace?')) { await api.del(`/api/sessions/${id}`); location.hash = ''; } }}>Delete session</button>
         </div>
       </aside>

@@ -177,3 +177,12 @@ test('PreToolUse hook exit 2 blocks the call', async () => {
   await h.agent.run(ac());
   assert.match(results(h.agent.messages[2])[0]!.content, /blocked this call: no shell today/);
 });
+
+test('an image a tool returns is shown to the model after the tool results', async () => {
+  const h = await makeAgent([{ calls: [{ name: 'read', input: { path: 'shot.png' } }] }, { text: 'red and blue' }]);
+  await fs.writeFile(path.join(h.root, 'shot.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
+  h.agent.append({ role: 'user', content: [{ type: 'text', text: 'look' }] });
+  await h.agent.run(ac());
+  const msg = h.agent.messages[2]!;
+  assert.deepEqual(msg.content.map((b) => b.type), ['tool_result', 'text', 'image']);
+});

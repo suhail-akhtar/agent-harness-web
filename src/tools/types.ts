@@ -2,7 +2,13 @@ import type { HarnessEvent, Todo } from '../core/types.ts';
 import type { ToolSpec } from '../providers/types.ts';
 import type { ToolHost, ToolOutcome } from '../runtime/host.ts';
 
-export type ToolKind = 'read' | 'edit' | 'exec' | 'network' | 'meta';
+/**
+ * Permission class. read: no side effects. edit: changes workspace files.
+ * exec: runs commands where tools run (free in a sandbox). network: fetches
+ * the web. external: acts on another system (an MCP service) - always asks
+ * unless allowed. meta: talks to the harness or the user.
+ */
+export type ToolKind = 'read' | 'edit' | 'exec' | 'network' | 'external' | 'meta';
 
 export interface FileStamp { mtimeMs: number; size: number }
 
@@ -14,7 +20,9 @@ export interface ToolContext {
   todos: Todo[];
   setTodos(todos: Todo[]): void;
   emit(e: HarnessEvent): void;
-  runSubagent?(args: { description: string; prompt: string; type: 'explore' | 'general' }): Promise<string>;
+  runSubagent?(args: { description: string; prompt: string; type: string }): Promise<string>;
+  /** Called with a file's real path before a tool changes it (checkpoints for rewind). */
+  beforeWrite?(realPath: string): Promise<void>;
   askUser?(question: string, options: string[]): Promise<string>;
   proposePlan?(plan: string): Promise<{ approved: boolean; feedback?: string }>;
   isPlanMode?(): boolean;
@@ -30,6 +38,11 @@ export interface Tool {
   run(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutcome>;
   /** One line for permission prompts and the UI. */
   summarize(input: Record<string, unknown>): string;
+  /**
+   * For dispatcher tools (tool_call): the real tool and input this call runs.
+   * Permissions, hooks and validation then apply to THAT tool.
+   */
+  resolve?(input: Record<string, unknown>): { tool: Tool; input: Record<string, unknown> } | { error: string };
 }
 
 export type { ToolOutcome };

@@ -232,3 +232,15 @@ pre.copyable { user-select: all; }
   .timeline, .composer { padding-left: 12px; padding-right: 12px; }
   .welcome { padding-top: 56px; }
 }
+
+/* framework panels */
+.tool-images { display: flex; gap: 8px; flex-wrap: wrap; padding: 8px 10px; border-top: 1px solid var(--line); }
+.tool-images img { max-width: 100%; max-height: 360px; border-radius: 6px; border: 1px solid var(--line); background: #fff; }
+.caps { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow-y: auto; }
+.checkpoints { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 280px; overflow-y: auto; }
+.checkpoints li { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
+.cp-head { display: flex; justify-content: space-between; align-items: center; }
+.cp-prompt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+table.trace { font: 12px var(--mono); }
+table.trace td, table.trace th { padding: 3px 8px; white-space: nowrap; }
+tr.compaction-row { background: var(--panel-2); }
