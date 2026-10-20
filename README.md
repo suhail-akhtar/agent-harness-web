@@ -27,6 +27,17 @@ npm start                     # http://127.0.0.1:4310, prints an access token
 
 Node 22.18+ is required; it runs the TypeScript directly. Docker is optional: without it, work on your own computer through the companion, or in a server folder.
 
+**On Windows or macOS, run it in Docker** (`docker/Dockerfile.harness`: Node 22, bash, LibreOffice, poppler, pandoc and Chromium, so every visual tool works with nothing installed on the machine):
+
+```bash
+docker compose build
+docker compose run --rm harness npm ci     # once; node_modules lives in a Linux volume
+docker compose run --rm harness npm test
+docker compose up                          # http://127.0.0.1:4310; keys pass through from your shell
+```
+
+Sessions in the container use the server-folder runtime on `/work` (`HARNESS_WORK` on the host, default `./.work`); the container is the isolation. Docker's default seccomp profile blocks `unshare`, so the document converters run without their extra no-network namespace there.
+
 Headless, for scripts and CI:
 
 ```bash

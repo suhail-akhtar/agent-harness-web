@@ -3,3 +3,4 @@ ui/dist/
 dist/
 .harness-data/
 .harness/bg/
+.work/
