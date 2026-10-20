@@ -52,7 +52,7 @@ export function resolveShell(platform: string = process.platform, env: NodeJS.Pr
 }
 
 export interface ImageData { media_type: string; data: string }
-export interface ToolOutcome { content: string; is_error?: boolean; display?: ToolDisplay; images?: ImageData[] }
+export interface ToolOutcome { content: string; is_error?: boolean; display?: ToolDisplay; images?: ImageData[]; /** Content from outside the user's control (the agent tool sets it when its sub-agent read the web). */ untrusted?: boolean }
 
 export interface ToolHost {
   kind: 'docker' | 'local' | 'companion';

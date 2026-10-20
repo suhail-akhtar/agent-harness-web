@@ -18,7 +18,10 @@ import type { ToolHost } from '../runtime/host.ts';
 import { LocalHost, run } from '../runtime/host.ts';
 import { makeSkillTool, type Skill, skillsIn, skillsListing, workspaceSkills } from '../skills/skills.ts';
 import { sortTools } from '../tools/index.ts';
-import type { FileStamp, Tool } from '../tools/types.ts';
+import type { FileStamp, Tool, ToolServices } from '../tools/types.ts';
+import { MemoryStore, projectKey } from '../memory/store.ts';
+import { SourceStore } from '../research/sources.ts';
+import type { SearchService } from '../research/search.ts';
 import { Agent, type AgentHooks, type PermissionAnswer, type TraceSpan } from './agent.ts';
 import { Checkpoints } from './checkpoints.ts';
 import { runHooks } from './hooks.ts';
@@ -53,6 +56,10 @@ export interface SessionMeta {
   turns?: number;
   /** True while a turn runs; still true on load means the server stopped mid-turn. */
   running?: boolean;
+  /** The account that owns the session (absent: the single-user server). */
+  owner?: string;
+  /** Spend by tools that cost money outside the model loop (web search). */
+  toolCost?: number;
 }
 
 export interface StoredEvent { seq: number; at: number; event: HarnessEvent }
@@ -67,6 +74,12 @@ export interface SessionDeps {
   dataDir: string; companions: CompanionHub; registry: Registry; mcp: McpManager;
   /** Every trace span as it is written (OpenTelemetry export). */
   onSpan?: (sessionId: string, span: TraceSpan & { at: number }) => void;
+  /** Memory across sessions: where it lives, and whether agents may change it. */
+  memory?: { root: string; mode: 'on' | 'read' | 'off' };
+  /** The web search behind web_search (absent: no search). */
+  search?: SearchService;
+  /** Spend per account: recorded on every charge, and a cap that stops turns. */
+  spend?: { add(owner: string | undefined, usd: number): void; over(owner: string | undefined): string | undefined };
 }
 
 /** What one session can use, assembled once (the tool list never changes mid-session: it would break the cache). */
@@ -111,18 +124,21 @@ export class Session {
   private subagents = 0;
   private latestPrompt = '';
   private saveTimer?: NodeJS.Timeout;
+  private memory?: Promise<MemoryStore | undefined>;
+  readonly sources: SourceStore;
 
   constructor(meta: SessionMeta, deps: SessionDeps) {
     this.meta = meta;
     this.deps = deps;
     this.dir = path.join(deps.dataDir, 'sessions', meta.id);
+    this.sources = new SourceStore(path.join(this.dir, 'sources'));
   }
 
   get workspace(): string {
     return this.meta.runtime.kind === 'local' && this.meta.runtime.path ? this.meta.runtime.path : path.join(this.deps.dataDir, 'workspaces', this.meta.id);
   }
 
-  static async create(deps: SessionDeps, opts: { title?: string; model: string; effort?: Effort; mode?: PermissionMode; runtime: SessionMeta['runtime']; gitUrl?: string }): Promise<Session> {
+  static async create(deps: SessionDeps, opts: { title?: string; model: string; effort?: Effort; mode?: PermissionMode; runtime: SessionMeta['runtime']; gitUrl?: string; owner?: string }): Promise<Session> {
     const model = deps.registry.model(opts.model);
     const id = crypto.randomBytes(8).toString('hex');
     const now = Date.now();
@@ -130,6 +146,7 @@ export class Session {
       id, title: opts.title?.slice(0, 80) || 'New session', model: model.id, effort: opts.effort && model.efforts.includes(opts.effort) ? opts.effort : model.effort,
       mode: opts.mode ?? 'default', runtime: opts.runtime, createdAt: now, updatedAt: now,
       usage: emptyUsage(), cost: 0, byModel: {}, todos: [], contextStart: 0, compactions: 0, lastPromptTokens: 0, sessionRules: [], turns: 0,
+      ...(opts.owner ? { owner: opts.owner } : {}),
     }, deps);
     await fs.mkdir(s.dir, { recursive: true });
     if (opts.runtime.kind !== 'companion') {
@@ -294,6 +311,47 @@ export class Session {
     return { ...base, allow: [...base.allow, ...this.meta.sessionRules] };
   }
 
+  /**
+   * This session's memory: the owner's (every project) and the project's,
+   * keyed by its git remote or, for a folder on this server, its path.
+   */
+  memoryStore(): Promise<MemoryStore | undefined> {
+    this.memory ??= (async () => {
+      const m = this.deps.memory;
+      if (!m || m.mode === 'off') return undefined;
+      const host = await this.getHost();
+      let remote: string | undefined;
+      if (host.kind !== 'companion') {
+        const r = await run('git', ['-C', host.root, 'config', '--get', 'remote.origin.url'], { timeoutMs: 5000 });
+        if (r.code === 0) remote = r.stdout.trim();
+      }
+      const folder = this.meta.runtime.kind === 'local' && this.meta.runtime.path ? this.meta.runtime.path : undefined;
+      const project = projectKey({ gitRemote: remote, folder });
+      const user = (this.meta.owner ?? 'default').replace(/[^\w.@-]/g, '_').slice(0, 80);
+      return new MemoryStore({ user: path.join(m.root, 'users', user), project: project && path.join(m.root, 'projects', project.key), projectLabel: project?.label }, { readOnly: m.mode === 'read', session: this.meta.id });
+    })();
+    return this.memory;
+  }
+
+  /** Harness services for an agent's tools. Sub-agents read memory but do not change it. */
+  private async services(main: boolean): Promise<ToolServices> {
+    const memory = await this.memoryStore();
+    return {
+      memory: main ? memory : memory?.reader(),
+      sources: this.sources,
+      search: this.deps.search,
+      charge: (what, cost) => {
+        this.meta.cost += cost;
+        this.deps.spend?.add(this.meta.owner, cost);
+        this.meta.toolCost = (this.meta.toolCost ?? 0) + cost;
+        const b = (this.meta.byModel[what] ??= { usage: emptyUsage(), cost: 0, requests: 0 });
+        b.cost += cost;
+        b.requests++;
+        this.scheduleSave();
+      },
+    };
+  }
+
   private getToolbox(host: ToolHost): Promise<Toolbox> {
     this.toolbox ??= this.buildToolbox(host).catch((err) => { this.toolbox = undefined; throw err; });
     return this.toolbox;
@@ -301,7 +359,9 @@ export class Session {
 
   private async buildToolbox(host: ToolHost): Promise<Toolbox> {
     const reg = this.deps.registry;
-    const tools: Tool[] = [...reg.tools.values()];
+    const memory = await this.memoryStore();
+    // Tools for services that are off are left out: a tool that can only fail is noise in every request.
+    const tools: Tool[] = [...reg.tools.values()].filter((t) => !(t.spec.name === 'memory' && !memory) && !(t.spec.name === 'web_search' && !this.deps.search));
 
     // Skills: operator plugins first, then the workspace's (a name is taken once).
     const skills: Skill[] = [];
@@ -358,14 +418,16 @@ export class Session {
     };
   }
 
-  private async preamble(host: ToolHost): Promise<string> {
+  /** The opening context. The main agent also gets its memory; sub-agents are briefed by it instead. */
+  private async preamble(host: ToolHost, main = true): Promise<string> {
     let branch: string | undefined;
     if (host.kind !== 'companion') {
       const r = await run('git', ['-C', host.root, 'rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: 5000 });
       if (r.code === 0) branch = r.stdout.trim();
     }
     const tb = await this.getToolbox(host);
-    return firstMessageText(await environmentBlock(host, { gitBranch: branch }), [await projectInstructions(host), skillsListing(tb.skills)].filter(Boolean).join('\n\n'), '');
+    const memory = main ? await (await this.memoryStore())?.briefing().catch(() => '') : '';
+    return firstMessageText(await environmentBlock(host, { gitBranch: branch }), [await projectInstructions(host), memory, skillsListing(tb.skills)].filter(Boolean).join('\n\n'), '');
   }
 
   private hooksFor(name: string, costSink?: (c: number) => void): AgentHooks {
@@ -381,6 +443,7 @@ export class Session {
       },
       onUsage: (m, u, cost) => {
         costSink?.(cost);
+        this.deps.spend?.add(this.meta.owner, cost);
         this.meta.usage = addUsage(this.meta.usage, u);
         this.meta.cost += cost;
         const b = (this.meta.byModel[m.id] ??= { usage: emptyUsage(), cost: 0, requests: 0 });
@@ -391,14 +454,14 @@ export class Session {
         this.scheduleSave();
       },
       onTrace: (span) => this.trace(span),
-      overBudget: () => this.meta.cost >= (this.settings?.maxCostUsd ?? Infinity) ? `Stopped: this session reached its spend limit of $${this.settings!.maxCostUsd.toFixed(2)}. Raise HARNESS_MAX_COST_USD to continue.` : undefined,
+      overBudget: () => (this.meta.cost >= (this.settings?.maxCostUsd ?? Infinity) ? `Stopped: this session reached its spend limit of $${this.settings!.maxCostUsd.toFixed(2)}. Raise HARNESS_MAX_COST_USD to continue.` : undefined) ?? this.deps.spend?.over(this.meta.owner),
       getMode: () => this.meta.mode,
       rules: () => this.rules(),
       requestPermission: (tool, input, summary, suggestion, agent) => this.askPermission(tool, input, summary, suggestion, agent),
       takeQueuedUserText: () => (name === 'main' ? this.queued.splice(0) : []),
       todos: () => this.meta.todos,
       setTodos: (t) => { this.meta.todos = t; this.scheduleSave(); },
-      preamble: async () => this.preamble(await this.getHost()),
+      preamble: async () => this.preamble(await this.getHost(), name === 'main'),
       latestUserPrompt: () => this.latestPrompt,
     };
   }
@@ -416,10 +479,14 @@ export class Session {
       askUser: (q: string, o: string[]) => this.ask(q, o),
       proposePlan: (p: string) => this.proposePlan(p),
       beforeWrite: this.checkpoints ? (p: string) => this.checkpoints!.before(p) : undefined,
+      services: await this.services(true),
     };
     if (!this.agent) {
       this.agent = new Agent(cfg, this.hooksFor('main'), this.history.slice(this.meta.contextStart));
       this.agent.lastPromptTokens = this.meta.lastPromptTokens;
+      // Reloaded after a restart: untrusted content already in the context still counts.
+      const untrusted = new Set(tb.tools.filter((t) => t.kind === 'network' || t.kind === 'external').map((t) => t.spec.name));
+      this.agent.tainted = this.agent.messages.some((m) => m.content.some((b) => b.type === 'tool_use' && (untrusted.has(b.name) || b.name.startsWith('mcp__') || b.name === 'tool_call')));
     } else {
       // Model or effort may have changed between turns; the context stays.
       this.agent.cfg = { ...this.agent.cfg, ...cfg };
@@ -441,7 +508,7 @@ export class Session {
     if (!settings.gatesOnStop || !this.deps.registry.gates.size) return [];
     return [{
       event: 'Stop', plugin: 'harness', handler: async (_p, ctx) => {
-        const results = await runGates(this.deps.registry, ctx.host, 'applicable', ctx.signal);
+        const results = await runGates(this.deps.registry, ctx.host, 'applicable', ctx.signal, await this.services(false));
         const failing = results.filter((r) => !r.pass && r.severity !== 'advisory');
         if (!failing.length) return undefined;
         return { block: true, feedback: `Quality gates are failing - fix them before you finish:\n${formatGates(results)}` };
@@ -477,11 +544,14 @@ export class Session {
       cacheKey: `hw-${this.meta.id}-${def.name}`, maxSteps: Math.min(a.maxSteps ?? (a.allowTodos ? 150 : 60), settings.maxSteps), readFiles: new Map<string, FileStamp>(),
       inProcessHooks: this.deps.registry.hooks,
       beforeWrite: this.checkpoints ? (p: string) => this.checkpoints!.before(p) : undefined,
+      services: await this.services(false),
     }, this.hooksFor(name, (c) => { cost += c; }));
-    const env = await this.preamble(host);
+    const env = await this.preamble(host, false);
     sub.append({ role: 'user', content: [{ type: 'text', text: `${env}${def.prompt ? `\n\n<role>\n${def.prompt}\n</role>` : ''}\n\n<brief>\n${a.prompt}\n</brief>` }] });
     this.emit({ kind: 'notice', level: 'info', text: `Started ${name} (${def.name}, ${model.id})${a.description ? `: ${a.description}` : ''}`, agent: name });
     const reason = await sub.run(a.signal);
+    // Its report carries whatever it read: the delegating agent is now tainted too.
+    if (sub.tainted && this.agent) this.agent.tainted = true;
     this.emit({ kind: 'turn_end', reason, agent: name });
     const last = [...sub.messages].reverse().find((m) => m.role === 'assistant');
     const text = last?.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n').trim() ?? '';
@@ -547,7 +617,7 @@ export class Session {
     return {
       host: () => this.getHost(),
       runAgent: (a) => this.runAgent({ ...a, allowTodos: true }),
-      runGates: async (names, signal) => runGates(this.deps.registry, await this.getHost(), names, signal),
+      runGates: async (names, signal) => runGates(this.deps.registry, await this.getHost(), names, signal, await this.services(false)),
       approve: async ({ runId, node, title, message, files }) => {
         const host = await this.getHost();
         const shown: { path: string; content: string }[] = [];

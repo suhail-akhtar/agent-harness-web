@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { BUILTIN_MODELS } from '../core/models.ts';
 import { SessionManager } from '../core/manager.ts';
+import type { SessionDeps } from '../core/session.ts';
 import { McpManager } from '../mcp/manager.ts';
 import type { McpServerConfig } from '../plugins/api.ts';
 import { findPluginDirs, loadPlugin, readManifest } from '../plugins/loader.ts';
@@ -10,6 +11,7 @@ import { OtelExporter, parseHeaders } from './otel.ts';
 import { BUILTIN_PROVIDERS } from '../providers/index.ts';
 import { CompanionHub } from '../runtime/companion.ts';
 import { BUILTIN_TOOLS } from '../tools/index.ts';
+import { BUILTIN_SEARCH, makeSearchService, type SearchService } from '../research/search.ts';
 import { Registry, type LoadedPlugin } from './registry.ts';
 
 // The harness as a library: one call assembles the registry (built-ins, then
@@ -42,6 +44,17 @@ export interface HarnessOptions {
   installDir?: string;
   /** OTLP/HTTP endpoint for trace spans. Default: HARNESS_OTEL_ENDPOINT. */
   otelEndpoint?: string;
+  /**
+   * Memory across sessions: 'on' (agents read and write it), 'read' (loaded,
+   * never changed by agents) or 'off'. Default: HARNESS_MEMORY, else 'on'.
+   */
+  memory?: 'on' | 'read' | 'off';
+  /** Where memory lives. Default: <dataDir>/memory. */
+  memoryDir?: string;
+  /** The search behind web_search. Default: from HARNESS_SEARCH and the keys the server has; null turns it off. */
+  search?: SearchService | null;
+  /** Spend per account (a shared server's daily caps). */
+  spend?: SessionDeps['spend'];
   log?: (message: string) => void;
 }
 
@@ -50,6 +63,8 @@ export interface CatalogueEntry { name: string; version: string; description: st
 export interface Harness {
   registry: Registry;
   sessions: SessionManager;
+  /** The web search backend in use, if any. */
+  search?: string;
   companions: CompanionHub;
   mcp: McpManager;
   dataDir: string;
@@ -120,10 +135,17 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   const mcp = new McpManager();
   const otelEndpoint = opts.otelEndpoint ?? process.env.HARNESS_OTEL_ENDPOINT;
   const otel = otelEndpoint ? new OtelExporter(otelEndpoint, { headers: parseHeaders(process.env.HARNESS_OTEL_HEADERS), log }) : undefined;
-  const sessions = new SessionManager({ dataDir: opts.dataDir, companions, registry, mcp, onSpan: otel ? (sid, span) => otel.record(sid, span) : undefined });
+  const memoryMode = opts.memory ?? (process.env.HARNESS_MEMORY as 'on' | 'read' | 'off' | undefined) ?? 'on';
+  if (!['on', 'read', 'off'].includes(memoryMode)) throw new Error(`HARNESS_MEMORY must be on, read or off (got "${memoryMode}")`);
+  const search = opts.search === null ? undefined : opts.search ?? makeSearchService([...registry.searchBackends.values(), ...(opts.bare ? [] : BUILTIN_SEARCH)]);
+  if (search) log(`web search: ${search.backend}`);
+  const sessions = new SessionManager({
+    dataDir: opts.dataDir, companions, registry, mcp, onSpan: otel ? (sid, span) => otel.record(sid, span) : undefined,
+    memory: { root: path.resolve(opts.memoryDir ?? path.join(opts.dataDir, 'memory')), mode: memoryMode }, search, spend: opts.spend,
+  });
   await sessions.load();
   return {
-    registry, sessions, companions, mcp, dataDir: opts.dataDir,
+    registry, sessions, companions, mcp, dataDir: opts.dataDir, search: search?.backend,
     async catalogue() {
       const out: CatalogueEntry[] = [];
       for (const dir of await catalogueDirs()) {

@@ -277,3 +277,8 @@ tr.compaction-row { background: var(--panel-2); }
 .prompt-approval { border-color: var(--accent); }
 .approval-file { max-height: 420px; overflow: auto; margin-top: 6px; }
 .run-row { padding: 3px 0; }
+.memory-files, .sources { list-style: none; margin: 6px 0; padding: 0; display: grid; gap: 3px; }
+.memory-files li, .sources li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sources a { color: var(--accent); text-decoration: none; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.row-end { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }

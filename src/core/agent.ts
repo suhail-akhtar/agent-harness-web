@@ -73,6 +73,7 @@ export interface AgentConfig {
   askUser?: ToolContext['askUser'];
   proposePlan?: ToolContext['proposePlan'];
   beforeWrite?: ToolContext['beforeWrite'];
+  services?: ToolContext['services'];
 }
 
 const MAX_RETRIES = 6;
@@ -93,6 +94,8 @@ export class Agent {
   lastPromptTokens = 0;
   private specs: ToolSpec[];
   private recentCalls: string[] = [];
+  /** Untrusted content (a web page, an MCP result, a sub-agent that read some) has entered this context. */
+  tainted = false;
   private stepsSinceTodo = 0;
 
   constructor(cfg: AgentConfig, hooks: AgentHooks, messages: Message[] = []) {
@@ -304,7 +307,7 @@ export class Agent {
     }
     const name = tool.spec.name;
 
-    const decision = decide(tool, input, { mode: this.hooks.getMode(), rules: this.hooks.rules(), sandboxed: this.cfg.host.sandboxed });
+    const decision = decide(tool, input, { mode: this.hooks.getMode(), rules: this.hooks.rules(), sandboxed: this.cfg.host.sandboxed, tainted: this.tainted });
     if (decision.action === 'deny') return finish(`Permission denied: ${decision.reason}.`, true, undefined, undefined, name);
     if (decision.action === 'ask') {
       const answer = await this.hooks.requestPermission(tool, input, tool.summarize(input), suggestRule(tool, input), agent);
@@ -327,6 +330,7 @@ export class Agent {
       return finish(msg, true, undefined, undefined, name);
     }
     if (name === 'todo_write') this.stepsSinceTodo = 0;
+    if (tool.kind === 'network' || tool.kind === 'external' || outcome.untrusted) this.tainted = true;
 
     let content = outcome.content;
     const post = await this.hookRun('PostToolUse', { tool: name, input, is_error: !!outcome.is_error }, name, signal);
@@ -348,6 +352,7 @@ export class Agent {
       proposePlan: this.cfg.proposePlan,
       beforeWrite: this.cfg.beforeWrite,
       isPlanMode: () => this.hooks.getMode() === 'plan',
+      services: this.cfg.services,
     };
   }
 

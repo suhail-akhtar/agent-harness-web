@@ -22,6 +22,7 @@ import { runGates } from '../gates/gates.ts';
 import type { Harness } from '../kernel/harness.ts';
 import { createHarness } from '../kernel/harness.ts';
 import { LocalHost } from '../runtime/host.ts';
+import type { ToolServices } from '../tools/types.ts';
 
 export interface EvalCheck { name: string; run?: string; gates?: string[]; files?: string[]; playtest?: string; timeoutSec?: number }
 export interface EvalCase {
@@ -66,7 +67,7 @@ async function freePort(): Promise<number> {
   });
 }
 
-export async function runChecks(h: Harness, c: EvalCase, ws: string, signal: AbortSignal): Promise<CheckResult[]> {
+export async function runChecks(h: Harness, c: EvalCase, ws: string, signal: AbortSignal, services?: ToolServices): Promise<CheckResult[]> {
   const host = new LocalHost(ws);
   const results: CheckResult[] = [];
   for (const ch of c.checks) {
@@ -78,7 +79,7 @@ export async function runChecks(h: Harness, c: EvalCase, ws: string, signal: Abo
         const out = `${r.stdout}\n${r.stderr}`.trim().split('\n').slice(-6).join('\n');
         results.push({ name: ch.name, pass: r.code === 0 && !r.timedOut, detail: r.timedOut ? 'timed out' : `exit ${r.code}${out ? `: ${out.slice(-600)}` : ''}` });
       } else if (ch.gates) {
-        const gs = await runGates(h.registry, host, ch.gates, signal);
+        const gs = await runGates(h.registry, host, ch.gates, signal, services);
         const missing = ch.gates.filter((n) => !gs.some((g) => g.name === n));
         const bad = gs.filter((g) => !g.pass);
         results.push({ name: ch.name, pass: !bad.length && !missing.length, detail: [...gs.map((g) => `${g.pass ? 'PASS' : 'FAIL'} ${g.name}: ${g.summary}${g.pass ? '' : ` ${(g.details ?? '').slice(0, 400)}`}`), ...missing.map((m) => `gate ${m} not registered`)].join('\n') });
@@ -141,7 +142,7 @@ export async function runOne(c: EvalCase, model: string, repeat: number, out: st
     const spans = await s.readTrace();
     run.modelCalls = spans.filter((x) => x.type === 'model').length;
     run.toolCalls = spans.filter((x) => x.type === 'tool').length;
-    run.checks = await runChecks(h, c, ws, new AbortController().signal);
+    run.checks = await runChecks(h, c, ws, new AbortController().signal, { sources: s.sources });
     run.pass = ['succeeded', 'done'].includes(run.status) && run.checks.every((x) => x.pass);
   } catch (e) {
     run.error = (e as Error).message;

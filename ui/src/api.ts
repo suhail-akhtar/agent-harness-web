@@ -36,6 +36,8 @@ export interface Config {
   runtimes: { docker: boolean; dockerImage: string | null; local: boolean; localRoots: string[] };
   companions: CompanionInfo[];
   plugins?: { name: string; version: string; description: string; contributes: string[] }[];
+  search?: string | null;
+  me?: { id?: string; name: string; role: 'admin' | 'member' };
 }
 export interface Usage { input: number; cacheRead: number; cacheWrite: number; output: number; reasoning: number }
 export interface Todo { content: string; status: 'pending' | 'in_progress' | 'completed' }

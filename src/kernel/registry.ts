@@ -3,6 +3,7 @@ import type { WorkflowDef } from '../graph/types.ts';
 import type { HookEvent, HookSpec } from '../core/settings.ts';
 import type { AgentDef, HookHandler, McpServerConfig, ProviderDef, QualityGate } from '../plugins/api.ts';
 import type { Provider } from '../providers/types.ts';
+import type { SearchBackend } from '../research/search.ts';
 import type { Tool } from '../tools/types.ts';
 
 // Everything the harness can use is registered here: the built-ins and every
@@ -17,6 +18,8 @@ export interface LoadedPlugin {
   contributes: string[];
   /** "shipped with the harness", "signed by <key>", "unsigned", ... */
   signature?: string;
+  /** What it declared it needs (harness-plugin.json permissions). */
+  permissions?: { network?: string[]; secrets?: string[] };
 }
 
 export interface InProcessHook { event: HookEvent; matcher?: string; handler: HookHandler; plugin: string }
@@ -27,9 +30,11 @@ export class Registry {
   readonly tools = new Map<string, Tool>();
   readonly agents = new Map<string, AgentDef>();
   readonly skillDirs: { dir: string; source: string }[] = [];
-  readonly mcpServers = new Map<string, McpServerConfig & { plugin: string }>();
+  readonly mcpServers = new Map<string, McpServerConfig & { plugin: string; secrets?: string[] }>();
   readonly gates = new Map<string, QualityGate & { plugin: string }>();
   readonly workflows = new Map<string, WorkflowDef>();
+  /** Search backends from plugins (tried before the built-in ones). */
+  readonly searchBackends = new Map<string, SearchBackend>();
   readonly hooks: InProcessHook[] = [];
   readonly shellHooks: Partial<Record<HookEvent, HookSpec[]>> = {};
   readonly plugins: LoadedPlugin[] = [];
@@ -39,7 +44,7 @@ export class Registry {
 
   /** Saves the registry's contents; the function returned puts them back (a failed plugin load). */
   snapshot(): () => void {
-    const maps: Map<string, unknown>[] = [this.models, this.providers, this.tools, this.agents, this.mcpServers, this.gates, this.workflows, this.instances];
+    const maps: Map<string, unknown>[] = [this.models, this.providers, this.tools, this.agents, this.mcpServers, this.gates, this.workflows, this.searchBackends, this.instances];
     const lists: unknown[][] = [this.skillDirs, this.hooks, this.plugins, this.closers];
     const savedMaps = maps.map((m) => new Map(m));
     const savedLists = lists.map((l) => l.slice());

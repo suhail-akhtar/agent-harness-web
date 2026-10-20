@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { McpServerConfig } from '../plugins/api.ts';
-import type { ToolHost } from '../runtime/host.ts';
+import { scrubbedEnv, type ToolHost } from '../runtime/host.ts';
 import { assertPublicUrl } from '../tools/web.ts';
 import { HttpTransport, McpClient, StdioTransport } from './client.ts';
 import { type McpEntry, qualifiedName } from './tools.ts';
@@ -19,9 +19,18 @@ import { type McpEntry, qualifiedName } from './tools.ts';
 
 export interface McpStatus { name: string; scope: 'server' | 'project'; ok: boolean; tools: number; error?: string }
 
-function expand(v: string): string {
-  return v.replace(/\$\{([A-Z0-9_]+)\}/g, (_m, k: string) => process.env[k] ?? '');
+const SECRET_NAME = /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|COOKIE|SESSION/i;
+
+/**
+ * ${VAR} from the server's environment. A plugin's server gets a secret only if
+ * the plugin declares it (permissions.secrets); the operator's own config gets any.
+ */
+export function expand(v: string, allowedSecrets?: string[]): string {
+  return v.replace(/\$\{([A-Z0-9_]+)\}/g, (_m, k: string) => (allowedSecrets && SECRET_NAME.test(k) && !allowedSecrets.includes(k) ? '' : process.env[k] ?? ''));
 }
+
+/** A server-scope MCP config, with who added it and the secrets it may read. */
+export type ServerMcpConfig = McpServerConfig & { plugin?: string; secrets?: string[] };
 
 const SHIMS = new Set(['npx', 'npm', 'pnpm', 'pnpx', 'yarn', 'corepack']);
 
@@ -40,20 +49,24 @@ export function spawnPlan(command: string, args: string[], platform: string = pr
   return batch ? { command: quoteWin(command), args: args.map(quoteWin), shell: true } : { command, args, shell: false };
 }
 
-async function connect(name: string, cfg: McpServerConfig, scope: 'server' | 'project', host?: ToolHost): Promise<McpClient> {
+async function connect(name: string, cfg: ServerMcpConfig, scope: 'server' | 'project', host?: ToolHost): Promise<McpClient> {
   let client: McpClient;
   const opts = { callTimeoutMs: cfg.timeoutMs };
+  // Operator config (no plugin) may read any variable; a plugin only what it declared.
+  const allowed = cfg.plugin && cfg.plugin !== 'config' ? cfg.secrets ?? [] : undefined;
+  const x = (v: string) => (scope === 'server' ? expand(v, allowed) : v);
   if (cfg.type === 'http') {
-    const url = scope === 'server' ? expand(cfg.url) : cfg.url;
+    const url = x(cfg.url);
     if (scope === 'project') await assertPublicUrl(url);
-    const headers = Object.fromEntries(Object.entries(cfg.headers ?? {}).map(([k, v]) => [k, scope === 'server' ? expand(v) : v]));
+    const headers = Object.fromEntries(Object.entries(cfg.headers ?? {}).map(([k, v]) => [k, x(v)]));
     client = new McpClient(new HttpTransport(url, headers), opts);
   } else {
-    const args = (cfg.args ?? []).map((a) => (scope === 'server' ? expand(a) : a));
-    const env = Object.fromEntries(Object.entries(cfg.env ?? {}).map(([k, v]) => [k, scope === 'server' ? expand(v) : v]));
+    const args = (cfg.args ?? []).map(x);
+    const env = Object.fromEntries(Object.entries(cfg.env ?? {}).map(([k, v]) => [k, x(v)]));
     const plan = spawnPlan(cfg.command, args);
+    // Never the server's whole environment: a server gets the provider keys only if its config passes them.
     const child = scope === 'server'
-      ? spawn(plan.command, plan.args, { cwd: cfg.cwd, env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'], shell: plan.shell })
+      ? spawn(plan.command, plan.args, { cwd: cfg.cwd, env: scrubbedEnv(env), stdio: ['pipe', 'pipe', 'pipe'], shell: plan.shell })
       : await host!.spawnStream!(cfg.command, args, env);
     client = new McpClient(new StdioTransport(child), opts);
   }
@@ -95,7 +108,7 @@ export class McpManager {
   private shared = new Map<string, Promise<{ client: ReconnectingClient; entries: McpEntry[] }>>();
 
   /** Operator-configured servers, connected once per process. */
-  async serverEntries(configs: Map<string, McpServerConfig>): Promise<{ entries: McpEntry[]; status: McpStatus[] }> {
+  async serverEntries(configs: Map<string, ServerMcpConfig>): Promise<{ entries: McpEntry[]; status: McpStatus[] }> {
     const entries: McpEntry[] = [];
     const status: McpStatus[] = [];
     for (const [name, cfg] of configs) {

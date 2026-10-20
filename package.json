@@ -17,7 +17,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p ui/tsconfig.json --noEmit",
     "sandbox:image": "docker build -t harness-sandbox:latest -f docker/Dockerfile.sandbox docker",
     "eval": "node scripts/run.mjs src/eval/cli.ts",
-    "plugin": "node scripts/run.mjs src/plugins/cli.ts"
+    "plugin": "node scripts/run.mjs src/plugins/cli.ts",
+    "users": "node scripts/run.mjs src/server/users-cli.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0",

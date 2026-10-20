@@ -22,6 +22,8 @@ interface CompanionRecord {
   name: string;
   tokenHash: string;
   createdAt: number;
+  /** The account that added it (absent: the single-user server). */
+  owner?: string;
 }
 
 interface Live {
@@ -55,10 +57,10 @@ export class CompanionHub {
     await fs.writeFile(this.file, JSON.stringify([...this.records.values()], null, 2), { mode: 0o600 });
   }
 
-  async create(name: string): Promise<{ id: string; token: string }> {
+  async create(name: string, owner?: string): Promise<{ id: string; token: string }> {
     const id = `cmp_${crypto.randomBytes(6).toString('hex')}`;
     const token = `hwc_${crypto.randomBytes(24).toString('base64url')}`;
-    this.records.set(id, { id, name: name.slice(0, 60) || 'My computer', tokenHash: hash(token), createdAt: Date.now() });
+    this.records.set(id, { id, name: name.slice(0, 60) || 'My computer', tokenHash: hash(token), createdAt: Date.now(), ...(owner ? { owner } : {}) });
     await this.save();
     return { id, token };
   }
@@ -74,7 +76,7 @@ export class CompanionHub {
   list() {
     return [...this.records.values()].map((r) => {
       const l = this.live.get(r.id);
-      return { id: r.id, name: r.name, online: !!l && Date.now() - l.lastSeen < 60_000, info: l?.info ?? null };
+      return { id: r.id, name: r.name, owner: r.owner, online: !!l && Date.now() - l.lastSeen < 60_000, info: l?.info ?? null };
     });
   }
 

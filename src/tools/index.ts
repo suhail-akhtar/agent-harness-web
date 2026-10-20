@@ -3,10 +3,11 @@ import { bashTool, todoTool } from './exec.ts';
 import { editTool, globTool, grepTool, readTool, writeTool } from './files.ts';
 import { askUserTool, exitPlanTool } from './meta.ts';
 import type { Tool } from './types.ts';
-import { webFetchTool } from './web.ts';
+import { memoryTool } from './memory.ts';
+import { webFetchTool, webSearchTool } from './web.ts';
 
 /** Built-in tools. The `agent`, `skill` and MCP tools are made per session from what is registered. */
-export const BUILTIN_TOOLS: Tool[] = [askUserTool, bashTool, editTool, exitPlanTool, globTool, grepTool, readTool, todoTool, webFetchTool, writeTool];
+export const BUILTIN_TOOLS: Tool[] = [askUserTool, bashTool, editTool, exitPlanTool, globTool, grepTool, memoryTool, readTool, todoTool, webFetchTool, webSearchTool, writeTool];
 
 export function toolByName(name: string): Tool | undefined {
   return BUILTIN_TOOLS.find((t) => t.spec.name === name);

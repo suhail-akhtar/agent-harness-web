@@ -1,7 +1,7 @@
 import type { Registry } from '../kernel/registry.ts';
 import type { GateResult } from '../plugins/api.ts';
 import type { ToolHost } from '../runtime/host.ts';
-import type { Tool } from '../tools/types.ts';
+import type { Tool, ToolServices } from '../tools/types.ts';
 
 // Quality gates are verifiers registered by plugins. The harness runs them in
 // three places: a workflow's gate nodes, the agent's own `quality_gates` tool
@@ -10,7 +10,7 @@ import type { Tool } from '../tools/types.ts';
 
 export interface GateRun extends GateResult { name: string; ms: number }
 
-export async function runGates(reg: Registry, host: ToolHost, names: string[] | 'applicable', signal: AbortSignal): Promise<GateRun[]> {
+export async function runGates(reg: Registry, host: ToolHost, names: string[] | 'applicable', signal: AbortSignal, services?: ToolServices): Promise<GateRun[]> {
   const out: GateRun[] = [];
   // The gates are bash commands. Under PowerShell their probes fail, so every gate
   // would read as "does not apply" and an unchecked workspace would pass.
@@ -25,7 +25,7 @@ export async function runGates(reg: Registry, host: ToolHost, names: string[] | 
     try {
       if (names === 'applicable' && g.applies && !(await g.applies(host, signal))) continue;
       const t0 = Date.now();
-      const r = await g.run({ host, signal });
+      const r = await g.run({ host, signal, services });
       out.push({ ...r, name: g.name, ms: Date.now() - t0 });
     } catch (err) {
       out.push({ name: g.name, pass: false, summary: `gate crashed: ${(err as Error).message}`, ms: 0 });
@@ -56,7 +56,7 @@ export function makeGatesTool(reg: Registry): Tool {
     summarize: (i) => `quality gates${Array.isArray(i.gates) && i.gates.length ? `: ${i.gates.join(', ')}` : ''}`,
     async run(input, ctx) {
       const chosen = Array.isArray(input.gates) && input.gates.length ? input.gates.map(String) : 'applicable';
-      const results = await runGates(reg, ctx.host, chosen, ctx.signal);
+      const results = await runGates(reg, ctx.host, chosen, ctx.signal, ctx.services);
       return { content: formatGates(results), is_error: results.some((r) => !r.pass && r.severity !== 'advisory') };
     },
   };

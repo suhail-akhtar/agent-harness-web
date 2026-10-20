@@ -18,6 +18,8 @@ export interface PermissionContext {
   rules: Rules;
   /** Commands run in an isolated container: auto-allow them (the sandbox is the boundary). */
   sandboxed: boolean;
+  /** The agent has read untrusted content (web pages, MCP results) in this context. */
+  tainted?: boolean;
 }
 
 function parseRule(rule: string): { tool: string; spec?: string } {
@@ -70,6 +72,10 @@ export function decide(tool: Tool, input: Record<string, unknown>, ctx: Permissi
   if (rules.deny.some((r) => ruleMatches(r, tool, input))) return { action: 'deny', reason: 'blocked by a deny rule' };
   if (rules.ask.some((r) => ruleMatches(r, tool, input))) return mode === 'bypass' ? { action: 'allow', reason: 'bypass mode' } : { action: 'ask', reason: 'matches an ask rule' };
   if (rules.allow.some((r) => ruleMatches(r, tool, input))) return { action: 'allow', reason: 'allowed by a rule' };
+  // Anything that outlives the session (memory) is confirmed once untrusted
+  // content is in the context: a page must not be able to plant instructions
+  // for every future session.
+  if (ctx.tainted && tool.persists?.(input) && mode !== 'bypass') return { action: 'ask', reason: 'this is saved for future sessions, and the agent has read untrusted content (web pages or service results) in this session' };
 
   // A call can need more than its tool's kind (render with export writes a file):
   // every kind it needs is decided, and the strictest answer wins.

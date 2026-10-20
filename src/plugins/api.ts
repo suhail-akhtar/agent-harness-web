@@ -3,7 +3,8 @@ import type { WorkflowDef } from '../graph/types.ts';
 import type { HookEvent } from '../core/settings.ts';
 import type { Provider, JsonSchema } from '../providers/types.ts';
 import type { ToolHost } from '../runtime/host.ts';
-import type { Tool, ToolContext, ToolKind, ToolOutcome } from '../tools/types.ts';
+import type { SearchBackend } from '../research/search.ts';
+import type { Tool, ToolContext, ToolKind, ToolOutcome, ToolServices } from '../tools/types.ts';
 
 // The contract between the harness and everything plugged into it. A plugin
 // is a folder with a harness-plugin.json manifest. Declarative contributions
@@ -44,7 +45,7 @@ export interface QualityGate {
   description: string;
   /** Whether this gate applies to the workspace (e.g. it has a package.json). */
   applies?(host: ToolHost, signal: AbortSignal): Promise<boolean>;
-  run(ctx: { host: ToolHost; signal: AbortSignal }): Promise<GateResult>;
+  run(ctx: { host: ToolHost; signal: AbortSignal; services?: ToolServices }): Promise<GateResult>;
 }
 
 export interface HookPayload { event: HookEvent; [k: string]: unknown }
@@ -69,10 +70,16 @@ export interface PluginAPI {
   registerSkills(dir: string): void;
   registerMcpServer(name: string, cfg: McpServerConfig): void;
   registerGate(gate: QualityGate): void;
+  /** A web search backend for web_search (chosen with HARNESS_SEARCH=<name>, else the first available). */
+  registerSearchBackend(backend: SearchBackend): void;
   /** A workflow graph (TypeScript workflows may use code nodes). Validated before every run. */
   registerWorkflow(def: WorkflowDef): void;
   on(event: HookEvent, handler: HookHandler, matcher?: string): void;
   log(message: string): void;
+  /** A server secret the plugin declared in permissions.secrets (throws for undeclared names). */
+  secret(name: string): string | undefined;
+  /** fetch, limited to the hosts declared in permissions.network (redirects re-checked; private addresses need an exact entry). */
+  fetch(url: string | URL, init?: RequestInit): Promise<Response>;
 }
 
 export interface PluginDefinition {
@@ -129,6 +136,12 @@ export interface PluginManifest {
   hooks?: Partial<Record<HookEvent, { matcher?: string; command: string; timeoutMs?: number }[]>>;
   /** Directory of workflow definitions (*.json). */
   workflows?: string;
-  /** What the plugin needs; shown to the operator and enforced where possible. */
+  /**
+   * What the plugin needs. Enforced on the channels the harness hands out:
+   * api.secret, api.fetch, and ${VAR} in its MCP servers' configuration (an
+   * undeclared secret expands to nothing). Plugin code runs in the server
+   * process, so this does not contain code that ignores those channels: that is
+   * what signing and review are for.
+   */
   permissions?: { network?: string[]; secrets?: string[] };
 }

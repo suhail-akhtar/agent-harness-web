@@ -97,3 +97,75 @@ export function TraceButton({ sessionId }: { sessionId: string }): VNode {
     </>
   );
 }
+
+interface MemoryFileInfo { scope: string; path: string; size: number; modified: number }
+interface MemoryListing { scopes: { scope: string; label?: string }[]; mode: string; files: MemoryFileInfo[]; changes: { at: number; session?: string; op: string; path: string }[] }
+
+/** What the agent remembers across sessions: readable, editable and deletable by its owner. */
+export function MemoryPanel({ sessionId, refreshKey }: { sessionId: string; refreshKey: number }): VNode | null {
+  const [list, setList] = useState<MemoryListing | null>(null);
+  const [edit, setEdit] = useState<{ path: string; content: string; isNew?: boolean } | null>(null);
+  const [msg, setMsg] = useState('');
+  const load = () => api.get<MemoryListing>(`/api/memory?session=${sessionId}`).then(setList).catch(() => setList(null));
+  useEffect(() => { load(); }, [sessionId, refreshKey]);
+  if (!list) return null;
+  const q = (p: string) => `/api/memory/file?session=${sessionId}&path=${encodeURIComponent(p)}`;
+  const open = async (p: string) => setEdit({ path: p, content: (await api.get<{ content: string }>(q(p))).content });
+  const save = async () => {
+    if (!edit) return;
+    try { await call('PUT', q(edit.path), { content: edit.content }); setEdit(null); setMsg('Saved.'); load(); } catch (e) { setMsg((e as Error).message); }
+  };
+  const remove = async (p: string) => {
+    if (!confirm(`Delete ${p}? Future sessions will not see it.`)) return;
+    try { await api.del(q(p)); setEdit(null); load(); } catch (e) { setMsg((e as Error).message); }
+  };
+  const project = list.scopes.find((s) => s.scope === 'project');
+  return (
+    <div class="panel">
+      <div class="panel-title">Memory <button class="link small" onClick={() => setEdit({ path: '/memories/user/', content: '', isNew: true })}>add</button></div>
+      <div class="muted small">{project ? `This project${project.label ? ` (${project.label})` : ''} and you. ` : 'You. '}{list.mode === 'read' ? 'Agents may read it, not change it.' : 'Agents add to it; you can correct it.'}</div>
+      <ul class="memory-files small">
+        {list.files.map((f) => <li key={f.path}><button class="link" onClick={() => open(f.path)}>{f.path.replace('/memories/', '')}</button> <span class="muted">{f.size} chars</span></li>)}
+        {!list.files.length && <li class="muted">Nothing remembered yet.</li>}
+      </ul>
+      {list.changes.length > 0 && <div class="muted small">Last change: {list.changes[0]!.op} {list.changes[0]!.path} by {list.changes[0]!.session?.startsWith('user:') ? list.changes[0]!.session.slice(5) : 'an agent'}, {new Date(list.changes[0]!.at).toLocaleString()}</div>}
+      {msg && <div class="notice notice-info small">{msg}</div>}
+      {edit && (
+        <Modal title={edit.isNew ? 'New memory file' : edit.path} onClose={() => setEdit(null)} wide>
+          {edit.isNew && <input class="input" value={edit.path} onInput={(e) => setEdit({ ...edit, path: (e.target as HTMLInputElement).value })} placeholder="/memories/user/preferences.md" />}
+          <textarea class="input mono" rows={16} value={edit.content} onInput={(e) => setEdit({ ...edit, content: (e.target as HTMLTextAreaElement).value })} />
+          <div class="row-end">
+            {!edit.isNew && <button class="btn danger" onClick={() => remove(edit.path)}>Delete</button>}
+            <button class="btn primary" onClick={save}>Save</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+interface SourceInfo { url: string; finalUrl: string; title?: string; fetchedAt: number; chars: number }
+
+/** Pages read in this session: what citations may point to. */
+export function SourcesPanel({ sessionId, refreshKey }: { sessionId: string; refreshKey: number }): VNode | null {
+  const [list, setList] = useState<SourceInfo[]>([]);
+  useEffect(() => { api.get<SourceInfo[]>(`/api/sessions/${sessionId}/sources`).then(setList).catch(() => setList([])); }, [sessionId, refreshKey]);
+  if (!list.length) return null;
+  return (
+    <div class="panel">
+      <div class="panel-title">Sources read ({list.length})</div>
+      <ul class="sources small">
+        {[...list].reverse().slice(0, 30).map((s) => (
+          <li key={s.finalUrl}><a href={s.finalUrl} target="_blank" rel="noopener noreferrer">{s.title || s.finalUrl}</a> <span class="muted">{Math.round(s.chars / 1000)}k chars</span></li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+async function call(method: string, path: string, body: unknown): Promise<unknown> {
+  const res = await fetch(path, { method, credentials: 'same-origin', headers: { 'content-type': 'application/json', 'x-harness': '1' }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+  return data;
+}

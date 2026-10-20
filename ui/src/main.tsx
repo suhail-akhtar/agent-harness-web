@@ -2,7 +2,7 @@ import { render, type VNode } from 'preact';
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { api, ApiError, type CompanionInfo, type Config, type Effort, type HarnessEvent, type Mode, type SessionDetail, type SessionMeta, type Usage, type WorkflowRunView } from './api.ts';
 import { ContextMeter, fmtCost, Modal, PendingPrompt, Timeline, TodoPanel, UsagePanel } from './components.tsx';
-import { CapabilitiesPanel, CheckpointsPanel, TraceButton } from './panels.tsx';
+import { CapabilitiesPanel, CheckpointsPanel, MemoryPanel, SourcesPanel, TraceButton } from './panels.tsx';
 import { apply, fromHistory, type Live } from './timeline.ts';
 import { ApprovalPrompt, RunsPanel, WorkflowDialog } from './workflow.tsx';
 
@@ -303,6 +303,8 @@ function SessionView({ id, config, onMeta }: { id: string; config: Config; onMet
         <UsagePanel usage={meta.usage} cost={meta.cost} byModel={meta.byModel} />
         <TodoPanel todos={meta.todos} />
         <RunsPanel sessionId={id} refreshKey={runsKey} busy={busy} />
+        <MemoryPanel sessionId={id} refreshKey={filesKey} />
+        <SourcesPanel sessionId={id} refreshKey={filesKey} />
         <CapabilitiesPanel sessionId={id} />
         {meta.runtime.kind !== 'companion' && <CheckpointsPanel sessionId={id} refreshKey={filesKey} busy={busy} />}
         {meta.runtime.kind !== 'companion' && <FilesPanel sessionId={id} refreshKey={filesKey} />}
@@ -360,6 +362,7 @@ function App(): VNode {
         <div class="sidebar-foot">
           <button class="link" onClick={() => setDialog('companions')}>Your computers ({config.companions.filter((c) => c.online).length} online)</button>
           <div class="muted small">All sessions: {fmtCost(total)}</div>
+          {config.me && <div class="muted small">Signed in as {config.me.name}{config.me.role === 'admin' && config.me.name !== 'operator' ? ' (admin)' : ''} · <button class="link small" onClick={async () => { await api.post('/api/logout'); location.reload(); }}>sign out</button></div>}
         </div>
       </nav>
       <main class="main">

@@ -12,6 +12,15 @@ export type ToolKind = 'read' | 'edit' | 'exec' | 'network' | 'external' | 'meta
 
 export interface FileStamp { mtimeMs: number; size: number }
 
+/** Harness services a tool may use; absent ones are turned off. */
+export interface ToolServices {
+  memory?: import('../memory/store.ts').MemoryStore;
+  sources?: import('../research/sources.ts').SourceStore;
+  search?: import('../research/search.ts').SearchService;
+  /** Spend a tool incurred outside the model loop (a paid search), added to the session's cost. */
+  charge?(what: string, cost: number): void;
+}
+
 export interface ToolContext {
   host: ToolHost;
   signal: AbortSignal;
@@ -26,6 +35,7 @@ export interface ToolContext {
   askUser?(question: string, options: string[]): Promise<string>;
   proposePlan?(plan: string): Promise<{ approved: boolean; feedback?: string }>;
   isPlanMode?(): boolean;
+  services?: ToolServices;
 }
 
 export interface Tool {
@@ -36,6 +46,8 @@ export interface Tool {
   /** Runs on the user's machine when the session uses a companion host. */
   remoteable: boolean;
   run(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutcome>;
+  /** True when this call keeps something beyond the session (memory): confirmed after untrusted input. */
+  persists?(input: Record<string, unknown>): boolean;
   /** The permission kinds this call needs, when they depend on the input (default: [kind]). */
   kindsFor?(input: Record<string, unknown>): ToolKind[];
   /** One line for permission prompts and the UI. */

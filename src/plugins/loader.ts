@@ -5,6 +5,7 @@ import { loadAgentDir } from '../agents/agents.ts';
 import type { Registry } from '../kernel/registry.ts';
 import type { WorkflowDef } from '../graph/types.ts';
 import { validateWorkflow } from '../graph/validate.ts';
+import { assertPublicUrl } from '../tools/web.ts';
 import { resolveIn } from '../tools/paths.ts';
 import { defineTool, type PluginAPI, type PluginDefinition, type PluginManifest } from './api.ts';
 
@@ -74,8 +75,9 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void): P
   if (m.workflows) {
     for (const w of await loadWorkflowDir(within(m.workflows), m.name)) { reg.workflows.set(w.name, w); contributes.push(`workflow:${w.name}`); }
   }
+  const declared = { network: (m.permissions?.network ?? []).map(String), secrets: (m.permissions?.secrets ?? []).map(String) };
   for (const [name, cfg] of Object.entries(m.mcpServers ?? {})) {
-    reg.mcpServers.set(name, { ...cfg, plugin: m.name } as never);
+    reg.mcpServers.set(name, { ...cfg, plugin: m.name, secrets: declared.secrets } as never);
     contributes.push(`mcp:${name}`);
   }
   for (const [ev, specs] of Object.entries(m.hooks ?? {})) {
@@ -96,8 +98,14 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void): P
       registerProvider: (id, p) => { reg.providers.set(id, p); contributes.push(`provider:${id}`); },
       registerAgent: (a) => { reg.agents.set(a.name, { ...a, source: m.name }); contributes.push(`agent:${a.name}`); },
       registerSkills: (d) => { reg.skillDirs.push({ dir: path.resolve(dir, d), source: m.name }); contributes.push('skills'); },
-      registerMcpServer: (name, cfg) => { reg.mcpServers.set(name, { ...cfg, plugin: m.name } as never); contributes.push(`mcp:${name}`); },
+      registerMcpServer: (name, cfg) => { reg.mcpServers.set(name, { ...cfg, plugin: m.name, secrets: declared.secrets } as never); contributes.push(`mcp:${name}`); },
+      secret: (name) => {
+        if (!declared.secrets.includes(name)) throw new Error(`${m.name}: the secret ${name} is not declared in harness-plugin.json (permissions.secrets)`);
+        return process.env[name];
+      },
+      fetch: (url, init) => pluginFetch(m.name, declared.network, url, init),
       registerGate: (g) => { reg.gates.set(g.name, { ...g, plugin: m.name }); contributes.push(`gate:${g.name}`); },
+      registerSearchBackend: (b) => { reg.searchBackends.set(b.name, b); contributes.push(`search:${b.name}`); },
       registerWorkflow: (w) => {
         const errors = validateWorkflow(w);
         if (errors.length) throw new Error(`${m.name}: workflow ${w.name} is invalid: ${errors.join('; ')}`);
@@ -115,7 +123,7 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void): P
     }
     if (typeof def.close === 'function') reg.closers.push(() => def.close!());
   }
-  reg.plugins.push({ name: m.name, version: m.version ?? '0.0.0', description: m.description ?? '', dir, trusted: true, contributes: [...new Set(contributes)] });
+  reg.plugins.push({ name: m.name, version: m.version ?? '0.0.0', description: m.description ?? '', dir, trusted: true, contributes: [...new Set(contributes)], ...(declared.network.length || declared.secrets.length ? { permissions: declared } : {}) });
 }
 
 /** JSON workflows from a directory. Declarative only: a JSON workflow cannot hold code nodes. */
@@ -137,3 +145,33 @@ export async function loadWorkflowDir(dir: string, source: string, log: (m: stri
   }
   return out;
 }
+
+/** A host matches a declared pattern: "api.example.com", or "*.example.com" for any subdomain. */
+export function hostAllowed(host: string, patterns: string[]): boolean {
+  const h = host.toLowerCase();
+  return patterns.some((p) => {
+    const d = p.toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    return d.startsWith('*.') ? h.endsWith(d.slice(1)) && h !== d.slice(2) : h === d;
+  });
+}
+
+/**
+ * fetch for plugin code: only to the hosts the plugin declared (permissions.network),
+ * every redirect re-checked. Public hosts are also checked against private
+ * addresses; a private host (a local model server) works only when named exactly.
+ */
+export async function pluginFetch(plugin: string, allowed: string[], url: string | URL, init: RequestInit = {}): Promise<Response> {
+  let u = new URL(String(url));
+  for (let hop = 0; hop < 6; hop++) {
+    const host = u.host.toLowerCase();
+    const exact = allowed.some((p) => p.toLowerCase() === host || p.toLowerCase() === u.hostname.toLowerCase());
+    if (!hostAllowed(u.hostname, allowed) && !exact) throw new Error(`${plugin}: ${u.hostname} is not in the plugin's declared network hosts (harness-plugin.json permissions.network)`);
+    if (!exact) await assertPublicUrl(u.toString());
+    const res = await fetch(u, { ...init, redirect: 'manual' });
+    const loc = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null;
+    if (!loc) return res;
+    u = new URL(loc, u);
+  }
+  throw new Error(`${plugin}: too many redirects`);
+}
+
