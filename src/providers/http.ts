@@ -61,6 +61,11 @@ export async function* readSse(res: Response, signal: AbortSignal): AsyncGenerat
       let chunk: ReadableStreamReadResult<Uint8Array>;
       try {
         chunk = await Promise.race([reader.read(), idle]);
+      } catch (err) {
+        // A connection dropped mid-stream ("terminated", ECONNRESET) is a network
+        // failure like a failed fetch: retry it, never end the step on it.
+        if (signal.aborted || err instanceof ProviderError) throw err;
+        throw new ProviderError(`network error mid-stream: ${(err as Error).message}`, 0, true);
       } finally {
         clearTimeout(timer);
       }

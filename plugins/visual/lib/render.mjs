@@ -63,11 +63,15 @@ async function pdfInfo(pdf, signal) {
   return { pages, width: size ? Number(size[1]) : 0, height: size ? Number(size[2]) : 0 };
 }
 
+/** Words on a page with their box heights (points): the height tracks the font size (about 1.1-1.35x). */
 async function pageWords(pdf, n, signal) {
-  const r = await run('pdftotext', ['-layout', '-f', String(n), '-l', String(n), pdf, '-'], { timeoutMs: 30_000, signal });
-  const text = r.stdout.replace(/\f/g, '').trim();
-  return { words: text ? text.split(/\s+/).length : 0, text };
+  const r = await run('pdftotext', ['-bbox', '-f', String(n), '-l', String(n), pdf, '-'], { timeoutMs: 30_000, signal });
+  const heights = [...r.stdout.matchAll(/<word xMin="[\d.]+" yMin="([\d.]+)" xMax="[\d.]+" yMax="([\d.]+)">/g)].map((m) => Number(m[2]) - Number(m[1]));
+  return { words: heights.length, heights };
 }
+
+/** Rough font size from a word box height. */
+const ptOf = (h) => Math.round(h / 1.25);
 
 /** Each slide's own text, from the .pptx, in presentation order. */
 export async function pptxSlideTexts(file) {
@@ -148,6 +152,12 @@ export async function renderFile({ root, rel, pages, width = 1000, max = 4, sign
         if (own >= 8 && w.words < own * 0.85) fact.overflow = `${own - w.words} of ${own} words do not fit on the slide`;
       }
       if (w.words === 0) fact.empty = true;
+      if (w.words) {
+        fact.smallestPt = ptOf(Math.min(...w.heights));
+        // A slide paragraph that autofit shrank (or was set tiny): many words under ~12 pt. A few small chart labels are fine.
+        const small = w.heights.filter((h) => ptOf(h) < 12).length;
+        if (slides && small > 40) fact.smallText = `${small} words are under ~12 pt (smallest ~${fact.smallestPt} pt) - too small to read on a slide`;
+      }
       result.facts.push(fact);
     }
     const want = parsePages(pages, info.pages, max);
@@ -186,9 +196,14 @@ export async function saveRenders(root, r) {
 
 export function describeRender(r, saved) {
   const lines = [`${r.file}: ${r.pages} page(s)${r.size ? `, ${r.size}` : ''}.`];
-  const flagged = r.facts.filter((f) => f.overflow || f.empty);
-  for (const f of flagged) lines.push(`  page ${f.page}: ${f.overflow ? `TEXT DOES NOT FIT - ${f.overflow}` : 'no text on this page'}`);
-  if (r.facts.length && !flagged.length) lines.push(`  text on every page${r.facts.some((f) => f.slideWords !== undefined) ? '; all slide text fits' : ''}.`);
+  const flagged = r.facts.filter((f) => f.overflow || f.smallText || f.empty);
+  for (const f of flagged) {
+    if (f.overflow) lines.push(`  page ${f.page}: TEXT DOES NOT FIT - ${f.overflow}`);
+    if (f.smallText) lines.push(`  page ${f.page}: TEXT TOO SMALL - ${f.smallText}`);
+    if (f.empty) lines.push(`  page ${f.page}: no text on this page`);
+  }
+  if (r.facts.length && !flagged.length) lines.push(`  text on every page${r.facts.some((f) => f.slideWords !== undefined) ? '; all slide text fits and is readable' : ''}.`);
+  if (r.exported) lines.push(`  exported ${r.exported}`);
   if (r.facts.length) lines.push(`  words per page: ${r.facts.map((f) => f.words).join(', ')}`);
   for (const w of r.warnings) lines.push(`  warning: ${w}`);
   if (r.images.length) lines.push(`Showing page(s) ${r.images.map((i) => i.page).join(', ')}${r.pages > r.images.length ? ` of ${r.pages} (ask for others with pages: "5-8")` : ''}. Saved: ${saved.join(', ')}`);

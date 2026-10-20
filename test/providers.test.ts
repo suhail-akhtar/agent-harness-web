@@ -81,3 +81,16 @@ test('images: each provider gets them in its own shape', async () => {
   const legacy: Message = { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'x' }, { type: 'text', text: 'Image(s) from read:' }, { type: 'image', ...img }] };
   assert.deepEqual((toInputItems(legacy) as { content?: unknown[] }[])[1]!.content![1], { type: 'input_image', image_url: 'data:image/png;base64,AAAA' });
 });
+
+test('a stream that breaks mid-way is a retryable network error, not the end of the step', async () => {
+  const { readSse } = await import('../src/providers/http.ts');
+  const { ProviderError } = await import('../src/providers/types.ts');
+  let n = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(c) { if (n++ === 0) c.enqueue(new TextEncoder().encode('data: {"a":1}\n\n')); else c.error(new TypeError('terminated')); },
+  });
+  const seen: string[] = [];
+  await assert.rejects(async () => { for await (const e of readSse(new Response(body), new AbortController().signal)) seen.push(e.data); },
+    (e: unknown) => e instanceof ProviderError && e.retryable && /mid-stream: terminated/.test(e.message));
+  assert.deepEqual(seen, ['{"a":1}']);
+});

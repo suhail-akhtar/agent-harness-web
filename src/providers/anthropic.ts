@@ -86,6 +86,11 @@ export class AnthropicProvider implements Provider {
     // The SDK materialises streamed tool input at block end; JSON it cannot
     // parse at all rejects here. Re-issuing the turn is the documented fix.
     if (err instanceof SyntaxError) return new ProviderError(`unparseable tool input: ${err.message}`, 0, true);
+    // A connection dropped mid-stream surfaces as undici's TypeError("terminated") or a socket error.
+    const code = (err as { code?: string; cause?: { code?: string } })?.code ?? (err as { cause?: { code?: string } })?.cause?.code;
+    if ((err instanceof TypeError && /terminated|fetch failed|socket|network/i.test(err.message)) || /^(ECONNRESET|EPIPE|ETIMEDOUT|UND_ERR_SOCKET)$/.test(code ?? '')) {
+      return new ProviderError(`network error mid-stream: ${(err as Error).message}`, 0, true);
+    }
     return err;
   }
 }

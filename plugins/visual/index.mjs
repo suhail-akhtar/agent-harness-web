@@ -95,17 +95,24 @@ export default {
           path: { type: 'string', description: 'File in the workspace' },
           pages: { type: 'string', description: 'Pages to show, e.g. "1-3,7" (default: the first 4)' },
           width: { type: 'number', description: 'Image width in pixels, 400-1600 (default 1000; use 1400 to read small print)' },
+          export: { type: 'string', enum: ['pdf'], description: 'Also save a PDF of an office file beside it (deck.pptx -> deck.pdf)' },
         },
         required: ['path'],
       },
       kind: 'read',
       parallelSafe: true,
       summarize: (i) => `${i.path}${i.pages ? ` pages ${i.pages}` : ''}`,
-      async run(input, { host, signal }) {
+      async run(input, { host, signal, beforeWrite }) {
         serverSide(host);
         const rel = await workspacePath(host, String(input.path));
         if (!RENDERABLE.includes(path.extname(rel).toLowerCase())) return { content: `Cannot render ${rel}. Supported: ${RENDERABLE.join(' ')}`, is_error: true };
         const r = await renderFile({ root: host.root, rel, pages: input.pages, width: Math.min(Math.max(Number(input.width) || 1000, 400), 1600), max: 6, signal });
+        if (input.export === 'pdf' && r.pdf && r.pdf !== path.join(host.root, rel)) {
+          const out = rel.replace(/\.[^./]+$/, '.pdf');
+          await beforeWrite?.(path.join(host.root, out));
+          await fsp.copyFile(r.pdf, path.join(host.root, out));
+          r.exported = out;
+        }
         const saved = await saveRenders(host.root, r);
         return { content: describeRender(r, saved), images: asImages(r.images) };
       },
@@ -170,8 +177,9 @@ export default {
             const r = await renderFile({ root: host.root, rel: f, pages: '0', max: 0, signal });
             await r.cleanup?.();
             const over = r.facts.filter((x) => x.overflow);
+            const small = r.facts.filter((x) => x.smallText);
             if (!r.pages) problems.push(`${f}: no pages`);
-            else if (over.length) problems.push(`${f}: text does not fit on ${over.map((x) => `slide ${x.page} (${x.overflow})`).join('; ')}`);
+            else if (over.length || small.length) problems.push(`${f}: ${[...over.map((x) => `slide ${x.page}: text does not fit (${x.overflow})`), ...small.map((x) => `slide ${x.page}: text too small (${x.smallText})`)].join('; ')}`);
             else ok.push(`${f} (${r.pages} pages)`);
           } catch (e) { problems.push(`${f}: ${e.message}`); }
         }
