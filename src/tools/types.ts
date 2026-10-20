@@ -2,9 +2,26 @@ import type { HarnessEvent, Todo } from '../core/types.ts';
 import type { ToolSpec } from '../providers/types.ts';
 import type { ToolHost, ToolOutcome } from '../runtime/host.ts';
 
-export type ToolKind = 'read' | 'edit' | 'exec' | 'network' | 'meta';
+/**
+ * Permission class. read: no side effects. edit: changes workspace files.
+ * exec: runs commands where tools run (free in a sandbox). network: fetches
+ * the web. external: acts on another system (an MCP service) - always asks
+ * unless allowed. meta: talks to the harness or the user.
+ */
+export type ToolKind = 'read' | 'edit' | 'exec' | 'network' | 'external' | 'meta';
 
 export interface FileStamp { mtimeMs: number; size: number }
+
+/** Harness services a tool may use; absent ones are turned off. */
+export interface ToolServices {
+  memory?: import('../memory/store.ts').MemoryStore;
+  sources?: import('../research/sources.ts').SourceStore;
+  search?: import('../research/search.ts').SearchService;
+  /** Publishes the workspace as a branch and pull request (absent: not possible for this session). */
+  publish?(input: import('../git/publish.ts').PublishInput, signal: AbortSignal): Promise<import('../git/publish.ts').PublishResult>;
+  /** Spend a tool incurred outside the model loop (a paid search), added to the session's cost. */
+  charge?(what: string, cost: number): void;
+}
 
 export interface ToolContext {
   host: ToolHost;
@@ -14,10 +31,17 @@ export interface ToolContext {
   todos: Todo[];
   setTodos(todos: Todo[]): void;
   emit(e: HarnessEvent): void;
-  runSubagent?(args: { description: string; prompt: string; type: 'explore' | 'general' }): Promise<string>;
+  runSubagent?(args: { description: string; prompt: string; type: string }): Promise<string>;
+  /** Called with a file's real path before a tool changes it (checkpoints for rewind). */
+  beforeWrite?(realPath: string): Promise<void>;
   askUser?(question: string, options: string[]): Promise<string>;
   proposePlan?(plan: string): Promise<{ approved: boolean; feedback?: string }>;
   isPlanMode?(): boolean;
+  services?: ToolServices;
+  /** Runs another tool as this agent would (permissions, hooks, events): for run_script. */
+  callTool?(name: string, input: Record<string, unknown>): Promise<{ content: string; is_error?: boolean }>;
+  /** The tools this agent has. */
+  toolNames?(): string[];
 }
 
 export interface Tool {
@@ -28,8 +52,19 @@ export interface Tool {
   /** Runs on the user's machine when the session uses a companion host. */
   remoteable: boolean;
   run(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutcome>;
+  /** True when this call keeps something beyond the session (memory): confirmed after untrusted input. */
+  persists?(input: Record<string, unknown>): boolean;
+  /** Its output comes from outside the user's control (a service, stored web pages), whatever its kind. */
+  untrusted?: boolean;
+  /** The permission kinds this call needs, when they depend on the input (default: [kind]). */
+  kindsFor?(input: Record<string, unknown>): ToolKind[];
   /** One line for permission prompts and the UI. */
   summarize(input: Record<string, unknown>): string;
+  /**
+   * For dispatcher tools (tool_call): the real tool and input this call runs.
+   * Permissions, hooks and validation then apply to THAT tool.
+   */
+  resolve?(input: Record<string, unknown>): { tool: Tool; input: Record<string, unknown> } | { error: string };
 }
 
 export type { ToolOutcome };

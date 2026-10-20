@@ -1,0 +1,49 @@
+# harness-web in Docker (any OS). Two services from one image:
+#   dev      read-write source: install, build, test, evaluate
+#   harness  the server agents work in: source and node_modules READ-ONLY, so an
+#            agent's shell (it has one in this container) cannot change the
+#            harness's own code on your disk; only /data and /work are writable.
+#
+#   docker compose build
+#   docker compose run --rm dev npm ci            # once, and after dependency changes
+#   docker compose run --rm dev npm run build     # after UI changes
+#   docker compose run --rm dev npm test
+#   docker compose up harness                     # the server on http://127.0.0.1:4310
+#
+# API keys pass through from your shell's environment; nothing is stored here.
+# Sessions use the "Server folder" runtime on /work (HARNESS_WORK on the host,
+# default ./.work); the container is the isolation.
+x-env: &env
+  ANTHROPIC_API_KEY:
+  GW_ANTHROPIC_API_KEY:
+  DEEPSEEK_API_KEY:
+  OPENAI_API_KEY:
+services:
+  dev:
+    build: { context: docker, dockerfile: Dockerfile.harness }
+    image: harness-web:dev
+    working_dir: /app
+    environment: *env
+    volumes:
+      - .:/app
+      - node_modules:/app/node_modules
+    profiles: [dev]
+  harness:
+    image: harness-web:dev
+    build: { context: docker, dockerfile: Dockerfile.harness }
+    working_dir: /app
+    environment:
+      <<: *env
+      HARNESS_HOST: 0.0.0.0
+      HARNESS_DATA: /data
+      HARNESS_LOCAL_ROOTS: /work
+      HARNESS_TOKEN:
+    ports: ["127.0.0.1:4310:4310"]
+    volumes:
+      - .:/app:ro
+      - node_modules:/app/node_modules:ro
+      - data:/data
+      - ${HARNESS_WORK:-./.work}:/work
+volumes:
+  node_modules:
+  data:

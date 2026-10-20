@@ -15,6 +15,9 @@ const MAX_READ_CHARS = 100_000;
 
 const fail = (content: string): ToolOutcome => ({ content, is_error: true });
 
+const IMAGE_TYPES: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
+const MAX_IMAGE = 4 * 1024 * 1024;
+
 async function realRoot(ctx: ToolContext) { return fs.realpath(ctx.host.root); }
 
 function numbered(lines: string[], start: number): string {
@@ -25,7 +28,7 @@ export const readTool: Tool = {
   kind: 'read', parallelSafe: true, remoteable: true,
   spec: {
     name: 'read',
-    description: 'Read a text file. Returns numbered lines (`  N\\tline`). Reads up to 2000 lines; use offset/limit for more. Read a file before editing it. A directory returns its entries.',
+    description: 'Read a text file. Returns numbered lines (`  N\\tline`). Reads up to 2000 lines; use offset/limit for more. Read a file before editing it. A directory returns its entries. An image (png, jpg, gif, webp) is shown to you, so you can check screenshots and renders.',
     input_schema: {
       type: 'object',
       properties: {
@@ -45,6 +48,12 @@ export const readTool: Tool = {
       const entries = await fs.readdir(p, { withFileTypes: true });
       const names = entries.sort((a, b) => a.name.localeCompare(b.name)).slice(0, 500).map((e) => e.isDirectory() ? `${e.name}/` : e.name);
       return { content: `Directory ${str(input.path)} (${entries.length} entries):\n${names.join('\n')}` };
+    }
+    const ext = path.extname(p).toLowerCase();
+    if (IMAGE_TYPES[ext]) {
+      if (st.size > MAX_IMAGE) return fail(`${str(input.path)} is an image of ${st.size} bytes; the limit is ${MAX_IMAGE}. Make a smaller copy first.`);
+      const data = (await fs.readFile(p)).toString('base64');
+      return { content: `Image ${str(input.path)} (${st.size} bytes) is attached below.`, images: [{ media_type: IMAGE_TYPES[ext]!, data }], display: { type: 'file', path: str(input.path), lines: 0 } };
     }
     const buf = await fs.readFile(p);
     if (buf.subarray(0, 8000).includes(0)) return { content: `${str(input.path)} is a binary file (${buf.length} bytes).` };
@@ -115,6 +124,7 @@ export const writeTool: Tool = {
     if (problem) return fail(problem);
     let before = '';
     try { before = await fs.readFile(p, 'utf8'); } catch { /* new file */ }
+    await ctx.beforeWrite?.(p);
     await fs.mkdir(path.dirname(p), { recursive: true });
     await fs.writeFile(p, input.content);
     await remember(ctx, p);
@@ -154,6 +164,7 @@ export const editTool: Tool = {
     if (count === 0) return fail(`old_string was not found in ${str(input.path)}.${nearMatch(before, oldS)} Re-read the file and copy the text exactly.`);
     if (count > 1 && !bool(input.replace_all)) return fail(`old_string occurs ${count} times. Add surrounding lines to make it unique, or set replace_all: true.`);
     const after = bool(input.replace_all) ? before.split(oldS).join(newS) : before.replace(oldS, () => newS);
+    await ctx.beforeWrite?.(p);
     await fs.writeFile(p, after);
     await remember(ctx, p);
     // Echo the changed region with line numbers so the model can verify

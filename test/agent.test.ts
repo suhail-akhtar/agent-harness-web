@@ -177,3 +177,31 @@ test('PreToolUse hook exit 2 blocks the call', async () => {
   await h.agent.run(ac());
   assert.match(results(h.agent.messages[2])[0]!.content, /blocked this call: no shell today/);
 });
+
+test('an image a tool returns travels on its tool result', async () => {
+  const h = await makeAgent([{ calls: [{ name: 'read', input: { path: 'shot.png' } }] }, { text: 'red and blue' }]);
+  await fs.writeFile(path.join(h.root, 'shot.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
+  h.agent.append({ role: 'user', content: [{ type: 'text', text: 'look' }] });
+  await h.agent.run(ac());
+  const msg = h.agent.messages[2]!;
+  assert.deepEqual(msg.content.map((b) => b.type), ['tool_result']);
+  assert.equal((msg.content[0] as { images?: unknown[] }).images?.length, 1);
+});
+
+test('an image the provider rejects is replaced by a note and the turn goes on', async () => {
+  const { ProviderError } = await import('../src/providers/types.ts');
+  const h = await makeAgent([{ calls: [{ name: 'read', input: { path: 'shot.png' } }] }, { text: 'done without the picture' }]);
+  await fs.writeFile(path.join(h.root, 'shot.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
+  const send = h.provider.send.bind(h.provider);
+  let rejected = 0;
+  h.provider.send = async (req) => {
+    if (req.messages.some((m) => m.content.some((b) => b.type === 'tool_result' && b.images?.length))) { rejected++; throw new ProviderError('400 .messages[2].image[0]: You have uploaded an unsupported image', 400, false); }
+    return send(req);
+  };
+  h.agent.append({ role: 'user', content: [{ type: 'text', text: 'look' }] });
+  assert.equal(await h.agent.run(ac()), 'done');
+  assert.equal(rejected, 1);
+  assert.match(results(h.agent.messages[2])[0]!.content, /not sent: the model provider rejected an image/);
+  assert.equal((h.persisted[2]!.content[0] as { images?: unknown[] }).images?.length, 1, 'the stored history keeps the image');
+  assert.ok(h.events.some((e) => e.kind === 'notice' && /rejected an image/.test(e.text)));
+});

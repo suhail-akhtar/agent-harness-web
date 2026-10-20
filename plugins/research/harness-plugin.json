@@ -1,0 +1,9 @@
+{
+  "name": "research",
+  "version": "1.0.0",
+  "description": "Research with sources you can check: web search and reading, parallel researchers, a report with numbered citations, a citation check against the pages actually read, and an independent fact-check.",
+  "main": "index.mjs",
+  "agents": "agents",
+  "skills": "skills",
+  "workflows": "workflows"
+}

@@ -16,6 +16,8 @@ export interface Settings {
   compactAt?: number;
   /** Model for sub-agents; defaults to the session's model. */
   subagentModel?: string;
+  /** Run blocking quality gates when the agent tries to finish, and send it back if any fail. */
+  gatesOnStop?: boolean;
 }
 
 export const defaultSettings = (): Settings => ({
@@ -25,6 +27,7 @@ export const defaultSettings = (): Settings => ({
   maxCostUsd: Number(process.env.HARNESS_MAX_COST_USD ?? 5),
   ...(process.env.HARNESS_COMPACT_AT ? { compactAt: Number(process.env.HARNESS_COMPACT_AT) } : {}),
   ...(process.env.HARNESS_SUBAGENT_MODEL ? { subagentModel: process.env.HARNESS_SUBAGENT_MODEL } : {}),
+  ...(process.env.HARNESS_GATES_ON_STOP === '1' ? { gatesOnStop: true } : {}),
 });
 
 /**
@@ -51,7 +54,17 @@ export function mergeSettings(base: Settings, project: Partial<Settings>, trustP
       deny: [...base.permissions.deny, ...(Array.isArray(p?.deny) ? p.deny : [])],
       ask: [...base.permissions.ask, ...(Array.isArray(p?.ask) ? p.ask : [])],
     },
-    hooks: trustProject && project.hooks && typeof project.hooks === 'object' ? project.hooks : base.hooks,
+    hooks: { ...base.hooks },
+    // Gates run the project's own commands (npm test, ...): a project may switch this on only when it is trusted.
+    gatesOnStop: base.gatesOnStop ?? (trustProject && project.gatesOnStop === true),
   };
+  // Operator hooks always run; the project's run in addition, when trusted.
+  if (trustProject && project.hooks && typeof project.hooks === 'object') {
+    for (const [ev, specs] of Object.entries(project.hooks)) {
+      if (!Array.isArray(specs)) continue;
+      const k = ev as HookEvent;
+      s.hooks[k] = [...(s.hooks[k] ?? []), ...specs];
+    }
+  }
   return s;
 }

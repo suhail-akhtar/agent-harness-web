@@ -89,3 +89,40 @@ test('glob patterns', () => {
   assert.ok(!globToRegExp('*.ts').test('src/a.ts'));
   assert.ok(globToRegExp('*.{js,ts}').test('a.js'));
 });
+
+test('a project can switch on gates-on-stop (which runs its own commands) only when it is trusted', async () => {
+  const { defaultSettings, mergeSettings } = await import('../src/core/settings.ts');
+  const base = { ...defaultSettings(), gatesOnStop: undefined };
+  assert.equal(mergeSettings(base, { gatesOnStop: true }, false).gatesOnStop, false);
+  assert.equal(mergeSettings(base, { gatesOnStop: true }, true).gatesOnStop, true);
+  assert.equal(mergeSettings({ ...base, gatesOnStop: true }, {}, false).gatesOnStop, true, 'the operator can always switch it on');
+});
+
+test('calls that write files need edit approval even when the tool is read-only or runs freely in a sandbox', async () => {
+  const { createHarness } = await import('../src/kernel/harness.ts');
+  const h = await createHarness({ dataDir: await tempDir(), plugins: [path.join(import.meta.dirname, '..', 'plugins', 'visual')] });
+  const rules = { allow: [], deny: [], ask: [] };
+  const render = h.registry.tools.get('render')!;
+  const browser = h.registry.tools.get('browser')!;
+  assert.equal(decide(render, { path: 'deck.pptx' }, { mode: 'plan', rules, sandboxed: true }).action, 'allow');
+  assert.equal(decide(render, { path: 'deck.pptx', export: 'pdf' }, { mode: 'plan', rules, sandboxed: true }).action, 'deny');
+  assert.equal(decide(render, { path: 'deck.pptx', export: 'pdf' }, { mode: 'default', rules, sandboxed: true }).action, 'ask');
+  assert.equal(decide(render, { path: 'deck.pptx', export: 'pdf' }, { mode: 'acceptEdits', rules, sandboxed: true }).action, 'allow');
+  assert.equal(decide(browser, {}, { mode: 'default', rules, sandboxed: true }).action, 'allow');
+  assert.equal(decide(browser, { save: { path: 'm.glb', js: 'x' } }, { mode: 'default', rules, sandboxed: true }).action, 'ask');
+  await h.close();
+});
+
+test('commands never get git\'s environment config: it can hold credentials, and half of it breaks git', async () => {
+  const { scrubbedEnv } = await import('../src/runtime/host.ts');
+  const saved = { ...process.env };
+  Object.assign(process.env, { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.extraHeader', GIT_CONFIG_VALUE_0: 'Authorization: Basic c2VjcmV0', GIT_COMMITTER_NAME: 'kept' });
+  try {
+    const env = scrubbedEnv();
+    for (const k of ['GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0']) assert.equal(env[k], undefined, k);
+    assert.equal(env.GIT_COMMITTER_NAME, 'kept');
+  } finally {
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+    Object.assign(process.env, saved);
+  }
+});

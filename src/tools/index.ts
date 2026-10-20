@@ -1,24 +1,23 @@
 import type { ToolSpec } from '../providers/types.ts';
 import { bashTool, todoTool } from './exec.ts';
 import { editTool, globTool, grepTool, readTool, writeTool } from './files.ts';
-import { agentTool, askUserTool, exitPlanTool } from './meta.ts';
+import { askUserTool, exitPlanTool } from './meta.ts';
 import type { Tool } from './types.ts';
-import { webFetchTool } from './web.ts';
+import { memoryTool } from './memory.ts';
+import { publishTool } from './publish.ts';
+import { runScriptTool } from './code.ts';
+import { webFetchTool, webSearchTool } from './web.ts';
 
-export const ALL_TOOLS: Tool[] = [agentTool, askUserTool, bashTool, editTool, exitPlanTool, globTool, grepTool, readTool, todoTool, webFetchTool, writeTool];
-
-/** Read-only set for "explore" sub-agents. */
-export const EXPLORE_TOOLS = new Set(['glob', 'grep', 'read', 'web_fetch']);
+/** Built-in tools. The `agent`, `skill` and MCP tools are made per session from what is registered. */
+export const BUILTIN_TOOLS: Tool[] = [askUserTool, bashTool, editTool, exitPlanTool, globTool, grepTool, memoryTool, publishTool, readTool, runScriptTool, todoTool, webFetchTool, webSearchTool, writeTool];
 
 export function toolByName(name: string): Tool | undefined {
-  return ALL_TOOLS.find((t) => t.spec.name === name);
+  return BUILTIN_TOOLS.find((t) => t.spec.name === name);
 }
 
-/** Deterministic: sorted by name, built the same way every time, so it caches. */
-export function toolSpecs(filter?: (t: Tool) => boolean): ToolSpec[] {
-  return ALL_TOOLS.filter((t) => !filter || filter(t))
-    .map((t) => t.spec)
-    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+/** Deterministic order (by name) so the tool list - which renders first in every request - caches. */
+export function sortTools(tools: Tool[]): Tool[] {
+  return [...tools].sort((a, b) => (a.spec.name < b.spec.name ? -1 : a.spec.name > b.spec.name ? 1 : 0));
 }
 
 /** Minimal JSON-schema check: required keys and primitive types. Returns a repair hint or undefined. */

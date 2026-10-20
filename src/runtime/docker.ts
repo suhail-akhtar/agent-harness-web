@@ -1,5 +1,30 @@
+import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import readline from 'node:readline';
+import { fileURLToPath } from 'node:url';
 import type { ExecOptions, ExecResult, ToolHost } from './host.ts';
 import { run } from './host.ts';
+
+const PROXY_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'egress-proxy.mjs');
+
+/**
+ * Hosts a sandbox with an allowlist reaches by default: the package registries
+ * and source hosts a build needs. HARNESS_SANDBOX_ALLOW_HOSTS replaces the list.
+ */
+export const DEFAULT_ALLOW_HOSTS = [
+  'registry.npmjs.org', 'registry.yarnpkg.com', 'pypi.org', 'files.pythonhosted.org',
+  'proxy.golang.org', 'sum.golang.org', 'crates.io', 'index.crates.io', 'static.crates.io',
+  'repo.maven.apache.org', 'repo1.maven.org', 'services.gradle.org', 'plugins.gradle.org',
+  'rubygems.org', 'index.rubygems.org', 'github.com', 'codeload.github.com', 'objects.githubusercontent.com', 'raw.githubusercontent.com',
+];
+
+export function defaultAllowHosts(): string[] {
+  const env = process.env.HARNESS_SANDBOX_ALLOW_HOSTS;
+  return env !== undefined ? env.split(',').map((h) => h.trim()).filter(Boolean) : DEFAULT_ALLOW_HOSTS;
+}
+
+export interface EgressEvent { host: string; port: number; allowed: boolean; why?: string }
 
 // One container per session. The workspace is a host directory mounted at
 // /workspace; the container has no network by default, drops every
@@ -9,9 +34,14 @@ import { run } from './host.ts';
 
 export interface DockerOptions {
   image: string;
-  network: 'none' | 'full';
+  /** none: no network; full: the default bridge; allowlist: only the hosts in policyFile, through a proxy. */
+  network: 'none' | 'full' | 'allowlist';
   memory: string;
   cpus: string;
+  /** allowlist: the JSON policy file ({ hosts: [...] }) the proxy reads; edit it to change the list live. */
+  policyFile?: string;
+  /** allowlist: called for every connection the proxy decides (blocked ones are worth telling the user). */
+  onEgress?: (e: EgressEvent) => void;
 }
 
 export const dockerDefaults = (): DockerOptions => ({
@@ -38,8 +68,11 @@ export class DockerHost implements ToolHost {
   platform = 'linux';
   shell = 'bash';
   sandboxed = true;
-  networkPolicy: 'none' | 'full';
+  networkPolicy: 'none' | 'full' | 'allowlist';
   private name: string;
+  private netName: string;
+  private proxyName: string;
+  private logs?: ReturnType<typeof spawn>;
   private opts: DockerOptions;
   private ready: Promise<void> | undefined;
 
@@ -48,6 +81,63 @@ export class DockerHost implements ToolHost {
     this.opts = opts;
     this.networkPolicy = opts.network;
     this.name = `harness-${sessionId}`;
+    this.netName = `harness-net-${sessionId}`;
+    this.proxyName = `harness-egress-${sessionId}`;
+  }
+
+  /**
+   * The allowlist network: an internal Docker network (no route out) holding the
+   * sandbox and a proxy container that is also on the default bridge. The proxy
+   * is the only way out, and it reads the policy file on every connection.
+   */
+  private async startEgress(): Promise<void> {
+    if (!this.opts.policyFile) throw new Error('allowlist network needs a policy file');
+    const policyDir = path.dirname(this.opts.policyFile);
+    await fs.mkdir(policyDir, { recursive: true });
+    if (!(await fs.stat(this.opts.policyFile).catch(() => null))) await fs.writeFile(this.opts.policyFile, JSON.stringify({ hosts: defaultAllowHosts() }));
+    const net = await run('docker', ['network', 'inspect', this.netName], { timeoutMs: 15_000 });
+    if (net.code !== 0) {
+      // --internal: no route out. inhibit_ipv4: the host has no address on it either,
+      // so the sandbox cannot reach services on the host past the proxy.
+      const c = await run('docker', ['network', 'create', '--internal', '-o', 'com.docker.network.bridge.inhibit_ipv4=true', '--label', 'harness-web=1', this.netName], { timeoutMs: 30_000 });
+      if (c.code !== 0) throw new Error(`could not create the sandbox network: ${c.stderr.trim()}`);
+    }
+    const state = await run('docker', ['inspect', '-f', '{{.State.Running}}', this.proxyName], { timeoutMs: 15_000 });
+    if (state.code !== 0 || state.stdout.trim() !== 'true') {
+      await run('docker', ['rm', '-f', this.proxyName], { timeoutMs: 15_000 });
+      const upstream = process.env.HARNESS_SANDBOX_UPSTREAM_PROXY;
+      const r = await run('docker', [
+        'run', '-d', '--init', '--name', this.proxyName, '--network', 'bridge',
+        '--memory', '256m', '--cpus', '0.5', '--pids-limit', '128', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--read-only',
+        '--user', `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`,
+        '-v', `${PROXY_SCRIPT}:/egress-proxy.mjs:ro`, '-v', `${policyDir}:/policy:ro`,
+        '-e', `ALLOW_FILE=/policy/${path.basename(this.opts.policyFile)}`, ...(upstream ? ['-e', `UPSTREAM_PROXY=${upstream}`] : []),
+        '--label', 'harness-web=1', this.opts.image, 'node', '/egress-proxy.mjs',
+      ], { timeoutMs: 120_000 });
+      if (r.code !== 0) throw new Error(`could not start the network proxy: ${(r.stderr || r.stdout).trim()}`);
+      const c = await run('docker', ['network', 'connect', '--alias', 'egress', this.netName, this.proxyName], { timeoutMs: 30_000 });
+      if (c.code !== 0) throw new Error(`could not attach the network proxy: ${c.stderr.trim()}`);      // Commands start only once the proxy listens, or their first request fails.
+      for (let i = 0; i < 50; i++) {
+        const l = await run('docker', ['logs', this.proxyName], { timeoutMs: 10_000 });
+        if (l.stdout.includes('"kind":"ready"')) break;
+        if (i === 49) throw new Error(`the network proxy did not start: ${(l.stdout + l.stderr).trim().slice(-300)}`);
+        await new Promise((r) => setTimeout(r, 200));
+      }
+    }
+    this.watchEgress();
+  }
+
+  private watchEgress(): void {
+    if (this.logs || !this.opts.onEgress) return;
+    const p = spawn('docker', ['logs', '-f', '--since', '0s', this.proxyName], { stdio: ['ignore', 'pipe', 'ignore'] });
+    this.logs = p;
+    readline.createInterface({ input: p.stdout! }).on('line', (line) => {
+      try {
+        const e = JSON.parse(line) as { kind?: string; host?: string; port?: number; allowed?: boolean; why?: string };
+        if (e.kind === 'connect' || e.kind === 'http') this.opts.onEgress!({ host: e.host ?? '', port: e.port ?? 0, allowed: !!e.allowed, why: e.why });
+      } catch { /* not ours */ }
+    });
+    p.on('exit', () => { if (this.logs === p) this.logs = undefined; });
   }
 
   private ensure(): Promise<void> {
@@ -56,6 +146,7 @@ export class DockerHost implements ToolHost {
   }
 
   private async start(): Promise<void> {
+    if (this.opts.network === 'allowlist') await this.startEgress();
     const state = await run('docker', ['inspect', '-f', '{{.State.Running}}', this.name], { timeoutMs: 15_000 });
     if (state.code === 0 && state.stdout.trim() === 'true') return;
     if (state.code === 0) {
@@ -65,9 +156,14 @@ export class DockerHost implements ToolHost {
     }
     const uid = process.getuid?.() ?? 1000;
     const gid = process.getgid?.() ?? 1000;
+    const allowlist = this.opts.network === 'allowlist';
+    const proxyEnv = allowlist
+      ? ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy'].flatMap((k) => ['-e', `${k}=http://egress:3128`]).concat(['-e', 'NO_PROXY=localhost,127.0.0.1', '-e', 'no_proxy=localhost,127.0.0.1', '-e', 'NODE_USE_ENV_PROXY=1'])
+      : [];
     const args = [
       'run', '-d', '--init', '--name', this.name,
-      '--network', this.opts.network === 'full' ? 'bridge' : 'none',
+      '--network', allowlist ? this.netName : this.opts.network === 'full' ? 'bridge' : 'none',
+      ...proxyEnv,
       '--memory', this.opts.memory, '--cpus', this.opts.cpus, '--pids-limit', '512',
       '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
       '--user', `${uid}:${gid}`,
@@ -92,14 +188,32 @@ export class DockerHost implements ToolHost {
     return r;
   }
 
+  async spawnStream(command: string, args: string[], env: Record<string, string>): Promise<ChildProcessWithoutNullStreams> {
+    await this.ensure();
+    const envArgs = Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
+    return spawn('docker', ['exec', '-i', ...envArgs, '-w', '/workspace', this.name, command, ...args], { stdio: ['pipe', 'pipe', 'pipe'] });
+  }
+
+  async allowedHosts(): Promise<string[]> {
+    if (!this.opts.policyFile) return [];
+    try { return (JSON.parse(await fs.readFile(this.opts.policyFile, 'utf8')) as { hosts?: string[] }).hosts ?? []; } catch { return defaultAllowHosts(); }
+  }
+
   /** Stops the container (it restarts on next use); the workspace stays. */
   async stop(): Promise<void> {
     this.ready = undefined;
+    this.logs?.kill();
     await run('docker', ['stop', '-t', '2', this.name], { timeoutMs: 30_000 });
+    if (this.opts.network === 'allowlist') await run('docker', ['stop', '-t', '1', this.proxyName], { timeoutMs: 30_000 });
   }
 
   async close(): Promise<void> {
     this.ready = undefined;
+    this.logs?.kill();
     await run('docker', ['rm', '-f', this.name], { timeoutMs: 30_000 });
+    if (this.opts.network === 'allowlist') {
+      await run('docker', ['rm', '-f', this.proxyName], { timeoutMs: 30_000 });
+      await run('docker', ['network', 'rm', this.netName], { timeoutMs: 30_000 });
+    }
   }
 }

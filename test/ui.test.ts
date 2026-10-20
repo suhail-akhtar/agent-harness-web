@@ -13,6 +13,8 @@ test('history renders user text without harness context blocks, and pairs tool r
   assert.equal((items[0] as { text: string }).text, 'Fix the bug');
   assert.equal((items[2] as { result: string }).result, 'body');
   assert.equal(visibleUserText('<system-reminder>x</system-reminder>'), '');
+  // Every block the harness adds to the first message stays out of the user's bubble.
+  assert.equal(visibleUserText('<environment>e</environment>\n\n<project_instructions source="AGENTS.md">p</project_instructions>\n\n<memory>\nNotes...\n<index path="/memories/project/MEMORY.md">\nx\n</index>\n</memory>\n\n<skills>\n- a: b\n</skills>\n\nremember how to run the tests'), 'remember how to run the tests');
 });
 
 test('live events stream text, then the final message replaces the streamed copy', () => {
@@ -28,4 +30,22 @@ test('live events stream text, then the final message replaces the streamed copy
   assert.equal((l.items[1] as { activity: unknown[] }).activity.length, 1, 'sub-agent activity nests in the agent card');
   l = apply(l, { kind: 'tool_result', id: 't', name: 'agent', content: 'report', is_error: false, ms: 5 });
   assert.equal((l.items[1] as { running: boolean }).running, false);
+});
+
+test('a workflow run is one card: node events update it and node agents report activity into it', () => {
+  const run = (status: string, history: { node: string; status: string; outcome?: string }[]) => ({
+    id: 'run_1', workflow: 'build-feature', status, cost: 0, nodes: [{ id: 'implement', type: 'agent' }, { id: 'gates', type: 'gate' }],
+    history: history.map((h) => ({ ...h, type: 'agent', startedAt: 1 })),
+  });
+  let live: Live = { items: [], contextTokens: 0, contextWindow: 0 };
+  live = apply(live, { kind: 'workflow', phase: 'started', run: run('running', []) });
+  live = apply(live, { kind: 'workflow', phase: 'node_started', node: 'implement', run: run('running', [{ node: 'implement', status: 'running' }]) });
+  live = apply(live, { kind: 'tool_call', id: 't', name: 'write', input: { path: 'src/app.js' }, agent: 'implement' });
+  live = apply(live, { kind: 'tool_result', id: 't', name: 'write', content: 'ok', is_error: false, ms: 1, agent: 'implement' });
+  live = apply(live, { kind: 'workflow', phase: 'node_finished', node: 'gates', run: run('running', [{ node: 'implement', status: 'done' }, { node: 'gates', status: 'done', outcome: 'pass' }]) });
+  assert.equal(live.items.length, 1);
+  const card = live.items[0] as Extract<typeof live.items[number], { kind: 'workflow' }>;
+  assert.equal(card.kind, 'workflow');
+  assert.deepEqual(card.activity.implement, [{ name: 'write', summary: 'src/app.js', done: true, isError: false }]);
+  assert.equal(card.run.history[1]!.outcome, 'pass');
 });

@@ -18,16 +18,19 @@ export interface PermissionContext {
   rules: Rules;
   /** Commands run in an isolated container: auto-allow them (the sandbox is the boundary). */
   sandboxed: boolean;
+  /** The agent has read untrusted content (web pages, MCP results) in this context. */
+  tainted?: boolean;
 }
 
 function parseRule(rule: string): { tool: string; spec?: string } {
-  const m = /^([a-z_]+)(?:\((.*)\))?$/.exec(rule.trim());
+  const m = /^([A-Za-z0-9_*-]+)(?:\((.*)\))?$/.exec(rule.trim());
   return m ? { tool: m[1]!, spec: m[2] } : { tool: rule.trim() };
 }
 
 export function ruleMatches(rule: string, tool: Tool, input: Record<string, unknown>): boolean {
   const { tool: name, spec } = parseRule(rule);
-  if (name !== tool.spec.name) return false;
+  // "mcp__github__*" covers every tool of one MCP server.
+  if (name.endsWith('*') ? !tool.spec.name.startsWith(name.slice(0, -1)) : name !== tool.spec.name) return false;
   if (spec === undefined || spec === '' || spec === '*') return true;
   if (name === 'bash') {
     const cmd = String(input.command ?? '').trim();
@@ -69,8 +72,21 @@ export function decide(tool: Tool, input: Record<string, unknown>, ctx: Permissi
   if (rules.deny.some((r) => ruleMatches(r, tool, input))) return { action: 'deny', reason: 'blocked by a deny rule' };
   if (rules.ask.some((r) => ruleMatches(r, tool, input))) return mode === 'bypass' ? { action: 'allow', reason: 'bypass mode' } : { action: 'ask', reason: 'matches an ask rule' };
   if (rules.allow.some((r) => ruleMatches(r, tool, input))) return { action: 'allow', reason: 'allowed by a rule' };
+  // Anything that outlives the session (memory) is confirmed once untrusted
+  // content is in the context: a page must not be able to plant instructions
+  // for every future session.
+  if (ctx.tainted && tool.persists?.(input) && mode !== 'bypass') return { action: 'ask', reason: 'this is saved for future sessions, and the agent has read untrusted content (web pages or service results) in this session' };
 
-  switch (tool.kind) {
+  // A call can need more than its tool's kind (render with export writes a file):
+  // every kind it needs is decided, and the strictest answer wins.
+  const kinds = tool.kindsFor?.(input) ?? [tool.kind];
+  const order = { deny: 0, ask: 1, allow: 2 } as const;
+  return kinds.map((k) => decideKind(k, input, ctx)).sort((a, b) => order[a.action] - order[b.action])[0]!;
+}
+
+function decideKind(kind: Tool['kind'], input: Record<string, unknown>, ctx: PermissionContext): Decision {
+  const { mode } = ctx;
+  switch (kind) {
     case 'read':
     case 'meta':
       return { action: 'allow', reason: 'read-only' };
@@ -89,6 +105,11 @@ export function decide(tool: Tool, input: Record<string, unknown>, ctx: Permissi
     case 'network':
       if (mode === 'bypass') return { action: 'allow', reason: 'bypass mode' };
       return { action: 'ask', reason: 'fetching a URL needs approval' };
+    case 'external':
+      // Acts on another system (an MCP service): the sandbox does not contain it.
+      if (mode === 'bypass') return { action: 'allow', reason: 'bypass mode' };
+      if (mode === 'plan') return { action: 'deny', reason: 'plan mode: no actions on external services until the plan is approved' };
+      return { action: 'ask', reason: 'actions on external services need approval' };
   }
 }
 

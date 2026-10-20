@@ -1,8 +1,10 @@
 import { render, type VNode } from 'preact';
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
-import { api, ApiError, type CompanionInfo, type Config, type Effort, type HarnessEvent, type Mode, type SessionDetail, type SessionMeta, type Usage } from './api.ts';
+import { api, ApiError, type CompanionInfo, type Config, type Effort, type HarnessEvent, type Mode, type SessionDetail, type SessionMeta, type Usage, type WorkflowRunView } from './api.ts';
 import { ContextMeter, fmtCost, Modal, PendingPrompt, Timeline, TodoPanel, UsagePanel } from './components.tsx';
+import { CapabilitiesPanel, CheckpointsPanel, MemoryPanel, NetworkPanel, SourcesPanel, TraceButton } from './panels.tsx';
 import { apply, fromHistory, type Live } from './timeline.ts';
+import { ApprovalPrompt, RunsPanel, WorkflowDialog } from './workflow.tsx';
 
 const MODE_LABEL: Record<Mode, string> = { default: 'Ask before edits', acceptEdits: 'Auto-accept edits', plan: 'Plan mode', bypass: 'Bypass permissions' };
 const RUNTIME_LABEL = { docker: 'Sandbox', local: 'Server folder', companion: 'My computer' } as const;
@@ -43,7 +45,7 @@ function NewSession({ config, onClose, onCreated, onCompanions }: { config: Conf
   const [effort, setEffort] = useState<Effort | ''>('');
   const defaultRuntime = config.runtimes.docker && config.runtimes.dockerImage ? 'docker' : config.companions.length ? 'companion' : config.runtimes.local ? 'local' : 'docker';
   const [runtime, setRuntime] = useState<'docker' | 'local' | 'companion'>(defaultRuntime);
-  const [network, setNetwork] = useState(false);
+  const [network, setNetwork] = useState<'none' | 'allowlist' | 'full'>('allowlist');
   const [gitUrl, setGitUrl] = useState('');
   const [path, setPath] = useState(config.runtimes.localRoots[0] ?? '');
   const [companionId, setCompanionId] = useState(config.companions.find((c) => c.online)?.id ?? config.companions[0]?.id ?? '');
@@ -53,7 +55,7 @@ function NewSession({ config, onClose, onCreated, onCompanions }: { config: Conf
   const create = async () => {
     setBusy(true); setErr('');
     try {
-      const s = await api.post<SessionMeta>('/api/sessions', { model, effort: effort || undefined, runtime, network: network ? 'full' : 'none', gitUrl: gitUrl.trim() || undefined, path: runtime === 'local' ? path : undefined, companionId: runtime === 'companion' ? companionId : undefined, mode });
+      const s = await api.post<SessionMeta>('/api/sessions', { model, effort: effort || undefined, runtime, network, gitUrl: gitUrl.trim() || undefined, path: runtime === 'local' ? path : undefined, companionId: runtime === 'companion' ? companionId : undefined, mode });
       onCreated(s.id);
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
@@ -64,6 +66,7 @@ function NewSession({ config, onClose, onCreated, onCompanions }: { config: Conf
           {config.models.map((m) => <option key={m.id} value={m.id} disabled={!m.available}>{m.label}{m.available ? '' : ' (no API key on server)'}</option>)}
         </select>
       </label>
+      {spec?.notes && <div class="notice notice-info small">{spec.notes}</div>}
       {spec && (
         <label class="field"><span>Effort</span>
           <select class="input" value={effort || spec.effort} onChange={(e) => setEffort((e.target as HTMLSelectElement).value as Effort)}>
@@ -83,7 +86,13 @@ function NewSession({ config, onClose, onCreated, onCompanions }: { config: Conf
           {!config.runtimes.dockerImage && <div class="notice notice-warn">The sandbox image is not built on the server yet (npm run sandbox:image).</div>}
           <p class="hint">An isolated container per session; commands run inside it, so they don't need approval.</p>
           <label class="field"><span>Clone a git repository (optional)</span><input class="input" placeholder="https://github.com/owner/repo" value={gitUrl} onInput={(e) => setGitUrl((e.target as HTMLInputElement).value)} /></label>
-          <label class="check"><input type="checkbox" checked={network} onChange={(e) => setNetwork((e.target as HTMLInputElement).checked)} /> Allow network access from commands (package installs)</label>
+          <label class="field"><span>Network for commands</span>
+            <select class="input" value={network} onChange={(e) => setNetwork((e.target as HTMLSelectElement).value as 'none' | 'allowlist' | 'full')}>
+              <option value="allowlist">Package registries and GitHub only (editable)</option>
+              <option value="none">None</option>
+              <option value="full">Full internet</option>
+            </select>
+          </label>
         </>
       )}
       {runtime === 'companion' && (
@@ -144,6 +153,41 @@ function Companions({ onClose, onChanged }: { onClose: () => void; onChanged: ()
   );
 }
 
+interface CatalogueEntry { name: string; version: string; description: string; signature: string; verified: boolean; installed: boolean; remote?: boolean }
+
+/** What is plugged in (with what each declared it needs), and signed plugins to install. */
+function Plugins({ config, onClose, onChanged }: { config: Config; onClose: () => void; onChanged: () => void }): VNode {
+  const [catalogue, setCatalogue] = useState<CatalogueEntry[] | null>(null);
+  const [msg, setMsg] = useState('');
+  const admin = config.me?.role !== 'member';
+  const load = () => api.get<CatalogueEntry[]>('/api/plugins/catalogue').then(setCatalogue).catch((e) => setMsg((e as Error).message));
+  useEffect(() => { load(); }, []);
+  const install = async (name: string) => {
+    setMsg(`Installing ${name}...`);
+    try { const r = await api.post<{ note: string; signature: string }>('/api/plugins/install', { name }); setMsg(`${name}: ${r.signature}. ${r.note}`); load(); onChanged(); } catch (e) { setMsg((e as Error).message); }
+  };
+  return (
+    <Modal title="Plugins" onClose={onClose} wide>
+      <div class="panel-title">Loaded</div>
+      {(config.plugins ?? []).map((p) => (
+        <div key={p.name} class="plugin-row">
+          <div><b>{p.name}</b> <span class="muted">{p.version}</span> <span class="muted small">{p.signature}</span></div>
+          <div class="muted small">{p.description}</div>
+          {p.permissions && <div class="small">Needs: {[...(p.permissions.network ?? []).map((h) => `network ${h}`), ...(p.permissions.secrets ?? []).map((s) => `secret ${s}`)].join(', ')}</div>}
+        </div>
+      ))}
+      <div class="panel-title">Catalogue</div>
+      {catalogue === null ? <p class="muted small">{msg || 'Loading...'}</p> : !catalogue.length ? <p class="muted small">No catalogue is configured (HARNESS_PLUGIN_CATALOGUE: a folder, or the URL of an index.json).</p> : catalogue.map((c) => (
+        <div key={c.name} class="plugin-row row gap">
+          <div class="grow"><b>{c.name}</b> <span class="muted">{c.version}</span> <span class="muted small">{c.signature}</span><div class="muted small">{c.description}</div></div>
+          {c.installed ? <span class="muted small">installed</span> : admin ? <button class="btn small" disabled={!c.verified && !c.remote} onClick={() => install(c.name)}>Install</button> : <span class="muted small">an administrator installs plugins</span>}
+        </div>
+      ))}
+      {msg && catalogue !== null && <div class="notice notice-info small">{msg}</div>}
+    </Modal>
+  );
+}
+
 function FilesPanel({ sessionId, refreshKey }: { sessionId: string; refreshKey: number }): VNode | null {
   const [files, setFiles] = useState<{ path: string; size: number }[] | null>(null);
   const [view, setView] = useState<{ path: string; content: string | null; note?: string } | null>(null);
@@ -178,6 +222,8 @@ function SessionView({ id, config, onMeta }: { id: string; config: Config; onMet
   const [err, setErr] = useState('');
   const [filesKey, setFilesKey] = useState(0);
   const [showSide, setShowSide] = useState(false);
+  const [wfDialog, setWfDialog] = useState(false);
+  const [runsKey, setRunsKey] = useState(0);
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const metaRef = useRef<SessionMeta | null>(null);
@@ -195,13 +241,18 @@ function SessionView({ id, config, onMeta }: { id: string; config: Config; onMet
       setStatus(d.status);
       setPending(d.pending);
       setLive({ items: fromHistory(d.history), contextTokens: d.meta.lastPromptTokens, contextWindow: spec?.compactAt ?? 0 });
+      // A run still going when the page opens gets its card back (finished ones are in the runs panel).
+      api.get<{ runs: WorkflowRunView[] }>(`/api/sessions/${id}/workflows`).then((r) => {
+        if (stopped) return;
+        for (const run of r.runs.filter((x) => x.status === 'running' || x.status === 'waiting')) setLive((l) => apply(l, { kind: 'workflow', phase: 'started', run }));
+      }).catch(() => {});
       es = new EventSource(`/api/sessions/${id}/events?after=${d.lastSeq}`);
       es.onmessage = (msg) => {
         const { event } = JSON.parse(msg.data) as { event: HarnessEvent };
         setLive((l) => apply(l, event));
         switch (event.kind) {
           case 'status': setStatus(event.status); break;
-          case 'permission_request': case 'question': case 'plan_proposed': setPending((p) => [...p.filter((x) => (x as { requestId: string }).requestId !== event.requestId), event]); break;
+          case 'permission_request': case 'question': case 'plan_proposed': case 'approval_request': setPending((p) => [...p.filter((x) => (x as { requestId: string }).requestId !== event.requestId), event]); break;
           case 'request_resolved': setPending((p) => p.filter((x) => (x as { requestId: string }).requestId !== event.requestId)); break;
           case 'usage': {
             const m = metaRef.current;
@@ -217,6 +268,8 @@ function SessionView({ id, config, onMeta }: { id: string; config: Config; onMet
           case 'todos': if (metaRef.current) { metaRef.current = { ...metaRef.current, todos: event.todos }; setMeta(metaRef.current); } break;
           case 'mode': if (metaRef.current) { metaRef.current = { ...metaRef.current, mode: event.mode }; setMeta(metaRef.current); } break;
           case 'tool_result': if (['write', 'edit', 'bash'].includes(event.name)) setFilesKey((k) => k + 1); break;
+          case 'notice': if (/^Rewound/.test(event.text)) setFilesKey((k) => k + 1); break;
+          case 'workflow': if (event.phase !== 'node_started') setRunsKey((k) => k + 1); if (event.phase === 'node_finished') setFilesKey((k) => k + 1); break;
           case 'turn_end': if (!event.agent) api.get<SessionDetail>(`/api/sessions/${id}`).then((d) => { metaRef.current = d.meta; setMeta(d.meta); onMeta(d.meta); }).catch(() => {}); break;
         }
       };
@@ -252,7 +305,7 @@ function SessionView({ id, config, onMeta }: { id: string; config: Config; onMet
       <div class="chat">
         <div class="chat-head">
           <input class="title-input" value={meta.title} onChange={(e) => patch({ title: (e.target as HTMLInputElement).value })} aria-label="Session title" />
-          <span class={`badge rt-${meta.runtime.kind}`}>{RUNTIME_LABEL[meta.runtime.kind]}{meta.runtime.kind === 'docker' ? (meta.runtime.network === 'full' ? ' · net' : ' · offline') : ''}</span>
+          <span class={`badge rt-${meta.runtime.kind}`}>{RUNTIME_LABEL[meta.runtime.kind]}{meta.runtime.kind === 'docker' ? (meta.runtime.network === 'full' ? ' · net' : meta.runtime.network === 'allowlist' ? ' · allowlist' : ' · offline') : ''}</span>
           <span class={`status status-${status}`}>{status === 'running' ? 'Working' : status === 'waiting' ? 'Needs you' : 'Idle'}</span>
           <button class="icon-btn side-toggle" onClick={() => setShowSide(!showSide)} aria-label="Session details">☰</button>
         </div>
@@ -260,7 +313,9 @@ function SessionView({ id, config, onMeta }: { id: string; config: Config; onMet
           {live.items.length === 0 && <div class="empty-chat"><div class="logo big">›_</div><p>Describe a task. The agent reads, edits, runs and verifies in its workspace.</p></div>}
           <Timeline items={live.items} />
           {live.retry && <div class="notice notice-warn">{live.retry}</div>}
-          {pending.map((p) => <PendingPrompt key={(p as { requestId: string }).requestId} p={p as never} respond={respond} />)}
+          {pending.map((p) => p.kind === 'approval_request'
+            ? <ApprovalPrompt key={p.requestId} p={p} respond={respond} />
+            : <PendingPrompt key={(p as { requestId: string }).requestId} p={p as never} respond={respond} />)}
         </div>
         <div class="composer">
           {err && <div class="notice notice-error">{err}</div>}
@@ -278,6 +333,7 @@ function SessionView({ id, config, onMeta }: { id: string; config: Config; onMet
               {(Object.keys(MODE_LABEL) as Mode[]).map((m) => <option key={m} value={m}>{MODE_LABEL[m]}</option>)}
             </select>
             <span class="grow" />
+            {!busy && <button class="btn" onClick={() => setWfDialog(true)} title="Run a multi-step workflow (e.g. requirements to delivery)">Workflow…</button>}
             {busy && <button class="btn danger" onClick={() => api.post(`/api/sessions/${id}/abort`)}>Stop</button>}
             <button class="btn primary" disabled={!text.trim()} onClick={sendMsg}>{busy ? 'Queue' : 'Send'}</button>
           </div>
@@ -287,13 +343,20 @@ function SessionView({ id, config, onMeta }: { id: string; config: Config; onMet
         <ContextMeter used={live.contextTokens} window={live.contextWindow || spec?.compactAt || 0} />
         <UsagePanel usage={meta.usage} cost={meta.cost} byModel={meta.byModel} />
         <TodoPanel todos={meta.todos} />
+        <RunsPanel sessionId={id} refreshKey={runsKey} busy={busy} />
+        {meta.runtime.network === 'allowlist' && <NetworkPanel sessionId={id} />}
+        <MemoryPanel sessionId={id} refreshKey={filesKey} />
+        <SourcesPanel sessionId={id} refreshKey={filesKey} />
+        <CapabilitiesPanel sessionId={id} />
+        {meta.runtime.kind !== 'companion' && <CheckpointsPanel sessionId={id} refreshKey={filesKey} busy={busy} />}
         {meta.runtime.kind !== 'companion' && <FilesPanel sessionId={id} refreshKey={filesKey} />}
         <div class="panel muted small">
           {meta.compactions ? <div>Compacted {meta.compactions}×</div> : null}
-          <div>Session {meta.id}</div>
+          <div>Session {meta.id} · <TraceButton sessionId={id} /></div>
           <button class="link danger" onClick={async () => { if (confirm('Delete this session and its workspace?')) { await api.del(`/api/sessions/${id}`); location.hash = ''; } }}>Delete session</button>
         </div>
       </aside>
+      {wfDialog && <WorkflowDialog sessionId={id} onClose={() => setWfDialog(false)} onStarted={() => { setWfDialog(false); stick.current = true; }} />}
     </div>
   );
 }
@@ -303,7 +366,7 @@ function App(): VNode {
   const [needLogin, setNeedLogin] = useState(false);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [hash, setHash] = useHash();
-  const [dialog, setDialog] = useState<'new' | 'companions' | null>(null);
+  const [dialog, setDialog] = useState<'new' | 'companions' | 'plugins' | null>(null);
   const [menu, setMenu] = useState(false);
   const [err, setErr] = useState('');
 
@@ -340,7 +403,9 @@ function App(): VNode {
         </div>
         <div class="sidebar-foot">
           <button class="link" onClick={() => setDialog('companions')}>Your computers ({config.companions.filter((c) => c.online).length} online)</button>
+          <button class="link" onClick={() => setDialog('plugins')}>Plugins ({(config.plugins ?? []).length})</button>
           <div class="muted small">All sessions: {fmtCost(total)}</div>
+          {config.me && <div class="muted small">Signed in as {config.me.name}{config.me.role === 'admin' && config.me.name !== 'operator' ? ' (admin)' : ''} · <button class="link small" onClick={async () => { await api.post('/api/logout'); location.reload(); }}>sign out</button></div>}
         </div>
       </nav>
       <main class="main">
@@ -360,6 +425,7 @@ function App(): VNode {
       </main>
       {dialog === 'new' && <NewSession config={config} onClose={() => setDialog(null)} onCompanions={() => setDialog('companions')} onCreated={(id) => { setDialog(null); load(); setHash(id); }} />}
       {dialog === 'companions' && <Companions onClose={() => setDialog(null)} onChanged={load} />}
+      {dialog === 'plugins' && <Plugins config={config} onClose={() => setDialog(null)} onChanged={load} />}
     </div>
   );
 }

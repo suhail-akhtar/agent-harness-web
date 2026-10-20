@@ -1,0 +1,6 @@
+{
+  "name": "quality-gates",
+  "version": "1.0.0",
+  "description": "Stack-aware verifiers: tests, type checks, lint and builds for Node, Python, Go, Rust and Java; secret, conflict-marker, TODO and large-file scans.",
+  "main": "index.mjs"
+}

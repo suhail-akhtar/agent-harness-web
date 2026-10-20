@@ -1,0 +1,5 @@
+quarter,revenue_musd,new_arr_musd,enterprise_share_new_arr,gross_margin_pct,monthly_churn_pct,nrr_pct,cac_payback_months,burn_musd,cash_musd,headcount
+Q4 2025,2.90,0.62,0.48,72,2.9,104,19,1.9,31.0,118
+Q1 2026,3.20,0.71,0.55,74,2.6,106,17,1.7,29.3,124
+Q2 2026,3.56,0.84,0.61,75,2.4,109,15,1.5,27.8,131
+Q3 2026,4.20,1.12,0.70,77,2.1,112,13,1.2,26.6,137

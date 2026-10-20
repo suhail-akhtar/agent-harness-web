@@ -1,3 +1,4 @@
+import { splitToolImages } from './images.ts';
 import type { Block, Message } from '../core/types.ts';
 import type { Provider, ProviderRequest, ProviderResponse, StopKind } from './types.ts';
 import { ProviderError } from './types.ts';
@@ -78,7 +79,8 @@ interface ResponseObject {
   };
 }
 
-export function toInputItems(m: Message): unknown[] {
+export function toInputItems(msg: Message): unknown[] {
+  const m = splitToolImages(msg);
   if (m.role === 'assistant') {
     if (m.raw?.provider === 'openai') return m.raw.payload as unknown[];
     const items: unknown[] = [];
@@ -93,8 +95,12 @@ export function toInputItems(m: Message): unknown[] {
   for (const b of m.content) {
     if (b.type === 'tool_result') items.push({ type: 'function_call_output', call_id: b.tool_use_id, output: b.is_error ? `ERROR: ${b.content}` : b.content || '(no output)' });
   }
-  const texts = m.content.filter((b) => b.type === 'text').map((b) => ({ type: 'input_text', text: (b as { text: string }).text }));
-  if (texts.length) items.push({ role: 'user', content: texts });
+  const parts: unknown[] = [];
+  for (const b of m.content) {
+    if (b.type === 'text') parts.push({ type: 'input_text', text: b.text });
+    else if (b.type === 'image') parts.push({ type: 'input_image', image_url: `data:${b.media_type};base64,${b.data}` });
+  }
+  if (parts.length) items.push({ role: 'user', content: parts });
   return items;
 }
 

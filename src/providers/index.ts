@@ -1,37 +1,13 @@
-import type { ProviderId } from '../core/types.ts';
-import { MODELS, type ModelSpec } from '../core/models.ts';
-import type { Provider } from './types.ts';
-import { AnthropicProvider, anthropicKey } from './anthropic.ts';
-import { OpenAIProvider } from './openai.ts';
+import type { ProviderDef } from '../plugins/api.ts';
+import { AnthropicProvider } from './anthropic.ts';
 import { DeepSeekProvider } from './deepseek.ts';
+import { OpenAIProvider } from './openai.ts';
 
-// Keys live in the server's environment only; the browser never sees them.
+// The built-in providers. Keys are read from the server's environment only;
+// the browser never sees them. Plugins register more the same way.
 
-function keyFor(p: ProviderId): string | undefined {
-  if (p === 'anthropic') return anthropicKey();
-  if (p === 'openai') return process.env.OPENAI_API_KEY || undefined;
-  return process.env.DEEPSEEK_API_KEY || undefined;
-}
-
-const cache = new Map<ProviderId, Provider>();
-
-export function providerFor(model: ModelSpec): Provider {
-  const hit = cache.get(model.provider);
-  if (hit) return hit;
-  const key = keyFor(model.provider);
-  if (!key) throw new Error(`No API key for ${model.provider}. Set ${model.provider === 'anthropic' ? 'ANTHROPIC_API_KEY (or GW_ANTHROPIC_API_KEY)' : model.provider === 'openai' ? 'OPENAI_API_KEY' : 'DEEPSEEK_API_KEY'} on the server.`);
-  const p: Provider = model.provider === 'anthropic' ? new AnthropicProvider(key)
-    : model.provider === 'openai' ? new OpenAIProvider(key)
-    : new DeepSeekProvider(key);
-  cache.set(model.provider, p);
-  return p;
-}
-
-/** Test seam: install a fake provider for a provider id. */
-export function setProvider(id: ProviderId, p: Provider | undefined): void {
-  if (p) cache.set(id, p); else cache.delete(id);
-}
-
-export function availableModels(): (ModelSpec & { available: boolean })[] {
-  return MODELS.map((m) => ({ ...m, available: Boolean(keyFor(m.provider)) || cache.has(m.provider) }));
-}
+export const BUILTIN_PROVIDERS: Record<string, ProviderDef> = {
+  anthropic: { keyEnv: ['ANTHROPIC_API_KEY', 'GW_ANTHROPIC_API_KEY'], create: (key) => new AnthropicProvider(key) },
+  openai: { keyEnv: ['OPENAI_API_KEY'], create: (key) => new OpenAIProvider(key) },
+  deepseek: { keyEnv: ['DEEPSEEK_API_KEY'], create: (key) => new DeepSeekProvider(key) },
+};

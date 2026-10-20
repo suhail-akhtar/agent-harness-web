@@ -1,0 +1,15 @@
+{
+  "name": "expense-cli",
+  "description": "A long task built feature by feature (long-task workflow), judged by a hidden end-to-end test of the finished command-line program, the quality gates, and every feature marked as verified.",
+  "workflow": "long-task",
+  "timeoutMin": 120,
+  "input": {
+    "goal": "A command-line expense tracker in Node.js 22 with no runtime dependencies, run as `node expenses.js <command>`. Data lives in the JSON file named by the EXPENSES_FILE environment variable (default ./expenses.json), created on first use.\n\nCommands (exact output formats matter: other programs parse them):\n- `add <amount> <category> [--date YYYY-MM-DD] [--note \"text\"]`: amount is a positive number with at most 2 decimals; category is one word, stored lower-case; date defaults to today. Prints `Added #<id>` where ids start at 1 and never repeat, even after deletes.\n- `list [--category c] [--month YYYY-MM]`: one line per expense, oldest date first (ties by id): `#<id> <YYYY-MM-DD> <category> <amount with 2 decimals>[ - <note>]`. Prints `No expenses.` when nothing matches.\n- `delete <id>`: prints `Deleted #<id>`; an unknown id prints `No expense #<id>` to stderr and exits 1.\n- `summary [--month YYYY-MM]`: one line per category, alphabetical: `<category>: <total with 2 decimals>`, then a last line `total: <grand total with 2 decimals>`.\n- `export <file.csv>`: writes `id,date,category,amount,note` then one row per expense in list order (notes quoted with double quotes, inner quotes doubled); prints `Exported <n> expenses to <file.csv>`.\n- `--help` or no command: a usage text that mentions every command, exit 0.\nInvalid input (bad amount, bad date, unknown command, missing arguments) prints a one-line error starting `Error:` to stderr and exits 1, without changing the data file.\n\nInclude a test suite run by `npm test` (node:test).",
+    "constraints": "Node.js 22, no npm dependencies at runtime"
+  },
+  "checks": [
+    { "name": "quality gates", "gates": ["node-test"] },
+    { "name": "every feature verified", "run": "node -e \"const a=JSON.parse(require('fs').readFileSync('.harness/long-task/features.json','utf8'));const left=a.filter(f=>f.passes!==true);console.log((a.length-left.length)+'/'+a.length+' features verified');process.exit(left.length?1:0)\"" },
+    { "name": "hidden end-to-end test", "run": "node {{case}}/check-cli.mjs {{ws}}", "timeoutSec": 120 }
+  ]
+}

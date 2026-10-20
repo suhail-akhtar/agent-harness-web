@@ -1,0 +1,12 @@
+{
+  "name": "acme",
+  "version": "1.0.0",
+  "description": "Example plugin: a tool, a quality gate, a policy hook, a sub-agent and a skill.",
+  "main": "index.mjs",
+  "skills": "skills",
+  "agents": "agents",
+  "hooks": {
+    "PostToolUse": [{ "matcher": "write|edit", "command": "true" }]
+  },
+  "permissions": { "network": [], "secrets": [] }
+}

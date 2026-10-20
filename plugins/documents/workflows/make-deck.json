@@ -1,0 +1,197 @@
+{
+  "name": "make-deck",
+  "description": "From a brief to a presentation-ready deck: storyline and slide outline, (approval), build with a script, render-and-fix, independent visual review, up to two revision rounds, PDF export and a delivery note.",
+  "inputs": {
+    "brief": {
+      "description": "What the deck must achieve: purpose, key content, data or source files in the workspace.",
+      "required": true
+    },
+    "audience": {
+      "description": "Who will read it",
+      "default": "senior decision makers"
+    },
+    "slides": {
+      "description": "Approximate number of slides",
+      "default": "8-12"
+    },
+    "style": {
+      "description": "Visual style or brand rules",
+      "default": "clean corporate: white background, one dark text colour, one accent colour, Arial"
+    },
+    "file": {
+      "description": "Output file",
+      "default": "deck.pptx"
+    },
+    "approval": {
+      "description": "\"manual\" to approve the outline before building, \"auto\" to go straight on",
+      "default": "manual"
+    }
+  },
+  "start": "outline",
+  "maxAgentRuns": 14,
+  "nodes": {
+    "outline": {
+      "type": "agent",
+      "title": "Storyline & outline",
+      "agent": "outline-writer",
+      "prompt": "Write the deck outline to docs/deck-outline.md.\n\n<brief>\n{{input.brief}}\n</brief>\n\nAudience: {{input.audience}}. Length: {{input.slides}} slides.\nFeedback on an earlier outline, if any: {{feedback}}\n\nReport: the storyline in three lines and the assumptions.",
+      "next": "approval-mode"
+    },
+    "approval-mode": {
+      "type": "branch",
+      "title": "Approval needed?",
+      "value": "{{input.approval}}",
+      "next": {
+        "on": {
+          "auto": "build"
+        },
+        "default": "approve-outline"
+      }
+    },
+    "approve-outline": {
+      "type": "approval",
+      "title": "Approve the outline",
+      "message": "The outline is ready. Approve to build the deck, or send it back with what to change.\n\n{{state.outline}}",
+      "files": [
+        "docs/deck-outline.md"
+      ],
+      "next": {
+        "on": {
+          "approve": "build",
+          "reject": "outline"
+        }
+      }
+    },
+    "build": {
+      "type": "agent",
+      "title": "Build the deck",
+      "agent": "deck-designer",
+      "maxSteps": 150,
+      "prompt": "Build {{input.file}} from docs/deck-outline.md.\nStyle: {{input.style}}\nAudience: {{input.audience}}\n\n<brief>\n{{input.brief}}\n</brief>\n\nRender every page and fix what you see until render reports no problems. Then export the PDF (render with export: \"pdf\").",
+      "next": "check"
+    },
+    "check": {
+      "type": "gate",
+      "title": "Render checks",
+      "gates": [
+        "documents-render"
+      ],
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "review",
+          "fail": "fix",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "fix": {
+      "type": "agent",
+      "title": "Fix render problems",
+      "agent": "deck-designer",
+      "prompt": "The render checks failed. Fix the build script (not by shrinking text: cut, split or re-layout), re-run it, render the pages to confirm, and export the PDF again.\n\n{{feedback}}",
+      "next": "check"
+    },
+    "review": {
+      "type": "agent",
+      "title": "Independent review",
+      "agent": "visual-reviewer",
+      "decide": [
+        "APPROVE",
+        "REQUEST_CHANGES"
+      ],
+      "prompt": "Review {{input.file}} against the brief and docs/deck-outline.md. Render and look at every page. Write docs/deck-review.md.\n\n<brief>\n{{input.brief}}\n</brief>\nAudience: {{input.audience}}",
+      "next": {
+        "on": {
+          "REQUEST_CHANGES": "revise"
+        },
+        "default": "deliver"
+      }
+    },
+    "revise": {
+      "type": "agent",
+      "title": "Revise",
+      "agent": "deck-designer",
+      "prompt": "Address every BLOCKING and MAJOR finding in docs/deck-review.md in the build script; re-run, render every changed page to confirm, export the PDF again. Add a \"Resolution\" line under each finding you fixed.\n\nReview summary:\n{{state.review}}",
+      "next": "recheck"
+    },
+    "recheck": {
+      "type": "gate",
+      "title": "Render checks",
+      "gates": [
+        "documents-render"
+      ],
+      "maxFailures": 2,
+      "next": {
+        "on": {
+          "pass": "final-review",
+          "fail": "fix-2",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "fix-2": {
+      "type": "agent",
+      "title": "Fix render problems",
+      "agent": "deck-designer",
+      "prompt": "The render checks failed after the revision. Fix it (not by shrinking text), re-render to confirm, export the PDF.\n\n{{feedback}}",
+      "next": "recheck"
+    },
+    "final-review": {
+      "type": "agent",
+      "title": "Second review",
+      "agent": "visual-reviewer",
+      "decide": [
+        "APPROVE",
+        "REQUEST_CHANGES"
+      ],
+      "prompt": "Second review of {{input.file}}. Render every page. Check that each BLOCKING and MAJOR finding in docs/deck-review.md is resolved and that nothing new broke. Append a \"Round 2\" section to docs/deck-review.md.",
+      "next": {
+        "on": {
+          "REQUEST_CHANGES": "revise-2"
+        },
+        "default": "deliver"
+      }
+    },
+    "revise-2": {
+      "type": "agent",
+      "title": "Final revision",
+      "agent": "deck-designer",
+      "prompt": "Fix the findings in the \"Round 2\" section of docs/deck-review.md; re-render, export the PDF.\n\n{{state.final-review}}",
+      "next": "last-check"
+    },
+    "last-check": {
+      "type": "gate",
+      "title": "Render checks",
+      "gates": [
+        "documents-render"
+      ],
+      "maxFailures": 1,
+      "next": {
+        "on": {
+          "pass": "deliver",
+          "fail": "failed",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "deliver": {
+      "type": "agent",
+      "title": "Delivery note",
+      "agent": "outline-writer",
+      "effort": "low",
+      "prompt": "Write docs/delivery.md: the files delivered ({{input.file}} and its PDF), the slide titles in order, what the reviews found and how each BLOCKING/MAJOR finding was resolved (from docs/deck-review.md), the assumptions made, and anything left open. Report its first paragraph.",
+      "next": "done"
+    },
+    "done": {
+      "type": "end",
+      "title": "Delivered",
+      "status": "success"
+    },
+    "failed": {
+      "type": "end",
+      "title": "Stopped: render checks still failing",
+      "status": "failed"
+    }
+  }
+}

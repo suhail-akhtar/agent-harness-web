@@ -1,0 +1,8 @@
+{
+  "name": "documents",
+  "version": "1.0.0",
+  "description": "Decks and documents a professional would present: storyline and outline, build (.pptx / .docx with PDF), render-and-look checks, an independent visual review, revisions. Needs the visual plugin.",
+  "agents": "agents",
+  "skills": "skills",
+  "workflows": "workflows"
+}

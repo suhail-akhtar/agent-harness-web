@@ -30,3 +30,24 @@ test('run_in_background returns at once and the process keeps running', async ()
   const pid = /pid (\d+)/.exec(r.content)![1]!;
   await bashTool.run({ command: `kill ${pid}` }, c);
 });
+
+test('shell writes of file contents are steered to write/edit; ordinary commands are not', async () => {
+  const { shellFileWrite } = await import('../src/tools/exec.ts');
+  for (const c of [
+    "cat > stats.js <<'EOF'\nx\nEOF",
+    'cat <<EOF > a.py\nprint(1)\nEOF',
+    'cat >> notes.md',
+    "sed -i 's/a/b/' file.txt",
+    'perl -pi -e s/a/b/ x.js',
+    'echo hi | tee out.txt',
+    "printf 'x' > src/app.ts",
+    'echo "{}" > package.json',
+  ]) assert.ok(shellFileWrite(c), c);
+  for (const c of [
+    'npm install', 'node test.js > /tmp/out.log 2>&1', 'cat stats.js', 'grep -n foo src/*.ts', 'echo done',
+    'make build 2>&1 | tail -20', 'ls > /dev/null', 'cat a.txt | tee /dev/stderr', 'git commit -m "update"', "sed -n '1,20p' file.txt",
+  ]) assert.equal(shellFileWrite(c), undefined, c);
+  const r = await bashTool.run({ command: "cat > x.js <<'EOF'\n1\nEOF" }, await ctx());
+  assert.ok(r.is_error);
+  assert.match(r.content, /Use the write tool/);
+});

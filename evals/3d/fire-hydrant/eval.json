@@ -1,0 +1,31 @@
+{
+  "name": "fire-hydrant",
+  "description": "A real-world object as a 3D model, judged on a valid GLB, real-world size, triangle budget and a clean viewer.",
+  "workflow": "model-3d",
+  "timeoutMin": 90,
+  "input": {
+    "subject": "A classic cast-iron pillar fire hydrant, painted red with slightly worn paint: a domed bonnet with a pentagonal operating nut on top, a barrel body with a rim near the top, two side hose outlets with caps and pentagonal nuts, one larger front pumper outlet with cap, a base flange with 6 bolts, standing on the ground. Real size about 0.75 m tall."
+  },
+  "checks": [
+    {
+      "name": "valid model and clean viewer",
+      "gates": [
+        "gltf-valid",
+        "web-console"
+      ]
+    },
+    {
+      "name": "deliverables",
+      "files": [
+        "model.glb",
+        "model.js",
+        "index.html",
+        "docs/model-plan.md"
+      ]
+    },
+    {
+      "name": "real size and budget",
+      "run": "node {{case}}/check-model.mjs model.glb"
+    }
+  ]
+}

@@ -54,16 +54,26 @@ export function Markdown({ text }: { text: string }): VNode {
     }
     if (/^\s*([-*+]|\d+[.)])\s+/.test(line)) {
       const ordered = /^\s*\d+[.)]/.test(line);
+      const start = ordered ? Number(/^\s*(\d+)/.exec(line)![1]) : 1;
+      const indent = /^\s*/.exec(line)![0].length;
+      const isItem = (l: string) => /^\s*([-*+]|\d+[.)])\s+/.test(l) && /^\s*/.exec(l)![0].length === indent;
       const items: Inline[][] = [];
-      while (i < lines.length && /^\s*([-*+]|\d+[.)])\s+/.test(lines[i]!)) {
+      while (i < lines.length && isItem(lines[i]!)) {
         let item = lines[i]!.replace(/^\s*([-*+]|\d+[.)])\s+/, '');
         i++;
-        while (i < lines.length && /^\s{2,}\S/.test(lines[i]!) && !/^\s*([-*+]|\d+[.)])\s+/.test(lines[i]!)) item += ' ' + lines[i++]!.trim();
+        // Lines indented past the bullet belong to this item: continuation text, or a nested list.
+        const nested: string[] = [];
+        while (i < lines.length && (lines[i]!.trim() === '' ? i + 1 < lines.length && /^\s+\S/.test(lines[i + 1]!) && /^\s*/.exec(lines[i + 1]!)![0].length > indent : /^\s*/.exec(lines[i]!)![0].length > indent)) {
+          const l = lines[i++]!;
+          if (nested.length || /^\s*([-*+]|\d+[.)])\s+/.test(l)) nested.push(l.slice(Math.min(l.length, indent + 2)));
+          else if (l.trim()) item += ' ' + l.trim();
+        }
         const task = /^\[( |x|X)\]\s+/.exec(item);
-        items.push(task ? [<input type="checkbox" checked={task[1] !== ' '} disabled />, ' ', ...inline(item.slice(task[0].length), `li${k}-${items.length}`)] : inline(item, `li${k}-${items.length}`));
+        const head = task ? [<input type="checkbox" checked={task[1] !== ' '} disabled />, ' ', ...inline(item.slice(task[0].length), `li${k}-${items.length}`)] : inline(item, `li${k}-${items.length}`);
+        items.push(nested.length ? [...head, <Markdown text={nested.join('\n')} />] : head);
       }
       const children = items.map((c, j) => <li key={j}>{c}</li>);
-      blocks.push(ordered ? <ol key={k++}>{children}</ol> : <ul key={k++}>{children}</ul>);
+      blocks.push(ordered ? <ol key={k++} start={start}>{children}</ol> : <ul key={k++}>{children}</ul>);
       continue;
     }
     if (/^\s*>/.test(line)) {
