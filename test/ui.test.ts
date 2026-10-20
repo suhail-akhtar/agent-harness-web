@@ -13,6 +13,8 @@ test('history renders user text without harness context blocks, and pairs tool r
   assert.equal((items[0] as { text: string }).text, 'Fix the bug');
   assert.equal((items[2] as { result: string }).result, 'body');
   assert.equal(visibleUserText('<system-reminder>x</system-reminder>'), '');
+  // Every block the harness adds to the first message stays out of the user's bubble.
+  assert.equal(visibleUserText('<environment>e</environment>\n\n<project_instructions source="AGENTS.md">p</project_instructions>\n\n<memory>\nNotes...\n<index path="/memories/project/MEMORY.md">\nx\n</index>\n</memory>\n\n<skills>\n- a: b\n</skills>\n\nremember how to run the tests'), 'remember how to run the tests');
 });
 
 test('live events stream text, then the final message replaces the streamed copy', () => {

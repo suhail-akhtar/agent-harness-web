@@ -21,6 +21,8 @@ export function visibleUserText(text: string): string {
   return text
     .replace(/<environment>[\s\S]*?<\/environment>/g, '')
     .replace(/<project_instructions[\s\S]*?<\/project_instructions>/g, '')
+    .replace(/<memory>[\s\S]*?<\/memory>/g, '')
+    .replace(/<skills>[\s\S]*?<\/skills>/g, '')
     .replace(/<session_start_context>[\s\S]*?<\/session_start_context>/g, '')
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
     .trim();
