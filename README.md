@@ -246,7 +246,34 @@ Every model and tool call is a span in the session's `trace.jsonl` (UI: "Open tr
 
 ## Measured (2026-10-20)
 
-**Phase 1 validation** (`/tmp`-style scratch run, local workspace). One task needed all of these at once:
+Every result below was checked independently, outside the agent's own claims: hidden HTTP acceptance checks, rendering and reading every slide, playing each game in the headless browser, viewing each model from four sides. One run per model per task, so these are observations, not benchmark statistics (`npm run eval -- --repeat N` gives those).
+
+**Phase 2 - `build-feature`, a URL-shortener API from written requirements** (requirements, ADRs, plan, test-first build, gates, parallel code and security review, fixes, docs, delivery report):
+
+| Model | Hidden acceptance (25) | Its own tests | Cost | Input tokens | Cache hit | Model calls |
+|---|---|---|---|---|---|---|
+| GPT-6 Luna | 25/25 | 43/43 | $0.10 | 6.4M | 94% | 219 |
+| DeepSeek Flash | 25/25 | 216/216 | $0.46 | 29.6M | 97% | 508 |
+| Claude Haiku 5.5 | 25/25 | 172/172 alone; 2 latency tests fail on a busy machine | $0.58 | 14.9M | 88% | 330 |
+
+The code reviewer on the Luna run found a real header-injection bug (CR/LF in a stored URL reaching `Location`) by testing it live; the security reviewer had approved. Every test name cited in the delivery reports exists verbatim.
+
+**Phase 3 - `make-deck`, a 9-11 slide board update from three data files:** all three decks rendered cleanly, carried every key number and passed the render gate. Luna ($0.024, approved first time) and Haiku ($0.13, one revision round) were correct but repeated a monthly-vs-quarterly burn conflict that was planted in the source notes; DeepSeek ($0.20, two rounds) caught that conflict with the arithmetic but added two claims the sources do not make (a region name and "included in the budget"). The reviewer now treats unsourced labels as blocking.
+
+**Phase 3 - `build-game` (a gravity-flight delivery game) and `model-3d` (a cast-iron fire hydrant):**
+
+| Model | Game: hidden playtests | Game cost | Hydrant (size, triangles, materials) | Model cost |
+|---|---|---|---|---|
+| GPT-6 Luna | 4/4 (+18 of its own) | $0.06 | 0.75 m, 15k tris, 6 materials | $0.03 |
+| Claude Haiku 5.5 | 4/4 (+20 of its own) | $0.26 | 0.745 m, 12k tris, worn-paint texture | $0.08 |
+| DeepSeek Flash | 4/4 (+20 of its own) | $0.64 | 0.75 m, 16k tris, 6 textures, pentagonal nuts | $0.25 |
+
+The independent playtester found real bugs in DeepSeek's game over two rounds (restart dead on the pause screen, launch overriding the player's aim, the ship hidden under the HUD, off-screen arrows rotated 90 degrees); each fix came with a scenario that fails on the old build.
+
+**What the live runs fixed in the harness:** parallel branches colliding on one save file; an agent step treating "out of steps" as failure; streams that drop mid-way ending a step; every old render staying in the context; one-image full-page renders that DeepSeek rejects; a rejected image ending a step; browser key presses that could fall between frames; plugins that broke when installed outside the repository; sub-agents wandering outside the workspace.
+
+
+**Phase 1 validation** (local workspace). One task needed all of these at once:
 
 - a project skill with a strict changelog format;
 - a project-defined `reviewer` sub-agent;
