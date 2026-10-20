@@ -8,8 +8,11 @@ export const MCP_PROTOCOL_VERSION = '2025-06-18';
 
 type Msg = { jsonrpc: '2.0'; id?: number | string; method?: string; params?: unknown; result?: unknown; error?: { code: number; message: string; data?: unknown } };
 
+export interface SendOptions { timeoutMs?: number; signal?: AbortSignal }
+
 export interface Transport {
-  send(msg: Msg): Promise<void>;
+  /** opts carry the request's own timeout and abort, so a long tool call is not cut at a transport default. */
+  send(msg: Msg, opts?: SendOptions): Promise<void>;
   onMessage(cb: (msg: Msg) => void): void;
   onClose(cb: (reason: string) => void): void;
   close(): Promise<void>;
@@ -39,7 +42,7 @@ export class StdioTransport implements Transport {
     child.on('error', (e) => { for (const c of this.closers) c(e.message); });
     child.stdin.on('error', () => {});
   }
-  async send(msg: Msg) { this.child.stdin.write(JSON.stringify(msg) + '\n'); }
+  async send(msg: Msg, _opts?: SendOptions) { this.child.stdin.write(JSON.stringify(msg) + '\n'); }
   onMessage(cb: (m: Msg) => void) { this.handlers.push(cb); }
   onClose(cb: (r: string) => void) { this.closers.push(cb); }
   async close() { try { this.child.stdin.end(); this.child.kill('SIGTERM'); } catch { /* gone */ } }
@@ -56,7 +59,8 @@ export class HttpTransport implements Transport {
     this.url = url;
     this.headers = headers;
   }
-  async send(msg: Msg) {
+  async send(msg: Msg, opts: SendOptions = {}) {
+    const timeout = AbortSignal.timeout(opts.timeoutMs ?? 120_000);
     const res = await fetch(this.url, {
       method: 'POST',
       headers: {
@@ -67,8 +71,14 @@ export class HttpTransport implements Transport {
         ...this.headers,
       },
       body: JSON.stringify(msg),
-      signal: AbortSignal.timeout(120_000),
+      signal: opts.signal ? AbortSignal.any([timeout, opts.signal]) : timeout,
     });
+    // An expired session is a 404 (MCP spec): the client must start a new one, so report it closed.
+    if (res.status === 404 && this.sessionId) {
+      this.sessionId = undefined;
+      for (const c of this.closers) c('session expired (HTTP 404)');
+      return;
+    }
     const sid = res.headers.get('mcp-session-id');
     if (sid) this.sessionId = sid;
     if (res.status === 202 || res.status === 204) return;
@@ -114,11 +124,13 @@ export class McpClient {
   private nextId = 1;
   private pending = new Map<number, { resolve(v: unknown): void; reject(e: Error): void; timer: NodeJS.Timeout }>();
   private closedReason?: string;
+  private callTimeoutMs: number;
   serverInfo?: { name?: string; version?: string };
   instructions?: string;
 
-  constructor(transport: Transport) {
+  constructor(transport: Transport, opts: { callTimeoutMs?: number } = {}) {
     this.transport = transport;
+    this.callTimeoutMs = opts.callTimeoutMs ?? 10 * 60_000;
     transport.onMessage((m) => {
       if (m.id !== undefined && (m.result !== undefined || m.error)) {
         const p = this.pending.get(Number(m.id));
@@ -151,7 +163,7 @@ export class McpClient {
         void this.transport.send({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: id, reason: 'aborted' } }).catch(() => {});
         reject(new Error('aborted'));
       }, { once: true });
-      this.transport.send({ jsonrpc: '2.0', id, method, params }).catch((e) => { this.pending.delete(id); clearTimeout(timer); reject(e); });
+      this.transport.send({ jsonrpc: '2.0', id, method, params }, { timeoutMs: timeoutMs + 5_000, signal }).catch((e) => { this.pending.delete(id); clearTimeout(timer); reject(e); });
     });
   }
 
@@ -180,8 +192,11 @@ export class McpClient {
   }
 
   callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpCallResult> {
-    return this.request<McpCallResult>('tools/call', { name, arguments: args }, 10 * 60_000, signal);
+    return this.request<McpCallResult>('tools/call', { name, arguments: args }, this.callTimeoutMs, signal);
   }
+
+  /** The server process exited or the HTTP session expired: this client cannot be used again. */
+  get closed(): boolean { return this.closedReason !== undefined; }
 
   close(): Promise<void> { return this.transport.close(); }
 }

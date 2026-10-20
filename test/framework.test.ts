@@ -440,3 +440,95 @@ test('starting a workflow claims the session at once: a second start or a messag
   s.abort();
   await h.close();
 });
+
+test('MCP: a shared server that crashed is reconnected on the next call; the failed call is not retried', async () => {
+  const mgr = new McpManager();
+  const { entries } = await mgr.serverEntries(new Map([['fx', { command: 'node', args: [fixture], plugin: 'test' }]]));
+  const echo = entries.find((e) => e.tool.name === 'echo')!;
+  assert.equal((await echo.client.callTool('echo', { text: 'a' })).content?.[0]?.text, 'echo: a');
+  await assert.rejects(echo.client.callTool('crash', {}), /MCP server closed/);
+  assert.equal((await echo.client.callTool('echo', { text: 'b' })).content?.[0]?.text, 'echo: b', 'reconnected');
+  assert.equal((echo.client as unknown as { reconnects: number }).reconnects, 1);
+  await mgr.closeAll();
+});
+
+test('MCP over HTTP: the per-server timeout applies to tool calls, and an expired session reconnects', async () => {
+  let session = 0;
+  let expired = false;
+  const server = http.createServer(async (req, res) => {
+    let body = '';
+    for await (const c of req) body += c;
+    if (req.method === 'DELETE') { res.writeHead(204).end(); return; }
+    const m = JSON.parse(body);
+    if (m.id === undefined) { res.writeHead(202).end(); return; }
+    if (m.method === 'initialize') {
+      session++; expired = false;
+      res.writeHead(200, { 'content-type': 'application/json', 'mcp-session-id': `s${session}` });
+      res.end(JSON.stringify({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'h' } } }));
+      return;
+    }
+    if (expired || req.headers['mcp-session-id'] !== `s${session}`) { res.writeHead(404).end('unknown session'); return; }
+    const result = m.method === 'tools/list'
+      ? { tools: [{ name: 'slow', inputSchema: { type: 'object', properties: { ms: { type: 'number' } } } }] }
+      : await new Promise((r) => setTimeout(() => r({ content: [{ type: 'text', text: `slept ${m.params.arguments.ms}` }] }), m.params.arguments.ms));
+    if (res.destroyed) return;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ jsonrpc: '2.0', id: m.id, result }));
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/mcp`;
+  const prev = process.env.NO_PROXY;
+  process.env.NO_PROXY = '127.0.0.1';
+  const mgr = new McpManager();
+  try {
+    const { entries } = await mgr.serverEntries(new Map([['h', { type: 'http', url, timeoutMs: 400, plugin: 'test' } as never]]));
+    const slow = entries[0]!;
+    assert.equal((await slow.client.callTool('slow', { ms: 50 })).content?.[0]?.text, 'slept 50');
+    await assert.rejects(slow.client.callTool('slow', { ms: 1500 }), /timed out after 0\.4s/);
+    expired = true; // the server forgot the session
+    await assert.rejects(slow.client.callTool('slow', { ms: 10 }), /session expired/);
+    assert.equal((await slow.client.callTool('slow', { ms: 10 })).content?.[0]?.text, 'slept 10', 'a new session was started');
+    assert.equal(session, 2);
+  } finally {
+    await mgr.closeAll();
+    server.close();
+    if (prev === undefined) delete process.env.NO_PROXY; else process.env.NO_PROXY = prev;
+  }
+});
+
+test('MCP on Windows: npx-style shims start through the shell with quoted arguments; real binaries do not', async () => {
+  const { spawnPlan } = await import('../src/mcp/manager.ts');
+  assert.deepEqual(spawnPlan('npx', ['-y', '@scope/server'], 'win32'), { command: 'npx', args: ['-y', '@scope/server'], shell: true });
+  assert.deepEqual(spawnPlan('npm', ['run', 'my tool & more'], 'win32').args, ['run', '"my tool ^& more"']);
+  assert.equal(spawnPlan('C:\\tools\\server.cmd', [], 'win32').shell, true);
+  assert.equal(spawnPlan('node', ['server.js'], 'win32').shell, false);
+  assert.equal(spawnPlan('npx', ['x'], 'linux').shell, false);
+});
+
+test('a Claude Code agent file keeps its tools: Read, Grep, Glob, Bash map to the harness names', () => {
+  const a = parseAgentFile('---\nname: reviewer\ndescription: Reviews code\ntools: Read, Grep, Glob, Bash, LS, mcp__github__get_issue, render\n---\nReview it.', 'x', 'project')!;
+  assert.deepEqual(a.tools, ['read', 'grep', 'glob', 'bash', 'mcp__github__get_issue', 'render']);
+});
+
+test('a plugin that fails partway through loading leaves nothing behind', async () => {
+  const root = await tempDir('hw-plugins-');
+  const dir = path.join(root, 'half');
+  await fs.mkdir(dir);
+  await fs.writeFile(path.join(dir, 'harness-plugin.json'), JSON.stringify({ name: 'half', main: 'index.mjs' }));
+  await fs.writeFile(path.join(dir, 'index.mjs'), `let closed = false;
+export default { name: 'half', close() { globalThis.__halfClosed = true; }, setup(api) {
+  api.registerTool({ name: 'half_tool', description: 'd', parameters: { type: 'object', properties: {} }, run: async () => 'x' });
+  api.registerGate({ name: 'half-gate', description: 'd', run: async () => ({ pass: true, summary: 'ok' }) });
+  api.on('Stop', () => undefined);
+  throw new Error('setup failed after registering');
+} };`);
+  const logs: string[] = [];
+  const h = await createHarness({ dataDir: await tempDir(), plugins: [root], log: (m) => logs.push(m) });
+  assert.ok(logs.some((l) => /half.*setup failed after registering/.test(l)));
+  assert.equal(h.registry.tools.has('half_tool'), false);
+  assert.equal(h.registry.gates.has('half-gate'), false);
+  assert.equal(h.registry.hooks.length, 0);
+  assert.equal(h.registry.plugins.length, 0);
+  assert.equal((globalThis as { __halfClosed?: boolean }).__halfClosed, true, 'its close() ran');
+  await h.close();
+});

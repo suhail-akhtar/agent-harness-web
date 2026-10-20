@@ -14,7 +14,7 @@ import type { McpCallResult, McpClient, McpTool } from './client.ts';
 export interface McpEntry {
   server: string;
   tool: McpTool;
-  client: McpClient;
+  client: Pick<McpClient, 'callTool'>;
   /** Name the model uses: mcp__server__tool. */
   qualified: string;
 }

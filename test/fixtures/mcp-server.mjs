@@ -26,6 +26,7 @@ rl.on('line', (line) => {
     const { name, arguments: a } = m.params;
     if (name === 'echo') return send({ jsonrpc: '2.0', id: m.id, result: { content: [{ type: 'text', text: `echo: ${a.text}` }] } });
     if (name === 'add') return send({ jsonrpc: '2.0', id: m.id, result: { content: [{ type: 'text', text: String(a.a + a.b) }] } });
+    if (name === 'crash') process.exit(1); // dies without answering, like a server that crashed
     return send({ jsonrpc: '2.0', id: m.id, result: { content: [{ type: 'text', text: `${name} done` }] } });
   }
   send({ jsonrpc: '2.0', id: m.id, error: { code: -32601, message: 'unknown method' } });

@@ -23,32 +23,76 @@ function expand(v: string): string {
   return v.replace(/\$\{([A-Z0-9_]+)\}/g, (_m, k: string) => process.env[k] ?? '');
 }
 
+const SHIMS = new Set(['npx', 'npm', 'pnpm', 'pnpx', 'yarn', 'corepack']);
+
+/** Windows quoting for cmd.exe: wrap in quotes, double inner quotes, escape cmd metacharacters. */
+const quoteWin = (a: string) => (/^[\w./:=@\\-]+$/.test(a) ? a : `"${a.replace(/"/g, '""').replace(/([%^&|<>])/g, '^$1')}"`);
+
+/**
+ * How to start an MCP server's command. On Windows, npx/npm & co are .cmd shims
+ * that Node refuses to spawn without a shell (EINVAL), so they go through cmd.exe
+ * with their arguments quoted for it.
+ */
+export function spawnPlan(command: string, args: string[], platform: string = process.platform): { command: string; args: string[]; shell: boolean } {
+  if (platform !== 'win32') return { command, args, shell: false };
+  const base = path.win32.basename(command).toLowerCase();
+  const batch = /\.(cmd|bat)$/.test(base) || (!/[\\/]/.test(command) && SHIMS.has(base));
+  return batch ? { command: quoteWin(command), args: args.map(quoteWin), shell: true } : { command, args, shell: false };
+}
+
 async function connect(name: string, cfg: McpServerConfig, scope: 'server' | 'project', host?: ToolHost): Promise<McpClient> {
   let client: McpClient;
+  const opts = { callTimeoutMs: cfg.timeoutMs };
   if (cfg.type === 'http') {
     const url = scope === 'server' ? expand(cfg.url) : cfg.url;
     if (scope === 'project') await assertPublicUrl(url);
     const headers = Object.fromEntries(Object.entries(cfg.headers ?? {}).map(([k, v]) => [k, scope === 'server' ? expand(v) : v]));
-    client = new McpClient(new HttpTransport(url, headers));
+    client = new McpClient(new HttpTransport(url, headers), opts);
   } else {
     const args = (cfg.args ?? []).map((a) => (scope === 'server' ? expand(a) : a));
     const env = Object.fromEntries(Object.entries(cfg.env ?? {}).map(([k, v]) => [k, scope === 'server' ? expand(v) : v]));
+    const plan = spawnPlan(cfg.command, args);
     const child = scope === 'server'
-      ? spawn(cfg.command, args, { cwd: cfg.cwd, env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'] })
+      ? spawn(plan.command, plan.args, { cwd: cfg.cwd, env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'], shell: plan.shell })
       : await host!.spawnStream!(cfg.command, args, env);
-    client = new McpClient(new StdioTransport(child));
+    client = new McpClient(new StdioTransport(child), opts);
   }
   await client.initialize();
   return client;
 }
 
-async function entriesOf(name: string, client: McpClient): Promise<McpEntry[]> {
+/**
+ * A client that reconnects when its server has gone (process exited, HTTP session
+ * expired). Only BEFORE a call: a call that fails mid-way is not retried, since the
+ * server may have acted on it.
+ */
+export class ReconnectingClient {
+  private current: McpClient;
+  private reconnecting?: Promise<McpClient>;
+  private reconnect: () => Promise<McpClient>;
+  reconnects = 0;
+  constructor(first: McpClient, reconnect: () => Promise<McpClient>) {
+    this.current = first;
+    this.reconnect = reconnect;
+  }
+  private async live(): Promise<McpClient> {
+    if (!this.current.closed) return this.current;
+    this.reconnecting ??= this.reconnect().then((c) => { this.current = c; this.reconnects++; return c; }).finally(() => { this.reconnecting = undefined; });
+    return this.reconnecting;
+  }
+  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
+    return (await this.live()).callTool(name, args, signal);
+  }
+  close(): Promise<void> { return this.current.close(); }
+}
+
+async function entriesOf(name: string, client: McpClient, caller: Pick<McpClient, 'callTool'> = client): Promise<McpEntry[]> {
   const tools = await client.listTools();
-  return tools.map((tool) => ({ server: name, tool, client, qualified: qualifiedName(name, tool.name) }));
+  return tools.map((tool) => ({ server: name, tool, client: caller, qualified: qualifiedName(name, tool.name) }));
 }
 
 export class McpManager {
-  private shared = new Map<string, Promise<{ client: McpClient; entries: McpEntry[] }>>();
+  private shared = new Map<string, Promise<{ client: ReconnectingClient; entries: McpEntry[] }>>();
 
   /** Operator-configured servers, connected once per process. */
   async serverEntries(configs: Map<string, McpServerConfig>): Promise<{ entries: McpEntry[]; status: McpStatus[] }> {
@@ -57,7 +101,10 @@ export class McpManager {
     for (const [name, cfg] of configs) {
       let p = this.shared.get(name);
       if (!p) {
-        p = connect(name, cfg, 'server').then(async (client) => ({ client, entries: await entriesOf(name, client) }));
+        p = connect(name, cfg, 'server').then(async (first) => {
+          const client = new ReconnectingClient(first, () => connect(name, cfg, 'server'));
+          return { client, entries: await entriesOf(name, first, client) };
+        });
         this.shared.set(name, p);
         p.catch(() => this.shared.delete(name));
       }
@@ -76,7 +123,7 @@ export class McpManager {
   async projectEntries(host: ToolHost, trusted: boolean): Promise<{ entries: McpEntry[]; status: McpStatus[]; close(): Promise<void> }> {
     const status: McpStatus[] = [];
     const entries: McpEntry[] = [];
-    const clients: McpClient[] = [];
+    const clients: { close(): Promise<void> }[] = [];
     const close = async () => { await Promise.all(clients.map((c) => c.close().catch(() => {}))); };
     if (host.kind === 'companion') return { entries, status, close };
     let configs: Record<string, McpServerConfig> = {};
@@ -95,9 +142,10 @@ export class McpManager {
         continue;
       }
       try {
-        const client = await connect(name, cfg, 'project', host);
+        const first = await connect(name, cfg, 'project', host);
+        const client = new ReconnectingClient(first, () => connect(name, cfg, 'project', host));
         clients.push(client);
-        const e = await entriesOf(name, client);
+        const e = await entriesOf(name, first, client);
         entries.push(...e);
         status.push({ name, scope: 'project', ok: true, tools: e.length });
       } catch (err) {

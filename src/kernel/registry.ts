@@ -37,6 +37,21 @@ export class Registry {
   readonly closers: (() => void | Promise<void>)[] = [];
   private instances = new Map<string, Provider>();
 
+  /** Saves the registry's contents; the function returned puts them back (a failed plugin load). */
+  snapshot(): () => void {
+    const maps: Map<string, unknown>[] = [this.models, this.providers, this.tools, this.agents, this.mcpServers, this.gates, this.workflows, this.instances];
+    const lists: unknown[][] = [this.skillDirs, this.hooks, this.plugins, this.closers];
+    const savedMaps = maps.map((m) => new Map(m));
+    const savedLists = lists.map((l) => l.slice());
+    const savedShell = Object.fromEntries(Object.entries(this.shellHooks).map(([k, v]) => [k, v?.slice()]));
+    return () => {
+      maps.forEach((m, i) => { m.clear(); for (const [k, v] of savedMaps[i]!) m.set(k, v); });
+      lists.forEach((l, i) => { l.length = 0; l.push(...savedLists[i]!); });
+      for (const k of Object.keys(this.shellHooks)) delete (this.shellHooks as Record<string, unknown>)[k];
+      Object.assign(this.shellHooks, savedShell);
+    };
+  }
+
   model(id: string): ModelSpec {
     const m = this.models.get(id);
     if (!m) throw new Error(`Unknown model "${id}". Available: ${[...this.models.keys()].join(', ')}`);

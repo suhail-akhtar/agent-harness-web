@@ -23,9 +23,10 @@ export interface AgentDef {
   source?: string;
 }
 
+/** timeoutMs: how long one tool call may take (default 10 minutes). */
 export type McpServerConfig =
-  | { type?: 'stdio'; command: string; args?: string[]; env?: Record<string, string>; cwd?: string }
-  | { type: 'http'; url: string; headers?: Record<string, string> };
+  | { type?: 'stdio'; command: string; args?: string[]; env?: Record<string, string>; cwd?: string; timeoutMs?: number }
+  | { type: 'http'; url: string; headers?: Record<string, string>; timeoutMs?: number };
 
 export interface GateResult {
   pass: boolean;

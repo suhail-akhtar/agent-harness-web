@@ -33,6 +33,23 @@ export const BUILTIN_AGENTS: AgentDef[] = [
 
 const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
+/**
+ * Claude Code's tool names, as they appear in .claude/agents files, mapped to
+ * this harness's. Unmapped, a Claude Code agent's "tools: Read, Grep, Glob" matched
+ * nothing and the agent ran with no tools at all.
+ */
+const CLAUDE_CODE_TOOLS: Record<string, string> = {
+  Read: 'read', Write: 'write', Edit: 'edit', MultiEdit: 'edit', NotebookEdit: 'edit', NotebookRead: 'read',
+  Bash: 'bash', BashOutput: 'bash', Glob: 'glob', Grep: 'grep', LS: 'glob', WebFetch: 'web_fetch',
+  TodoWrite: 'todo_write', Task: 'agent', ExitPlanMode: 'exit_plan_mode', AskUserQuestion: 'ask_user', Skill: 'skill',
+};
+
+/** A tools list in either vocabulary, without duplicates; MCP and plugin tool names pass through. */
+export function normaliseToolNames(names: string[] | undefined): string[] | undefined {
+  if (!names) return undefined;
+  return [...new Set(names.map((n) => CLAUDE_CODE_TOOLS[n] ?? n))];
+}
+
 /** Parses an agent definition file: frontmatter (name, description, tools, model, effort) + prompt body. */
 export function parseAgentFile(text: string, fallbackName: string, source: string): AgentDef | undefined {
   const { data, body } = parseFrontmatter(text);
@@ -41,7 +58,7 @@ export function parseAgentFile(text: string, fallbackName: string, source: strin
   if (!/^[a-z0-9][a-z0-9_-]{0,40}$/i.test(name) || !description) return undefined;
   const effort = EFFORTS.find((e) => e === data.effort);
   const model = typeof data.model === 'string' && data.model !== 'inherit' ? data.model : undefined;
-  return { name, description: description.slice(0, 300), prompt: body, tools: asList(data.tools), model, effort, source };
+  return { name, description: description.slice(0, 300), prompt: body, tools: normaliseToolNames(asList(data.tools)), model, effort, source };
 }
 
 export async function loadAgentDir(dir: string, source: string): Promise<AgentDef[]> {

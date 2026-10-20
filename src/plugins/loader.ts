@@ -39,7 +39,21 @@ export async function findPluginDirs(root: string): Promise<string[]> {
   return out;
 }
 
+/**
+ * Loads one plugin, all or nothing: a plugin that fails partway through (a bad
+ * workflow, a throwing setup) leaves no tools, agents, gates or hooks behind.
+ */
 export async function loadPlugin(reg: Registry, dir: string, log: (m: string) => void = () => {}): Promise<void> {
+  const restore = reg.snapshot();
+  try {
+    await loadInto(reg, dir, log);
+  } catch (e) {
+    restore();
+    throw e;
+  }
+}
+
+async function loadInto(reg: Registry, dir: string, log: (m: string) => void): Promise<void> {
   const m = await readManifest(dir);
   if (!m) throw new Error(`no ${MANIFEST} in ${dir}`);
   if (reg.plugins.some((p) => p.name === m.name)) throw new Error(`plugin ${m.name} is loaded twice`);
@@ -93,7 +107,12 @@ export async function loadPlugin(reg: Registry, dir: string, log: (m: string) =>
       on: (event, handler, matcher) => { reg.hooks.push({ event, handler, matcher, plugin: m.name }); contributes.push(`hook:${event}`); },
       log: (msg) => log(`[${m.name}] ${msg}`),
     };
-    await def.setup(api);
+    try {
+      await def.setup(api);
+    } catch (e) {
+      await Promise.resolve(def.close?.()).catch(() => {}); // it may have started something before failing
+      throw e;
+    }
     if (typeof def.close === 'function') reg.closers.push(() => def.close!());
   }
   reg.plugins.push({ name: m.name, version: m.version ?? '0.0.0', description: m.description ?? '', dir, trusted: true, contributes: [...new Set(contributes)] });
