@@ -47,16 +47,33 @@ function route(node: WorkflowNode, outcome: string | undefined): string | undefi
   return n.default;
 }
 
-function decideFrom(report: string, words: string[] | undefined): string | undefined {
+const NEGATIVE = /REQUEST|REJECT|FAIL|CHANGES|BLOCK/i;
+
+/**
+ * The verdict in a report: a line that is only a decision word wins (agents are
+ * asked to end with one), else the LAST whole-word mention. Earliest-mention lost
+ * to "I would APPROVE if ... REQUEST_CHANGES", and substrings counted DISAPPROVE.
+ */
+export function decideFrom(report: string, words: string[] | undefined): string | undefined {
   if (!words?.length) return undefined;
-  // The first decision word that appears wins (agents are asked to lead with it).
+  const norm = (x: string) => x.toUpperCase().replace(/[\s_-]+/g, '_');
+  const lines = report.split('\n').map((l) => norm(l.replace(/[*_`#>.!:]+/g, ' ').trim()));
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i]) continue;
+    const w = words.find((x) => norm(x) === lines[i]);
+    if (w) return w;
+    break; // only the last non-empty line can be the stand-alone verdict
+  }
   let best: { w: string; i: number } | undefined;
   for (const w of words) {
-    const i = report.toUpperCase().indexOf(w.toUpperCase());
-    if (i >= 0 && (!best || i < best.i)) best = { w, i };
+    const re = new RegExp(`(?<![A-Z0-9_])${norm(w).replace(/_/g, '[\\s_-]+')}(?![A-Z0-9_])`, 'gi');
+    for (const m of report.matchAll(re)) if (!best || m.index! > best.i) best = { w, i: m.index! };
   }
   return best?.w;
 }
+
+/** No verdict is never approval: the conservative word (REQUEST_CHANGES, REJECT, ...) if the node has one. */
+const conservative = (words: string[] | undefined) => words?.find((w) => NEGATIVE.test(w));
 
 export class WorkflowRunner {
   private w: WorkflowDef;
@@ -149,12 +166,16 @@ export class WorkflowRunner {
         // Out of steps is unfinished work, not a failure: the next step (a gate) judges it.
         if (r.reason === 'max_steps') {
           run.feedback = `The "${id}" step ran out of steps before it finished. Its last report:\n${r.report.slice(-3000)}`;
+          // A reviewer that did not finish has not approved.
+          const no = conservative(node.decide);
+          if (no) return { outcome: no, summary: `${r.report}\n\n(Ran out of steps before a verdict: treated as ${no}.)`, cost: r.cost };
           run.state[INCOMPLETE] = run.feedback;
           return { outcome: 'incomplete', summary: r.report, cost: r.cost };
         }
         if (r.reason !== 'done' && r.reason !== 'max_tokens') return { failed: true, summary: `agent stopped: ${r.reason}`, cost: r.cost };
-        const outcome = decideFrom(r.report.slice(-600), node.decide) ?? decideFrom(r.report, node.decide);
-        return { outcome, summary: r.report, cost: r.cost };
+        const found = decideFrom(r.report, node.decide);
+        const no = node.decide?.length && !found ? conservative(node.decide) : undefined;
+        return { outcome: found ?? no, summary: no ? `${r.report}\n\n(No verdict given: treated as ${no}.)` : r.report, cost: r.cost };
       }
       case 'gate': {
         const results = await this.host.runGates(node.gates, signal);
@@ -195,8 +216,12 @@ export class WorkflowRunner {
         const cost = results.reduce((a, r) => a + (r.cost ?? 0), 0);
         if (failed.length) return { failed: true, summary: failed.map((f) => f.summary).join('; '), cost };
         // Outcome: "all" when no branch reported a negative decision, else the first negative one.
-        const outcomes = results.map((r) => r.outcome).filter(Boolean) as string[];
-        const negative = outcomes.find((o) => /REQUEST|REJECT|FAIL|CHANGES|BLOCK/i.test(o));
+        // A branch that decides but gave no recognised verdict counts as negative.
+        const outcomes = results.map((r, i) => {
+          const words = (this.w.nodes[node.branches[i]!] as { decide?: string[] }).decide;
+          return words?.length && !words.includes(r.outcome ?? '') ? conservative(words) ?? r.outcome : r.outcome;
+        }).filter(Boolean) as string[];
+        const negative = outcomes.find((o) => NEGATIVE.test(o));
         return { outcome: negative ?? 'all', summary: node.branches.map((b, i) => `${b}: ${results[i]!.outcome ?? 'done'}`).join(', '), cost };
       }
       case 'branch': {

@@ -140,3 +140,34 @@ test('a step that runs out of steps goes on to the gates, and the fix step is to
   assert.match(prompts.find((p) => p.label === 'fix')!.prompt, /ran out of steps[\s\S]*tasks 1-5 of 9[\s\S]*Quality gates failed/);
   assert.equal(run.state.__incomplete, undefined);
 });
+
+test('the verdict is the last decision, as a whole word, and a stand-alone last line wins', async () => {
+  const { decideFrom } = await import('../src/graph/runner.ts');
+  const W = ['APPROVE', 'REQUEST_CHANGES'];
+  assert.equal(decideFrom('I would APPROVE once the tests are fixed. Two blocking issues.\nREQUEST_CHANGES', W), 'REQUEST_CHANGES');
+  assert.equal(decideFrom('**Verdict: REQUEST CHANGES**', W), 'REQUEST_CHANGES');
+  assert.equal(decideFrom('Looks good.\n\n**APPROVE**', W), 'APPROVE');
+  assert.equal(decideFrom('I DISAPPROVE of one name; it is MINOR.', W), undefined, 'DISAPPROVE is not APPROVE');
+  assert.equal(decideFrom('REQUEST_CHANGES at first, but after the fixes: APPROVE.', W), 'APPROVE');
+});
+
+test('a reviewer with no verdict, or one that ran out of steps, never counts as approval', async () => {
+  // Parallel review: one branch says nothing usable.
+  let { host } = stubHost({ reports: { cr: ['Reviewed everything, looks mostly fine.'], sr: ['APPROVE'] } });
+  let run = await new WorkflowRunner(wf(), host, newRun(wf(), 's', { request: 'X' })).execute(new AbortController().signal);
+  assert.equal(run.history.find((h) => h.node === 'review')!.outcome, 'REQUEST_CHANGES');
+  assert.ok(run.history.some((h) => h.node === 'address'), 'routed to the fix step, not to done');
+  // A reviewer that ran out of steps.
+  ({ host } = stubHost({ reasons: { sr: ['max_steps'] }, reports: { cr: ['APPROVE'], sr: ['Checked half of it'] } }));
+  run = await new WorkflowRunner(wf(), host, newRun(wf(), 's', { request: 'X' })).execute(new AbortController().signal);
+  assert.equal(run.history.find((h) => h.node === 'sr')!.outcome, 'REQUEST_CHANGES');
+  assert.equal(run.history.find((h) => h.node === 'review')!.outcome, 'REQUEST_CHANGES');
+  // A single review node whose default route is "deliver".
+  const w: WorkflowDef = { name: 'r', description: '', start: 'review', nodes: {
+    review: { type: 'agent', prompt: 'review', decide: ['APPROVE', 'REQUEST_CHANGES'], next: { on: { REQUEST_CHANGES: 'fix' }, default: 'deliver' } },
+    fix: { type: 'agent', prompt: 'fix', next: 'end' }, deliver: { type: 'agent', prompt: 'deliver', next: 'end' }, end: { type: 'end' } } };
+  ({ host } = stubHost({ reports: { review: ['I looked at it.'] } }));
+  run = await new WorkflowRunner(w, host, newRun(w, 's', {})).execute(new AbortController().signal);
+  assert.deepEqual(run.history.map((h) => h.node), ['review', 'fix', 'end']);
+  assert.match(run.history[0]!.summary ?? '', /No verdict given: treated as REQUEST_CHANGES/);
+});

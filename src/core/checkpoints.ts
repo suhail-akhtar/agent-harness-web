@@ -17,6 +17,8 @@ export class Checkpoints {
   private turn = 0;
   private prompt = '';
   private manifest?: Manifest;
+  /** Saves run one at a time: parallel tool calls once overwrote each other's manifest entries. */
+  private queue: Promise<void> = Promise.resolve();
 
   constructor(sessionDir: string, workspaceRoot: string) {
     this.dir = path.join(sessionDir, 'checkpoints');
@@ -32,8 +34,22 @@ export class Checkpoints {
 
   private turnDir(t: number) { return path.join(this.dir, String(t).padStart(6, '0')); }
 
-  async before(realPath: string): Promise<void> {
+  before(filePath: string): Promise<void> {
+    const next = this.queue.then(() => this.save(filePath));
+    this.queue = next.catch(() => {});
+    return next;
+  }
+
+  /** The canonical path, also for a file that does not exist yet (its folder is resolved). */
+  private static async canonical(p: string): Promise<string> {
+    const abs = path.resolve(p);
+    try { return await fs.realpath(abs); } catch { /* not there yet */ }
+    try { return path.join(await fs.realpath(path.dirname(abs)), path.basename(abs)); } catch { return abs; }
+  }
+
+  private async save(filePath: string): Promise<void> {
     const rootReal = await fs.realpath(this.root);
+    const realPath = await Checkpoints.canonical(filePath);
     const rel = path.relative(rootReal, realPath);
     if (rel.startsWith('..') || path.isAbsolute(rel)) return;
     const td = this.turnDir(this.turn);
@@ -53,7 +69,9 @@ export class Checkpoints {
     }
     this.manifest.files[rel] = entry;
     await fs.mkdir(td, { recursive: true });
-    await fs.writeFile(path.join(td, 'manifest.json'), JSON.stringify(this.manifest));
+    const f = path.join(td, 'manifest.json');
+    await fs.writeFile(`${f}.tmp`, JSON.stringify(this.manifest));
+    await fs.rename(`${f}.tmp`, f);
   }
 
   async list(): Promise<CheckpointTurn[]> {

@@ -92,7 +92,7 @@ const keyOf = (a) => Object.keys(a).find((k) => k !== 'hold' && k !== 'timeout' 
  */
 export async function runPage({ root, file = 'index.html', query = '', viewport = { width: 1280, height: 720 }, actions = [], evaluate, save, screenshot = true, fullPage = false, paged, waitMs = 1000, timeoutMs = 90_000, signal }) {
   const srv = await serveDir(root);
-  const out = { url: '', title: '', console: [], errors: [], blocked: [], missing: [], evals: [], shots: [], result: undefined };
+  const out = { url: '', title: '', console: [], errors: [], blocked: [], missing: [], evals: [], timeouts: [], shots: [], result: undefined };
   try {
     return await withBrowser(async (browser) => {
       const ctx = await browser.newContext({ viewport, deviceScaleFactor: 1, serviceWorkers: 'block', acceptDownloads: false });
@@ -139,7 +139,8 @@ export async function runPage({ root, file = 'index.html', query = '', viewport 
             case 'drag': await page.mouse.move(v[0][0], v[0][1]); await page.mouse.down(); await page.mouse.move(v[1][0], v[1][1], { steps: 10 }); await page.mouse.up(); break;
             case 'scroll': await page.mouse.wheel(0, Number(v) || 0); break;
             case 'eval': out.evals.push({ js: String(v).slice(0, 200), value: await safeEval(page, String(v)) }); break;
-            case 'waitFor': await page.waitForFunction(String(v), undefined, { timeout: Math.min(Number(a.timeout) || 5000, left()) }).catch(() => out.evals.push({ js: String(v).slice(0, 200), value: 'waitFor timed out' })); break;
+            // Timeouts are kept apart from eval results: playtests read evals by position.
+            case 'waitFor': await page.waitForFunction(String(v), undefined, { timeout: Math.min(Number(a.timeout) || 5000, left()) }).catch(() => out.timeouts.push(String(v).slice(0, 200))); break;
             case 'screenshot': out.shots.push({ label: String(v || `after step ${out.shots.length + 1}`), png: await shoot(page, fullPage, viewport, out) }); break;
             default: out.errors.push(`unknown action ${JSON.stringify(a).slice(0, 100)}`);
           }
@@ -259,6 +260,7 @@ export function describePage(r) {
   if (r.missing.length) lines.push(`Missing files:\n${r.missing.map((m) => `  ${m}`).join('\n')}`);
   if (r.blocked.length) lines.push(`Blocked (pages run offline - put libraries in the workspace, e.g. with add_library):\n${r.blocked.map((b) => `  ${b}`).join('\n')}`);
   for (const e of r.evals) lines.push(`eval ${e.js} => ${e.value}`);
+  for (const t of r.timeouts ?? []) lines.push(`waitFor timed out: ${t}`);
   if (r.result !== undefined) lines.push(`Result: ${r.result}`);
   if (r.saved) lines.push(r.saved.error ? `Save failed: ${r.saved.error}` : `Saved ${r.saved.label}: ${r.saved.bytes} bytes`);
   for (const s of r.shots) lines.push(`Screenshot "${s.label}": ${s.stats.blank ? 'BLANK (one colour - nothing was drawn)' : `${s.stats.colours} colours, contrast ${s.stats.stddev}`}`);

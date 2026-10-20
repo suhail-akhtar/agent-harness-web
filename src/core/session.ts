@@ -567,29 +567,42 @@ export class Session {
   }
 
   /** Starts a workflow run in this session's workspace. */
+  /**
+   * Claims the idle session before the first await: between the check and the
+   * run starting, a second start, a resume or a message could otherwise also see
+   * "idle" and two agents would drive one workspace.
+   */
+  private async claimed<T>(busy: string, f: () => Promise<T>): Promise<T> {
+    if (this.status !== 'idle') throw new Error(busy);
+    this.setStatus('running');
+    try { return await f(); } catch (e) { this.setStatus('idle'); throw e; }
+  }
+
   async startWorkflow(name: string, input: Record<string, string>): Promise<WorkflowRunView> {
-    if (this.status !== 'idle') throw new Error('The session is busy; wait for it to finish or stop it.');
-    const w = (await this.workflows()).find((x) => x.name === name);
-    if (!w) throw new Error(`No workflow named "${name}".`);
-    const run = newRun(w, this.meta.id, input);
-    if (this.meta.title === 'New session') {
-      const first = Object.values(run.input).find((v) => v.trim()) ?? '';
-      this.meta.title = `${w.name}: ${first.replace(/\s+/g, ' ')}`.slice(0, 60);
-    }
-    await this.saveRun(run);
-    this.executeRun(w, run).catch(() => {});
-    return runView(run, w);
+    return this.claimed('The session is busy; wait for it to finish or stop it.', async () => {
+      const w = (await this.workflows()).find((x) => x.name === name);
+      if (!w) throw new Error(`No workflow named "${name}".`);
+      const run = newRun(w, this.meta.id, input);
+      if (this.meta.title === 'New session') {
+        const first = Object.values(run.input).find((v) => v.trim()) ?? '';
+        this.meta.title = `${w.name}: ${first.replace(/\s+/g, ' ')}`.slice(0, 60);
+      }
+      await this.saveRun(run);
+      this.executeRun(w, run).catch(() => {});
+      return runView(run, w);
+    });
   }
 
   async resumeRun(runId: string): Promise<WorkflowRunView> {
-    if (this.status !== 'idle') throw new Error('The session is busy.');
-    const run = await this.readRun(runId);
-    if (!['interrupted', 'aborted', 'failed'].includes(run.status) || !run.current) throw new Error(`Run ${runId} cannot be resumed (status ${run.status}).`);
-    const w = (await this.workflows()).find((x) => x.name === run.workflow);
-    if (!w) throw new Error(`Workflow ${run.workflow} is no longer available.`);
-    run.error = undefined;
-    this.executeRun(w, run).catch(() => {});
-    return runView(run, w);
+    return this.claimed('The session is busy.', async () => {
+      const run = await this.readRun(runId);
+      if (!['interrupted', 'aborted', 'failed'].includes(run.status) || !run.current) throw new Error(`Run ${runId} cannot be resumed (status ${run.status}).`);
+      const w = (await this.workflows()).find((x) => x.name === run.workflow);
+      if (!w) throw new Error(`Workflow ${run.workflow} is no longer available.`);
+      run.error = undefined;
+      this.executeRun(w, run).catch(() => {});
+      return runView(run, w);
+    });
   }
 
   private async executeRun(w: WorkflowDef, run: RunRecord): Promise<void> {

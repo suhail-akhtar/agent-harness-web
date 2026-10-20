@@ -10,6 +10,18 @@ const tail = (s, n = 80) => s.trim().split('\n').slice(-n).join('\n');
 const sh = (host, cmd, signal, timeoutMs = 600_000) => host.exec(cmd, { timeoutMs, signal });
 const has = async (host, test, signal) => (await sh(host, test, signal, 20_000)).code === 0;
 
+/**
+ * Runs grep and keeps ITS exit status (0 found, 1 none, 2 error). Piping into
+ * head reported head's status, so a missing grep or a failed scan read as "nothing found".
+ */
+async function scan(host, args, signal, timeoutMs, limit = 20) {
+  const r = await sh(host, `e=$(mktemp); out=$(grep ${args} . 2>"$e"); c=$?; printf '%s' "$out" | head -${limit}; [ $c -gt 1 ] && { printf '\n__SCAN_ERROR__ '; head -c 300 "$e"; }; rm -f "$e"; exit $c`, signal, timeoutMs);
+  const [hits, err] = r.stdout.split('__SCAN_ERROR__ ');
+  const error = r.timedOut ? 'the scan timed out' : r.code > 1 && !hits.trim() ? `the scan failed: ${(err ?? r.stderr).trim().slice(0, 300) || `exit ${r.code}`}` : undefined;
+  return { hits: hits.trim(), error };
+}
+const couldNotScan = (error) => ({ pass: false, summary: `could not scan (${error})`, details: 'A check that could not run is not a pass. Make sure grep is available where the gates run.' });
+
 async function pkg(host, signal) {
   const r = await sh(host, 'cat package.json 2>/dev/null', signal, 10_000);
   try { return JSON.parse(r.stdout); } catch { return undefined; }
@@ -95,8 +107,8 @@ const gates = [
         'xox[baprs]-[A-Za-z0-9-]{10,}',
         '(api[_-]?key|secret|token|passw(or)?d)["\']?[[:space:]]*[:=][[:space:]]*["\'][A-Za-z0-9_/+=-]{20,}["\']',
       ].join('|');
-      const r = await sh(host, `grep -rIEin ${grepExcludes} --exclude='*.lock' --exclude='package-lock.json' -e '${pattern.replace(/'/g, "'\\''")}' . 2>/dev/null | head -20`, signal, 120_000);
-      const hits = r.stdout.trim();
+      const { hits, error } = await scan(host, `-rIEin ${grepExcludes} --exclude='*.lock' --exclude='package-lock.json' -e '${pattern.replace(/'/g, "'\\''")}'`, signal, 120_000);
+      if (error && !hits) return couldNotScan(error);
       if (!hits) return { pass: true, summary: 'no credentials found' };
       // Never echo the secret itself.
       const redacted = hits.split('\n').map((l) => l.replace(/^([^:]+:\d+):.*$/, '$1: possible credential')).join('\n');
@@ -106,16 +118,18 @@ const gates = [
   {
     name: 'conflict-markers', description: 'No unresolved merge-conflict markers',
     async run({ host, signal }) {
-      const r = await sh(host, `grep -rIEn ${grepExcludes} '^(<<<<<<< |>>>>>>> |=======$)' . 2>/dev/null | head -20`, signal, 60_000);
-      return r.stdout.trim() ? { pass: false, summary: 'merge-conflict markers found', details: r.stdout.trim() } : { pass: true, summary: 'no conflict markers' };
+      const { hits, error } = await scan(host, `-rIEn ${grepExcludes} '^(<<<<<<< |>>>>>>> |=======$)'`, signal, 60_000);
+      if (error && !hits) return couldNotScan(error);
+      return hits ? { pass: false, summary: 'merge-conflict markers found', details: hits } : { pass: true, summary: 'no conflict markers' };
     },
   },
   {
     name: 'todo-markers', description: 'TODO/FIXME left in source (advisory)',
     async run({ host, signal }) {
-      const r = await sh(host, `grep -rIEn ${grepExcludes} --exclude='*.md' '\\b(TODO|FIXME|XXX|HACK)\\b' . 2>/dev/null | head -30`, signal, 60_000);
-      const n = r.stdout.trim() ? r.stdout.trim().split('\n').length : 0;
-      return n ? { pass: false, severity: 'advisory', summary: `${n}${n === 30 ? '+' : ''} TODO/FIXME marker(s)`, details: r.stdout.trim() } : { pass: true, severity: 'advisory', summary: 'none' };
+      const { hits, error } = await scan(host, `-rIEn ${grepExcludes} --exclude='*.md' '\\b(TODO|FIXME|XXX|HACK)\\b'`, signal, 60_000, 30);
+      if (error && !hits) return { ...couldNotScan(error), severity: 'advisory' };
+      const n = hits ? hits.split('\n').length : 0;
+      return n ? { pass: false, severity: 'advisory', summary: `${n}${n === 30 ? '+' : ''} TODO/FIXME marker(s)`, details: hits } : { pass: true, severity: 'advisory', summary: 'none' };
     },
   },
   {

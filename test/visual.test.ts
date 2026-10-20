@@ -164,3 +164,21 @@ test('a long Markdown file renders as pages, never one giant image', { skip: !ha
   }
   await h.close();
 });
+
+test('a waitFor that times out fails the scenario and does not shift the checks after it', { skip: !hasChromium && 'no Chromium' }, async () => {
+  const { h, root, host } = await setup();
+  await fs.writeFile(path.join(root, 'index.html'), GAME);
+  await fs.writeFile(path.join(root, 'playtest.json'), JSON.stringify({
+    viewport: { width: 400, height: 300 },
+    scenarios: [{
+      name: 'starts, after waiting for something that never happens',
+      steps: [{ waitFor: 'window.__game.never === true', timeout: 300 }, { press: 'Enter' }, { eval: 'window.__game.state' }],
+      expect: [{ eval: 'window.__game.state', op: '==', value: 'playing' }],
+    }],
+  }));
+  const [g] = await runGates(h.registry, host, ['playtest'], new AbortController().signal);
+  assert.equal(g!.pass, false);
+  assert.match(g!.details ?? '', /waited for window\.__game\.never === true, which never became true/);
+  assert.doesNotMatch(g!.details ?? '', /expected window\.__game\.state == "playing"/, 'the state check read its own value, not the timeout');
+  await h.close();
+});

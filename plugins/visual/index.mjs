@@ -76,6 +76,7 @@ export async function runPlaytests(root, signal, only, given) {
       else if (typeof after === 'string' && after.startsWith('error:')) failures.push(`${e.eval} threw: ${after}`);
       else if (!op(after, e.value, prev)) failures.push(`expected ${e.eval} ${e.op ?? 'truthy'}${e.value !== undefined ? ` ${JSON.stringify(e.value)}` : ''}${prev !== undefined ? ` (before: ${JSON.stringify(prev)})` : ''}, got ${JSON.stringify(after)}`);
     });
+    for (const t of r.timeouts) failures.push(`waited for ${t}, which never became true`);
     if (r.errors.length) failures.push(`uncaught errors: ${r.errors.join(' | ').slice(0, 600)}`);
     if (r.shots[0]?.stats.blank) failures.push('the screen is blank at the end');
     results.push({ name: sc.name ?? `scenario ${results.length + 1}`, pass: failures.length === 0, failures, shot: r.shots[0] });

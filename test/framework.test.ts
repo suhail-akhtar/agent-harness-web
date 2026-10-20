@@ -356,3 +356,87 @@ test('tool images ride on their result, and clearing old results drops their ima
   assert.equal(resultsWithImages(h.persisted), 17, 'the stored history keeps every image');
   assert.equal(resultsWithImages(h.agent.messages), 6, 'the live context keeps the newest six');
 });
+
+test('scan gates fail when the scan cannot run, instead of reading as "nothing found"', async () => {
+  const { runGates } = await import('../src/gates/gates.ts');
+  const h = await createHarness({ dataDir: await tempDir(), plugins: [path.join(here, '..', 'plugins', 'quality-gates')] });
+  const root = await tempDir();
+  const local = new LocalHost(root);
+  const run = async (host: LocalHost) => Object.fromEntries((await runGates(h.registry, host, ['secrets', 'conflict-markers'], new AbortController().signal)).map((g) => [g.name, g]));
+  let r = await run(local);
+  assert.equal(r.secrets!.pass, true);
+  await fs.writeFile(path.join(root, 'config.js'), `const key = "AKIA${'A'.repeat(16)}";\n<<<<<<< HEAD\n`);
+  r = await run(local);
+  assert.equal(r.secrets!.pass, false);
+  assert.equal(r['conflict-markers']!.pass, false);
+  // A grep that errors (exit 2), as when it is missing or cannot read the tree.
+  const bin = await tempDir();
+  await fs.writeFile(path.join(bin, 'grep'), '#!/bin/sh\necho "grep: broken" >&2\nexit 2\n', { mode: 0o755 });
+  const broken = Object.assign(Object.create(Object.getPrototypeOf(local)), local, { exec: (cmd: string, o: Parameters<LocalHost['exec']>[1]) => local.exec(`PATH="${bin}:$PATH"; ${cmd}`, o) }) as LocalHost;
+  await fs.rm(path.join(root, 'config.js'));
+  r = await run(broken);
+  assert.equal(r.secrets!.pass, false, 'a failed scan is not a pass');
+  assert.match(r.secrets!.summary, /could not scan \(the scan failed: grep: broken\)/);
+  assert.equal(r['conflict-markers']!.pass, false);
+  await h.close();
+});
+
+test('checkpoints: parallel writes all get recorded, and a path through a symlinked root still counts', async () => {
+  const real = await tempDir();
+  const link = path.join(await tempDir(), 'ws-link');
+  await fs.symlink(real, link);
+  const sdir = await tempDir();
+  const cp = new Checkpoints(sdir, link);
+  cp.begin(1, 'parallel edits');
+  const names = Array.from({ length: 12 }, (_, i) => `f${i}.txt`);
+  for (const n of names) await fs.writeFile(path.join(real, n), `original ${n}`);
+  // Twelve tools checkpoint at once, through the non-canonical (symlinked) workspace path.
+  await Promise.all(names.map((n) => cp.before(path.join(link, n))));
+  await cp.before(path.join(link, 'new.txt'));
+  for (const n of names) await fs.writeFile(path.join(real, n), 'changed');
+  await fs.writeFile(path.join(real, 'new.txt'), 'created');
+  const [turn] = await cp.list();
+  assert.equal(turn!.files.length, 13, 'every file is in the manifest');
+  await cp.rewind(1);
+  for (const n of names) assert.equal(await fs.readFile(path.join(real, n), 'utf8'), `original ${n}`);
+  await assert.rejects(fs.access(path.join(real, 'new.txt')), 'a file created in the turn is removed');
+});
+
+test('checkpoints: staggered parallel saves of mixed sizes never lose a manifest entry', async () => {
+  let lost = 0;
+  // The race is timing-dependent, so this catches it only sometimes (about 1 run in 3 on the old
+  // code); the queue in Checkpoints.before removes it by construction.
+  for (let it = 0; it < 30; it++) {
+    const root = await tempDir();
+    const cp = new Checkpoints(await tempDir(), root);
+    cp.begin(1, 'p');
+    const names = Array.from({ length: 20 }, (_, i) => `f${i}`);
+    for (const [i, n] of names.entries()) await fs.writeFile(path.join(root, n), Buffer.alloc(i % 3 === 0 ? 2_000_000 : 10, i));
+    await Promise.all(names.map((n, i) => new Promise((r) => setTimeout(r, (i % 5) * 3)).then(() => cp.before(path.join(root, n)))));
+    lost += 20 - ((await cp.list())[0]?.files.length ?? 0);
+  }
+  assert.equal(lost, 0);
+});
+
+test('starting a workflow claims the session at once: a second start or a message in the same moment cannot also run', async () => {
+  const h = await createHarness({ dataDir: await tempDir() });
+  const ws = await tempDir();
+  await fs.mkdir(path.join(ws, '.harness', 'workflows'), { recursive: true });
+  await fs.writeFile(path.join(ws, '.harness', 'workflows', 'wait.json'), JSON.stringify({
+    name: 'wait', description: 'd', start: 'ok', nodes: { ok: { type: 'approval', message: 'go?', next: { on: { approve: 'end', reject: 'end' } } }, end: { type: 'end' } },
+  }));
+  const s = await h.sessions.create({ model: 'deepseek-flash', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: ws } });
+  const approvals: string[] = [];
+  s.subscribe(0, ({ event }) => { if (event.kind === 'approval_request') approvals.push(event.requestId); });
+  // All in the same tick, before any of them has awaited anything.
+  const [a, b, c] = await Promise.allSettled([s.startWorkflow('wait', {}), s.startWorkflow('wait', {}), s.send('hello')]);
+  assert.equal(a.status, 'fulfilled');
+  assert.equal(b.status, 'rejected');
+  assert.match((b as PromiseRejectedResult).reason.message, /busy/);
+  assert.deepEqual(c, { status: 'fulfilled', value: 'queued' }, 'the message is queued, not a second turn');
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(approvals.length, 1, 'one run is waiting, not two');
+  assert.equal((await s.listRuns()).length, 1);
+  s.abort();
+  await h.close();
+});
