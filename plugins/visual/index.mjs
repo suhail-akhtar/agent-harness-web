@@ -3,8 +3,10 @@
 //   browser      open a workspace page offline, drive it (keys, clicks), read state, screenshot
 //   add_library  put three / pptxgenjs / docx / jszip into the workspace without the network
 // Gates: documents-render, web-console, playtest (playtest.json scenarios).
-// Renderers run on the server, on the session's workspace folder (sandbox and
-// server-folder sessions; not companion sessions).
+// Renderers run on the server, on the session's workspace folder. For a
+// companion session (the folder is on the user's computer) they work on a
+// server-side copy that is refreshed with the files that changed, and anything
+// they write (an exported PDF, saved renders, a browser export) is sent back.
 
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -17,8 +19,15 @@ import { describeRender, OFFICE, RENDERABLE, renderFile, saveRenders } from './l
 const EXCLUDE = new Set(['node_modules', '.git', 'vendor', '.harness', 'dist', 'build', 'coverage', '.venv', 'venv', '__pycache__', 'target']);
 const asImages = (list) => list.map((i) => ({ media_type: i.media_type, data: Buffer.from(i.data).toString('base64') }));
 
-function serverSide(host) {
-  if (host.kind === 'companion') throw new Error('This tool runs on the server and cannot see files on your computer. Use a sandbox or server-folder session for visual checks.');
+/**
+ * Where a server-side tool finds the files: the workspace itself, or for a
+ * companion session a mirrored copy (with `push` to write results back).
+ */
+async function siteOf(host, signal) {
+  if (host.kind !== 'companion') return { host, root: host.root, push: null };
+  if (!host.mirror || !host.pushFile) throw new Error('This tool runs on the server and cannot see files on your computer with this companion: update the companion (download it again from the web app).');
+  const root = await host.mirror(signal);
+  return { host: { root, displayRoot: host.displayRoot }, root, push: (rel, data) => host.pushFile(rel.split(path.sep).join('/'), data, signal) };
 }
 
 async function workspacePath(host, p) {
@@ -105,8 +114,9 @@ export default {
       kindsFor: (i) => (i.export ? ['read', 'edit'] : ['read']), // export writes a PDF into the workspace
       parallelSafe: true,
       summarize: (i) => `${i.path}${i.pages ? ` pages ${i.pages}` : ''}${i.export ? ' (export PDF)' : ''}`,
-      async run(input, { host, signal, beforeWrite }) {
-        serverSide(host);
+      async run(input, { host: h, signal, beforeWrite }) {
+        const site = await siteOf(h, signal);
+        const host = site.host;
         const rel = await workspacePath(host, String(input.path));
         if (!RENDERABLE.includes(path.extname(rel).toLowerCase())) return { content: `Cannot render ${rel}. Supported: ${RENDERABLE.join(' ')}`, is_error: true };
         const r = await renderFile({ root: host.root, rel, pages: input.pages, width: Math.min(Math.max(Number(input.width) || 1000, 400), 1600), max: 6, signal });
@@ -114,9 +124,11 @@ export default {
           const out = rel.replace(/\.[^./]+$/, '.pdf');
           await beforeWrite?.(path.join(host.root, out));
           await fsp.copyFile(r.pdf, path.join(host.root, out));
+          await site.push?.(out, await fsp.readFile(path.join(host.root, out)));
           r.exported = out;
         }
         const saved = await saveRenders(host.root, r);
+        if (site.push) for (const f of saved) await site.push(f, await fsp.readFile(path.join(host.root, f)));
         return { content: describeRender(r, saved), images: asImages(r.images) };
       },
     }));
@@ -142,8 +154,9 @@ export default {
       kindsFor: (i) => (i.save ? ['exec', 'edit'] : ['exec']), // save writes a file into the workspace
       parallelSafe: true,
       summarize: (i) => `${i.save && typeof i.save === 'object' ? `save ${i.save.path} from ` : ''}${i.path ?? 'index.html'}${i.query ?? ''}${Array.isArray(i.actions) && i.actions.length ? ` +${i.actions.length} actions` : ''}`,
-      async run(input, { host, signal, beforeWrite }) {
-        serverSide(host);
+      async run(input, { host: h, signal, beforeWrite }) {
+        const site = await siteOf(h, signal);
+        const host = site.host;
         const rel = await workspacePath(host, String(input.path ?? 'index.html'));
         const sv = input.save && typeof input.save === 'object' ? input.save : null;
         let save;
@@ -160,6 +173,7 @@ export default {
           screenshot: input.screenshot !== false, fullPage: input.fullPage === true, save, signal,
         });
         if (r.saved && save) r.saved.label = save.label;
+        if (r.saved && save && site.push) await site.push(save.label, await fsp.readFile(save.file));
         return { content: describePage(r), is_error: r.errors.length > 0 && !r.shots.length, images: r.shots.map((s) => ({ media_type: 'image/png', data: s.png.toString('base64') })) };
       },
     }));
@@ -171,7 +185,7 @@ export default {
       kind: 'edit',
       summarize: (i) => String(i.name),
       async run(input, { host, beforeWrite }) {
-        serverSide(host);
+        if (host.kind === 'companion') return { content: 'add_library copies files from the server into a server workspace; on your computer, install the library with your package manager instead (e.g. npm install three).', is_error: true };
         await beforeWrite?.(path.join(host.root, 'package.json'));
         const r = await addLibrary(host.root, String(input.name));
         return `Added ${input.name} ${r.version}: ${r.files}\n${r.usage}`;
@@ -181,8 +195,9 @@ export default {
     api.registerGate({
       name: 'documents-render',
       description: 'Every document in the workspace (docx, pptx, xlsx, odt, odp, pdf) opens and renders, and no slide has text cut off at its edge.',
-      applies: async (host) => host.kind !== 'companion' && (await walk(host.root, [...OFFICE, '.pdf'], 1)).length > 0,
-      async run({ host, signal }) {
+      applies: async (h, signal) => (await walk((await siteOf(h, signal)).root, [...OFFICE, '.pdf'], 1)).length > 0,
+      async run({ host: h, signal }) {
+        const host = (await siteOf(h, signal)).host;
         const files = await walk(host.root, [...OFFICE, '.pdf'], 8);
         const problems = [];
         const ok = [];
@@ -206,8 +221,9 @@ export default {
     api.registerGate({
       name: 'web-console',
       description: 'The workspace page (index.html) opens offline with no uncaught errors, console errors or missing files, and draws something.',
-      applies: async (host) => host.kind !== 'companion' && !!(await entryPage(host.root)),
-      async run({ host, signal }) {
+      applies: async (h, signal) => !!(await entryPage((await siteOf(h, signal)).root)),
+      async run({ host: h, signal }) {
+        const host = (await siteOf(h, signal)).host;
         const page = await entryPage(host.root);
         const r = await runPage({ root: host.root, file: page, waitMs: 2000, signal });
         const problems = [
@@ -226,8 +242,9 @@ export default {
     api.registerGate({
       name: 'playtest',
       description: 'The scenarios in playtest.json pass: scripted input, then checks on the page state (window.* values).',
-      applies: async (host) => host.kind !== 'companion' && exists(path.join(host.root, 'playtest.json')),
-      async run({ host, signal }) {
+      applies: async (h, signal) => exists(path.join((await siteOf(h, signal)).root, 'playtest.json')),
+      async run({ host: h, signal }) {
+        const host = (await siteOf(h, signal)).host;
         let results;
         try { results = await runPlaytests(host.root, signal); } catch (e) { return { pass: false, summary: 'playtest.json could not run', details: e.message }; }
         if (!results.length) return { pass: false, summary: 'playtest.json has no scenarios' };

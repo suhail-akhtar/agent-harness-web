@@ -9,9 +9,11 @@ import type { ExecOptions, ExecResult, ToolHost, ToolOutcome } from './host.ts';
 // with the same tool code, and posts the results back. Permission checks and
 // hooks decisions happen on the server before a call is dispatched.
 
-export type CompanionJob =
-  | { id: string; kind: 'tool'; sessionId: string; name: string; input: Record<string, unknown> }
-  | { id: string; kind: 'exec'; sessionId: string; command: string; timeoutMs: number; stdin?: string };
+export type { CompanionJob } from '../companion/handler.ts';
+import type { CompanionJob } from '../companion/handler.ts';
+
+/** How much a companion folder may hold for server-side tools (render, browser). */
+const MIRROR_MAX = Number(process.env.HARNESS_MIRROR_MAX_MB ?? 100) * 1024 * 1024;
 
 type NewJob = CompanionJob extends infer J ? (J extends CompanionJob ? Omit<J, 'id'> : never) : never;
 
@@ -38,11 +40,52 @@ const hash = (t: string) => crypto.createHash('sha256').update(t).digest('hex');
 
 export class CompanionHub {
   private file: string;
+  private dataDir: string;
+  /** Per session: what the server's copy of the companion folder holds. */
+  private mirrors = new Map<string, { known: Record<string, [number, number]>; queue: Promise<unknown> }>();
   private records = new Map<string, CompanionRecord>();
   private live = new Map<string, Live>();
 
   constructor(dataDir: string) {
     this.file = path.join(dataDir, 'companions.json');
+    this.dataDir = dataDir;
+  }
+
+  /**
+   * A server-side copy of a companion session's folder for tools that run on
+   * the server (render, browser): only files that changed are copied, and
+   * files gone from the folder are removed. Calls for one session queue.
+   */
+  async mirror(id: string, sessionId: string, signal?: AbortSignal): Promise<string> {
+    const root = path.join(this.dataDir, 'mirrors', sessionId);
+    const m = this.mirrors.get(sessionId) ?? { known: {}, queue: Promise.resolve() };
+    this.mirrors.set(sessionId, m);
+    const next = m.queue.catch(() => {}).then(async () => {
+      const r = await this.dispatch<{ files: { path: string; size: number; mtime: number; data?: string }[] }>(id, { kind: 'pull', sessionId, known: m.known, maxBytes: MIRROR_MAX }, signal, 10 * 60_000);
+      const seen = new Set<string>();
+      for (const f of r.files) {
+        const rel = f.path.split('/').filter((p) => p && p !== '..' && p !== '.').join('/');
+        if (!rel || rel !== f.path) continue; // a companion only ever sends plain relative paths
+        seen.add(rel);
+        if (f.data === undefined) continue;
+        const target = path.join(root, rel);
+        await fs.mkdir(path.dirname(target), { recursive: true });
+        await fs.writeFile(target, Buffer.from(f.data, 'base64'));
+        m.known[rel] = [f.size, f.mtime];
+      }
+      for (const rel of Object.keys(m.known)) {
+        if (!seen.has(rel)) { delete m.known[rel]; await fs.rm(path.join(root, rel), { force: true }); }
+      }
+      await fs.mkdir(root, { recursive: true });
+      return root;
+    });
+    m.queue = next;
+    return next;
+  }
+
+  /** Writes a file the server made (an export, a saved render) into the companion folder. */
+  async push(id: string, sessionId: string, rel: string, data: Buffer, signal?: AbortSignal): Promise<void> {
+    await this.dispatch(id, { kind: 'push', sessionId, path: rel, data: data.toString('base64') }, signal, 5 * 60_000);
   }
 
   async load(): Promise<void> {
@@ -152,6 +195,8 @@ export class CompanionHub {
       remoteTool(name: string, input: Record<string, unknown>, signal: AbortSignal): Promise<ToolOutcome> {
         return hub.dispatch<ToolOutcome>(id, { kind: 'tool', sessionId, name, input }, signal);
       },
+      mirror: (signal?: AbortSignal) => hub.mirror(id, sessionId, signal),
+      pushFile: (rel: string, data: Buffer, signal?: AbortSignal) => hub.push(id, sessionId, rel, data, signal),
     } as ToolHost;
   }
 }

@@ -77,6 +77,10 @@ export interface ToolHost {
   spawnStream?(command: string, args: string[], env: Record<string, string>): Promise<ChildProcessWithoutNullStreams>;
   /** Present on hosts that run whole tool calls themselves (companion). */
   remoteTool?: (name: string, input: Record<string, unknown>, signal: AbortSignal) => Promise<ToolOutcome>;
+  /** Companion: a server-side copy of the folder (changed files copied), for tools that run on the server. */
+  mirror?(signal?: AbortSignal): Promise<string>;
+  /** Companion: writes a file the server made back into the user's folder. */
+  pushFile?(rel: string, data: Buffer, signal?: AbortSignal): Promise<void>;
   close?(): Promise<void>;
 }
 
