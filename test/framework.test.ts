@@ -226,6 +226,15 @@ test('a plugin contributes tools, skills, agents, gates and in-process hooks to 
   await h.close();
 });
 
+test('the trace reads back every span just written, in order (eval counts come from it)', async () => {
+  const h = await createHarness({ dataDir: await tempDir() });
+  const s = await h.sessions.create({ model: 'deepseek-flash', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: await tempDir() } });
+  const trace = (s as unknown as { trace(span: object): void }).trace.bind(s);
+  for (let i = 0; i < 200; i++) trace({ type: 'tool', tool: `t${i}` });
+  assert.deepEqual((await s.readTrace()).map((x) => (x as { tool?: string }).tool), Array.from({ length: 200 }, (_, i) => `t${i}`));
+  await h.close();
+});
+
 test('a session interrupted by a restart is closed out append-only', async () => {
   const data = await tempDir();
   const h = await createHarness({ dataDir: data });

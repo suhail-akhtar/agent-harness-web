@@ -1,4 +1,7 @@
 import { existsSync } from 'node:fs';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import type { ToolDisplay } from '../core/types.ts';
@@ -141,6 +144,9 @@ export function run(cmd: string, args: string[], opts: ExecOptions): Promise<Exe
   });
 }
 
+/** Longer `-c` commands are broken by Git Bash on Windows (the limit is near 8K). */
+const WIN_BASH_ARG_MAX = 4000;
+
 export class LocalHost implements ToolHost {
   kind = 'local' as const;
   root: string;
@@ -163,6 +169,12 @@ export class LocalHost implements ToolHost {
   exec(cmd: string, opts: ExecOptions): Promise<ExecResult> {
     const o = { ...opts, cwd: opts.cwd ?? this.root, env: opts.env ?? scrubbedEnv() };
     if (this.shell === 'powershell') return run(this.shellPath, ['-NoProfile', '-NonInteractive', '-Command', cmd], o);
-    return run(this.shellPath, ['-c', cmd], o);
+    // Git Bash cuts a `-c` argument off at about 8K characters, so a long
+    // command (a large heredoc) goes in a script file instead.
+    if (process.platform !== 'win32' || cmd.length <= WIN_BASH_ARG_MAX) return run(this.shellPath, ['-c', cmd], o);
+    const file = path.join(os.tmpdir(), `harness-cmd-${crypto.randomUUID()}.sh`);
+    return fs.writeFile(file, cmd)
+      .then(() => run(this.shellPath, [file], o))
+      .finally(() => fs.rm(file, { force: true }));
   }
 }

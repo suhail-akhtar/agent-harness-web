@@ -80,9 +80,12 @@ export interface PublishResult { branch: string; commit: string; pushedTo: strin
 
 export class PublishError extends Error {}
 
+// Git for Windows rejects os.devNull ("\\.\nul") as a config path but accepts NUL.
+const NO_CONFIG = process.platform === 'win32' ? 'NUL' : os.devNull;
+
 const SAFE_ENV = (): NodeJS.ProcessEnv => ({
   PATH: process.env.PATH, HOME: os.tmpdir(), LANG: 'C', GIT_TERMINAL_PROMPT: '0',
-  GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull, GIT_ATTR_NOSYSTEM: '1',
+  GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: NO_CONFIG, GIT_ATTR_NOSYSTEM: '1',
   ...(process.env.HTTPS_PROXY ? { HTTPS_PROXY: process.env.HTTPS_PROXY } : {}),
   ...(process.env.NO_PROXY ? { NO_PROXY: process.env.NO_PROXY } : {}),
   ...(process.env.SSL_CERT_FILE ? { SSL_CERT_FILE: process.env.SSL_CERT_FILE } : {}),

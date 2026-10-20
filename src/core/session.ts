@@ -237,13 +237,18 @@ export class Session {
     this.saveTimer = setTimeout(() => { this.saveMeta().catch(() => {}); }, 300);
   }
 
+  /** Appends in order; readTrace waits for them, so a span just traced is never missing. */
+  private traceWrite: Promise<void> = Promise.resolve();
+
   private trace(span: TraceSpan): void {
     const rec = { at: Date.now(), ...span };
-    fs.appendFile(path.join(this.dir, 'trace.jsonl'), JSON.stringify(rec) + '\n').catch(() => {});
+    const file = path.join(this.dir, 'trace.jsonl');
+    this.traceWrite = this.traceWrite.then(() => fs.appendFile(file, JSON.stringify(rec) + '\n')).catch(() => {});
     this.deps.onSpan?.(this.meta.id, rec);
   }
 
   async readTrace(): Promise<(TraceSpan & { at: number })[]> {
+    await this.traceWrite;
     try {
       return (await fs.readFile(path.join(this.dir, 'trace.jsonl'), 'utf8')).split('\n').filter(Boolean).map((l) => JSON.parse(l));
     } catch { return []; }

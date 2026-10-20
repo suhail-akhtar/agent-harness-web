@@ -150,6 +150,8 @@ export class MemoryStore {
 
   private async put(scope: MemoryScope, real: string, text: string): Promise<void> {
     await this.checkScopeSize(scope, real, Buffer.byteLength(text));
+    // Check before mkdir too: mkdir follows a planted link and creates folders outside memory.
+    await this.assertNotLink(real, this.dirs[scope]!);
     await fs.mkdir(path.dirname(real), { recursive: true });
     await this.assertNotLink(real, this.dirs[scope]!);
     const tmp = `${real}.${crypto.randomUUID().slice(0, 8)}.tmp`;

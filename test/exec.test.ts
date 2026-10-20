@@ -14,6 +14,13 @@ test('a command that leaves `&` children holding the pipes still returns', async
   assert.match(r.content, /run_in_background/);
 });
 
+test('a long command runs whole (Git Bash on Windows cuts `-c` off near 8K characters)', async () => {
+  const host = new LocalHost(await tempDir());
+  const r = await host.exec(`printf '${'x'.repeat(20_000)}' | wc -c`, { timeoutMs: 30_000 });
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(r.stdout.trim(), '20000');
+});
+
 test('timeouts kill the command', async () => {
   const t0 = Date.now();
   const r = await bashTool.run({ command: 'sleep 30', timeout_ms: 1000 }, await ctx());

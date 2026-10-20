@@ -35,7 +35,7 @@ Node 22.18+ is required; it runs the TypeScript directly. Docker is optional: wi
 - For `render` of Office files (`.pptx`, `.docx`, `.xlsx`): `winget install TheDocumentFoundation.LibreOffice`. PDF, HTML, SVG and Markdown need only Chromium: pages are drawn by pdf.js and Markdown is converted by `marked`, both installed by `npm ci`. poppler and pandoc are used only if those are missing. LibreOffice is found in its install folder even when it is not on the PATH; a missing one is reported with the command that installs it, and `HARNESS_SOFFICE` points at it directly. Linux's no-network namespace for LibreOffice (`unshare`) does not exist on Windows, so there it runs with the machine's network.
 - For `browser`: `npx playwright install chromium`, or set `HARNESS_CHROMIUM`.
 
-These choices are covered by tests with simulated Windows paths (`test/windows.test.ts`); the suite has not yet been run on a real Windows machine.
+These choices are covered by tests with simulated Windows paths (`test/windows.test.ts`), and the whole suite passes on native Windows 11 (first run 2026-10-21).
 
 **Or run it in Docker** (`docker/Dockerfile.harness`: Node 22, bash, LibreOffice, poppler, pandoc and Chromium, so every visual tool works with nothing installed on the machine):
 

@@ -1,6 +1,6 @@
 # Harness Web - handoff guide
 
-Where the project stands on 2026-10-20, how to pick it up on your own machine, and what to do next.
+Where the project stands on 2026-10-21, how to pick it up on your own machine, and what to do next.
 The README is the reference for every feature; this page is the map.
 
 ## 1. Purpose
@@ -23,27 +23,31 @@ Harness Web is a **browser-based agent harness that is also a framework**, in th
 | 4 | `npm run eval` with hidden checks; Ed25519 plugin signing and catalogue; OpenTelemetry; Docker for Windows/macOS; native Windows | `src/eval`, `evals/`, `src/plugins/signing*`, `docker/` |
 | 5 | Memory across sessions; research (web_search with 7 backends, readable web_fetch, source store, citation checker, deep-research workflow); accounts, ownership, rate limits, spend limits; plugin permissions (secrets, network); per-host network allowlist for the sandbox (egress proxy); `publish_branch` (push + pull request); Claude server-side compaction; code mode; `long-task` workflow; Chromium-only rendering for PDF/HTML/Markdown; remote plugin catalogue; render/browser on companion sessions | `src/memory`, `src/research`, `plugins/research`, `src/server/users.ts`, `src/runtime/egress-proxy.mjs`, `src/git/publish.ts`, `src/tools/code*.{ts,mjs}`, `plugins/sdlc/workflows/long-task.json` |
 
-Every code review of this branch (three rounds) was fixed with a regression test that fails without the fix. The last round (11 findings, commit 3c8ed77) closed: the publish token going to any git host, a `run_script` sandbox escape, Windows path traversal in the companion mirror, a symlinked `.git` in publishing, project memory shared between accounts, gaps in untrusted-content tracking, mirror results over the request limit, gates that copied whole folders, quadratic HTML parsing, the compaction threshold, and a plugin named "config" getting the operator's reach.
+Every finding from the code reviews of this branch was fixed with a regression test that fails without the fix: one review fixed in cc4d106, f87eecb and 2a51f4d (security, correctness, robustness), then a last round of 11 findings in commit 3c8ed77, which closed: the publish token going to any git host, a `run_script` sandbox escape, Windows path traversal in the companion mirror, a symlinked `.git` in publishing, project memory shared between accounts, gaps in untrusted-content tracking, mirror results over the request limit, gates that copied whole folders, quadratic HTML parsing, the compaction threshold, and a plugin named "config" getting the operator's reach.
 
 ## 3. Results
 
 Full numbers are in the README ("Measured") and `evals/results/`. In short:
 
-- **Phases 1-4, every pack on every model:** 12/12 runs, 39/39 hidden checks, $2.56 in total, ~93% of input read from cache.
-- **Phase 5** (`evals/results/2026-10-20-p5.md`): research 3/3 with every report approved by the fact-checker; code mode the same answer at about half the cost on all three models; memory carried across sessions on all three; Claude server-side compaction ran three times in one task and stayed correct; the long-task workflow built a whole CLI feature by feature on GPT-6 Luna (11/11 features, every hidden check) and DeepSeek (15/18 features when stopped, every hidden check), and exposed a workflow deadlock on Haiku that is now fixed.
-- **Tests:** `npm test` - 155 tests, all passing on Linux; typecheck clean.
+- **Phases 1-4, every pack on every model:** 12/12 runs, 39/39 hidden checks, $2.56 in total, ~93% of input read from cache. These ran on the code before phase 5; the regression run on the phase 5 code was stopped early (4 runs: fire-hydrant and board-deck on Haiku and Luna, all passing; nothing on DeepSeek, arcade or url-shortener).
+- **Phase 5** (`evals/results/2026-10-20-p5.md`): research 3/3 with every report approved by the fact-checker; code mode the same answer at about half the cost on all three models; memory carried across sessions on all three; Claude server-side compaction ran three times in one task and stayed correct; the long-task workflow built a whole CLI feature by feature on GPT-6 Luna (11/11 features, every hidden check) and DeepSeek (15/18 features when stopped; the hidden checks pass on what was built). On Haiku it stopped at 10/26 features with the hidden test failing, which exposed a workflow deadlock; the fix (001e88b) is **not yet verified by a re-run**.
+- **Tests:** `npm test` - 157 tests; typecheck clean. 9 skip unless their tools are installed: Chromium (7), LibreOffice (1), Docker with the sandbox image (1). All pass on Linux, and on native Windows 11 since 2026-10-21 (see below).
+- **First run on a real Windows machine (2026-10-21):** 9 tests failed and were fixed, each with a test: publishing broke because Git for Windows rejects `os.devNull` as a config path (now `NUL`); Git Bash cut off `-c` commands near 8K characters (long commands now run from a script file); the memory store's `mkdir` followed a planted link before the link check (a check on every OS, now done first); trace spans were written without waiting, so `readTrace` (and the eval's model-call counts) could miss the last ones (writes are now queued); plus two tests that assumed Linux.
 
 ## 4. Picking it up on your own machine
 
 ```bash
 git clone https://github.com/suhail-akhtar/agent-harness-web
 cd agent-harness-web
-npm ci                         # Node 22.18+; runs the TypeScript directly
-npm run build                  # browser UI + companion script
-npm run typecheck && npm test  # expect 155/155
+npm ci                              # Node 22.18+; runs the TypeScript directly
+npx playwright install chromium     # render/browser tools; without it 7 tests skip
+npm run build                       # browser UI + companion script
+npm run typecheck && npm test       # expect 157 tests, 0 failing (up to 9 skipped)
 export DEEPSEEK_API_KEY=... OPENAI_API_KEY=... ANTHROPIC_API_KEY=...   # only the ones you use
-npm start                      # http://127.0.0.1:4310, prints an access token
+npm start                           # http://127.0.0.1:4310, prints an access token
 ```
+
+In PowerShell, set the keys with `$env:DEEPSEEK_API_KEY = "..."` (one per line); every npm command is the same.
 
 - Docker is optional. With it, `npm run sandbox:image` once, and sessions get a sandbox with the allowlist network. Without it, use a server folder or the companion (your own computer).
 - Windows: install Git for Windows (Git Bash runs the commands); LibreOffice only for Office files. See the README's Quick start.
@@ -62,8 +66,8 @@ How to work on it:
 ## 5. Next steps (in priority order)
 
 1. **Re-run the evals on the final code.** The long-task eval was stopped to save budget: re-run Haiku (`--packs sdlc --cases expense-cli --models claude-haiku-5-5`) to confirm the deadlock fix, then the full set (`--cases url-shortener,board-deck,arcade,fire-hydrant,mcp-facts,expense-cli`). Record the numbers in `evals/results/` and the README.
-2. **A fresh code review of the round-5 fixes** (run_script bootstrap, mirror chunking, taint persistence, the linear HTML scanner).
-3. **Test on a real Windows machine and on Docker Desktop.** Both are covered only by simulated tests; the allowlist network needs Linux Docker networking.
+2. **A fresh code review of the last round's fixes** (3c8ed77: run_script bootstrap, mirror chunking, taint persistence, the linear HTML scanner) and of the Windows fixes of 2026-10-21.
+3. **Test on Docker Desktop, and the rest of Windows.** The suite now passes on native Windows 11, but its LibreOffice and Docker tests were skipped there and no eval has run on Windows. Docker Desktop is covered only by simulated tests; the allowlist network needs Linux Docker networking.
 4. **Pin the checked address in `web_fetch` and `api.fetch`** (an HTTP client with a custom DNS lookup, e.g. the `undici` package's `Agent({ connect: { lookup } })`), to close DNS rebinding between the check and the connection.
 5. **Credential injection at the egress proxy**, so sandboxed commands can call an API without the key entering the sandbox.
 6. **Companion sessions:** checkpoints and project MCP servers.

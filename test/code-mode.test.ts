@@ -81,7 +81,9 @@ console.log(JSON.stringify(o));`);
 
 test('a script\'s tool calls get the same permission checks; interactive tools and runaway scripts are refused', async () => {
   // Default mode: a write from inside a script is asked about, and a "no" throws in the script.
-  const denied = await scripted(`try { await tools.write({ path: "x.txt", content: "hi" }); return "wrote" } catch (e) { return "refused: " + e.message }`, { mode: 'default', answers: [false] });
+  // Without network isolation (anything but Linux) run_script itself is asked about first.
+  const answers = scriptNetworkIsolated() ? [false] : [true, false];
+  const denied = await scripted(`try { await tools.write({ path: "x.txt", content: "hi" }); return "wrote" } catch (e) { return "refused: " + e.message }`, { mode: 'default', answers });
   assert.match(denied.r.content, /^refused: The user denied this call/);
   await assert.rejects(fs.stat(path.join(denied.h.root, 'x.txt')));
   const inter = await scripted(`try { await tools.call("todo_write", { todos: [] }) } catch (e) { return e.message }`);

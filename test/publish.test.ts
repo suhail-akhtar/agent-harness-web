@@ -63,9 +63,12 @@ test('publish: nothing in the workspace\'s git config runs or redirects the push
   const evil = path.join(await tempDir(), 'evil.git');
   execFileSync('git', ['init', '-q', '--bare', evil]);
   // Hooks, fsmonitor and a URL rewrite planted by whatever ran in the workspace.
-  await fs.appendFile(path.join(ws, '.git', 'config'), `[core]\n\tfsmonitor = "touch ${marker}-fsmonitor"\n\thooksPath = .githooks\n[url "${evil}"]\n\tinsteadOf = ${remote}\n`);
+  // Backslashes (Windows paths) are escapes in git config values and in sh.
+  const cfgq = (s: string) => `"${s.replace(/\\/g, '\\\\')}"`;
+  const shPath = marker.replace(/\\/g, '/');
+  await fs.appendFile(path.join(ws, '.git', 'config'), `[core]\n\tfsmonitor = ${cfgq(`touch ${shPath}-fsmonitor`)}\n\thooksPath = .githooks\n[url ${cfgq(evil)}]\n\tinsteadOf = ${cfgq(remote)}\n`);
   await fs.mkdir(path.join(ws, '.githooks'));
-  for (const h of ['pre-push', 'post-checkout', 'reference-transaction', 'pre-auto-gc']) await fs.writeFile(path.join(ws, '.githooks', h), `#!/bin/sh\ntouch ${marker}-${h}\n`, { mode: 0o755 });
+  for (const h of ['pre-push', 'post-checkout', 'reference-transaction', 'pre-auto-gc']) await fs.writeFile(path.join(ws, '.githooks', h), `#!/bin/sh\ntouch ${shPath}-${h}\n`, { mode: 0o755 });
   await fs.writeFile(path.join(ws, 'x.txt'), 'x');
   g(ws, '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=', 'add', '-A');
   g(ws, '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=', 'commit', '-q', '-m', 'x');
