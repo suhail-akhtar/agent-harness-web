@@ -207,8 +207,10 @@ export class WorkflowRunner {
         const r = await host.exec(render(node.command, run), { timeoutMs: node.timeoutMs ?? 300_000, signal });
         const out = `exit ${r.code}\n${(r.stdout + (r.stderr ? `\n${r.stderr}` : '')).trim().slice(-SUMMARY_MAX)}`;
         run.state[id] = out;
-        if (r.code !== 0) run.feedback = `Command "${node.command}" failed:\n${out}`;
-        return { outcome: r.code === 0 ? 'ok' : 'fail', summary: `exit ${r.code}` };
+        if (r.code !== 0) run.feedback = `Command "${node.command.length > 120 ? `${node.command.slice(0, 117)}...` : node.command}" failed:\n${out}`;
+        // "exit-N" routes a specific exit code when `next` names it; any other failure is "fail".
+        const specific = typeof node.next === 'object' && r.code !== 0 && `exit-${r.code}` in node.next.on ? `exit-${r.code}` : undefined;
+        return { outcome: r.code === 0 ? 'ok' : specific ?? 'fail', summary: `exit ${r.code}` };
       }
       case 'parallel': {
         const results = await Promise.all(node.branches.map((b) => this.runNode(b, this.w.nodes[b]!, signal)));

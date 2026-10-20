@@ -49,7 +49,7 @@ export interface ShellNode extends Base {
   type: 'shell';
   command: string;
   timeoutMs?: number;
-  /** Outcomes: "ok" | "fail". */
+  /** Outcomes: "ok" | "fail", or "exit-N" for exit code N when `next` routes it. */
 }
 
 export interface ParallelNode extends Base {

@@ -38,6 +38,10 @@ export interface ToolContext {
   proposePlan?(plan: string): Promise<{ approved: boolean; feedback?: string }>;
   isPlanMode?(): boolean;
   services?: ToolServices;
+  /** Runs another tool as this agent would (permissions, hooks, events): for run_script. */
+  callTool?(name: string, input: Record<string, unknown>): Promise<{ content: string; is_error?: boolean }>;
+  /** The tools this agent has. */
+  toolNames?(): string[];
 }
 
 export interface Tool {

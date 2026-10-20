@@ -96,6 +96,7 @@ export class Agent {
   private recentCalls: string[] = [];
   /** Untrusted content (a web page, an MCP result, a sub-agent that read some) has entered this context. */
   tainted = false;
+  private scriptCalls = 0;
   private stepsSinceTodo = 0;
 
   constructor(cfg: AgentConfig, hooks: AgentHooks, messages: Message[] = []) {
@@ -356,6 +357,11 @@ export class Agent {
       beforeWrite: this.cfg.beforeWrite,
       isPlanMode: () => this.hooks.getMode() === 'plan',
       services: this.cfg.services,
+      callTool: async (name, input) => {
+        const r = await this.executeOne({ type: 'tool_use', id: `script_${++this.scriptCalls}`, name, input }, signal);
+        return { content: r.block.content, is_error: r.block.is_error };
+      },
+      toolNames: () => this.cfg.tools.map((t) => t.spec.name),
     };
   }
 

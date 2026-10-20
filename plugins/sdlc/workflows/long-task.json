@@ -1,0 +1,170 @@
+{
+  "name": "long-task",
+  "description": "A goal too big for one context, built feature by feature: an initializer writes a prioritised feature list with end-to-end checks, then fresh agents build and verify one feature each (quality gates after every one) until all pass, then a final review. Resumable at any point.",
+  "inputs": {
+    "goal": {
+      "description": "What to build, in as much detail as you have.",
+      "required": true
+    },
+    "constraints": {
+      "description": "Stack, libraries, style or anything else to respect",
+      "default": "use the project's existing stack, or a simple standard one"
+    }
+  },
+  "start": "init",
+  "maxAgentRuns": 90,
+  "nodes": {
+    "init": {
+      "type": "agent",
+      "title": "Plan the features",
+      "agent": "initializer",
+      "maxSteps": 120,
+      "prompt": "Set up this long task.\n\n<goal>\n{{input.goal}}\n</goal>\nConstraints: {{input.constraints}}",
+      "next": "lock"
+    },
+    "lock": {
+      "type": "shell",
+      "title": "Freeze the feature list",
+      "command": "mkdir -p .harness/long-task && cp .harness/long-task/features.json .harness/long-task/features.lock.json && (git add -A && git -c user.name=agent -c user.email=agent@harness.invalid commit -q -m 'long-task: plan' || true)",
+      "next": {
+        "on": {
+          "ok": "check"
+        },
+        "default": "failed"
+      }
+    },
+    "check": {
+      "type": "shell",
+      "title": "Features left?",
+      "command": "node -e \"const fs=require('fs');const d='.harness/long-task/';let a,b;try{a=JSON.parse(fs.readFileSync(d+'features.json','utf8'))}catch(e){console.log('features.json is missing or not valid JSON: '+e.message);process.exit(2)}if(!Array.isArray(a)||!a.length){console.log('features.json must be a non-empty JSON array');process.exit(2)}try{b=JSON.parse(fs.readFileSync(d+'features.lock.json','utf8'))}catch{b=null}const strip=x=>JSON.stringify(x.map(({passes,...r})=>r));if(b&&strip(a)!==strip(b)){console.log('features.json was changed beyond its passes fields: restore every id, description and step from git and only flip passes');process.exit(3)}const left=a.filter(x=>x.passes!==true);const passing=a.length-left.length;let st={passing:-1,stalls:0};try{st=JSON.parse(fs.readFileSync(d+'.state.json','utf8'))}catch{}st.stalls=left.length&&passing<=st.passing?st.stalls+1:0;st.passing=passing;fs.writeFileSync(d+'.state.json',JSON.stringify(st));console.log(passing+'/'+a.length+' features pass'+(left.length?'. Next: '+left[0].id+' - '+left[0].description:''));if(st.stalls>=3){console.log('No feature has passed in the last 3 sessions.');process.exit(4)}process.exit(left.length?1:0)\"",
+      "next": {
+        "on": {
+          "ok": "final-gates",
+          "exit-4": "stuck"
+        },
+        "default": "build"
+      }
+    },
+    "build": {
+      "type": "agent",
+      "title": "Build the next feature",
+      "agent": "engineer",
+      "maxSteps": 150,
+      "prompt": "You are one session of a long task; earlier sessions' work is in the workspace.\n\n1. Run ./init.sh, read .harness/long-task/progress.md and the last commits (git log --oneline -10).\n2. Take the FIRST feature in .harness/long-task/features.json whose passes is false.\n3. Build it, with tests.\n4. Verify it end to end by following its steps exactly, as a user would (run the program, call the API, use the browser for a UI). Only when every step works, set its passes to true. Never edit ids, descriptions or steps, and never remove a feature or a test.\n5. Commit with a message naming the feature, and append one line to the Log in progress.md: the feature, what you did, how you verified it.\n\nOne feature only. If the feature cannot be done, write why in progress.md and leave passes false.\n\nThe goal, for context:\n{{input.goal}}\n\nState of the list:\n{{feedback}}",
+      "next": "gates"
+    },
+    "gates": {
+      "type": "gate",
+      "title": "Quality gates",
+      "gates": "applicable",
+      "maxFailures": 4,
+      "next": {
+        "on": {
+          "pass": "check",
+          "fail": "fix",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "fix": {
+      "type": "agent",
+      "title": "Fix failing gates",
+      "agent": "engineer",
+      "prompt": "The quality gates failed after the last feature. Fix the root causes (not the tests), keep every feature that passed working, and commit.\n\n{{feedback}}",
+      "next": "gates"
+    },
+    "final-gates": {
+      "type": "gate",
+      "title": "Quality gates (all features)",
+      "gates": "applicable",
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "review",
+          "fail": "fix-final",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "fix-final": {
+      "type": "agent",
+      "title": "Fix failing gates",
+      "agent": "engineer",
+      "prompt": "The quality gates failed. Fix the root causes and commit.\n\n{{feedback}}",
+      "next": "final-gates"
+    },
+    "review": {
+      "type": "agent",
+      "title": "Final review",
+      "agent": "code-reviewer",
+      "decide": [
+        "APPROVE",
+        "REQUEST_CHANGES"
+      ],
+      "prompt": "Review the finished work against the goal and .harness/long-task/features.json: run ./init.sh, spot-check features end to end, read the code. Write docs/reviews/final-review.md.\n\n<goal>\n{{input.goal}}\n</goal>",
+      "next": {
+        "on": {
+          "REQUEST_CHANGES": "address"
+        },
+        "default": "done"
+      }
+    },
+    "address": {
+      "type": "agent",
+      "title": "Address the review",
+      "agent": "engineer",
+      "prompt": "Address every BLOCKING and MAJOR finding in docs/reviews/final-review.md, with tests, and commit. Note under each finding how it was resolved.\n\n{{state.review}}",
+      "next": "final-gates-2"
+    },
+    "final-gates-2": {
+      "type": "gate",
+      "title": "Quality gates (after review)",
+      "gates": "applicable",
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "done",
+          "fail": "fix-final-2",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "fix-final-2": {
+      "type": "agent",
+      "title": "Fix failing gates",
+      "agent": "engineer",
+      "prompt": "The quality gates failed. Fix the root causes and commit.\n\n{{feedback}}",
+      "next": "final-gates-2"
+    },
+    "stuck": {
+      "type": "approval",
+      "title": "Stuck: continue?",
+      "message": "No feature has passed in the last three build sessions. Look at .harness/long-task/progress.md for why. Approve to try again (add guidance in the feedback), or reject to stop.\n\n{{state.check}}",
+      "files": [
+        ".harness/long-task/progress.md"
+      ],
+      "next": {
+        "on": {
+          "approve": "unstick"
+        },
+        "default": "failed"
+      }
+    },
+    "unstick": {
+      "type": "shell",
+      "title": "Reset the stall count",
+      "command": "node -e \"const f='.harness/long-task/.state.json';const fs=require('fs');let s={};try{s=JSON.parse(fs.readFileSync(f,'utf8'))}catch{}s.stalls=0;fs.writeFileSync(f,JSON.stringify(s))\"",
+      "next": "build"
+    },
+    "done": {
+      "type": "end",
+      "title": "All features built and verified",
+      "status": "success"
+    },
+    "failed": {
+      "type": "end",
+      "title": "Stopped: a step could not be completed",
+      "status": "failed"
+    }
+  }
+}
