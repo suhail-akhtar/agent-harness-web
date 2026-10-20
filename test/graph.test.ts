@@ -80,6 +80,8 @@ test('a parallel review with a REQUEST_CHANGES verdict routes to the fix node', 
   const { host, prompts } = stubHost({ reports: { cr: ['Missing tests for REQ-2.\nREQUEST_CHANGES'], sr: ['APPROVE'] } });
   const run = await new WorkflowRunner(wf(), host, newRun(wf(), 's', { request: 'X' })).execute(new AbortController().signal);
   assert.equal(run.history.find((h) => h.node === 'review')!.outcome, 'REQUEST_CHANGES');
+  const cost = (n: string) => run.history.find((h) => h.node === n)!.cost;
+  assert.deepEqual([cost('review'), cost('cr'), cost('sr')], [0.02, 0.01, 0.01], 'branch costs do not overlap');
   assert.match(prompts.find((p) => p.label === 'address')!.prompt, /Missing tests for REQ-2/);
   assert.equal(run.status, 'succeeded');
 });

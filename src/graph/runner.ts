@@ -111,15 +111,14 @@ export class WorkflowRunner {
   }
 
   /** Runs one node (or a parallel group); records it; returns its outcome. */
-  private async runNode(id: string, node: WorkflowNode, signal: AbortSignal): Promise<{ outcome?: string; summary?: string; failed?: boolean }> {
+  private async runNode(id: string, node: WorkflowNode, signal: AbortSignal): Promise<{ outcome?: string; summary?: string; failed?: boolean; cost?: number }> {
     const run = this.run;
     const rec: NodeRecord = { node: id, type: node.type, status: 'running', startedAt: Date.now() };
     run.history.push(rec);
     run.counts[id] = (run.counts[id] ?? 0) + 1;
     await this.save();
     this.host.emit({ kind: 'workflow', run, node: id, phase: 'node_started' });
-    const costBefore = run.cost;
-    let out: { outcome?: string; summary?: string; failed?: boolean };
+    let out: { outcome?: string; summary?: string; failed?: boolean; cost?: number };
     try {
       out = await this.exec(id, node, signal);
       rec.status = out.failed ? 'failed' : 'done';
@@ -130,12 +129,14 @@ export class WorkflowRunner {
     rec.outcome = out.outcome;
     rec.summary = out.summary?.slice(0, 2000);
     rec.endedAt = Date.now();
-    rec.cost = run.cost - costBefore;
+    // Each step reports its own cost: parallel branches finish in any order, so a
+    // difference in the run total would count a sibling's spend.
+    rec.cost = out.cost ?? 0;
     this.host.emit({ kind: 'workflow', run, node: id, phase: 'node_finished' });
     return out;
   }
 
-  private async exec(id: string, node: WorkflowNode, signal: AbortSignal): Promise<{ outcome?: string; summary?: string; failed?: boolean }> {
+  private async exec(id: string, node: WorkflowNode, signal: AbortSignal): Promise<{ outcome?: string; summary?: string; failed?: boolean; cost?: number }> {
     const run = this.run;
     switch (node.type) {
       case 'agent': {
@@ -149,11 +150,11 @@ export class WorkflowRunner {
         if (r.reason === 'max_steps') {
           run.feedback = `The "${id}" step ran out of steps before it finished. Its last report:\n${r.report.slice(-3000)}`;
           run.state[INCOMPLETE] = run.feedback;
-          return { outcome: 'incomplete', summary: r.report };
+          return { outcome: 'incomplete', summary: r.report, cost: r.cost };
         }
-        if (r.reason !== 'done' && r.reason !== 'max_tokens') return { failed: true, summary: `agent stopped: ${r.reason}` };
+        if (r.reason !== 'done' && r.reason !== 'max_tokens') return { failed: true, summary: `agent stopped: ${r.reason}`, cost: r.cost };
         const outcome = decideFrom(r.report.slice(-600), node.decide) ?? decideFrom(r.report, node.decide);
-        return { outcome, summary: r.report };
+        return { outcome, summary: r.report, cost: r.cost };
       }
       case 'gate': {
         const results = await this.host.runGates(node.gates, signal);
@@ -191,11 +192,12 @@ export class WorkflowRunner {
       case 'parallel': {
         const results = await Promise.all(node.branches.map((b) => this.runNode(b, this.w.nodes[b]!, signal)));
         const failed = results.filter((r) => r.failed);
-        if (failed.length) return { failed: true, summary: failed.map((f) => f.summary).join('; ') };
+        const cost = results.reduce((a, r) => a + (r.cost ?? 0), 0);
+        if (failed.length) return { failed: true, summary: failed.map((f) => f.summary).join('; '), cost };
         // Outcome: "all" when no branch reported a negative decision, else the first negative one.
         const outcomes = results.map((r) => r.outcome).filter(Boolean) as string[];
         const negative = outcomes.find((o) => /REQUEST|REJECT|FAIL|CHANGES|BLOCK/i.test(o));
-        return { outcome: negative ?? 'all', summary: node.branches.map((b, i) => `${b}: ${results[i]!.outcome ?? 'done'}`).join(', ') };
+        return { outcome: negative ?? 'all', summary: node.branches.map((b, i) => `${b}: ${results[i]!.outcome ?? 'done'}`).join(', '), cost };
       }
       case 'branch': {
         const v = render(node.value, run).trim().toLowerCase();
