@@ -1,0 +1,166 @@
+{
+  "name": "model-3d",
+  "description": "From a description to a production-ready 3D model: plan with real proportions, build as code (Three.js), look from every view and fix, export .glb, validate, independent art review, revisions.",
+  "inputs": {
+    "subject": {
+      "description": "What to model, its style and any details that must be there.",
+      "required": true
+    },
+    "detail": {
+      "description": "Detail level",
+      "default": "a clean, realistic product model, under 50k triangles"
+    },
+    "approval": {
+      "description": "\"manual\" to approve the plan first, \"auto\" to go straight on",
+      "default": "auto"
+    }
+  },
+  "start": "plan",
+  "maxAgentRuns": 10,
+  "nodes": {
+    "plan": {
+      "type": "agent",
+      "title": "Model plan",
+      "agent": "3d-artist",
+      "effort": "medium",
+      "prompt": "Plan the model (do not build yet): load procedural-3d-modeling and write docs/model-plan.md with real dimensions in metres, the parts with primitives, sizes and positions, mirrored/repeated parts, materials, and what makes the silhouette recognisable.\n\n<subject>\n{{input.subject}}\n</subject>\nDetail: {{input.detail}}\nFeedback, if any: {{feedback}}",
+      "next": "approval-mode"
+    },
+    "approval-mode": {
+      "type": "branch",
+      "title": "Approval needed?",
+      "value": "{{input.approval}}",
+      "next": {
+        "on": {
+          "auto": "build"
+        },
+        "default": "approve-plan"
+      }
+    },
+    "approve-plan": {
+      "type": "approval",
+      "title": "Approve the plan",
+      "message": "{{state.plan}}",
+      "files": [
+        "docs/model-plan.md"
+      ],
+      "next": {
+        "on": {
+          "approve": "build",
+          "reject": "plan"
+        }
+      }
+    },
+    "build": {
+      "type": "agent",
+      "title": "Model & look",
+      "agent": "3d-artist",
+      "maxSteps": 150,
+      "prompt": "Build the model from docs/model-plan.md: model.js, the viewer index.html, then look at every view and fix what you see. Export model.glb and check it with model_info.\n\n<subject>\n{{input.subject}}\n</subject>\nDetail: {{input.detail}}",
+      "next": "checks"
+    },
+    "checks": {
+      "type": "gate",
+      "title": "Viewer & model checks",
+      "gates": [
+        "web-console",
+        "gltf-valid"
+      ],
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "review",
+          "fail": "fix",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "fix": {
+      "type": "agent",
+      "title": "Fix",
+      "agent": "3d-artist",
+      "prompt": "The checks failed. Fix the model or viewer, re-export model.glb, confirm with model_info.\n\n{{feedback}}",
+      "next": "checks"
+    },
+    "review": {
+      "type": "agent",
+      "title": "Art review",
+      "agent": "art-director",
+      "decide": [
+        "APPROVE",
+        "REQUEST_CHANGES"
+      ],
+      "prompt": "Review the model against the subject and docs/model-plan.md. Write docs/model-review.md.\n\n<subject>\n{{input.subject}}\n</subject>",
+      "next": {
+        "on": {
+          "REQUEST_CHANGES": "revise"
+        },
+        "default": "deliver"
+      }
+    },
+    "revise": {
+      "type": "agent",
+      "title": "Revise",
+      "agent": "3d-artist",
+      "prompt": "Address every BLOCKING and MAJOR finding in docs/model-review.md; look at the affected views again; re-export model.glb. Add a \"Resolution\" line under each finding.\n\n{{state.review}}",
+      "next": "recheck"
+    },
+    "recheck": {
+      "type": "gate",
+      "title": "Viewer & model checks",
+      "gates": [
+        "web-console",
+        "gltf-valid"
+      ],
+      "maxFailures": 2,
+      "next": {
+        "on": {
+          "pass": "final-review",
+          "fail": "fix-2",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "fix-2": {
+      "type": "agent",
+      "title": "Fix",
+      "agent": "3d-artist",
+      "prompt": "The checks failed after the revision. Fix it.\n\n{{feedback}}",
+      "next": "recheck"
+    },
+    "final-review": {
+      "type": "agent",
+      "title": "Second review",
+      "agent": "art-director",
+      "decide": [
+        "APPROVE",
+        "REQUEST_CHANGES"
+      ],
+      "prompt": "Second review: confirm each BLOCKING and MAJOR finding in docs/model-review.md is resolved and nothing new broke. Append a \"Round 2\" section.",
+      "next": {
+        "on": {
+          "REQUEST_CHANGES": "deliver"
+        },
+        "default": "deliver"
+      }
+    },
+    "deliver": {
+      "type": "agent",
+      "title": "Delivery note",
+      "agent": "3d-artist",
+      "effort": "low",
+      "prompt": "Write docs/delivery.md: the files (model.glb, model.js, index.html), size in metres, triangles, materials, how to view it (open index.html; ?view=front|side|back|top), what the reviews found and how it was resolved, and anything still open (including any Round 2 findings not fixed). Report its first paragraph.",
+      "next": "done"
+    },
+    "done": {
+      "type": "end",
+      "title": "Delivered",
+      "status": "success"
+    },
+    "failed": {
+      "type": "end",
+      "title": "Stopped: checks still failing",
+      "status": "failed"
+    }
+  }
+}

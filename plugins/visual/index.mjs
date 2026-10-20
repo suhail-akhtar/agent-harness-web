@@ -131,21 +131,31 @@ export default {
           actions: { type: 'array', items: { type: 'object' } },
           eval: { type: 'string', description: 'JavaScript expression read at the end, e.g. "window.game.state" (JSON result)' },
           screenshot: { type: 'boolean', description: 'Final screenshot (default true)' },
+          save: { type: 'object', description: 'Write what a page expression returns into the workspace: {"path": "model.glb", "js": "window.exportGLB()"}. The expression may return a Promise, Blob, ArrayBuffer/typed array, data: URL, or text. For exports that need a browser (GLTFExporter, canvas.toDataURL).', properties: { path: { type: 'string' }, js: { type: 'string' } } },
           fullPage: { type: 'boolean' },
         },
       },
       kind: 'exec',
       parallelSafe: true,
       summarize: (i) => `${i.path ?? 'index.html'}${i.query ?? ''}${Array.isArray(i.actions) && i.actions.length ? ` +${i.actions.length} actions` : ''}`,
-      async run(input, { host, signal }) {
+      async run(input, { host, signal, beforeWrite }) {
         serverSide(host);
         const rel = await workspacePath(host, String(input.path ?? 'index.html'));
+        const sv = input.save && typeof input.save === 'object' ? input.save : null;
+        let save;
+        if (sv) {
+          if (typeof sv.path !== 'string' || typeof sv.js !== 'string') return { content: 'save needs {"path": "...", "js": "..."}', is_error: true };
+          const file = await resolveIn(host, sv.path);
+          await beforeWrite?.(file);
+          save = { file, js: sv.js, label: path.relative(await fsp.realpath(host.root), file) };
+        }
         const r = await runPage({
           root: host.root, file: rel, query: typeof input.query === 'string' ? input.query : '',
           viewport: { width: Math.min(Math.max(Number(input.width) || 1280, 320), 1920), height: Math.min(Math.max(Number(input.height) || 720, 240), 1200) },
           actions: Array.isArray(input.actions) ? input.actions : [], evaluate: typeof input.eval === 'string' ? input.eval : undefined,
-          screenshot: input.screenshot !== false, fullPage: input.fullPage === true, signal,
+          screenshot: input.screenshot !== false, fullPage: input.fullPage === true, save, signal,
         });
+        if (r.saved && save) r.saved.label = save.label;
         return { content: describePage(r), is_error: r.errors.length > 0 && !r.shots.length, images: r.shots.map((s) => ({ media_type: 'image/png', data: s.png.toString('base64') })) };
       },
     }));

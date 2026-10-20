@@ -13,7 +13,7 @@
     "dev": "npm run build && npm start",
     "cli": "NODE_USE_ENV_PROXY=1 node --disable-warning=ExperimentalWarning --disable-warning=UNDICI-EHPA src/cli.ts",
     "bench": "NODE_USE_ENV_PROXY=1 node --disable-warning=ExperimentalWarning --disable-warning=UNDICI-EHPA bench/run.ts",
-    "test": "node --test --disable-warning=ExperimentalWarning 'test/**/*.test.ts'",
+    "test": "node --test --test-force-exit --disable-warning=ExperimentalWarning 'test/**/*.test.ts'",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p ui/tsconfig.json --noEmit",
     "sandbox:image": "docker build -t harness-sandbox:latest -f docker/Dockerfile.sandbox docker"
   },

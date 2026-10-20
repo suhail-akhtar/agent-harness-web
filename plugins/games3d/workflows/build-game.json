@@ -1,0 +1,190 @@
+{
+  "name": "build-game",
+  "description": "From an idea to a finished browser game: design document and playtest scenarios, (approval), build, web-console and playtest gates with a fix loop, independent playtest with real input and screenshots, polish, final gates, how-to-play README.",
+  "inputs": {
+    "idea": {
+      "description": "The game: genre, theme, what the player does, anything that must be in it.",
+      "required": true
+    },
+    "tech": {
+      "description": "Rendering",
+      "default": "Canvas 2D unless the idea needs 3D; Three.js (vendored) for 3D"
+    },
+    "approval": {
+      "description": "\"manual\" to approve the design before building, \"auto\" to go straight on",
+      "default": "manual"
+    }
+  },
+  "start": "design",
+  "maxAgentRuns": 14,
+  "nodes": {
+    "design": {
+      "type": "agent",
+      "title": "Game design",
+      "agent": "game-designer",
+      "prompt": "Design this game. Write docs/game-design.md and playtest.json.\n\n<idea>\n{{input.idea}}\n</idea>\n\nTech: {{input.tech}}\nFeedback on an earlier design, if any: {{feedback}}",
+      "next": "approval-mode"
+    },
+    "approval-mode": {
+      "type": "branch",
+      "title": "Approval needed?",
+      "value": "{{input.approval}}",
+      "next": {
+        "on": {
+          "auto": "build"
+        },
+        "default": "approve-design"
+      }
+    },
+    "approve-design": {
+      "type": "approval",
+      "title": "Approve the design",
+      "message": "The design is ready. Approve to build, or send it back with what to change.\n\n{{state.design}}",
+      "files": [
+        "docs/game-design.md",
+        "playtest.json"
+      ],
+      "next": {
+        "on": {
+          "approve": "build",
+          "reject": "design"
+        }
+      }
+    },
+    "build": {
+      "type": "agent",
+      "title": "Build & play",
+      "agent": "game-engineer",
+      "maxSteps": 150,
+      "prompt": "Build the game in docs/game-design.md (index.html at the workspace root). Tech: {{input.tech}}. Keep playtest.json passing (extend it if you add features; never weaken a scenario to make it pass). Play it with the browser tool and look at the screenshots as you go.",
+      "next": "gates"
+    },
+    "gates": {
+      "type": "gate",
+      "title": "Console & playtests",
+      "gates": [
+        "web-console",
+        "playtest"
+      ],
+      "maxFailures": 4,
+      "next": {
+        "on": {
+          "pass": "playtest",
+          "fail": "fix",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "fix": {
+      "type": "agent",
+      "title": "Fix",
+      "agent": "game-engineer",
+      "prompt": "The checks failed. Fix the game (change a playtest scenario only if the scenario itself is wrong, and say why). Re-check with the browser tool.\n\n{{feedback}}",
+      "next": "gates"
+    },
+    "playtest": {
+      "type": "agent",
+      "title": "Independent playtest",
+      "agent": "playtester",
+      "decide": [
+        "APPROVE",
+        "REQUEST_CHANGES"
+      ],
+      "prompt": "Playtest the game against docs/game-design.md and write docs/playtest-report.md.\n\n<idea>\n{{input.idea}}\n</idea>",
+      "next": {
+        "on": {
+          "REQUEST_CHANGES": "polish"
+        },
+        "default": "docs"
+      }
+    },
+    "polish": {
+      "type": "agent",
+      "title": "Address the playtest",
+      "agent": "game-engineer",
+      "maxSteps": 120,
+      "prompt": "Address every BLOCKING and MAJOR finding in docs/playtest-report.md; add a playtest.json scenario for each bug you fix so it stays fixed. Play it again to confirm, and add a \"Resolution\" line under each finding.\n\n{{state.playtest}}",
+      "next": "gates-final"
+    },
+    "gates-final": {
+      "type": "gate",
+      "title": "Console & playtests",
+      "gates": [
+        "web-console",
+        "playtest"
+      ],
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "replay",
+          "fail": "fix-final",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "fix-final": {
+      "type": "agent",
+      "title": "Fix",
+      "agent": "game-engineer",
+      "prompt": "The checks failed after the polish round. Fix it.\n\n{{feedback}}",
+      "next": "gates-final"
+    },
+    "replay": {
+      "type": "agent",
+      "title": "Second playtest",
+      "agent": "playtester",
+      "decide": [
+        "APPROVE",
+        "REQUEST_CHANGES"
+      ],
+      "prompt": "Second playtest: confirm each BLOCKING and MAJOR finding in docs/playtest-report.md is resolved and nothing new broke. Append a \"Round 2\" section.",
+      "next": {
+        "on": {
+          "REQUEST_CHANGES": "polish-2"
+        },
+        "default": "docs"
+      }
+    },
+    "polish-2": {
+      "type": "agent",
+      "title": "Final fixes",
+      "agent": "game-engineer",
+      "prompt": "Fix the findings in the \"Round 2\" section of docs/playtest-report.md, with playtest scenarios.\n\n{{state.replay}}",
+      "next": "last-gates"
+    },
+    "last-gates": {
+      "type": "gate",
+      "title": "Console & playtests",
+      "gates": [
+        "web-console",
+        "playtest"
+      ],
+      "maxFailures": 1,
+      "next": {
+        "on": {
+          "pass": "docs",
+          "fail": "failed",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "docs": {
+      "type": "agent",
+      "title": "How to play",
+      "agent": "game-designer",
+      "effort": "low",
+      "prompt": "Write README.md: what the game is, how to open it (open index.html, or serve the folder: npx http-server .), controls, rules and scoring, URL options (?seed, ?autostart), how to run the playtests, and known limitations from docs/playtest-report.md. Report its first paragraph.",
+      "next": "done"
+    },
+    "done": {
+      "type": "end",
+      "title": "Shipped",
+      "status": "success"
+    },
+    "failed": {
+      "type": "end",
+      "title": "Stopped: checks still failing",
+      "status": "failed"
+    }
+  }
+}

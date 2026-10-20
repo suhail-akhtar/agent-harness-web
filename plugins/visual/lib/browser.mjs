@@ -90,7 +90,7 @@ const keyOf = (a) => Object.keys(a).find((k) => k !== 'hold' && k !== 'timeout' 
  *   | {click: selector | [x, y]} | {move: [x, y]} | {drag: [[x1, y1], [x2, y2]]} | {scroll: dy}
  *   | {eval: js} | {waitFor: js, timeout?: ms} | {screenshot: label}]
  */
-export async function runPage({ root, file = 'index.html', query = '', viewport = { width: 1280, height: 720 }, actions = [], evaluate, screenshot = true, fullPage = false, waitMs = 1000, timeoutMs = 90_000, signal }) {
+export async function runPage({ root, file = 'index.html', query = '', viewport = { width: 1280, height: 720 }, actions = [], evaluate, save, screenshot = true, fullPage = false, waitMs = 1000, timeoutMs = 90_000, signal }) {
   const srv = await serveDir(root);
   const out = { url: '', title: '', console: [], errors: [], blocked: [], missing: [], evals: [], shots: [], result: undefined };
   try {
@@ -144,6 +144,7 @@ export async function runPage({ root, file = 'index.html', query = '', viewport 
         }
         out.title = await page.title().catch(() => '');
         if (evaluate) out.result = await safeEval(page, evaluate);
+        if (save) out.saved = await saveFromPage(page, save);
         if (screenshot && !out.shots.length) out.shots.push({ label: 'final', png: await page.screenshot({ fullPage }) });
         for (const s of out.shots) s.stats = await frameStats(ctx, s.png);
         return out;
@@ -155,6 +156,36 @@ export async function runPage({ root, file = 'index.html', query = '', viewport 
   } finally {
     await srv.close();
   }
+}
+
+const MAX_SAVE = 50 * 1024 * 1024;
+
+/**
+ * Writes what a page expression returns to a file the caller already resolved
+ * inside the workspace: a data: URL, a base64 string, or plain text.
+ * For browser-only exporters (GLTFExporter, canvas.toDataURL, Blob output).
+ */
+async function saveFromPage(page, { file, js, encoding = 'auto' }) {
+  let v;
+  try {
+    v = await page.evaluate(async (code) => {
+      let r = await (0, eval)(code);
+      if (r instanceof Blob) r = new Uint8Array(await r.arrayBuffer());
+      if (r instanceof ArrayBuffer) r = new Uint8Array(r);
+      if (ArrayBuffer.isView(r)) { let s = ''; const b = new Uint8Array(r.buffer, r.byteOffset, r.byteLength); for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000)); return { b64: btoa(s) }; }
+      return typeof r === 'string' ? { str: r } : { str: JSON.stringify(r, null, 2) };
+    }, js);
+  } catch (e) { return { error: `save expression failed: ${String(e?.message ?? e).split('\n')[0].slice(0, 300)}` }; }
+  let buf;
+  const dataUrl = v.str && /^data:[^;,]+(;base64)?,/.exec(v.str);
+  if (v.b64 !== undefined) buf = Buffer.from(v.b64, 'base64');
+  else if (dataUrl) buf = dataUrl[1] ? Buffer.from(v.str.slice(dataUrl[0].length), 'base64') : Buffer.from(decodeURIComponent(v.str.slice(dataUrl[0].length)));
+  else if (encoding === 'base64') buf = Buffer.from(v.str, 'base64');
+  else buf = Buffer.from(v.str ?? '', 'utf8');
+  if (buf.length > MAX_SAVE) return { error: `save output is ${buf.length} bytes (limit ${MAX_SAVE})` };
+  await fsp.mkdir(path.dirname(file), { recursive: true });
+  await fsp.writeFile(file, buf);
+  return { bytes: buf.length };
 }
 
 async function safeEval(page, js) {
@@ -201,6 +232,7 @@ export function describePage(r) {
   if (r.blocked.length) lines.push(`Blocked (pages run offline - put libraries in the workspace, e.g. with add_library):\n${r.blocked.map((b) => `  ${b}`).join('\n')}`);
   for (const e of r.evals) lines.push(`eval ${e.js} => ${e.value}`);
   if (r.result !== undefined) lines.push(`Result: ${r.result}`);
+  if (r.saved) lines.push(r.saved.error ? `Save failed: ${r.saved.error}` : `Saved ${r.saved.label}: ${r.saved.bytes} bytes`);
   for (const s of r.shots) lines.push(`Screenshot "${s.label}": ${s.stats.blank ? 'BLANK (one colour - nothing was drawn)' : `${s.stats.colours} colours, contrast ${s.stats.stddev}`}`);
   return lines.join('\n');
 }

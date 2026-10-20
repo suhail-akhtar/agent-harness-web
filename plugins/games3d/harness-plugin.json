@@ -1,0 +1,9 @@
+{
+  "name": "games3d",
+  "version": "1.0.0",
+  "description": "Browser games (2D canvas or Three.js) and 3D models: design, build, play-test in a real headless browser, independent playtest/art review, glTF export with validation. Needs the visual plugin.",
+  "main": "index.mjs",
+  "agents": "agents",
+  "skills": "skills",
+  "workflows": "workflows"
+}
