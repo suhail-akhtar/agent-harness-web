@@ -8,6 +8,7 @@ import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { findBinary, missingMessage } from './binaries.mjs';
 import { runPage } from './browser.mjs';
 
 export const OFFICE = ['.docx', '.doc', '.odt', '.rtf', '.pptx', '.ppt', '.odp', '.xlsx', '.xls', '.ods'];
@@ -24,7 +25,17 @@ async function offlinePrefix() {
 }
 export async function convertersOffline() { return !!(await offlinePrefix()); }
 
-async function run(cmd, args, { timeoutMs = 120_000, signal, cwd } = {}) {
+const found = new Map();
+/** A converter's path, found once; throws with how to install it when it is missing. */
+function tool(name) {
+  if (!found.has(name)) found.set(name, findBinary(name));
+  const p = found.get(name);
+  if (!p) { found.delete(name); throw new Error(missingMessage(name)); }
+  return p;
+}
+
+async function run(name, args, { timeoutMs = 120_000, signal, cwd } = {}) {
+  let cmd = ['soffice', 'pdfinfo', 'pdftoppm', 'pdftotext', 'pandoc'].includes(name) ? tool(name) : name;
   const pre = process.env.HARNESS_RENDER_NETWORK === 'on' ? null : await offlinePrefix();
   if (pre) { args = [...pre.slice(1), cmd, ...args]; cmd = pre[0]; }
   return new Promise((resolve) => {

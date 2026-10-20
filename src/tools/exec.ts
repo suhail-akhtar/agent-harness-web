@@ -76,7 +76,9 @@ async function background(command: string, ctx: ToolContext): Promise<ToolOutcom
   if (ctx.host.shell === 'powershell') return { content: 'run_in_background is not supported on Windows hosts; use Start-Process in a normal command.', is_error: true };
   const id = Math.random().toString(36).slice(2, 8);
   const log = `.harness/bg/${id}.log`;
-  const script = `mkdir -p .harness/bg && (setsid nohup bash -c ${shq(command)} > ${log} 2>&1 < /dev/null & echo $!)`;
+  // setsid gives it its own session where it exists; Git Bash on Windows has only nohup.
+  const detach = `(command -v setsid >/dev/null 2>&1 && exec setsid nohup bash -c ${shq(command)} || exec nohup bash -c ${shq(command)})`;
+  const script = `mkdir -p .harness/bg && (${detach} > ${log} 2>&1 < /dev/null & echo $!)`;
   const r = await ctx.host.exec(script, { timeoutMs: 15_000, signal: ctx.signal });
   const pid = r.stdout.trim().split('\n').pop();
   if (r.code !== 0 || !pid) return { content: `could not start: ${r.stderr.trim() || r.stdout.trim()}`, is_error: true };

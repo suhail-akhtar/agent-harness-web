@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import type { ToolDisplay } from '../core/types.ts';
 
@@ -23,6 +25,30 @@ export function scrubbedEnv(extra: Record<string, string> = {}): NodeJS.ProcessE
     env[k] = v;
   }
   return { ...env, ...extra };
+}
+
+export interface ShellChoice { kind: 'bash' | 'powershell'; path: string; why: string }
+
+/**
+ * The shell commands run in. On Windows: Git Bash when it is installed (the quality
+ * gates, background commands and models' habits are bash), else PowerShell (and
+ * the model is told so). Never C:\Windows\System32\bash.exe: that is WSL, which
+ * runs inside Linux and sees the Windows workspace at a different path.
+ * HARNESS_SHELL=bash|powershell|<path to bash.exe> overrides.
+ */
+export function resolveShell(platform: string = process.platform, env: NodeJS.ProcessEnv = process.env, exists: (p: string) => boolean = existsSync): ShellChoice {
+  if (platform !== 'win32') return { kind: 'bash', path: 'bash', why: 'default' };
+  const want = env.HARNESS_SHELL?.trim();
+  if (want && /powershell/i.test(want)) return { kind: 'powershell', path: 'powershell.exe', why: 'HARNESS_SHELL' };
+  if (want && want !== 'bash' && exists(want)) return { kind: 'bash', path: want, why: 'HARNESS_SHELL' };
+  const roots = [env.ProgramFiles, env['ProgramFiles(x86)'], env.ProgramW6432, env.LOCALAPPDATA && path.win32.join(env.LOCALAPPDATA, 'Programs'), 'C:\\Program Files'].filter(Boolean) as string[];
+  const candidates = [
+    ...roots.map((r) => path.win32.join(r, 'Git', 'bin', 'bash.exe')),
+    ...(env.Path ?? env.PATH ?? '').split(';').filter((d) => d && !/\\system32\b/i.test(d) && !/WindowsApps/i.test(d)).map((d) => path.win32.join(d, 'bash.exe')),
+  ];
+  const found = candidates.find((c) => exists(c));
+  if (found) return { kind: 'bash', path: found, why: 'Git Bash' };
+  return { kind: 'powershell', path: 'powershell.exe', why: 'no Git Bash found (install Git for Windows for bash)' };
 }
 
 export interface ImageData { media_type: string; data: string }
@@ -110,19 +136,23 @@ export class LocalHost implements ToolHost {
   root: string;
   displayRoot: string;
   platform = process.platform;
-  shell = process.platform === 'win32' ? 'powershell' : 'bash';
+  shell: string;
+  private shellPath: string;
   sandboxed = false;
   networkPolicy = 'full' as const;
   constructor(root: string) {
     this.root = root;
     this.displayRoot = root;
+    const sh = resolveShell();
+    this.shell = sh.kind;
+    this.shellPath = sh.path;
   }
   async spawnStream(command: string, args: string[], env: Record<string, string>): Promise<ChildProcessWithoutNullStreams> {
     return spawn(command, args, { cwd: this.root, env: scrubbedEnv(env), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
   }
   exec(cmd: string, opts: ExecOptions): Promise<ExecResult> {
     const o = { ...opts, cwd: opts.cwd ?? this.root, env: opts.env ?? scrubbedEnv() };
-    if (process.platform === 'win32') return run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', cmd], o);
-    return run('bash', ['-c', cmd], o);
+    if (this.shell === 'powershell') return run(this.shellPath, ['-NoProfile', '-NonInteractive', '-Command', cmd], o);
+    return run(this.shellPath, ['-c', cmd], o);
   }
 }

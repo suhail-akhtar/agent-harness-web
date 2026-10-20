@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { LocalHost } from '../runtime/host.ts';
+import { LocalHost, resolveShell } from '../runtime/host.ts';
 import { toolByName } from '../tools/index.ts';
 import type { FileStamp, ToolContext } from '../tools/types.ts';
 
@@ -67,7 +67,7 @@ async function loop(): Promise<void> {
   let backoff = 1000;
   while (true) {
     try {
-      const res = await post('/api/companion/poll', { info: { platform: process.platform, shell: process.platform === 'win32' ? 'powershell' : 'bash', root: dir, version: '0.1.0' } }, AbortSignal.timeout(60_000));
+      const res = await post('/api/companion/poll', { info: { platform: process.platform, shell: resolveShell().kind, root: dir, version: '0.1.0' } }, AbortSignal.timeout(60_000));
       if (res.status === 401) { console.error('The server rejected this token. Create a new companion in the web app.'); process.exit(1); }
       if (res.status === 200) handle(await res.json() as Job).catch((e) => console.error(e));
       else if (res.status !== 204) throw new Error(`poll failed: ${res.status}`);

@@ -27,7 +27,15 @@ npm start                     # http://127.0.0.1:4310, prints an access token
 
 Node 22.18+ is required; it runs the TypeScript directly. Docker is optional: without it, work on your own computer through the companion, or in a server folder.
 
-**On Windows or macOS, run it in Docker** (`docker/Dockerfile.harness`: Node 22, bash, LibreOffice, poppler, pandoc and Chromium, so every visual tool works with nothing installed on the machine):
+**On Windows, natively.** The npm scripts are plain `node` launchers (`scripts/run.mjs`, `scripts/test.mjs`), so they work in PowerShell and cmd as they do in bash. What to install:
+
+- [Git for Windows](https://git-scm.com/download/win). The harness runs the model's commands in its **Git Bash**. It never uses `C:\Windows\System32\bash.exe`, which is WSL and sees the workspace at a different path. Without Git Bash, commands run in PowerShell; the model is told so, background commands are refused, and the quality gates fail with a message saying they need bash. Set `HARNESS_SHELL` to the path of a `bash.exe` to pick another one.
+- For `render`: `winget install TheDocumentFoundation.LibreOffice oschwartz10612.Poppler JohnMacFarlane.Pandoc`. They are found in their install folders, even when they are not on the PATH. A missing one is reported with the command that installs it, and `HARNESS_SOFFICE`, `HARNESS_PDFTOPPM` and the like point at a binary directly. Linux's no-network namespace for the converters (`unshare`) does not exist on Windows, so there they run with the machine's network.
+- For `browser`: `npx playwright install chromium`, or set `HARNESS_CHROMIUM`.
+
+These choices are covered by tests with simulated Windows paths (`test/windows.test.ts`); the suite has not yet been run on a real Windows machine.
+
+**Or run it in Docker** (`docker/Dockerfile.harness`: Node 22, bash, LibreOffice, poppler, pandoc and Chromium, so every visual tool works with nothing installed on the machine):
 
 ```bash
 docker compose build
@@ -332,6 +340,8 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 | `HARNESS_OTEL_ENDPOINT` / `HARNESS_OTEL_HEADERS` | | OTLP/HTTP trace export. |
 | `HARNESS_RENDER_NETWORK` | off | `on` lets document converters reach the network (they run in an empty network namespace otherwise). |
 | `HARNESS_CHROMIUM` | auto | Chromium for the render and browser tools. |
+| `HARNESS_SOFFICE`, `HARNESS_PDFTOPPM`, `HARNESS_PDFTOTEXT`, `HARNESS_PDFINFO`, `HARNESS_PANDOC` | auto | Paths to the document converters (searched on the PATH and in the usual install folders). |
+| `HARNESS_SHELL` | auto | Windows: `powershell`, or the path of a `bash.exe` (default: Git Bash, else PowerShell). |
 | `HARNESS_SHELL_WRITE_GUARD` | on | `off` allows shell file writes. |
 | `HARNESS_SANDBOX_IMAGE`, `_MEMORY`, `_CPUS`, `_IDLE_MS` | `harness-sandbox:latest`, `4g`, `2`, 30 min | |
 | `HARNESS_PRICING_JSON` | | Override prices per model. |
@@ -350,4 +360,5 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
   - Blender or Godot integration (3D is Three.js in the headless browser; neither binary was available to test).
 - **Not tested here:**
   - the full sandbox image (this environment's proxy blocks Debian packages, so tests used a plain Node image);
+  - a real Windows machine (the Windows choices are tested with simulated paths, and the Docker setup ran 80/80 on Windows before the review fixes);
   - prices, which come from the providers' pages on 2026-10-19 and can change.

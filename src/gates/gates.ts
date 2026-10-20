@@ -12,6 +12,11 @@ export interface GateRun extends GateResult { name: string; ms: number }
 
 export async function runGates(reg: Registry, host: ToolHost, names: string[] | 'applicable', signal: AbortSignal): Promise<GateRun[]> {
   const out: GateRun[] = [];
+  // The gates are bash commands. Under PowerShell their probes fail, so every gate
+  // would read as "does not apply" and an unchecked workspace would pass.
+  if (host.shell === 'powershell' && reg.gates.size) {
+    return [{ name: 'gates', pass: false, ms: 0, summary: 'the quality gates need bash, and this host runs PowerShell', details: 'Install Git for Windows (it brings Git Bash) and restart the harness, or set HARNESS_SHELL to the path of bash.exe.' }];
+  }
   const all = [...reg.gates.values()];
   const chosen = names === 'applicable' ? all : all.filter((g) => names.includes(g.name));
   if (names !== 'applicable') for (const n of names) if (!reg.gates.has(n)) out.push({ name: n, pass: false, summary: 'no such gate', ms: 0 });
