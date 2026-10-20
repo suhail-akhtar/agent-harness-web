@@ -1,3 +1,4 @@
+import { splitToolImages } from './images.ts';
 import type { Block, Message } from '../core/types.ts';
 import type { Provider, ProviderRequest, ProviderResponse, StopKind } from './types.ts';
 import { ProviderError } from './types.ts';
@@ -98,7 +99,8 @@ export class DeepSeekProvider implements Provider {
   }
 }
 
-export function toChat(m: Message): unknown[] {
+export function toChat(msg: Message): unknown[] {
+  const m = splitToolImages(msg);
   if (m.role === 'assistant') {
     if (m.raw?.provider === 'deepseek') return [m.raw.payload];
     // A message from another provider: no reasoning to replay.

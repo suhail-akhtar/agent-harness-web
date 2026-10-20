@@ -6,7 +6,7 @@ import { validateWorkflow } from '../src/graph/validate.ts';
 import { LocalHost } from '../src/runtime/host.ts';
 import { tempDir } from './helpers.ts';
 
-function stubHost(opts: { reports?: Record<string, string[]>; gates?: boolean[]; approvals?: { approved: boolean; feedback?: string }[] }) {
+function stubHost(opts: { reports?: Record<string, string[]>; gates?: boolean[]; approvals?: { approved: boolean; feedback?: string }[]; reasons?: Record<string, string[]> }) {
   const prompts: { label: string; prompt: string }[] = [];
   const saved: string[] = [];
   const reports = Object.fromEntries(Object.entries(opts.reports ?? {}).map(([k, v]) => [k, [...v]]));
@@ -14,7 +14,7 @@ function stubHost(opts: { reports?: Record<string, string[]>; gates?: boolean[];
   const approvals = [...(opts.approvals ?? [])];
   const host: WorkflowHost = {
     host: async () => new LocalHost(await tempDir()),
-    runAgent: async (a) => { prompts.push({ label: a.label, prompt: a.prompt }); return { report: reports[a.label]?.shift() ?? `${a.label} done`, reason: 'done', cost: 0.01 }; },
+    runAgent: async (a) => { prompts.push({ label: a.label, prompt: a.prompt }); return { report: reports[a.label]?.shift() ?? `${a.label} done`, reason: opts.reasons?.[a.label]?.shift() ?? 'done', cost: 0.01 }; },
     runGates: async () => { const pass = gates.shift() ?? true; return [{ name: 'tests', pass, summary: pass ? 'ok' : '2 failing', details: pass ? undefined : 'expected 3, got 2' }]; },
     approve: async () => approvals.shift() ?? { approved: true },
     emit: () => {},
@@ -129,4 +129,12 @@ test('a step summary line skips headings and labels', async () => {
   assert.equal(firstLine('## Report\n\n**Built the API** in src/.'), 'Built the API in src/.');
   assert.equal(firstLine('Report:\n---\nAll tests pass.'), 'All tests pass.');
   assert.equal(firstLine('# Only a heading'), '# Only a heading');
+});
+
+test('a step that runs out of steps goes on to the gates, and the fix step is told it was unfinished', async () => {
+  const { host, prompts } = stubHost({ reasons: { build: ['max_steps'] }, reports: { build: ['Did tasks 1-5 of 9.'] }, gates: [false, true] });
+  const run = await new WorkflowRunner(wf(), host, newRun(wf(), 's', { request: 'X' })).execute(new AbortController().signal);
+  assert.deepEqual(run.history.slice(0, 4).map((h) => `${h.node}:${h.outcome ?? ''}`), ['build:incomplete', 'gates:fail', 'fix:', 'gates:pass']);
+  assert.match(prompts.find((p) => p.label === 'fix')!.prompt, /ran out of steps[\s\S]*tasks 1-5 of 9[\s\S]*Quality gates failed/);
+  assert.equal(run.state.__incomplete, undefined);
 });

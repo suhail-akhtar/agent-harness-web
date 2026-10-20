@@ -12,6 +12,9 @@ import { validateWorkflow } from './validate.ts';
 const SUMMARY_MAX = 4000;
 const MAX_STEPS = 200;
 
+/** state key holding an unfinished step's note until the next gate reports. */
+const INCOMPLETE = '__incomplete';
+
 export function render(template: string, run: RunRecord): string {
   return template.replace(/\{\{\s*(input|state)\.([a-zA-Z0-9_-]+)\s*\}\}|\{\{\s*feedback\s*\}\}/g, (m, scope?: string, key?: string) => {
     if (!scope) return run.feedback || '(none)';
@@ -139,9 +142,15 @@ export class WorkflowRunner {
         if (this.w.maxAgentRuns && run.agentRuns >= this.w.maxAgentRuns) return { failed: true, summary: `agent-run limit (${this.w.maxAgentRuns}) reached` };
         run.agentRuns++;
         const decide = node.decide?.length ? `\n\nEnd your report with exactly one of these words on its own line: ${node.decide.join(' | ')}.` : '';
-        const r = await this.host.runAgent({ agent: node.agent ?? 'general', label: id, prompt: render(node.prompt, run) + decide, model: node.model, effort: node.effort, signal });
+        const r = await this.host.runAgent({ agent: node.agent ?? 'general', label: id, prompt: render(node.prompt, run) + decide, model: node.model, effort: node.effort, maxSteps: node.maxSteps, signal });
         run.cost += r.cost;
         run.state[id] = r.report.slice(0, SUMMARY_MAX);
+        // Out of steps is unfinished work, not a failure: the next step (a gate) judges it.
+        if (r.reason === 'max_steps') {
+          run.feedback = `The "${id}" step ran out of steps before it finished. Its last report:\n${r.report.slice(-3000)}`;
+          run.state[INCOMPLETE] = run.feedback;
+          return { outcome: 'incomplete', summary: r.report };
+        }
         if (r.reason !== 'done' && r.reason !== 'max_tokens') return { failed: true, summary: `agent stopped: ${r.reason}` };
         const outcome = decideFrom(r.report.slice(-600), node.decide) ?? decideFrom(r.report, node.decide);
         return { outcome, summary: r.report };
@@ -151,9 +160,11 @@ export class WorkflowRunner {
         const failed = results.filter((g) => !g.pass && g.severity !== 'advisory');
         const lines = results.map((g) => `${g.pass ? 'PASS' : g.severity === 'advisory' ? 'WARN' : 'FAIL'} ${g.name}: ${g.summary}`);
         run.state[id] = lines.join('\n');
-        if (!failed.length) { run.feedback = ''; return { outcome: 'pass', summary: `${results.length} gate(s) passed\n${lines.join('\n')}` }; }
+        if (!failed.length) { run.feedback = ''; delete run.state[INCOMPLETE]; return { outcome: 'pass', summary: `${results.length} gate(s) passed\n${lines.join('\n')}` }; }
         const fails = (run.counts[`${id}:fail`] = (run.counts[`${id}:fail`] ?? 0) + 1);
-        run.feedback = `Quality gates failed:\n${failed.map((g) => `## ${g.name}: ${g.summary}\n${(g.details ?? '').slice(0, 3000)}`).join('\n\n')}`;
+        const unfinished = run.state[INCOMPLETE] ? `${run.state[INCOMPLETE]}\n\n` : '';
+        delete run.state[INCOMPLETE];
+        run.feedback = `${unfinished}Quality gates failed:\n${failed.map((g) => `## ${g.name}: ${g.summary}\n${(g.details ?? '').slice(0, 3000)}`).join('\n\n')}`;
         if (node.maxFailures && fails >= node.maxFailures) return { outcome: 'exhausted', summary: `${failed.length} gate(s) still failing after ${fails} attempt(s)\n${lines.join('\n')}` };
         return { outcome: 'fail', summary: `${failed.length} gate(s) failed: ${failed.map((g) => g.name).join(', ')}\n${lines.join('\n')}` };
       }

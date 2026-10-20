@@ -36,7 +36,7 @@ export function fromHistory(history: Message[]): Item[] {
       for (const b of m.content) {
         if (b.type === 'tool_result') {
           const t = tools.get(b.tool_use_id);
-          if (t) { t.result = b.content; t.isError = !!b.is_error; t.running = false; lastTool = t; }
+          if (t) { t.result = b.content; t.isError = !!b.is_error; t.running = false; if (b.images?.length) t.images = b.images; lastTool = t; }
         } else if (b.type === 'image') {
           if (lastTool) (lastTool.images ??= []).push({ media_type: b.media_type, data: b.data });
         } else if (b.type === 'text') {

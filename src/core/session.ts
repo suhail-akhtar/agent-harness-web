@@ -452,7 +452,7 @@ export class Session {
    * Runs a named agent in a fresh context: a chat sub-agent, or a workflow's
    * agent node. One cache key per agent kind, so sibling runs share a prefix.
    */
-  async runAgent(a: { agent: string; prompt: string; signal: AbortSignal; label?: string; description?: string; model?: string; effort?: Effort; allowTodos?: boolean }): Promise<{ report: string; reason: string; cost: number }> {
+  async runAgent(a: { agent: string; prompt: string; signal: AbortSignal; label?: string; description?: string; model?: string; effort?: Effort; maxSteps?: number; allowTodos?: boolean }): Promise<{ report: string; reason: string; cost: number }> {
     const host = await this.getHost();
     const settings = await this.getSettings(host);
     const tb = await this.getToolbox(host);
@@ -468,7 +468,7 @@ export class Session {
     const sub = new Agent({
       name, model, provider: this.deps.registry.provider(model), effort,
       system: SUBAGENT_PROMPT, tools, host, settings,
-      cacheKey: `hw-${this.meta.id}-${def.name}`, maxSteps: Math.min(a.allowTodos ? 120 : 60, settings.maxSteps), readFiles: new Map<string, FileStamp>(),
+      cacheKey: `hw-${this.meta.id}-${def.name}`, maxSteps: Math.min(a.maxSteps ?? (a.allowTodos ? 150 : 60), settings.maxSteps), readFiles: new Map<string, FileStamp>(),
       inProcessHooks: this.deps.registry.hooks,
       beforeWrite: this.checkpoints ? (p: string) => this.checkpoints!.before(p) : undefined,
     }, this.hooksFor(name, (c) => { cost += c; }));
@@ -510,11 +510,21 @@ export class Session {
     return JSON.parse(await fs.readFile(path.join(this.runsDir(), `${runId}.json`), 'utf8')) as RunRecord;
   }
 
-  private async saveRun(run: RunRecord): Promise<void> {
-    await fs.mkdir(this.runsDir(), { recursive: true });
-    const f = path.join(this.runsDir(), `${run.id}.json`);
-    await fs.writeFile(`${f}.tmp`, JSON.stringify(run, null, 1));
-    await fs.rename(`${f}.tmp`, f);
+  private runWrites = new Map<string, Promise<void>>();
+
+  /** Saves are queued per run: parallel branches save at the same moment. */
+  private saveRun(run: RunRecord): Promise<void> {
+    const body = JSON.stringify(run, null, 1);
+    const prev = this.runWrites.get(run.id) ?? Promise.resolve();
+    const next = prev.catch(() => {}).then(async () => {
+      await fs.mkdir(this.runsDir(), { recursive: true });
+      const f = path.join(this.runsDir(), `${run.id}.json`);
+      const tmp = `${f}.${crypto.randomUUID().slice(0, 8)}.tmp`;
+      await fs.writeFile(tmp, body);
+      await fs.rename(tmp, f);
+    });
+    this.runWrites.set(run.id, next);
+    return next;
   }
 
   /** Runs marked running when the server stopped become "interrupted" (resumable). */

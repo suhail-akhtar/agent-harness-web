@@ -323,3 +323,36 @@ test('a workspace workflow runs through the session; its approval shows only fil
   assert.deepEqual(run!.history.map((x) => `${x.node}:${x.outcome ?? ''}`), ['ok:approve', 'end:']);
   await h.close();
 });
+
+test('parallel branches saving at the same moment do not break the run record', async () => {
+  const h = await createHarness({ dataDir: await tempDir() });
+  const ws = await tempDir();
+  await fs.mkdir(path.join(ws, '.harness', 'workflows'), { recursive: true });
+  const branches = Array.from({ length: 6 }, (_, i) => `b${i}`);
+  await fs.writeFile(path.join(ws, '.harness', 'workflows', 'fan.json'), JSON.stringify({
+    name: 'fan', description: 'd', start: 'p',
+    nodes: { p: { type: 'parallel', branches, next: 'end' }, ...Object.fromEntries(branches.map((b) => [b, { type: 'gate', gates: 'applicable' }])), end: { type: 'end' } },
+  }));
+  const s = await h.sessions.create({ model: 'deepseek-flash', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: ws } });
+  const ended = new Promise<void>((r) => s.subscribe(0, ({ event }) => { if (event.kind === 'turn_end' && !event.agent) r(); }));
+  await s.startWorkflow('fan', {});
+  await ended;
+  const [run] = await s.listRuns();
+  assert.equal(run!.status, 'succeeded', run!.error ?? '');
+  assert.equal(run!.history.filter((x) => x.outcome === 'pass').length, 6);
+  await h.close();
+});
+
+test('tool images ride on their result, and clearing old results drops their images', async () => {
+  const { makeAgent } = await import('./helpers.ts');
+  const root = await tempDir();
+  await fs.writeFile(path.join(root, 'shot.png'), Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8ffff3f0005fe02fea7d6a4c80000000049454e44ae426082', 'hex'));
+  const steps = Array.from({ length: 17 }, (_, i) => ({ calls: [{ name: 'read', input: { path: 'shot.png' } }], usage: { input: i < 16 ? 1000 : 120_000 } }));
+  const h = await makeAgent([...steps, { text: 'ok' }], { root });
+  h.agent.append({ role: 'user', content: [{ type: 'text', text: 'go' }] });
+  await h.agent.run(new AbortController().signal);
+  const resultsWithImages = (msgs: typeof h.persisted) => msgs.flatMap((m) => m.content).filter((b) => b.type === 'tool_result' && b.images?.length).length;
+  assert.equal(h.persisted.flatMap((m) => m.content).filter((b) => b.type === 'image').length, 0, 'no loose image blocks');
+  assert.equal(resultsWithImages(h.persisted), 17, 'the stored history keeps every image');
+  assert.equal(resultsWithImages(h.agent.messages), 6, 'the live context keeps the newest six');
+});

@@ -7,6 +7,7 @@ import { createHarness } from './kernel/harness.ts';
 
 // Headless runs: one prompt, streamed to the terminal, for scripts and benchmarks.
 //   npm run cli -- --model deepseek-flash --runtime docker|local [--dir path] [--mode bypass] "task"
+//   npm run cli -- --data dir --session <id> --resume <runId>
 
 function arg(name: string, fallback?: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -35,7 +36,7 @@ export function printEvent(e: HarnessEvent, quiet = false): void {
 async function main() {
   const prompt = process.argv.slice(2).filter((a, i, all) => !a.startsWith('--') && !all[i - 1]?.startsWith('--')).join(' ');
   const workflow = arg('workflow');
-  if (!prompt && !workflow) { console.error('usage: npm run cli -- [--model id] [--runtime docker|local] [--dir path] [--mode default|acceptEdits|plan|bypass] "task"'); process.exit(2); }
+  if (!prompt && !workflow && !arg('resume')) { console.error('usage: npm run cli -- [--model id] [--runtime docker|local] [--dir path] [--mode default|acceptEdits|plan|bypass] "task"'); process.exit(2); }
   const dataDir = path.resolve(arg('data', path.join(os.tmpdir(), 'harness-cli'))!);
   const runtime = (arg('runtime', 'local') === 'docker' ? 'docker' : 'local') as 'docker' | 'local';
   const dir = arg('dir');
@@ -45,11 +46,15 @@ async function main() {
     plugins: [path.join(appRoot, 'plugins'), ...(process.env.HARNESS_PLUGINS || '').split(path.delimiter).filter(Boolean)],
     mcp: process.env.HARNESS_MCP_CONFIG || undefined,
   });
-  const s = await h.sessions.create({
+  // --resume <runId> --session <id> continues a stopped workflow run from the step it was in.
+  const resume = arg('resume');
+  const existing = arg('session');
+  const s = existing ? h.sessions.get(existing) : await h.sessions.create({
     model: arg('model', 'deepseek-flash')!,
     mode: (arg('mode', 'bypass') as 'bypass'),
     runtime: { kind: runtime, network: arg('network') === 'full' ? 'full' : 'none', ...(dir ? { path: path.resolve(dir) } : {}) },
   });
+  if (!s) { console.error(`no session ${existing} in ${dataDir}`); process.exit(2); }
   console.log(`session ${s.meta.id} workspace ${s.workspace}`);
   const done = new Promise<void>((resolve) => {
     s.subscribe(0, ({ event }) => {
@@ -61,7 +66,9 @@ async function main() {
       if (event.kind === 'turn_end' && !event.agent) resolve();
     });
   });
-  if (workflow) {
+  if (resume) {
+    await s.resumeRun(resume);
+  } else if (workflow) {
     // --input key=value (repeatable); the prompt text, if any, becomes input.request.
     const input: Record<string, string> = {};
     process.argv.forEach((a, i) => { if (a === '--input') { const [k, ...v] = (process.argv[i + 1] ?? '').split('='); if (k) input[k] = v.join('='); } });

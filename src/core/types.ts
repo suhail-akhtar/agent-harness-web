@@ -5,7 +5,8 @@ export type ProviderId = string;
 
 export interface TextBlock { type: 'text'; text: string }
 export interface ToolUseBlock { type: 'tool_use'; id: string; name: string; input: Record<string, unknown>; parseError?: string }
-export interface ToolResultBlock { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean }
+/** Images a tool produced travel with its result, so clearing the result clears them too. */
+export interface ToolResultBlock { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean; images?: { media_type: string; data: string }[] }
 /** Model reasoning. `text` is for display only; replay uses the provider-native `raw` on the message. */
 export interface ReasoningBlock { type: 'reasoning'; text: string }
 

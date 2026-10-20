@@ -81,6 +81,8 @@ const RESULT_PREVIEW = 8000;
 const UI_IMAGE_MAX = 1_500_000;
 /** Tool results kept verbatim when clearing old ones. */
 const CLEAR_KEEP = 6;
+/** Rough prompt cost of one attached image (a 1000px-wide render is ~1-1.5k tokens). */
+const IMAGE_TOKENS = 1200;
 const CLEARED = '[Old tool output cleared to keep the context lean. Run the tool again if you need it.]';
 
 export class Agent {
@@ -175,15 +177,9 @@ export class Agent {
       }
       // Tool results first (providers require it), then any images they
       // produced, then harness notes - all appended, never inserted earlier.
-      const content: Block[] = results.map((r) => r.block);
+      const content: Block[] = results.map((r) => (r.images?.length && this.cfg.model.vision ? { ...r.block, images: r.images } : r.block));
       for (const r of results) {
-        if (!r.images?.length) continue;
-        if (!this.cfg.model.vision) {
-          content.push({ type: 'text', text: `<system-reminder>${r.label} produced ${r.images.length} image(s), but this model cannot view images.</system-reminder>` });
-          continue;
-        }
-        content.push({ type: 'text', text: `Image(s) from ${r.label}:` });
-        for (const img of r.images) content.push({ type: 'image', media_type: img.media_type, data: img.data });
+        if (r.images?.length && !this.cfg.model.vision) content.push({ type: 'text', text: `<system-reminder>${r.label} produced ${r.images.length} image(s), but this model cannot view images.</system-reminder>` });
       }
       for (const r of this.reminders(calls)) content.push({ type: 'text', text: `<system-reminder>${r}</system-reminder>` });
       for (const t of this.hooks.takeQueuedUserText()) {
@@ -383,7 +379,7 @@ export class Agent {
       if (b.type !== 'tool_result' || b.content === CLEARED) return;
       const n = names.get(b.tool_use_id) ?? '';
       if (n === 'todo_write' || n === 'agent' || n === 'skill') return;
-      positions.push({ mi, bi, tokens: Math.ceil(b.content.length / 4) });
+      positions.push({ mi, bi, tokens: Math.ceil(b.content.length / 4) + (b.images?.length ?? 0) * IMAGE_TOKENS });
     }));
     const old = positions.slice(0, Math.max(0, positions.length - CLEAR_KEEP)).filter((p) => p.tokens > 200);
     const total = old.reduce((a, p) => a + p.tokens, 0);
@@ -392,7 +388,7 @@ export class Agent {
       const m = this.messages[p.mi]!;
       // Copy, never mutate: the stored history keeps the original.
       const content = m.content.slice();
-      content[p.bi] = { ...(content[p.bi] as ToolResultBlock), content: CLEARED };
+      content[p.bi] = { ...(content[p.bi] as ToolResultBlock), content: CLEARED, images: undefined };
       this.messages[p.mi] = { ...m, content };
     }
     this.lastPromptTokens -= total;

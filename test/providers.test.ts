@@ -65,12 +65,19 @@ test('pricing: Haiku rate card by prompt size, DeepSeek peak hours', () => {
 
 test('images: each provider gets them in its own shape', async () => {
   const { anthropicBody } = await import('../src/providers/anthropic.ts');
-  const m: Message = { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'Image attached below.' }, { type: 'text', text: 'Image(s) from read:' }, { type: 'image', media_type: 'image/png', data: 'AAAA' }] };
-  const a = anthropicBody({ model: getModel('claude-haiku-5-5'), system: 'S', tools: [], messages: [m], effort: 'low' }, false) as { messages: { content: unknown[] }[] };
-  assert.deepEqual(a.messages[0]!.content[2], { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } });
-  const o = toInputItems(m) as { content?: unknown[] }[];
-  assert.deepEqual(o[1]!.content![1], { type: 'input_image', image_url: 'data:image/png;base64,AAAA' });
+  const img = { media_type: 'image/png', data: 'AAAA' };
+  const m: Message = { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'Image attached below.', images: [img] }, { type: 'text', text: 'note' }] };
+  // Claude: inside the tool result, so server-side clearing removes it with the result.
+  const a = anthropicBody({ model: getModel('claude-haiku-5-5'), system: 'S', tools: [], messages: [m], effort: 'low' }, false) as { messages: { content: { content: unknown }[] }[] };
+  assert.deepEqual(a.messages[0]!.content[0]!.content, [{ type: 'text', text: 'Image attached below.' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } }]);
+  // OpenAI and DeepSeek: text-only results, the image follows as user content.
+  const o = toInputItems(m) as { type?: string; output?: unknown; content?: unknown[] }[];
+  assert.equal(o[0]!.output, 'Image attached below.');
+  assert.deepEqual(o[1]!.content, [{ type: 'input_text', text: 'Image(s) from tool call t1:' }, { type: 'input_image', image_url: 'data:image/png;base64,AAAA' }, { type: 'input_text', text: 'note' }]);
   const d = toChat(m) as { role: string; content: unknown }[];
   assert.equal(d[0]!.role, 'tool');
   assert.deepEqual((d[1]!.content as unknown[])[1], { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } });
+  // Sessions saved before images moved onto results still convert.
+  const legacy: Message = { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'x' }, { type: 'text', text: 'Image(s) from read:' }, { type: 'image', ...img }] };
+  assert.deepEqual((toInputItems(legacy) as { content?: unknown[] }[])[1]!.content![1], { type: 'input_image', image_url: 'data:image/png;base64,AAAA' });
 });

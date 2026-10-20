@@ -1,3 +1,4 @@
+import { splitToolImages } from './images.ts';
 import type { Block, Message } from '../core/types.ts';
 import type { Provider, ProviderRequest, ProviderResponse, StopKind } from './types.ts';
 import { ProviderError } from './types.ts';
@@ -78,7 +79,8 @@ interface ResponseObject {
   };
 }
 
-export function toInputItems(m: Message): unknown[] {
+export function toInputItems(msg: Message): unknown[] {
+  const m = splitToolImages(msg);
   if (m.role === 'assistant') {
     if (m.raw?.provider === 'openai') return m.raw.payload as unknown[];
     const items: unknown[] = [];

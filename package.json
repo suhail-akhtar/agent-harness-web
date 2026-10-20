@@ -25,5 +25,14 @@
     "@types/node": "^26.6.5",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2"
+  },
+  "optionalDependencies": {
+    "docx": "9.13.0",
+    "playwright-core": "1.56.1",
+    "pptxgenjs": "4.0.1",
+    "three": "0.186.1"
+  },
+  "overrides": {
+    "image-size": "2.0.4"
   }
 }

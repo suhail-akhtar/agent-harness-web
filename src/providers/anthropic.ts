@@ -134,7 +134,13 @@ function toAnthropicMessage(m: Message) {
   for (const b of m.content) {
     if (b.type === 'text' && b.text) content.push({ type: 'text', text: b.text });
     else if (b.type === 'tool_use') content.push({ type: 'tool_use', id: b.id, name: b.name, input: b.input });
-    else if (b.type === 'tool_result') content.push({ type: 'tool_result', tool_use_id: b.tool_use_id, content: b.content || '(no output)', ...(b.is_error ? { is_error: true } : {}) });
+    else if (b.type === 'tool_result') {
+      // Images inside the result: server-side clearing then removes them with it.
+      const body = b.images?.length
+        ? [{ type: 'text', text: b.content || '(no output)' }, ...b.images.map((i) => ({ type: 'image', source: { type: 'base64', media_type: i.media_type, data: i.data } }))]
+        : b.content || '(no output)';
+      content.push({ type: 'tool_result', tool_use_id: b.tool_use_id, content: body, ...(b.is_error ? { is_error: true } : {}) });
+    }
     else if (b.type === 'image') content.push({ type: 'image', source: { type: 'base64', media_type: b.media_type, data: b.data } });
   }
   if (content.length === 0) content.push({ type: 'text', text: '(empty)' });
