@@ -1,0 +1,85 @@
+{
+  "page": "index.html",
+  "viewport": {
+    "width": 1024,
+    "height": 700
+  },
+  "scenarios": [
+    {
+      "name": "exposes window.__game with a state",
+      "expect": [
+        {
+          "eval": "typeof window.__game.state",
+          "op": "==",
+          "value": "string"
+        }
+      ]
+    },
+    {
+      "name": "Enter starts the game from the title screen",
+      "steps": [
+        {
+          "press": "Enter"
+        },
+        {
+          "wait": 300
+        }
+      ],
+      "expect": [
+        {
+          "eval": "window.__game.state",
+          "op": "changed"
+        }
+      ]
+    },
+    {
+      "name": "plays for three seconds with input and no errors",
+      "query": "?seed=7&autostart=1",
+      "steps": [
+        {
+          "press": "ArrowUp",
+          "hold": 600
+        },
+        {
+          "press": "ArrowLeft",
+          "hold": 400
+        },
+        {
+          "press": "Space"
+        },
+        {
+          "wait": 1500
+        }
+      ],
+      "expect": [
+        {
+          "eval": "typeof window.__game.score",
+          "op": "==",
+          "value": "number"
+        }
+      ]
+    },
+    {
+      "name": "P pauses",
+      "query": "?seed=7&autostart=1",
+      "steps": [
+        {
+          "wait": 300
+        },
+        {
+          "press": "KeyP"
+        },
+        {
+          "wait": 200
+        }
+      ],
+      "expect": [
+        {
+          "eval": "window.__game.state",
+          "op": "==",
+          "value": "paused"
+        }
+      ]
+    }
+  ]
+}

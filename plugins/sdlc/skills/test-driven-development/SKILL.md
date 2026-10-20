@@ -17,3 +17,4 @@ Conventions
 - A bug fix starts with a test that reproduces the bug.
 - Never weaken or delete a test to make it pass; fix the code, or fix the test only if the test itself is wrong (say so).
 - Keep the full suite fast (seconds): run it after every task.
+- No timing or performance assertions in the test suite ("p95 under 20 ms" fails on a busy machine and makes the suite flaky). Measure performance in a separate script (`npm run bench`) and report the numbers; assert only behaviour.

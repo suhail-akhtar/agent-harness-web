@@ -1,0 +1,41 @@
+{
+  "name": "url-shortener",
+  "description": "A small REST service from written requirements, judged by 25 hidden HTTP acceptance checks (validation, status codes, redirects, click counts, persistence across restart, CR/LF in URLs).",
+  "workflow": "build-feature",
+  "timeoutMin": 120,
+  "input": {
+    "request": "A URL shortener HTTP API. POST /links with JSON {url, slug?} creates a short link: url must be an absolute http or https URL (max 2048 chars); slug is optional, 3-32 chars of [a-z0-9-], must be unique (409 if taken); without a slug generate a random 6-char one. GET /:slug redirects with 302 to the url and counts the click. GET /links/:slug returns {slug, url, clicks, createdAt}. GET /links lists all links, newest first. DELETE /links/:slug removes it (204). Unknown slugs give 404 with a JSON error. Links survive a restart. Reject request bodies over 10 KB with 413 and malformed JSON with 400. The port comes from PORT and the data file path from DATA_FILE.",
+    "stack": "Node.js 22, no external dependencies (node:http, node:test), persistence in a JSON file written atomically. npm start runs the server."
+  },
+  "checks": [
+    {
+      "name": "its own tests pass",
+      "run": "npm test",
+      "timeoutSec": 300
+    },
+    {
+      "name": "hidden acceptance checks",
+      "run": "bash {{case}}/acceptance.sh {{ws}} \"npm start\" 4590",
+      "timeoutSec": 180
+    },
+    {
+      "name": "quality gates",
+      "gates": [
+        "node-test",
+        "secrets",
+        "conflict-markers"
+      ]
+    },
+    {
+      "name": "delivery documents",
+      "files": [
+        "docs/requirements.md",
+        "docs/architecture.md",
+        "docs/reviews/code-review.md",
+        "docs/reviews/security-review.md",
+        "docs/delivery-report.md",
+        "README.md"
+      ]
+    }
+  ]
+}

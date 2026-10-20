@@ -15,7 +15,8 @@
     "bench": "NODE_USE_ENV_PROXY=1 node --disable-warning=ExperimentalWarning --disable-warning=UNDICI-EHPA bench/run.ts",
     "test": "node --test --test-force-exit --disable-warning=ExperimentalWarning 'test/**/*.test.ts'",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p ui/tsconfig.json --noEmit",
-    "sandbox:image": "docker build -t harness-sandbox:latest -f docker/Dockerfile.sandbox docker"
+    "sandbox:image": "docker build -t harness-sandbox:latest -f docker/Dockerfile.sandbox docker",
+    "eval": "NODE_USE_ENV_PROXY=1 node --disable-warning=ExperimentalWarning --disable-warning=UNDICI-EHPA src/eval/cli.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0",

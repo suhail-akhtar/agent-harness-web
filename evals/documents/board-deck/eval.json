@@ -1,0 +1,33 @@
+{
+  "name": "board-deck",
+  "description": "A board deck from three source files, judged on render checks, the numbers that must appear, the slide count and the deliverables.",
+  "workflow": "make-deck",
+  "fixtures": "fixtures",
+  "timeoutMin": 90,
+  "input": {
+    "brief": "Q3 2026 board update for Northwind Analytics, a B2B SaaS company. Use the data in data/metrics.csv, data/arr_by_segment.csv and data/notes.md (use only these numbers). The board must leave knowing three things: growth is accelerating, efficiency improved on every measure, and management asks for approval of a $3.0M EU expansion. Include a revenue trend chart, ARR by segment, a unit-economics table, the Q4 pipeline, the risks, and a clear final slide with the ask.",
+    "audience": "the board of directors and two investors",
+    "slides": "9-11"
+  },
+  "checks": [
+    {
+      "name": "renders cleanly",
+      "gates": [
+        "documents-render"
+      ]
+    },
+    {
+      "name": "deliverables",
+      "files": [
+        "deck.pptx",
+        "deck.pdf",
+        "docs/deck-outline.md",
+        "docs/delivery.md"
+      ]
+    },
+    {
+      "name": "slide count and key numbers",
+      "run": "bash {{case}}/check-deck.sh"
+    }
+  ]
+}

@@ -56,8 +56,9 @@ const OPS = {
 const parse = (s) => { try { return s === 'undefined' ? undefined : JSON.parse(s); } catch { return s; } };
 
 /** Runs playtest.json scenarios: steps, then expectations on page state. */
-export async function runPlaytests(root, signal, only) {
-  const spec = JSON.parse(await fsp.readFile(path.join(root, 'playtest.json'), 'utf8'));
+export async function runPlaytests(root, signal, only, given) {
+  // given: a spec from elsewhere (an evaluation's hidden scenarios) instead of the workspace's playtest.json.
+  const spec = given ?? JSON.parse(await fsp.readFile(path.join(root, 'playtest.json'), 'utf8'));
   const scenarios = (spec.scenarios ?? []).filter((s) => !only || s.name === only);
   const results = [];
   for (const sc of scenarios.slice(0, 20)) {

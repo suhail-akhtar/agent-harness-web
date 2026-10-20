@@ -1,0 +1,31 @@
+{
+  "name": "arcade",
+  "description": "A complete arcade game from a one-paragraph idea, judged by hidden playtests on the conventions every game must follow (state, start, controls, pause, no errors) plus its own gates.",
+  "workflow": "build-game",
+  "timeoutMin": 120,
+  "input": {
+    "idea": "Asteroid Miner: a 2D arcade game. The player pilots a mining ship (rotate with left/right, thrust with up, shoot with space) in a wrapping asteroid field. Big rocks split into smaller ones when shot; small ones drop ore crystals the ship collects by flying through them. Score for rocks and ore; a life is lost on collision (3 lives, brief invulnerability after respawn). Waves get bigger. Title screen, pause, game over with best score, restart."
+  },
+  "checks": [
+    {
+      "name": "its own gates",
+      "gates": [
+        "web-console",
+        "playtest"
+      ]
+    },
+    {
+      "name": "hidden playtests",
+      "playtest": "hidden-playtest.json"
+    },
+    {
+      "name": "deliverables",
+      "files": [
+        "index.html",
+        "playtest.json",
+        "docs/game-design.md",
+        "README.md"
+      ]
+    }
+  ]
+}
