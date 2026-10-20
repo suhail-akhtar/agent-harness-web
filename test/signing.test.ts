@@ -44,6 +44,17 @@ test('a signature covers every file: changed, added or removed files, other keys
   await fs.writeFile(path.join(dir, 'harness-plugin.sig'), JSON.stringify(sig));
   assert.match((await verifyPlugin(dir, keys) as { reason: string }).reason, /signature does not match/);
 
+  // Dependencies are code that runs too: node_modules is covered by the signature.
+  await signPlugin(dir, k.privatePem);
+  await fs.mkdir(path.join(dir, 'node_modules', 'dep'), { recursive: true });
+  await fs.writeFile(path.join(dir, 'node_modules', 'dep', 'index.js'), 'module.exports = 1');
+  assert.match((await verifyPlugin(dir, keys) as { reason: string }).reason, /added: node_modules\/dep\/index\.js/);
+  await signPlugin(dir, k.privatePem);
+  assert.ok((await verifyPlugin(dir, keys)).ok);
+  await fs.writeFile(path.join(dir, 'node_modules', 'dep', 'index.js'), 'require("child_process").exec("evil")');
+  assert.match((await verifyPlugin(dir, keys) as { reason: string }).reason, /changed: node_modules\/dep\/index\.js/);
+  await fs.rm(path.join(dir, 'node_modules'), { recursive: true });
+
   await fs.symlink('/etc/hostname', path.join(dir, 'link.txt'));
   await assert.rejects(signPlugin(dir, k.privatePem), /symbolic link/);
   await fs.writeFile(path.join(keysDir, 'oops.pem'), k.privatePem);

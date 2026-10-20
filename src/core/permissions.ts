@@ -71,7 +71,16 @@ export function decide(tool: Tool, input: Record<string, unknown>, ctx: Permissi
   if (rules.ask.some((r) => ruleMatches(r, tool, input))) return mode === 'bypass' ? { action: 'allow', reason: 'bypass mode' } : { action: 'ask', reason: 'matches an ask rule' };
   if (rules.allow.some((r) => ruleMatches(r, tool, input))) return { action: 'allow', reason: 'allowed by a rule' };
 
-  switch (tool.kind) {
+  // A call can need more than its tool's kind (render with export writes a file):
+  // every kind it needs is decided, and the strictest answer wins.
+  const kinds = tool.kindsFor?.(input) ?? [tool.kind];
+  const order = { deny: 0, ask: 1, allow: 2 } as const;
+  return kinds.map((k) => decideKind(k, input, ctx)).sort((a, b) => order[a.action] - order[b.action])[0]!;
+}
+
+function decideKind(kind: Tool['kind'], input: Record<string, unknown>, ctx: PermissionContext): Decision {
+  const { mode } = ctx;
+  switch (kind) {
     case 'read':
     case 'meta':
       return { action: 'allow', reason: 'read-only' };

@@ -92,6 +92,8 @@ export interface ToolDefinition {
   description: string;
   parameters: JsonSchema;
   kind?: ToolKind;
+  /** Kinds a particular call needs beyond `kind` (e.g. an option that writes files needs 'edit'). */
+  kindsFor?: (input: Record<string, unknown>) => ToolKind[];
   parallelSafe?: boolean;
   summarize?: (input: Record<string, unknown>) => string;
   run(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutcome | string>;
@@ -101,6 +103,7 @@ export function defineTool(t: ToolDefinition): Tool {
   return {
     spec: { name: t.name, description: t.description, input_schema: t.parameters },
     kind: t.kind ?? 'exec',
+    ...(t.kindsFor ? { kindsFor: t.kindsFor } : {}),
     parallelSafe: t.parallelSafe ?? false,
     remoteable: false,
     summarize: t.summarize ?? ((i) => `${t.name} ${JSON.stringify(i).slice(0, 80)}`),

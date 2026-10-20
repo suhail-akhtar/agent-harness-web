@@ -10,7 +10,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 export const SIG_FILE = 'harness-plugin.sig';
-const SKIP = new Set([SIG_FILE, '.git', 'node_modules', '.DS_Store']);
+// node_modules is signed like everything else: a plugin's dependencies are code that runs too.
+const SKIP = new Set([SIG_FILE, '.git', '.DS_Store']);
 
 export interface PluginSignature { keyId: string; signedAt: string; files: Record<string, string>; signature: string }
 export interface TrustedKey { keyId: string; name: string; key: crypto.KeyObject }
@@ -34,7 +35,7 @@ export async function hashTree(dir: string, rel = ''): Promise<Record<string, st
   const out: Record<string, string> = {};
   for (const e of (await fs.readdir(path.join(dir, rel), { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
     if (!rel && SKIP.has(e.name)) continue;
-    if (e.name === 'node_modules' || e.name === '.git') continue;
+    if (e.name === '.git') continue;
     const r = rel ? `${rel}/${e.name}` : e.name;
     if (e.isSymbolicLink()) throw new Error(`${r} is a symbolic link; signed plugins cannot contain links`);
     if (e.isDirectory()) Object.assign(out, await hashTree(dir, r));

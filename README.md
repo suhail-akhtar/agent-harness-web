@@ -31,12 +31,13 @@ Node 22.18+ is required; it runs the TypeScript directly. Docker is optional: wi
 
 ```bash
 docker compose build
-docker compose run --rm harness npm ci     # once; node_modules lives in a Linux volume
-docker compose run --rm harness npm test
-docker compose up                          # http://127.0.0.1:4310; keys pass through from your shell
+docker compose run --rm dev npm ci          # once; node_modules lives in a Linux volume
+docker compose run --rm dev npm run build
+docker compose run --rm dev npm test
+docker compose up harness                   # http://127.0.0.1:4310; keys pass through from your shell
 ```
 
-Sessions in the container use the server-folder runtime on `/work` (`HARNESS_WORK` on the host, default `./.work`); the container is the isolation. Docker's default seccomp profile blocks `unshare`, so the document converters run without their extra no-network namespace there.
+Sessions in the container use the server-folder runtime on `/work` (`HARNESS_WORK` on the host, default `./.work`); the container is the isolation. The server mounts the source and `node_modules` read-only, so an agent's shell cannot change the harness's own code; `dev` is the read-write service for installing, building and testing. Docker's default seccomp profile blocks `unshare`, so the document converters run without their extra no-network namespace there.
 
 Headless, for scripts and CI:
 

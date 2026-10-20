@@ -101,8 +101,9 @@ export default {
         required: ['path'],
       },
       kind: 'read',
+      kindsFor: (i) => (i.export ? ['read', 'edit'] : ['read']), // export writes a PDF into the workspace
       parallelSafe: true,
-      summarize: (i) => `${i.path}${i.pages ? ` pages ${i.pages}` : ''}`,
+      summarize: (i) => `${i.path}${i.pages ? ` pages ${i.pages}` : ''}${i.export ? ' (export PDF)' : ''}`,
       async run(input, { host, signal, beforeWrite }) {
         serverSide(host);
         const rel = await workspacePath(host, String(input.path));
@@ -137,8 +138,9 @@ export default {
         },
       },
       kind: 'exec',
+      kindsFor: (i) => (i.save ? ['exec', 'edit'] : ['exec']), // save writes a file into the workspace
       parallelSafe: true,
-      summarize: (i) => `${i.path ?? 'index.html'}${i.query ?? ''}${Array.isArray(i.actions) && i.actions.length ? ` +${i.actions.length} actions` : ''}`,
+      summarize: (i) => `${i.save && typeof i.save === 'object' ? `save ${i.save.path} from ` : ''}${i.path ?? 'index.html'}${i.query ?? ''}${Array.isArray(i.actions) && i.actions.length ? ` +${i.actions.length} actions` : ''}`,
       async run(input, { host, signal, beforeWrite }) {
         serverSide(host);
         const rel = await workspacePath(host, String(input.path ?? 'index.html'));

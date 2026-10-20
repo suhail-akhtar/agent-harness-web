@@ -25,3 +25,11 @@ test('scripts and sources use LF line endings (a Windows checkout runs them in L
   }
   assert.deepEqual(crlf, []);
 });
+
+test('docker: the server agents work in mounts the harness source and node_modules read-only', async () => {
+  const compose = await fs.readFile(path.join(root, 'docker-compose.yml'), 'utf8');
+  const harness = compose.slice(compose.indexOf('\n  harness:'), compose.indexOf('\nvolumes:'));
+  assert.match(harness, /- \.:\/app:ro$/m);
+  assert.match(harness, /- node_modules:\/app\/node_modules:ro$/m);
+  assert.doesNotMatch(harness, /- \.:\/app$/m, 'no read-write source mount on the server');
+});

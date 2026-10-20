@@ -36,6 +36,8 @@ export interface Tool {
   /** Runs on the user's machine when the session uses a companion host. */
   remoteable: boolean;
   run(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutcome>;
+  /** The permission kinds this call needs, when they depend on the input (default: [kind]). */
+  kindsFor?(input: Record<string, unknown>): ToolKind[];
   /** One line for permission prompts and the UI. */
   summarize(input: Record<string, unknown>): string;
   /**
