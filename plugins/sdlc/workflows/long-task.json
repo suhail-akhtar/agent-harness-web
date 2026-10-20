@@ -50,7 +50,7 @@
       "title": "Build the next feature",
       "agent": "engineer",
       "maxSteps": 150,
-      "prompt": "You are one session of a long task; earlier sessions' work is in the workspace.\n\n1. Run ./init.sh, read .harness/long-task/progress.md and the last commits (git log --oneline -10).\n2. Take the FIRST feature in .harness/long-task/features.json whose passes is false.\n3. Build it, with tests.\n4. Verify it end to end by following its steps exactly, as a user would (run the program, call the API, use the browser for a UI). Only when every step works, set its passes to true. Never edit ids, descriptions or steps, and never remove a feature or a test.\n5. Commit with a message naming the feature, and append one line to the Log in progress.md: the feature, what you did, how you verified it.\n\nOne feature only. If the feature cannot be done, write why in progress.md and leave passes false.\n\nThe goal, for context:\n{{input.goal}}\n\nState of the list:\n{{feedback}}",
+      "prompt": "You are one session of a long task; earlier sessions' work is in the workspace.\n\n1. Run ./init.sh, read .harness/long-task/progress.md and the last commits (git log --oneline -10).\n2. Take the FIRST feature in .harness/long-task/features.json whose passes is false. If its steps need a feature that is not built yet (a command or page that comes later in the list), build that feature instead this session - the earliest one it needs - and come back to it next session.\n3. Build it, with tests.\n4. Verify it end to end by following its steps exactly, as a user would (run the program, call the API, use the browser for a UI). Only when every step works, set its passes to true. Never edit ids, descriptions or steps, and never remove a feature or a test.\n5. Commit with a message naming the feature, and append one line to the Log in progress.md: the feature, what you did, how you verified it.\n\nOne feature only. If the feature cannot be done for any other reason, write why in progress.md and leave passes false.\n\nThe goal, for context:\n{{input.goal}}\n\nState of the list:\n{{feedback}}",
       "next": "gates"
     },
     "gates": {
@@ -139,7 +139,7 @@
     "stuck": {
       "type": "approval",
       "title": "Stuck: continue?",
-      "message": "No feature has passed in the last three build sessions. Look at .harness/long-task/progress.md for why. Approve to try again (add guidance in the feedback), or reject to stop.\n\n{{state.check}}",
+      "message": "No feature has passed in the last three build sessions. Look at .harness/long-task/progress.md for why. Approve to try again (add guidance in the feedback), or reject to stop. After the third retry it stops.\n\n{{state.check}}",
       "files": [
         ".harness/long-task/progress.md"
       ],
@@ -152,9 +152,14 @@
     },
     "unstick": {
       "type": "shell",
-      "title": "Reset the stall count",
-      "command": "node -e \"const f='.harness/long-task/.state.json';const fs=require('fs');let s={};try{s=JSON.parse(fs.readFileSync(f,'utf8'))}catch{}s.stalls=0;fs.writeFileSync(f,JSON.stringify(s))\"",
-      "next": "build"
+      "title": "Reset the stall count (at most three times)",
+      "command": "node -e \"const f='.harness/long-task/.state.json';const fs=require('fs');let s={};try{s=JSON.parse(fs.readFileSync(f,'utf8'))}catch{}s.stalls=0;s.unsticks=(s.unsticks||0)+1;fs.writeFileSync(f,JSON.stringify(s));if(s.unsticks>3){console.log('Stuck four times: stopping rather than retrying the same thing again.');process.exit(1)}\"",
+      "next": {
+        "on": {
+          "ok": "build"
+        },
+        "default": "failed"
+      }
     },
     "done": {
       "type": "end",

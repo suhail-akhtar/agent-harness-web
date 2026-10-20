@@ -99,3 +99,27 @@ test('long-task stops for a person when three sessions in a row pass no feature'
   await h.close();
 });
 
+
+test('long-task: approving "stuck" retries at most three times, so an unattended run cannot loop forever', async () => {
+  const ws = await tempDir();
+  execFileSync('git', ['init', '-q', ws]);
+  const h = await createHarness({ dataDir: await tempDir(), plugins: [path.join(here, '..', 'plugins', 'sdlc')], search: null, memory: 'off' });
+  const fake = new FakeProvider([
+    { calls: [{ name: 'write', input: { path: '.harness/long-task/features.json', content: JSON.stringify([feature('F01')]) } }] },
+    { text: 'planned' },
+    ...Array.from({ length: 12 }, () => ({ text: 'could not do it' })),
+  ]);
+  h.registry.setProviderInstance('deepseek', fake);
+  const s = await h.sessions.create({ model: 'deepseek-flash', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: ws } });
+  const done = new Promise<void>((r) => s.subscribe(0, ({ event }) => {
+    if (event.kind === 'approval_request') s.respond(event.requestId, { decision: 'approve' }); // as the eval runner does
+    if (event.kind === 'turn_end' && !event.agent) r();
+  }));
+  await s.startWorkflow('long-task', { goal: 'g' });
+  await done;
+  const [run] = await s.listRuns();
+  const path_ = run!.history.map((x) => `${x.node}:${x.outcome ?? x.status}`);
+  assert.equal(run!.status, 'failed', path_.join(' > '));
+  assert.equal(path_.filter((x) => x === 'build:done').length, 12, path_.join(' > '));
+  assert.equal(path_.filter((x) => x.startsWith('unstick:')).at(-1), 'unstick:fail');
+});
