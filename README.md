@@ -270,6 +270,8 @@ The code reviewer on the Luna run found a real header-injection bug (CR/LF in a 
 
 The independent playtester found real bugs in DeepSeek's game over two rounds (restart dead on the pause screen, launch overriding the player's aim, the ship hidden under the HUD, off-screen arrows rotated 90 degrees); each fix came with a scenario that fails on the old build.
 
+**Phase 4 - `npm run eval`, every pack on every model** (after the fixes below; [full report](evals/results/2026-10-20.md)): **12/12 runs passed, 39/39 hidden checks**, for $2.56 in total (111M input tokens, ~93% read from cache). Per model, all four cases together: GPT-6 Luna $0.23, Claude Haiku 5.5 $0.96, DeepSeek Flash $1.38. On the re-run board deck the stricter reviewer blocked the invented region name, marked the hosting cost as an assumption, and found that the test data itself contradicts (6 logos x $210k exceeds the quarter's new ARR).
+
 **What the live runs fixed in the harness:** parallel branches colliding on one save file; an agent step treating "out of steps" as failure; streams that drop mid-way ending a step; every old render staying in the context; one-image full-page renders that DeepSeek rejects; a rejected image ending a step; browser key presses that could fall between frames; plugins that broke when installed outside the repository; sub-agents wandering outside the workspace.
 
 
