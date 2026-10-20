@@ -4,6 +4,8 @@ An agent harness that is also a framework. You give it requirements and it works
 
 It is tuned and tested on three cost-efficient models: **Claude Haiku 5.5**, **DeepSeek V4.1 Flash** (`deepseek-flash`) and **GPT-6 Luna**. Plugins can add more.
 
+**Picking the project up?** Read [docs/HANDOFF.md](docs/HANDOFF.md): its purpose, what is built, the results, how to run it on your own machine, and the next steps.
+
 ```
               ┌──────────────── browser UI / CLI / your code (createHarness) ───────────────┐
               │                                                                               │
@@ -381,6 +383,15 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 
 **What the live runs fixed in the harness:** parallel branches colliding on one save file; an agent step treating "out of steps" as failure; streams that drop mid-way ending a step; every old render staying in the context; one-image full-page renders that DeepSeek rejects; a rejected image ending a step; browser key presses that could fall between frames; plugins that broke when installed outside the repository; sub-agents wandering outside the workspace.
 
+
+**Phase 5 - memory, research, code mode, compaction, long tasks** ([full report](evals/results/2026-10-20-p5.md)):
+
+- Research (`research/mcp-facts`): 3/3 models, 4/4 hidden checks each, every report approved by the fact-checker. GPT-6 Luna $0.047, Claude Haiku 5.5 $0.12, DeepSeek Flash $0.21.
+- Code mode on a 40-file aggregation: the same correct answer at about half the cost on every model (Haiku $0.0037 → $0.0020, DeepSeek $0.0037 → $0.0017, Luna $0.0015 → $0.0007).
+- Memory: a convention saved in one session was used unprompted in the next on all three models, under $0.003 a session.
+- Claude server-side compaction: three compactions in one Haiku task, correct answer, $0.043.
+- Long task (`sdlc/expense-cli`): GPT-6 Luna built all 11 features and passed every hidden end-to-end check ($0.15); DeepSeek had 15/18 features, all passing the hidden checks, when the run was stopped to save budget. Haiku exposed a deadlock in the workflow (a feature whose checks needed a later one); it is fixed but not yet re-run.
+- Regression on the phase 5 code (stopped early): fire hydrant and board deck passed 3/3 on Haiku and Luna.
 
 **Phase 1 validation** (local workspace). One task needed all of these at once:
 

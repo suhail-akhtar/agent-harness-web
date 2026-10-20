@@ -9,7 +9,9 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'exp-'));
 const data = path.join(dir, 'data.json');
 const run = (...args) => {
   const r = spawnSync(process.execPath, [path.join(ws, 'expenses.js'), ...args], { cwd: dir, encoding: 'utf8', env: { ...process.env, EXPENSES_FILE: data } });
-  return { out: r.stdout.trim(), err: r.stderr.trim(), code: r.status };
+  // Node's own warnings (an experimental proxy agent on some hosts) are not the program's output.
+  const err = r.stderr.split('\n').filter((l) => !/^\(node:\d+\) |^\(Use `node --trace-warnings/.test(l)).join('\n');
+  return { out: r.stdout.trim(), err: err.trim(), code: r.status };
 };
 const fails = [];
 const expect = (what, cond, got) => { if (!cond) fails.push(`${what}: got ${JSON.stringify(got)}`); };
