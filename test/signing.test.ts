@@ -140,3 +140,70 @@ test('OpenTelemetry: model and tool calls arrive as OTLP spans with GenAI attrib
   const keys = spans[0]!.attributes.map((a) => a.key);
   for (const k of ['gen_ai.request.model', 'gen_ai.usage.input_tokens', 'gen_ai.usage.output_tokens', 'harness.cost_usd', 'harness.session.id']) assert.ok(keys.includes(k), k);
 });
+
+test('archives: a folder packs to the same bytes every time and unpacks intact; unsafe archives are refused', async () => {
+  const { pack, unpack } = await import('../src/plugins/archive.ts');
+  const zlib = await import('node:zlib');
+  const dir = await copyAcme(path.join(await tempDir(), 'acme'));
+  const a = await pack(dir);
+  assert.deepEqual(a, await pack(dir), 'deterministic');
+  const out = path.join(await tempDir(), 'x');
+  const files = await unpack(a, out);
+  assert.ok(files.includes('harness-plugin.json') && files.includes('index.mjs'));
+  assert.equal(await fs.readFile(path.join(out, 'index.mjs'), 'utf8'), await fs.readFile(path.join(dir, 'index.mjs'), 'utf8'));
+  // Hand-made hostile archives: a path out of the folder, and a symbolic link.
+  const entry = (name: string, type: string, body = '') => {
+    const h = Buffer.alloc(512);
+    h.write(name, 0); h.write('0000644\0', 100); h.write(body.length.toString(8).padStart(11, '0') + '\0', 124); h.write('00000000000\0', 136);
+    h.write(type, 156); if (type === '2') h.write('/etc/passwd', 157); h.write('ustar\0', 257); h.write('00', 263);
+    h.write('        ', 148); let sum = 0; for (const b of h) sum += b; h.write(sum.toString(8).padStart(6, '0') + '\0 ', 148);
+    const data = Buffer.alloc(Math.ceil(body.length / 512) * 512); data.write(body);
+    return Buffer.concat([h, data]);
+  };
+  const tgz = (...e: Buffer[]) => zlib.gzipSync(Buffer.concat([...e, Buffer.alloc(1024)]));
+  await assert.rejects(unpack(tgz(entry('../../evil.txt', '0', 'x')), path.join(await tempDir(), 'a')), /unsafe path/);
+  await assert.rejects(unpack(tgz(entry('/etc/evil', '0', 'x')), path.join(await tempDir(), 'b')), /unsafe path/);
+  await assert.rejects(unpack(tgz(entry('link', '2')), path.join(await tempDir(), 'c')), /not a plain file or folder/);
+});
+
+test('remote catalogue: lists from index.json, installs only what matches its hash and signature', async () => {
+  const { pack } = await import('../src/plugins/archive.ts');
+  const crypto = await import('node:crypto');
+  const { keysDir, k } = await setupKeys();
+  const src = await copyAcme(path.join(await tempDir(), 'acme'));
+  await signPlugin(src, k.privatePem);
+  const good = await pack(src);
+  await fs.appendFile(path.join(src, 'index.mjs'), '\n// changed after signing\n');
+  const resigned = await pack(src); // signature no longer matches the files
+  const served: Record<string, Buffer> = { '/good.tgz': good, '/tampered.tgz': resigned };
+  let index = { plugins: [{ name: 'acme', version: '1.0.0', description: 'Word counts', url: 'good.tgz', sha256: crypto.createHash('sha256').update(good).digest('hex') }] };
+  const srv = http.createServer((req, res) => {
+    if (req.url === '/catalogue/index.json') return res.end(JSON.stringify(index));
+    const body = served[req.url!.replace('/catalogue', '')];
+    if (!body) { res.writeHead(404); return res.end(); }
+    res.end(body);
+  });
+  await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${(srv.address() as { port: number }).port}/catalogue/index.json`;
+  const prev = process.env.NO_PROXY;
+  process.env.NO_PROXY = '127.0.0.1';
+  try {
+    const h = await createHarness({ dataDir: await tempDir(), catalogue: url, pluginKeys: keysDir, search: null });
+    assert.deepEqual((await h.catalogue()).map((e) => [e.name, e.remote, e.installed]), [['acme', true, false]]);
+    // A download that does not match its hash is refused before anything is unpacked.
+    index = { plugins: [{ ...index.plugins[0]!, url: 'tampered.tgz' }] };
+    await assert.rejects(h.install('acme'), /does not match the catalogue's sha256/);
+    // A matching hash is not enough: the files must match the plugin's signature.
+    index = { plugins: [{ ...index.plugins[0]!, sha256: crypto.createHash('sha256').update(resigned).digest('hex') }] };
+    await assert.rejects(h.install('acme'), /Refused: files differ[\s\S]*index\.mjs/);
+    index = { plugins: [{ name: 'acme', version: '1.0.0', description: 'Word counts', url: 'good.tgz', sha256: crypto.createHash('sha256').update(good).digest('hex') }] };
+    const p = await h.install('acme');
+    assert.match(p.signature ?? '', /signed by acme/);
+    assert.ok(h.registry.tools.has('acme_word_count'));
+    assert.equal((await h.catalogue())[0]!.installed, true);
+    await h.close();
+  } finally {
+    srv.close();
+    if (prev === undefined) delete process.env.NO_PROXY; else process.env.NO_PROXY = prev;
+  }
+});

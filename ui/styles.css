@@ -282,3 +282,5 @@ tr.compaction-row { background: var(--panel-2); }
 .sources a { color: var(--accent); text-decoration: none; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .row-end { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+.plugin-row { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.plugin-row + .panel-title { margin-top: 16px; }

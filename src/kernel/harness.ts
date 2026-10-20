@@ -1,5 +1,8 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
+import { unpack } from '../plugins/archive.ts';
 import { BUILTIN_MODELS } from '../core/models.ts';
 import { SessionManager } from '../core/manager.ts';
 import type { SessionDeps } from '../core/session.ts';
@@ -38,7 +41,11 @@ export interface HarnessOptions {
    * Default: HARNESS_PLUGIN_KEYS.
    */
   pluginKeys?: string;
-  /** A folder of signed plugins people can install from. Default: HARNESS_PLUGIN_CATALOGUE. */
+  /**
+   * Signed plugins people can install: a folder, or the https URL of an
+   * index.json ({ plugins: [{ name, version, description, url, sha256 }] },
+   * made with `npm run plugin -- index`). Default: HARNESS_PLUGIN_CATALOGUE.
+   */
   catalogue?: string;
   /** Where catalogue installs go. Default: <dataDir>/plugins (loaded on the next start too). */
   installDir?: string;
@@ -64,7 +71,19 @@ export interface HarnessOptions {
   log?: (message: string) => void;
 }
 
-export interface CatalogueEntry { name: string; version: string; description: string; signature: string; verified: boolean; installed: boolean }
+export interface CatalogueEntry { name: string; version: string; description: string; signature: string; verified: boolean; installed: boolean; remote?: boolean }
+
+/** One plugin in a remote catalogue's index.json. */
+export interface RemoteCatalogueEntry { name: string; version?: string; description?: string; url: string; sha256: string }
+
+const ARCHIVE_MAX = 50 * 1024 * 1024;
+
+async function remoteIndex(url: string): Promise<RemoteCatalogueEntry[]> {
+  const res = await fetch(url, { signal: AbortSignal.timeout(20_000), headers: { accept: 'application/json' } });
+  if (!res.ok) throw new Error(`catalogue ${url}: HTTP ${res.status}`);
+  const j = await res.json() as { plugins?: RemoteCatalogueEntry[] };
+  return (j.plugins ?? []).filter((p) => p && typeof p.name === 'string' && typeof p.url === 'string' && /^[a-f0-9]{64}$/i.test(String(p.sha256)));
+}
 
 export interface Harness {
   registry: Registry;
@@ -128,7 +147,8 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     }
   }
   const cataloguePath = opts.catalogue ?? process.env.HARNESS_PLUGIN_CATALOGUE;
-  const catalogueDirs = async () => (cataloguePath ? findPluginDirs(path.resolve(cataloguePath)) : []);
+  const remoteCatalogue = !!cataloguePath && /^https?:\/\//i.test(cataloguePath);
+  const catalogueDirs = async () => (cataloguePath && !remoteCatalogue ? findPluginDirs(path.resolve(cataloguePath)) : []);
   if (opts.mcp) {
     const servers = typeof opts.mcp === 'string'
       ? (JSON.parse(await fs.readFile(opts.mcp, 'utf8')) as { mcpServers?: Record<string, McpServerConfig> }).mcpServers ?? {}
@@ -151,10 +171,49 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     publish: opts.publish === null ? undefined : opts.publish ?? publishFromEnv(),
   });
   await sessions.load();
+  /** Downloads, checks the hash, unpacks, verifies the signature, then installs like a folder plugin. */
+  async function installRemote(name: string): Promise<LoadedPlugin> {
+    if (!/^[a-z0-9][a-z0-9._-]*$/i.test(name)) throw new Error(`Bad plugin name "${name}".`);
+    if (registry.plugins.some((p) => p.name === name)) throw new Error(`Plugin "${name}" is already loaded.`);
+    const entry = (await remoteIndex(cataloguePath!)).find((p) => p.name === name);
+    if (!entry) throw new Error(`No plugin "${name}" in the catalogue.`);
+    const url = new URL(entry.url, cataloguePath!).toString();
+    const res = await fetch(url, { signal: AbortSignal.timeout(120_000) });
+    if (!res.ok) throw new Error(`download failed: HTTP ${res.status}`);
+    if (Number(res.headers.get('content-length') ?? 0) > ARCHIVE_MAX) throw new Error('plugin archive is too large');
+    const data = Buffer.from(await res.arrayBuffer());
+    if (data.length > ARCHIVE_MAX) throw new Error('plugin archive is too large');
+    const sha = crypto.createHash('sha256').update(data).digest('hex');
+    if (sha !== entry.sha256.toLowerCase()) throw new Error(`Refused: the download does not match the catalogue's sha256 (got ${sha.slice(0, 12)}...)`);
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'hw-plugin-'));
+    try {
+      const dir = path.join(tmp, name);
+      await unpack(data, dir);
+      const m = await readManifest(dir).catch(() => undefined);
+      if (m?.name !== name) throw new Error(`Refused: the archive holds plugin "${m?.name ?? '?'}", not "${name}"`);
+      const v = await verifyPlugin(dir, keys!);
+      if (!v.ok) throw new Error(`Refused: ${v.reason}`);
+      const dest = path.join(installDir, name);
+      if (await fs.stat(dest).catch(() => null)) throw new Error(`${dest} already exists.`);
+      await fs.mkdir(installDir, { recursive: true });
+      await fs.cp(dir, dest, { recursive: true });
+      try { return await load(dest); } catch (e) { await fs.rm(dest, { recursive: true, force: true }); throw e; }
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  }
+
   return {
     registry, sessions, companions, mcp, dataDir: opts.dataDir, search: search?.backend,
     async catalogue() {
       const out: CatalogueEntry[] = [];
+      if (remoteCatalogue) {
+        // Listed as the index says; each one is verified against the trust list when installed.
+        for (const p of await remoteIndex(cataloguePath!)) {
+          out.push({ name: p.name, version: p.version ?? '0.0.0', description: p.description ?? '', signature: 'verified when installed', verified: false, installed: registry.plugins.some((x) => x.name === p.name), remote: true });
+        }
+        return out;
+      }
       for (const dir of await catalogueDirs()) {
         const m = await readManifest(dir).catch(() => undefined);
         if (!m) continue;
@@ -169,6 +228,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     },
     async install(name) {
       if (!keys) throw new Error('Installing from the catalogue needs a trust list (HARNESS_PLUGIN_KEYS): plugin code runs in the server.');
+      if (remoteCatalogue) return installRemote(name);
       let src: string | undefined;
       for (const d of await catalogueDirs()) if ((await readManifest(d).catch(() => undefined))?.name === name) src = d;
       if (!src) throw new Error(`No plugin "${name}" in the catalogue.`);

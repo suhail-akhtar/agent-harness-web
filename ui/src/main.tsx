@@ -153,6 +153,41 @@ function Companions({ onClose, onChanged }: { onClose: () => void; onChanged: ()
   );
 }
 
+interface CatalogueEntry { name: string; version: string; description: string; signature: string; verified: boolean; installed: boolean; remote?: boolean }
+
+/** What is plugged in (with what each declared it needs), and signed plugins to install. */
+function Plugins({ config, onClose, onChanged }: { config: Config; onClose: () => void; onChanged: () => void }): VNode {
+  const [catalogue, setCatalogue] = useState<CatalogueEntry[] | null>(null);
+  const [msg, setMsg] = useState('');
+  const admin = config.me?.role !== 'member';
+  const load = () => api.get<CatalogueEntry[]>('/api/plugins/catalogue').then(setCatalogue).catch((e) => setMsg((e as Error).message));
+  useEffect(() => { load(); }, []);
+  const install = async (name: string) => {
+    setMsg(`Installing ${name}...`);
+    try { const r = await api.post<{ note: string; signature: string }>('/api/plugins/install', { name }); setMsg(`${name}: ${r.signature}. ${r.note}`); load(); onChanged(); } catch (e) { setMsg((e as Error).message); }
+  };
+  return (
+    <Modal title="Plugins" onClose={onClose} wide>
+      <div class="panel-title">Loaded</div>
+      {(config.plugins ?? []).map((p) => (
+        <div key={p.name} class="plugin-row">
+          <div><b>{p.name}</b> <span class="muted">{p.version}</span> <span class="muted small">{p.signature}</span></div>
+          <div class="muted small">{p.description}</div>
+          {p.permissions && <div class="small">Needs: {[...(p.permissions.network ?? []).map((h) => `network ${h}`), ...(p.permissions.secrets ?? []).map((s) => `secret ${s}`)].join(', ')}</div>}
+        </div>
+      ))}
+      <div class="panel-title">Catalogue</div>
+      {catalogue === null ? <p class="muted small">{msg || 'Loading...'}</p> : !catalogue.length ? <p class="muted small">No catalogue is configured (HARNESS_PLUGIN_CATALOGUE: a folder, or the URL of an index.json).</p> : catalogue.map((c) => (
+        <div key={c.name} class="plugin-row row gap">
+          <div class="grow"><b>{c.name}</b> <span class="muted">{c.version}</span> <span class="muted small">{c.signature}</span><div class="muted small">{c.description}</div></div>
+          {c.installed ? <span class="muted small">installed</span> : admin ? <button class="btn small" disabled={!c.verified && !c.remote} onClick={() => install(c.name)}>Install</button> : <span class="muted small">an administrator installs plugins</span>}
+        </div>
+      ))}
+      {msg && catalogue !== null && <div class="notice notice-info small">{msg}</div>}
+    </Modal>
+  );
+}
+
 function FilesPanel({ sessionId, refreshKey }: { sessionId: string; refreshKey: number }): VNode | null {
   const [files, setFiles] = useState<{ path: string; size: number }[] | null>(null);
   const [view, setView] = useState<{ path: string; content: string | null; note?: string } | null>(null);
@@ -331,7 +366,7 @@ function App(): VNode {
   const [needLogin, setNeedLogin] = useState(false);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [hash, setHash] = useHash();
-  const [dialog, setDialog] = useState<'new' | 'companions' | null>(null);
+  const [dialog, setDialog] = useState<'new' | 'companions' | 'plugins' | null>(null);
   const [menu, setMenu] = useState(false);
   const [err, setErr] = useState('');
 
@@ -368,6 +403,7 @@ function App(): VNode {
         </div>
         <div class="sidebar-foot">
           <button class="link" onClick={() => setDialog('companions')}>Your computers ({config.companions.filter((c) => c.online).length} online)</button>
+          <button class="link" onClick={() => setDialog('plugins')}>Plugins ({(config.plugins ?? []).length})</button>
           <div class="muted small">All sessions: {fmtCost(total)}</div>
           {config.me && <div class="muted small">Signed in as {config.me.name}{config.me.role === 'admin' && config.me.name !== 'operator' ? ' (admin)' : ''} · <button class="link small" onClick={async () => { await api.post('/api/logout'); location.reload(); }}>sign out</button></div>}
         </div>
@@ -389,6 +425,7 @@ function App(): VNode {
       </main>
       {dialog === 'new' && <NewSession config={config} onClose={() => setDialog(null)} onCompanions={() => setDialog('companions')} onCreated={(id) => { setDialog(null); load(); setHash(id); }} />}
       {dialog === 'companions' && <Companions onClose={() => setDialog(null)} onChanged={load} />}
+      {dialog === 'plugins' && <Plugins config={config} onClose={() => setDialog(null)} onChanged={load} />}
     </div>
   );
 }

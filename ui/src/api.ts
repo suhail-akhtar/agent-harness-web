@@ -35,7 +35,7 @@ export interface Config {
   models: ModelInfo[];
   runtimes: { docker: boolean; dockerImage: string | null; local: boolean; localRoots: string[] };
   companions: CompanionInfo[];
-  plugins?: { name: string; version: string; description: string; contributes: string[] }[];
+  plugins?: { name: string; version: string; description: string; contributes: string[]; signature?: string; permissions?: { network?: string[]; secrets?: string[] } }[];
   search?: string | null;
   me?: { id?: string; name: string; role: 'admin' | 'member' };
 }
