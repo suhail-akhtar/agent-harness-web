@@ -76,6 +76,8 @@ export class WorkflowRunner {
   async execute(signal: AbortSignal): Promise<RunRecord> {
     const run = this.run;
     run.status = 'running';
+    // A resumed run re-enters its current node; the record left open by the stop is closed as interrupted.
+    for (const h of run.history) if (h.status === 'running' || h.status === 'waiting') { h.status = 'interrupted'; h.endedAt ??= run.updatedAt ?? Date.now(); }
     this.host.emit({ kind: 'workflow', run, phase: 'started' });
     try {
       for (let step = 0; step < MAX_STEPS && run.current; step++) {
@@ -123,7 +125,7 @@ export class WorkflowRunner {
       rec.status = 'failed';
     }
     rec.outcome = out.outcome;
-    rec.summary = out.summary?.slice(0, 600);
+    rec.summary = out.summary?.slice(0, 2000);
     rec.endedAt = Date.now();
     rec.cost = run.cost - costBefore;
     this.host.emit({ kind: 'workflow', run, node: id, phase: 'node_finished' });
@@ -142,24 +144,25 @@ export class WorkflowRunner {
         run.state[id] = r.report.slice(0, SUMMARY_MAX);
         if (r.reason !== 'done' && r.reason !== 'max_tokens') return { failed: true, summary: `agent stopped: ${r.reason}` };
         const outcome = decideFrom(r.report.slice(-600), node.decide) ?? decideFrom(r.report, node.decide);
-        return { outcome, summary: firstLine(r.report) };
+        return { outcome, summary: r.report };
       }
       case 'gate': {
         const results = await this.host.runGates(node.gates, signal);
         const failed = results.filter((g) => !g.pass && g.severity !== 'advisory');
         const lines = results.map((g) => `${g.pass ? 'PASS' : g.severity === 'advisory' ? 'WARN' : 'FAIL'} ${g.name}: ${g.summary}`);
         run.state[id] = lines.join('\n');
-        if (!failed.length) { run.feedback = ''; return { outcome: 'pass', summary: `${results.length} gate(s) passed` }; }
+        if (!failed.length) { run.feedback = ''; return { outcome: 'pass', summary: `${results.length} gate(s) passed\n${lines.join('\n')}` }; }
         const fails = (run.counts[`${id}:fail`] = (run.counts[`${id}:fail`] ?? 0) + 1);
         run.feedback = `Quality gates failed:\n${failed.map((g) => `## ${g.name}: ${g.summary}\n${(g.details ?? '').slice(0, 3000)}`).join('\n\n')}`;
-        if (node.maxFailures && fails >= node.maxFailures) return { outcome: 'exhausted', summary: `${failed.length} gate(s) still failing after ${fails} attempt(s)` };
-        return { outcome: 'fail', summary: `${failed.length} gate(s) failed: ${failed.map((g) => g.name).join(', ')}` };
+        if (node.maxFailures && fails >= node.maxFailures) return { outcome: 'exhausted', summary: `${failed.length} gate(s) still failing after ${fails} attempt(s)\n${lines.join('\n')}` };
+        return { outcome: 'fail', summary: `${failed.length} gate(s) failed: ${failed.map((g) => g.name).join(', ')}\n${lines.join('\n')}` };
       }
       case 'approval': {
         const message = render(node.message, run);
         run.status = 'waiting';
         this.run.history[this.run.history.length - 1]!.status = 'waiting';
         await this.save();
+        this.host.emit({ kind: 'workflow', run, node: id, phase: 'node_started' });
         const r = await this.host.approve({ runId: run.id, node: id, title: node.title ?? id, message, files: node.files ?? [] });
         run.status = 'running';
         run.state[id] = r.approved ? 'approved' : `rejected: ${r.feedback ?? ''}`;
@@ -198,6 +201,9 @@ export class WorkflowRunner {
   }
 }
 
-function firstLine(s: string): string {
-  return s.trim().split('\n').find((l) => l.trim())?.slice(0, 200) ?? '';
+/** The first line that says something: not a heading, rule or bare label like "Report:". */
+export function firstLine(s: string): string {
+  const lines = s.split('\n').map((l) => l.trim()).filter(Boolean);
+  const said = lines.find((l) => !/^(#{1,6}\s|[-*_=]{3,}$|\**(report|summary)\**:?\**$)/i.test(l));
+  return (said ?? lines[0] ?? '').replace(/\*\*/g, '').slice(0, 200);
 }

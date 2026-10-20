@@ -295,3 +295,31 @@ test('the shipped example plugin loads and works', async () => {
   assert.ok(h.registry.agents.has('security-reviewer'));
   await h.close();
 });
+
+test('a workspace workflow runs through the session; its approval shows only files inside the workspace', async () => {
+  const h = await createHarness({ dataDir: await tempDir() });
+  const outside = await tempDir();
+  const ws = path.join(outside, 'ws');
+  await fs.mkdir(path.join(ws, '.harness', 'workflows'), { recursive: true });
+  await fs.writeFile(path.join(outside, 'secret.txt'), 'server secret');
+  await fs.writeFile(path.join(ws, 'design.md'), '# Design');
+  await fs.symlink(path.join(outside, 'secret.txt'), path.join(ws, 'link.md'));
+  await fs.writeFile(path.join(ws, '.harness', 'workflows', 'ship.json'), JSON.stringify({
+    name: 'ship', description: 'd', inputs: { what: { description: 'w', required: true } }, start: 'ok',
+    nodes: { ok: { type: 'approval', message: 'Ship {{input.what}}?', files: ['../secret.txt', 'link.md', 'design.md'], next: { on: { approve: 'end', reject: 'end' } } }, end: { type: 'end' } },
+  }));
+  const s = await h.sessions.create({ model: 'deepseek-flash', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: ws } });
+  const seen: string[][] = [];
+  const ended = new Promise<void>((r) => s.subscribe(0, ({ event }) => {
+    if (event.kind === 'approval_request') { seen.push(event.files.map((f) => f.path)); assert.equal(event.message, 'Ship v2?'); s.respond(event.requestId, { decision: 'approve' }); }
+    if (event.kind === 'turn_end' && !event.agent) r();
+  }));
+  await s.startWorkflow('ship', { what: 'v2' });
+  await ended;
+  assert.deepEqual(seen, [['design.md']]);
+  assert.equal(s.meta.title, 'ship: v2');
+  const [run] = await s.listRuns();
+  assert.equal(run!.status, 'succeeded');
+  assert.deepEqual(run!.history.map((x) => `${x.node}:${x.outcome ?? ''}`), ['ok:approve', 'end:']);
+  await h.close();
+});

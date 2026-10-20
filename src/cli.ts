@@ -2,6 +2,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { HarnessEvent } from './core/types.ts';
+import { firstLine } from './graph/runner.ts';
 import { createHarness } from './kernel/harness.ts';
 
 // Headless runs: one prompt, streamed to the terminal, for scripts and benchmarks.
@@ -25,7 +26,7 @@ export function printEvent(e: HarnessEvent, quiet = false): void {
     case 'turn_end': if (!tag) console.log(`\n[turn end: ${e.reason}]`); break;
     case 'workflow':
       if (e.phase === 'node_started') console.log(`\n=== [workflow] ${e.node} started`);
-      if (e.phase === 'node_finished') { const h = [...e.run.history].reverse().find((x) => x.node === e.node); console.log(`=== [workflow] ${e.node} ${h?.status}${h?.outcome ? ` -> ${h.outcome}` : ''}: ${h?.summary ?? ''} ($${(h?.cost ?? 0).toFixed(4)})`); }
+      if (e.phase === 'node_finished') { const h = [...e.run.history].reverse().find((x) => x.node === e.node); console.log(`=== [workflow] ${e.node} ${h?.status}${h?.outcome ? ` -> ${h.outcome}` : ''}: ${firstLine(h?.summary ?? '')} ($${(h?.cost ?? 0).toFixed(4)})`); }
       if (e.phase === 'finished') console.log(`\n=== [workflow] ${e.run.workflow} ${e.run.status}${e.run.error ? `: ${e.run.error}` : ''} ($${e.run.cost.toFixed(4)})`);
       break;
   }

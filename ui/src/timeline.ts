@@ -1,4 +1,4 @@
-import type { HarnessEvent, ImageData, Message, ToolDisplay } from './api.ts';
+import type { HarnessEvent, ImageData, Message, ToolDisplay, WorkflowRunView } from './api.ts';
 
 // The chat view is a list of items rebuilt from the stored history, then kept
 // current by live events. Pure functions, so they are easy to test.
@@ -8,7 +8,8 @@ export type Item =
   | { kind: 'assistant'; key: string; text: string; reasoning: string; streaming: boolean }
   | { kind: 'tool'; key: string; id: string; name: string; input: Record<string, unknown>; result?: string; isError?: boolean; display?: ToolDisplay; ms?: number; running: boolean; activity: Activity[]; images?: ImageData[] }
   | { kind: 'notice'; key: string; level: 'info' | 'warn' | 'error'; text: string }
-  | { kind: 'compaction'; key: string; before?: number; after?: number };
+  | { kind: 'compaction'; key: string; before?: number; after?: number }
+  | { kind: 'workflow'; key: string; run: WorkflowRunView; activity: Record<string, Activity[]> };
 
 export interface Activity { name: string; summary: string; isError?: boolean; done: boolean }
 
@@ -101,6 +102,13 @@ export function apply(live: Live, e: HarnessEvent): Live {
       if (!text && !reasoning) return live;
       return { ...live, items: [...items, { kind: 'assistant', key: key(), text, reasoning, streaming: false }] };
     }
+    case 'workflow': {
+      const idx = findLastIndex(items, (i) => i.kind === 'workflow' && i.run.id === e.run.id);
+      if (idx < 0) return { ...live, items: [...items, { kind: 'workflow', key: key(), run: e.run, activity: {} }] };
+      const copy = items.slice();
+      copy[idx] = { ...(copy[idx] as Extract<Item, { kind: 'workflow' }>), run: e.run };
+      return { ...live, items: copy };
+    }
     case 'tool_call': {
       if (isSub(e.agent)) return withActivity(live, e.agent!, (a) => [...a, { name: e.name, summary: summarize(e.name, e.input), done: false }]);
       return { ...live, items: [...items, { kind: 'tool', key: key(), id: e.id, name: e.name, input: e.input, running: true, activity: [] }] };
@@ -135,8 +143,18 @@ export function apply(live: Live, e: HarnessEvent): Live {
   }
 }
 
-/** Sub-agent activity is shown inside the most recent running `agent` tool card. */
-function withActivity(live: Live, _agent: string, f: (a: Activity[]) => Activity[]): Live {
+/**
+ * Sub-agent activity is shown inside the running workflow card when the agent
+ * is one of its nodes, else inside the most recent running `agent` tool card.
+ */
+function withActivity(live: Live, agent: string, f: (a: Activity[]) => Activity[]): Live {
+  const w = findLastIndex(live.items, (i) => i.kind === 'workflow' && i.run.nodes.some((n) => n.id === agent));
+  if (w >= 0) {
+    const copy = live.items.slice();
+    const item = copy[w] as Extract<Item, { kind: 'workflow' }>;
+    copy[w] = { ...item, activity: { ...item.activity, [agent]: f(item.activity[agent] ?? []).slice(-40) } };
+    return { ...live, items: copy };
+  }
   const idx = findLastIndex(live.items, (i) => i.kind === 'tool' && i.name === 'agent' && i.running);
   if (idx < 0) return live;
   const copy = live.items.slice();

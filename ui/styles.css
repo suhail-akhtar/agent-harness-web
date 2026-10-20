@@ -244,3 +244,36 @@ pre.copyable { user-select: all; }
 table.trace { font: 12px var(--mono); }
 table.trace td, table.trace th { padding: 3px 8px; white-space: nowrap; }
 tr.compaction-row { background: var(--panel-2); }
+
+/* workflow runs */
+.wf { border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--radius); background: var(--panel); overflow: hidden; }
+.wf-succeeded { border-left-color: var(--good); }
+.wf-failed, .wf-aborted { border-left-color: var(--bad); }
+.wf-interrupted, .wf-waiting { border-left-color: var(--warn); }
+.wf-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel-2); }
+.wf-icon { color: var(--accent); }
+.wf-status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 1px 8px; border-radius: 99px; background: var(--panel); border: 1px solid var(--line); white-space: nowrap; }
+.wf-status-running { color: var(--accent); }
+.wf-status-waiting, .wf-status-interrupted { color: var(--warn); }
+.wf-status-succeeded { color: var(--good); }
+.wf-status-failed, .wf-status-aborted { color: var(--bad); }
+.wf-steps { list-style: none; margin: 0; padding: 4px 0; }
+.wf-step-head { width: 100%; display: flex; align-items: center; gap: 8px; padding: 4px 12px; border: 0; background: none; text-align: left; cursor: pointer; min-width: 0; }
+.wf-step-head:disabled { cursor: default; }
+.wf-step-head:not(:disabled):hover { background: var(--panel-2); }
+.wf-step-icon { width: 18px; text-align: center; color: var(--muted); flex-shrink: 0; }
+.wf-step-done .wf-step-icon { color: var(--good); }
+.wf-step-failed .wf-step-icon, .wf-step-failed .wf-step-title { color: var(--bad); }
+.wf-step-running .wf-step-title { font-weight: 600; }
+.wf-step-interrupted .wf-step-icon, .wf-step-interrupted .wf-step-title { color: var(--warn); }
+.wf-step-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.wf-outcome { font: 11px var(--mono); padding: 0 6px; border-radius: 4px; background: var(--panel-2); color: var(--muted); white-space: nowrap; }
+.wf-outcome.pos { color: var(--good); }
+.wf-outcome.neg { color: var(--bad); }
+.wf-summary { margin: 2px 12px 8px 38px; padding: 8px 12px; background: var(--code-bg); border-radius: 8px; max-height: 360px; overflow: auto; font-size: 13px; }
+.wf-summary pre { margin: 0; white-space: pre-wrap; }
+.wf .notice { margin: 4px 12px 10px; }
+.wf-path { line-height: 1.7; }
+.prompt-approval { border-color: var(--accent); }
+.approval-file { max-height: 420px; overflow: auto; margin-top: 6px; }
+.run-row { padding: 3px 0; }

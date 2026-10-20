@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
+import { resolveIn } from '../tools/paths.ts';
 import path from 'node:path';
 import { BUILTIN_AGENTS, INTERACTIVE_TOOLS, loadAgentDir, makeAgentTool } from '../agents/agents.ts';
 import { formatGates, makeGatesTool, runGates } from '../gates/gates.ts';
@@ -536,7 +537,9 @@ export class Session {
         const shown: { path: string; content: string }[] = [];
         for (const f of files.slice(0, 4)) {
           if (host.kind === 'companion') break;
-          const content = await fs.readFile(path.join(host.root, f), 'utf8').catch(() => '');
+          // Workflow files may come from the workspace: resolve inside it, symlinks included.
+          const real = await resolveIn(host, f).catch(() => null);
+          const content = real ? await fs.readFile(real, 'utf8').catch(() => '') : '';
           if (content) shown.push({ path: f, content: content.slice(0, 30_000) });
         }
         const r = await this.request('approval', { kind: 'approval_request', requestId: crypto.randomUUID(), runId, node, title, message, files: shown });
@@ -553,6 +556,10 @@ export class Session {
     const w = (await this.workflows()).find((x) => x.name === name);
     if (!w) throw new Error(`No workflow named "${name}".`);
     const run = newRun(w, this.meta.id, input);
+    if (this.meta.title === 'New session') {
+      const first = Object.values(run.input).find((v) => v.trim()) ?? '';
+      this.meta.title = `${w.name}: ${first.replace(/\s+/g, ' ')}`.slice(0, 60);
+    }
     await this.saveRun(run);
     this.executeRun(w, run).catch(() => {});
     return runView(run, w);

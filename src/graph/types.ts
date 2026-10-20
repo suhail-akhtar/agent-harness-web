@@ -87,7 +87,7 @@ export interface WorkflowDef {
 export interface NodeRecord {
   node: string;
   type: WorkflowNode['type'];
-  status: 'running' | 'done' | 'failed' | 'waiting';
+  status: 'running' | 'done' | 'failed' | 'waiting' | 'interrupted';
   outcome?: string;
   summary?: string;
   startedAt: number;

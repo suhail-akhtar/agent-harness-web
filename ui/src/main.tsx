@@ -1,9 +1,10 @@
 import { render, type VNode } from 'preact';
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
-import { api, ApiError, type CompanionInfo, type Config, type Effort, type HarnessEvent, type Mode, type SessionDetail, type SessionMeta, type Usage } from './api.ts';
+import { api, ApiError, type CompanionInfo, type Config, type Effort, type HarnessEvent, type Mode, type SessionDetail, type SessionMeta, type Usage, type WorkflowRunView } from './api.ts';
 import { ContextMeter, fmtCost, Modal, PendingPrompt, Timeline, TodoPanel, UsagePanel } from './components.tsx';
 import { CapabilitiesPanel, CheckpointsPanel, TraceButton } from './panels.tsx';
 import { apply, fromHistory, type Live } from './timeline.ts';
+import { ApprovalPrompt, RunsPanel, WorkflowDialog } from './workflow.tsx';
 
 const MODE_LABEL: Record<Mode, string> = { default: 'Ask before edits', acceptEdits: 'Auto-accept edits', plan: 'Plan mode', bypass: 'Bypass permissions' };
 const RUNTIME_LABEL = { docker: 'Sandbox', local: 'Server folder', companion: 'My computer' } as const;
@@ -180,6 +181,8 @@ function SessionView({ id, config, onMeta }: { id: string; config: Config; onMet
   const [err, setErr] = useState('');
   const [filesKey, setFilesKey] = useState(0);
   const [showSide, setShowSide] = useState(false);
+  const [wfDialog, setWfDialog] = useState(false);
+  const [runsKey, setRunsKey] = useState(0);
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const metaRef = useRef<SessionMeta | null>(null);
@@ -197,13 +200,18 @@ function SessionView({ id, config, onMeta }: { id: string; config: Config; onMet
       setStatus(d.status);
       setPending(d.pending);
       setLive({ items: fromHistory(d.history), contextTokens: d.meta.lastPromptTokens, contextWindow: spec?.compactAt ?? 0 });
+      // A run still going when the page opens gets its card back (finished ones are in the runs panel).
+      api.get<{ runs: WorkflowRunView[] }>(`/api/sessions/${id}/workflows`).then((r) => {
+        if (stopped) return;
+        for (const run of r.runs.filter((x) => x.status === 'running' || x.status === 'waiting')) setLive((l) => apply(l, { kind: 'workflow', phase: 'started', run }));
+      }).catch(() => {});
       es = new EventSource(`/api/sessions/${id}/events?after=${d.lastSeq}`);
       es.onmessage = (msg) => {
         const { event } = JSON.parse(msg.data) as { event: HarnessEvent };
         setLive((l) => apply(l, event));
         switch (event.kind) {
           case 'status': setStatus(event.status); break;
-          case 'permission_request': case 'question': case 'plan_proposed': setPending((p) => [...p.filter((x) => (x as { requestId: string }).requestId !== event.requestId), event]); break;
+          case 'permission_request': case 'question': case 'plan_proposed': case 'approval_request': setPending((p) => [...p.filter((x) => (x as { requestId: string }).requestId !== event.requestId), event]); break;
           case 'request_resolved': setPending((p) => p.filter((x) => (x as { requestId: string }).requestId !== event.requestId)); break;
           case 'usage': {
             const m = metaRef.current;
@@ -220,6 +228,7 @@ function SessionView({ id, config, onMeta }: { id: string; config: Config; onMet
           case 'mode': if (metaRef.current) { metaRef.current = { ...metaRef.current, mode: event.mode }; setMeta(metaRef.current); } break;
           case 'tool_result': if (['write', 'edit', 'bash'].includes(event.name)) setFilesKey((k) => k + 1); break;
           case 'notice': if (/^Rewound/.test(event.text)) setFilesKey((k) => k + 1); break;
+          case 'workflow': if (event.phase !== 'node_started') setRunsKey((k) => k + 1); if (event.phase === 'node_finished') setFilesKey((k) => k + 1); break;
           case 'turn_end': if (!event.agent) api.get<SessionDetail>(`/api/sessions/${id}`).then((d) => { metaRef.current = d.meta; setMeta(d.meta); onMeta(d.meta); }).catch(() => {}); break;
         }
       };
@@ -263,7 +272,9 @@ function SessionView({ id, config, onMeta }: { id: string; config: Config; onMet
           {live.items.length === 0 && <div class="empty-chat"><div class="logo big">›_</div><p>Describe a task. The agent reads, edits, runs and verifies in its workspace.</p></div>}
           <Timeline items={live.items} />
           {live.retry && <div class="notice notice-warn">{live.retry}</div>}
-          {pending.map((p) => <PendingPrompt key={(p as { requestId: string }).requestId} p={p as never} respond={respond} />)}
+          {pending.map((p) => p.kind === 'approval_request'
+            ? <ApprovalPrompt key={p.requestId} p={p} respond={respond} />
+            : <PendingPrompt key={(p as { requestId: string }).requestId} p={p as never} respond={respond} />)}
         </div>
         <div class="composer">
           {err && <div class="notice notice-error">{err}</div>}
@@ -281,6 +292,7 @@ function SessionView({ id, config, onMeta }: { id: string; config: Config; onMet
               {(Object.keys(MODE_LABEL) as Mode[]).map((m) => <option key={m} value={m}>{MODE_LABEL[m]}</option>)}
             </select>
             <span class="grow" />
+            {!busy && <button class="btn" onClick={() => setWfDialog(true)} title="Run a multi-step workflow (e.g. requirements to delivery)">Workflow…</button>}
             {busy && <button class="btn danger" onClick={() => api.post(`/api/sessions/${id}/abort`)}>Stop</button>}
             <button class="btn primary" disabled={!text.trim()} onClick={sendMsg}>{busy ? 'Queue' : 'Send'}</button>
           </div>
@@ -290,6 +302,7 @@ function SessionView({ id, config, onMeta }: { id: string; config: Config; onMet
         <ContextMeter used={live.contextTokens} window={live.contextWindow || spec?.compactAt || 0} />
         <UsagePanel usage={meta.usage} cost={meta.cost} byModel={meta.byModel} />
         <TodoPanel todos={meta.todos} />
+        <RunsPanel sessionId={id} refreshKey={runsKey} busy={busy} />
         <CapabilitiesPanel sessionId={id} />
         {meta.runtime.kind !== 'companion' && <CheckpointsPanel sessionId={id} refreshKey={filesKey} busy={busy} />}
         {meta.runtime.kind !== 'companion' && <FilesPanel sessionId={id} refreshKey={filesKey} />}
@@ -299,6 +312,7 @@ function SessionView({ id, config, onMeta }: { id: string; config: Config; onMet
           <button class="link danger" onClick={async () => { if (confirm('Delete this session and its workspace?')) { await api.del(`/api/sessions/${id}`); location.hash = ''; } }}>Delete session</button>
         </div>
       </aside>
+      {wfDialog && <WorkflowDialog sessionId={id} onClose={() => setWfDialog(false)} onStarted={() => { setWfDialog(false); stick.current = true; }} />}
     </div>
   );
 }

@@ -5,6 +5,7 @@ import { Diff } from './diff.tsx';
 import { Markdown } from './markdown.tsx';
 import type { Item } from './timeline.ts';
 import { summarize } from './timeline.ts';
+import { WorkflowCard } from './workflow.tsx';
 
 export const fmtTokens = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(2)}M` : n >= 10_000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 export const fmtCost = (c: number) => (c < 0.01 ? `$${c.toFixed(4)}` : `$${c.toFixed(2)}`);
@@ -69,6 +70,7 @@ export function Timeline({ items }: { items: Item[] }): VNode {
           case 'assistant': return <AssistantItem key={it.key} item={it} />;
           case 'tool': return <ToolCard key={it.key} item={it} />;
           case 'notice': return <div key={it.key} class={`notice notice-${it.level}`}>{it.text}</div>;
+          case 'workflow': return <WorkflowCard key={it.key} run={it.run} activity={it.activity} />;
           case 'compaction': return <div key={it.key} class="compaction"><span>Context compacted{it.before ? ` · ${fmtTokens(it.before)} → ${fmtTokens(it.after ?? 0)} tokens` : ''}</span></div>;
         }
       })}

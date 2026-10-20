@@ -1,6 +1,6 @@
 # Harness Web
 
-An agent harness that is also a framework. You give it requirements and it works in a workspace until the job is done: it plans, edits, runs, tests, fixes what fails and reports. You extend what it can do with **plugins**: tools, models, providers, sub-agents, skills, MCP services, quality gates and hooks. All of it goes through the same registry the built-ins use.
+An agent harness that is also a framework. You give it requirements and it works in a workspace until the job is done: it plans, edits, runs, tests, fixes what fails and reports. You extend what it can do with **plugins**: tools, models, providers, sub-agents, skills, MCP services, quality gates, workflows and hooks. All of it goes through the same registry the built-ins use.
 
 It is tuned and tested on three cost-efficient models: **Claude Haiku 5.5**, **DeepSeek V4.1 Flash** (`deepseek-flash`) and **GPT-6 Luna**. Plugins can add more.
 
@@ -123,6 +123,58 @@ Repository-defined commands (hooks, stdio MCP servers) run only in a sandboxed s
 
 **Hooks** (shell or in-process): `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`. Exit code 2 (or `{block: true}`) blocks. A `Stop` hook can send the agent back to work, for example "the tests still fail".
 
+## Workflows (node graphs)
+
+A workflow is a graph of steps that the harness drives, not the model. Each step is saved when it ends, so a run survives a restart and resumes at the step it was in (UI **Resume**, or `POST /api/sessions/:id/runs/:runId/resume`). Inside a step, an agent works with the normal loop and tools.
+
+| Node | What it does | Outcomes it routes on |
+|---|---|---|
+| `agent` | Runs a sub-agent (`agent`, `prompt`, optional `model`, `effort`) in a fresh context. Its report is kept as `{{state.<node>}}`. | the first `decide` word found in the report, e.g. `APPROVE` / `REQUEST_CHANGES` |
+| `gate` | Runs quality gates (`gates: "applicable"` or names). On failure the evidence becomes `{{feedback}}` for the next step. | `pass`, `fail`, `exhausted` (after `maxFailures`) |
+| `approval` | Shows a person a message and files; they approve, or send it back with what to change. | `approve`, `reject` |
+| `parallel` | Runs its `branches` at once. | the first negative branch outcome (`REQUEST_CHANGES`, `REJECT`, `FAIL`…), else `all` |
+| `branch` | Routes on a rendered value, e.g. `{{input.approval}}`. | the value |
+| `shell` | Runs a command. A workspace workflow with a shell node loads only where project commands are trusted. | `ok`, `fail` |
+| `code` | Runs a function. Plugins only, never from a workspace. | what it returns |
+| `end` | Finishes as `success` or `failed`. | |
+
+`next` is a node id, or `{ "on": { "<outcome>": "<node>" }, "default": "<node>" }`. Templates: `{{input.x}}`, `{{state.<node>}}`, `{{feedback}}`. A graph is checked before it runs (missing nodes, unreachable nodes, branch rules). Loops are bounded by `maxAgentRuns` and 200 steps.
+
+Workflows come from plugins (`registerWorkflow`, or a `workflows` folder in the manifest) or from the workspace (`.harness/workflows/*.json`). Run one from the UI (**Workflow…** beside Send), from the CLI, or from code:
+
+```bash
+npm run cli -- --model deepseek-flash --runtime local --dir ./work --workflow build-feature \
+  --input "request=A URL shortener HTTP API with ..." --input approval=auto
+```
+
+### The SDLC pack (`plugins/sdlc`)
+
+Seven agents (analyst, architect, planner, engineer, code-reviewer, security-reviewer, tech-writer) and five skills (requirements spec, ADRs, test-driven development, review checklist, delivery report). Its `build-feature` workflow:
+
+```
+requirements → architecture + ADRs → [approve design] → plan → implement (test-first)
+  → quality gates ⇄ fix  → code review ∥ security review → [address findings → gates ⇄ fix]
+  → docs → delivery report (requirement → code → test traceability)
+```
+
+With `approval=manual` (the default) a person approves the requirements and architecture before any code is written, and can send them back.
+
+### Quality gates (`plugins/quality-gates`)
+
+Each gate decides for itself whether it applies to the workspace:
+
+- **Tests:** Node (`npm test`), Python (pytest, when there are test files), Go, Rust, Java (Maven or Gradle).
+- **Checks:** Node typecheck, lint and build when the project defines them; ruff (blocking only if the project configures it).
+- **Hygiene:** committed secrets (shown redacted), merge-conflict markers, TODO/FIXME markers (advisory), large files (advisory).
+
+Gates run in three places:
+
+1. as `gate` nodes in a workflow;
+2. as the `quality_gates` tool, which agents call before they finish;
+3. as a `Stop` check, with `HARNESS_GATES_ON_STOP=1` or `"gatesOnStop": true`: the agent cannot end its turn while a blocking gate fails.
+
+Plugins add gates with `api.registerGate`.
+
 ## Permissions
 
 Enforced in code on every call. Order: deny rules, then ask rules, then allow rules, then the mode's default.
@@ -197,6 +249,8 @@ In plan mode the agent researches read-only, then presents its plan for approval
 | `HARNESS_MCP_INLINE_MAX` | 10 | Above this many MCP tools, schemas load on demand. |
 | `HARNESS_TRUST_PROJECT` | off | Let repository hooks and stdio MCP servers run outside the sandbox. |
 | `HARNESS_AUTO_RESUME` | off | Continue interrupted sessions after a restart. |
+| `HARNESS_GATES_ON_STOP` | off | Refuse to end a turn while a blocking quality gate fails. |
+| `HARNESS_BUNDLED_PLUGINS` | on | `off` skips the bundled `plugins/` (quality gates, SDLC). |
 | `HARNESS_SHELL_WRITE_GUARD` | on | `off` allows shell file writes. |
 | `HARNESS_SANDBOX_IMAGE`, `_MEMORY`, `_CPUS`, `_IDLE_MS` | `harness-sandbox:latest`, `4g`, `2`, 30 min | |
 | `HARNESS_PRICING_JSON` | | Override prices per model. |
@@ -206,7 +260,8 @@ In plan mode the agent researches read-only, then presents its plan for approval
 - **This is not Claude Code's code.** Claude Code is closed source. This harness follows its published design and open-source harnesses; unpublished tuning (the exact prompts) is not reproduced.
 - **The harness lifts every model but cannot make them equal.** Studies put the harness's effect at 5–30 points on agent benchmarks; the model is still most of the result.
 - **Not built yet:**
-  - the graph/workflow engine and quality-gate pipeline (Phase 2: gates register now, but nothing orchestrates them yet);
+  - packs beyond software delivery: documents and presentations, 3D and games (Phase 3);
+  - evaluation suites per pack (Phase 4);
   - background compaction;
   - per-host network allowlists in the sandbox (all or nothing);
   - checkpoints and project MCP servers on companion sessions;

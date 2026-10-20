@@ -73,6 +73,8 @@ export type HarnessEvent =
   | { kind: 'permission_request'; requestId: string; tool: string; summary: string; input: Record<string, unknown>; suggestion?: string; agent?: string }
   | { kind: 'question'; requestId: string; question: string; options: string[] }
   | { kind: 'plan_proposed'; requestId: string; plan: string }
+  | { kind: 'approval_request'; requestId: string; runId: string; node: string; title: string; message: string; files: { path: string; content: string }[] }
+  | { kind: 'workflow'; phase: 'started' | 'node_started' | 'node_finished' | 'finished'; node?: string; run: WorkflowRunView }
   | { kind: 'request_resolved'; requestId: string; decision: string }
   | { kind: 'usage'; model: string; usage: Usage; cost: number; contextTokens: number; contextWindow: number; agent?: string }
   | { kind: 'todos'; todos: Todo[] }
@@ -97,3 +99,10 @@ export type TraceSpan =
   | { at: number; type: 'model'; agent: string; model: string; ms: number; usage: Usage; cost: number; stop: string; retries: number; compaction?: boolean }
   | { at: number; type: 'tool'; agent: string; tool: string; ms: number; error: boolean; chars: number; images: number }
   | { at: number; type: 'clear'; agent: string; results: number; tokens: number };
+
+export interface WorkflowRunView {
+  id: string; workflow: string; status: string; current?: string; cost: number; error?: string;
+  nodes: { id: string; type: string; title?: string }[];
+  history: { node: string; type: string; status: string; outcome?: string; summary?: string; startedAt: number; endedAt?: number; cost?: number }[];
+}
+export interface WorkflowInfo { name: string; description: string; source?: string; inputs: Record<string, { description?: string; required?: boolean; default?: string }>; nodes: { id: string; type: string; title?: string }[] }

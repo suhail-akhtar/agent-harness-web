@@ -109,9 +109,10 @@ test('a run saved mid-way resumes at the node it was in', async () => {
   const run = newRun(wf(), 's', { request: 'X' });
   run.current = 'review';
   run.status = 'interrupted';
+  run.history.push({ node: 'review', type: 'parallel', status: 'running', startedAt: 1 });
   const done = await new WorkflowRunner(wf(), host, run).execute(new AbortController().signal);
   assert.equal(done.status, 'succeeded');
-  assert.equal(done.history[0]!.node, 'review');
+  assert.deepEqual(done.history.slice(0, 2).map((h) => `${h.node}:${h.status}`), ['review:interrupted', 'review:done']);
 });
 
 test('agent-run cap stops runaway loops', async () => {
@@ -121,4 +122,11 @@ test('agent-run cap stops runaway loops', async () => {
   const run = await new WorkflowRunner(w, host, newRun(w, 's', { request: 'X' })).execute(new AbortController().signal);
   assert.equal(run.status, 'failed');
   assert.match(run.error ?? '', /agent-run limit/);
+});
+
+test('a step summary line skips headings and labels', async () => {
+  const { firstLine } = await import('../src/graph/runner.ts');
+  assert.equal(firstLine('## Report\n\n**Built the API** in src/.'), 'Built the API in src/.');
+  assert.equal(firstLine('Report:\n---\nAll tests pass.'), 'All tests pass.');
+  assert.equal(firstLine('# Only a heading'), '# Only a heading');
 });
