@@ -55,6 +55,12 @@ export interface HarnessOptions {
   search?: SearchService | null;
   /** Spend per account (a shared server's daily caps). */
   spend?: SessionDeps['spend'];
+  /**
+   * Branches and pull requests (publish_branch). Default from the environment:
+   * HARNESS_GITHUB_TOKEN, HARNESS_PUBLISH_REPOS, HARNESS_GITHUB_API, HARNESS_GIT_AUTHOR ("Name <email>");
+   * on when a token or a repository list is set. null turns it off.
+   */
+  publish?: SessionDeps['publish'] | null;
   log?: (message: string) => void;
 }
 
@@ -142,6 +148,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   const sessions = new SessionManager({
     dataDir: opts.dataDir, companions, registry, mcp, onSpan: otel ? (sid, span) => otel.record(sid, span) : undefined,
     memory: { root: path.resolve(opts.memoryDir ?? path.join(opts.dataDir, 'memory')), mode: memoryMode }, search, spend: opts.spend,
+    publish: opts.publish === null ? undefined : opts.publish ?? publishFromEnv(),
   });
   await sessions.load();
   return {
@@ -188,3 +195,12 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     },
   };
 }
+
+function publishFromEnv(): SessionDeps['publish'] {
+  const token = process.env.HARNESS_GITHUB_TOKEN?.trim() || undefined;
+  const repos = (process.env.HARNESS_PUBLISH_REPOS ?? '').split(',').map((r) => r.trim()).filter(Boolean);
+  if (!token && !repos.length) return undefined;
+  const a = /^(.+?)\s*<([^>]+)>$/.exec(process.env.HARNESS_GIT_AUTHOR ?? '');
+  return { token, repos, apiBase: process.env.HARNESS_GITHUB_API || undefined, author: a ? { name: a[1]!, email: a[2]! } : undefined };
+}
+

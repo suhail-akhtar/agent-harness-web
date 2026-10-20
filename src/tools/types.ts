@@ -17,6 +17,8 @@ export interface ToolServices {
   memory?: import('../memory/store.ts').MemoryStore;
   sources?: import('../research/sources.ts').SourceStore;
   search?: import('../research/search.ts').SearchService;
+  /** Publishes the workspace as a branch and pull request (absent: not possible for this session). */
+  publish?(input: import('../git/publish.ts').PublishInput, signal: AbortSignal): Promise<import('../git/publish.ts').PublishResult>;
   /** Spend a tool incurred outside the model loop (a paid search), added to the session's cost. */
   charge?(what: string, cost: number): void;
 }

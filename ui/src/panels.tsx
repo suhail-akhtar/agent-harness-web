@@ -163,6 +163,30 @@ export function SourcesPanel({ sessionId, refreshKey }: { sessionId: string; ref
   );
 }
 
+/** The hosts an allowlist sandbox may reach; changes apply to the next connection. */
+export function NetworkPanel({ sessionId }: { sessionId: string }): VNode | null {
+  const [hosts, setHosts] = useState<string[] | null>(null);
+  const [text, setText] = useState('');
+  const [msg, setMsg] = useState('');
+  useEffect(() => { api.get<{ hosts: string[] }>(`/api/sessions/${sessionId}/network`).then((r) => { setHosts(r.hosts); setText(r.hosts.join('\n')); }).catch(() => setHosts(null)); }, [sessionId]);
+  if (!hosts) return null;
+  const save = async () => {
+    try {
+      const r = await call('PUT', `/api/sessions/${sessionId}/network`, { hosts: text.split(/[\s,]+/).filter(Boolean) }) as { hosts: string[] };
+      setHosts(r.hosts); setText(r.hosts.join('\n')); setMsg('Saved; applies to the next connection.');
+    } catch (e) { setMsg((e as Error).message); }
+  };
+  return (
+    <div class="panel">
+      <div class="panel-title">Allowed hosts</div>
+      <div class="muted small">Commands reach only these hosts, through a proxy. One per line; *.example.com for subdomains, host:port for other ports.</div>
+      <textarea class="input mono" rows={5} value={text} onInput={(e) => setText((e.target as HTMLTextAreaElement).value)} />
+      <div class="row-end"><button class="btn small" onClick={save}>Save</button></div>
+      {msg && <div class="notice notice-info small">{msg}</div>}
+    </div>
+  );
+}
+
 async function call(method: string, path: string, body: unknown): Promise<unknown> {
   const res = await fetch(path, { method, credentials: 'same-origin', headers: { 'content-type': 'application/json', 'x-harness': '1' }, body: JSON.stringify(body) });
   const data = await res.json().catch(() => ({}));

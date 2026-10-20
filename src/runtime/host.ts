@@ -22,6 +22,9 @@ export function scrubbedEnv(extra: Record<string, string> = {}): NodeJS.ProcessE
   const env: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (/KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|COOKIE|SESSION/i.test(k)) continue;
+    // Git's environment config is one group (COUNT, KEY_n, VALUE_n): it can carry
+    // credentials (http.extraHeader), and half of it makes every git command fail.
+    if (/^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+|PARAMETERS)$/.test(k)) continue;
     env[k] = v;
   }
   return { ...env, ...extra };
@@ -65,7 +68,10 @@ export interface ToolHost {
   shell: string;
   /** Whether commands are isolated from the host (OS sandbox). */
   sandboxed: boolean;
-  networkPolicy: 'none' | 'full';
+  /** allowlist: only some hosts, through the harness's proxy. */
+  networkPolicy: 'none' | 'full' | 'allowlist';
+  /** allowlist: the hosts currently allowed. */
+  allowedHosts?(): Promise<string[]>;
   exec(cmd: string, opts: ExecOptions): Promise<ExecResult>;
   /** Starts a long-lived process with piped stdio where tools run (MCP servers). */
   spawnStream?(command: string, args: string[], env: Record<string, string>): Promise<ChildProcessWithoutNullStreams>;

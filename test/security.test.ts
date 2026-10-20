@@ -112,3 +112,17 @@ test('calls that write files need edit approval even when the tool is read-only 
   assert.equal(decide(browser, { save: { path: 'm.glb', js: 'x' } }, { mode: 'default', rules, sandboxed: true }).action, 'ask');
   await h.close();
 });
+
+test('commands never get git\'s environment config: it can hold credentials, and half of it breaks git', async () => {
+  const { scrubbedEnv } = await import('../src/runtime/host.ts');
+  const saved = { ...process.env };
+  Object.assign(process.env, { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.extraHeader', GIT_CONFIG_VALUE_0: 'Authorization: Basic c2VjcmV0', GIT_COMMITTER_NAME: 'kept' });
+  try {
+    const env = scrubbedEnv();
+    for (const k of ['GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0']) assert.equal(env[k], undefined, k);
+    assert.equal(env.GIT_COMMITTER_NAME, 'kept');
+  } finally {
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+    Object.assign(process.env, saved);
+  }
+});

@@ -237,7 +237,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       const b = await readJson(req);
       const model = String(b.model ?? registry.listModels().find((m) => m.available)?.id ?? '');
       const kind = b.runtime === 'local' || b.runtime === 'companion' ? b.runtime : 'docker';
-      const runtime: SessionMeta['runtime'] = { kind, network: b.network === 'full' ? 'full' : 'none' };
+      const runtime: SessionMeta['runtime'] = { kind, network: b.network === 'full' ? 'full' : b.network === 'allowlist' && kind === 'docker' ? 'allowlist' : 'none' };
       if (kind === 'docker') {
         if (!await dockerAvailable()) throw new HttpError(400, 'Docker is not available on the server. Choose a companion or local workspace.');
         if (!await imageExists(dockerDefaults().image)) throw new HttpError(400, `Sandbox image ${dockerDefaults().image} is missing. Build it with: npm run sandbox:image`);
@@ -265,6 +265,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         runtime,
         gitUrl: typeof b.gitUrl === 'string' && b.gitUrl ? b.gitUrl : undefined,
         owner: me.id,
+        allowHosts: Array.isArray(b.allowHosts) ? b.allowHosts.map(String) : undefined,
       });
       return send(res, 201, s.meta);
     }
@@ -344,6 +345,12 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       }
       if (action === 'trace' && method === 'GET') return send(res, 200, await s.readTrace());
       if (action === 'sources' && method === 'GET') return send(res, 200, await s.sources.list());
+      if (action === 'network' && method === 'GET') return send(res, 200, { network: s.meta.runtime.network, hosts: await s.allowHosts() });
+      if (action === 'network' && method === 'PUT') {
+        const b = await readJson(req);
+        if (!Array.isArray(b.hosts)) throw new HttpError(400, 'hosts must be a list');
+        try { return send(res, 200, { hosts: await s.setAllowHosts(b.hosts.map(String)) }); } catch (e) { throw new HttpError(409, (e as Error).message); }
+      }
       if (action === 'workflows' && method === 'GET') {
         const wfs = await s.workflows();
         return send(res, 200, {

@@ -1,77 +1,208 @@
 {
   "name": "deep-research",
-  "description": "From a question to a cited report: a plan of sub-questions, three researchers reading sources in parallel, a report with numbered citations, a citation check against the pages actually read, an independent fact-check and up to two revisions.",
+  "description": "From a question to a cited report: a plan of sub-questions, three researchers reading sources in parallel, a report with numbered citations, a citation check against the pages actually read, an independent fact-check and up to three revision rounds.",
   "inputs": {
-    "question": { "description": "What to find out, with any scope (period, place, purpose).", "required": true },
-    "audience": { "description": "Who will read the report", "default": "a well-informed reader who is not a specialist" },
-    "length": { "description": "Roughly how long the report should be", "default": "600-1200 words" }
+    "question": {
+      "description": "What to find out, with any scope (period, place, purpose).",
+      "required": true
+    },
+    "audience": {
+      "description": "Who will read the report",
+      "default": "a well-informed reader who is not a specialist"
+    },
+    "length": {
+      "description": "Roughly how long the report should be",
+      "default": "600-1200 words"
+    }
   },
   "start": "plan",
-  "maxAgentRuns": 14,
+  "maxAgentRuns": 18,
   "nodes": {
     "plan": {
-      "type": "agent", "title": "Plan the research", "agent": "research-lead",
+      "type": "agent",
+      "title": "Plan the research",
+      "agent": "research-lead",
       "prompt": "Write the research plan to research/plan.md.\n\n<question>\n{{input.question}}\n</question>",
       "next": "gather"
     },
     "gather": {
-      "type": "parallel", "title": "Research in parallel", "branches": ["research-1", "research-2", "research-3"],
+      "type": "parallel",
+      "title": "Research in parallel",
+      "branches": [
+        "research-1",
+        "research-2",
+        "research-3"
+      ],
       "next": "write"
     },
     "research-1": {
-      "type": "agent", "title": "Researcher 1", "agent": "researcher",
+      "type": "agent",
+      "title": "Researcher 1",
+      "agent": "researcher",
       "prompt": "Research sub-questions 1 and 4 (if it exists) of research/plan.md. Write your evidence notes to research/notes-1.md.\n\nThe overall question, for context:\n{{input.question}}"
     },
     "research-2": {
-      "type": "agent", "title": "Researcher 2", "agent": "researcher",
+      "type": "agent",
+      "title": "Researcher 2",
+      "agent": "researcher",
       "prompt": "Research sub-questions 2 and 5 (if it exists) of research/plan.md. Write your evidence notes to research/notes-2.md.\n\nThe overall question, for context:\n{{input.question}}"
     },
     "research-3": {
-      "type": "agent", "title": "Researcher 3", "agent": "researcher",
+      "type": "agent",
+      "title": "Researcher 3",
+      "agent": "researcher",
       "prompt": "Research sub-questions 3 and 6 (if it exists) of research/plan.md. Write your evidence notes to research/notes-3.md.\n\nThe overall question, for context:\n{{input.question}}"
     },
     "write": {
-      "type": "agent", "title": "Write the report", "agent": "research-writer",
+      "type": "agent",
+      "title": "Write the report",
+      "agent": "research-writer",
       "prompt": "Write research/report.md answering the question from research/plan.md and the notes in research/notes-*.md.\n\n<question>\n{{input.question}}\n</question>\nAudience: {{input.audience}}. Length: {{input.length}}.",
       "next": "cite-check"
     },
     "cite-check": {
-      "type": "gate", "title": "Citation check", "gates": ["citations"], "maxFailures": 3,
-      "next": { "on": { "pass": "fact-check", "fail": "fix-citations", "exhausted": "failed" } }
+      "type": "gate",
+      "title": "Citation check",
+      "gates": [
+        "citations"
+      ],
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "fact-check",
+          "fail": "fix-citations",
+          "exhausted": "failed"
+        }
+      }
     },
     "fix-citations": {
-      "type": "agent", "title": "Fix citations", "agent": "research-writer",
+      "type": "agent",
+      "title": "Fix citations",
+      "agent": "research-writer",
       "prompt": "The citation check failed on research/report.md. Fix each problem: cite only pages that were read (the sources tool lists them), copy quotes and figures exactly, put computed figures in their own sentence ending \"(derived: ...)\", or cut the claim.\n\n{{feedback}}",
       "next": "cite-check"
     },
     "fact-check": {
-      "type": "agent", "title": "Independent fact-check", "agent": "fact-checker",
-      "decide": ["APPROVE", "REQUEST_CHANGES"],
+      "type": "agent",
+      "title": "Independent fact-check",
+      "agent": "fact-checker",
+      "decide": [
+        "APPROVE",
+        "REQUEST_CHANGES"
+      ],
       "prompt": "Fact-check research/report.md against the pages it cites and against the question. Write research/fact-check.md.\n\n<question>\n{{input.question}}\n</question>",
-      "next": { "on": { "REQUEST_CHANGES": "revise" }, "default": "done" }
+      "next": {
+        "on": {
+          "REQUEST_CHANGES": "revise"
+        },
+        "default": "done"
+      }
     },
     "revise": {
-      "type": "agent", "title": "Revise", "agent": "research-writer",
-      "prompt": "Address every BLOCKING and MAJOR finding in research/fact-check.md in research/report.md (read more sources with the sources tool, or ask nothing new of the web unless a finding needs it). Add a \"Resolution\" line under each finding you fixed. Run check_citations before you finish.\n\nFact-check summary:\n{{state.fact-check}}",
+      "type": "agent",
+      "title": "Revise",
+      "agent": "research-writer",
+      "prompt": "Address every BLOCKING and MAJOR finding in research/fact-check.md in research/report.md (read more sources with the sources tool, or ask nothing new of the web unless a finding needs it). Add a \"Resolution\" line under each finding you fixed. Run check_citations before you finish. A finding you cannot fix with a page you have read is fixed by narrowing the claim to exactly what the cited page says, or cutting it: never leave a BLOCKING or MAJOR finding open.\n\nFact-check summary:\n{{state.fact-check}}",
       "next": "recheck"
     },
     "recheck": {
-      "type": "gate", "title": "Citation check", "gates": ["citations"], "maxFailures": 3,
-      "next": { "on": { "pass": "fact-check-2", "fail": "fix-citations-2", "exhausted": "failed" } }
+      "type": "gate",
+      "title": "Citation check",
+      "gates": [
+        "citations"
+      ],
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "fact-check-2",
+          "fail": "fix-citations-2",
+          "exhausted": "failed"
+        }
+      }
     },
     "fix-citations-2": {
-      "type": "agent", "title": "Fix citations", "agent": "research-writer",
+      "type": "agent",
+      "title": "Fix citations",
+      "agent": "research-writer",
       "prompt": "The citation check failed on research/report.md. Fix each problem.\n\n{{feedback}}",
       "next": "recheck"
     },
     "fact-check-2": {
-      "type": "agent", "title": "Second fact-check", "agent": "fact-checker",
-      "decide": ["APPROVE", "REQUEST_CHANGES"],
+      "type": "agent",
+      "title": "Second fact-check",
+      "agent": "fact-checker",
+      "decide": [
+        "APPROVE",
+        "REQUEST_CHANGES"
+      ],
       "prompt": "Re-check research/report.md after the revisions: confirm each earlier finding in research/fact-check.md is resolved and nothing new is wrong. Update research/fact-check.md.\n\n<question>\n{{input.question}}\n</question>",
-      "next": { "on": { "APPROVE": "done" }, "default": "done-with-findings" }
+      "next": {
+        "on": {
+          "APPROVE": "done",
+          "REQUEST_CHANGES": "revise-2"
+        },
+        "default": "done-with-findings"
+      }
     },
-    "done": { "type": "end", "title": "Report ready", "status": "success" },
-    "done-with-findings": { "type": "end", "title": "Report ready, with open fact-check findings", "status": "success" },
-    "failed": { "type": "end", "title": "Citations could not be made to check out", "status": "failed" }
+    "revise-2": {
+      "type": "agent",
+      "title": "Revise again",
+      "agent": "research-writer",
+      "prompt": "The fact-checker still found problems. Address every open BLOCKING and MAJOR finding in research/fact-check.md in research/report.md, and add a \"Resolution\" line under each. A finding you cannot fix with a page you have read is fixed by narrowing the claim to exactly what the cited page says, or cutting it: never leave a BLOCKING or MAJOR finding open. Run check_citations before you finish.\n\nFact-check summary:\n{{state.fact-check-2}}",
+      "next": "recheck-2"
+    },
+    "recheck-2": {
+      "type": "gate",
+      "title": "Citation check",
+      "gates": [
+        "citations"
+      ],
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "fact-check-3",
+          "fail": "fix-citations-3",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "fix-citations-3": {
+      "type": "agent",
+      "title": "Fix citations",
+      "agent": "research-writer",
+      "prompt": "The citation check failed on research/report.md. Fix each problem.\n\n{{feedback}}",
+      "next": "recheck-2"
+    },
+    "fact-check-3": {
+      "type": "agent",
+      "title": "Final fact-check",
+      "agent": "fact-checker",
+      "decide": [
+        "APPROVE",
+        "REQUEST_CHANGES"
+      ],
+      "prompt": "Final check of research/report.md: confirm each finding in research/fact-check.md is resolved and nothing new is wrong. Update research/fact-check.md.\n\n<question>\n{{input.question}}\n</question>",
+      "next": {
+        "on": {
+          "APPROVE": "done"
+        },
+        "default": "done-with-findings"
+      }
+    },
+    "done": {
+      "type": "end",
+      "title": "Report ready",
+      "status": "success"
+    },
+    "done-with-findings": {
+      "type": "end",
+      "title": "Report ready, with open fact-check findings",
+      "status": "success"
+    },
+    "failed": {
+      "type": "end",
+      "title": "Citations could not be made to check out",
+      "status": "failed"
+    }
   }
 }

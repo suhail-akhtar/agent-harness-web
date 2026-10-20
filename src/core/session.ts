@@ -13,7 +13,7 @@ import type { McpManager, McpStatus } from '../mcp/manager.ts';
 import { deferredTools, MCP_INLINE_MAX, type McpEntry, mcpTool } from '../mcp/tools.ts';
 import type { AgentDef } from '../plugins/api.ts';
 import type { CompanionHub } from '../runtime/companion.ts';
-import { DockerHost, dockerDefaults } from '../runtime/docker.ts';
+import { defaultAllowHosts, DockerHost, dockerDefaults } from '../runtime/docker.ts';
 import type { ToolHost } from '../runtime/host.ts';
 import { LocalHost, run } from '../runtime/host.ts';
 import { makeSkillTool, type Skill, skillsIn, skillsListing, workspaceSkills } from '../skills/skills.ts';
@@ -21,6 +21,7 @@ import { sortTools } from '../tools/index.ts';
 import type { FileStamp, Tool, ToolServices } from '../tools/types.ts';
 import { MemoryStore, projectKey } from '../memory/store.ts';
 import { SourceStore } from '../research/sources.ts';
+import { publish, PublishError, shq } from '../git/publish.ts';
 import type { SearchService } from '../research/search.ts';
 import { Agent, type AgentHooks, type PermissionAnswer, type TraceSpan } from './agent.ts';
 import { Checkpoints } from './checkpoints.ts';
@@ -39,7 +40,7 @@ export interface SessionMeta {
   model: string;
   effort: Effort;
   mode: PermissionMode;
-  runtime: { kind: RuntimeKind; network: 'none' | 'full'; companionId?: string; path?: string };
+  runtime: { kind: RuntimeKind; network: 'none' | 'full' | 'allowlist'; companionId?: string; path?: string };
   createdAt: number;
   updatedAt: number;
   usage: Usage;
@@ -60,6 +61,8 @@ export interface SessionMeta {
   owner?: string;
   /** Spend by tools that cost money outside the model loop (web search). */
   toolCost?: number;
+  /** The repository the workspace was cloned from (where publish_branch may push). */
+  gitUrl?: string;
 }
 
 export interface StoredEvent { seq: number; at: number; event: HarnessEvent }
@@ -78,6 +81,8 @@ export interface SessionDeps {
   memory?: { root: string; mode: 'on' | 'read' | 'off' };
   /** The web search behind web_search (absent: no search). */
   search?: SearchService;
+  /** Publishing branches and pull requests (absent: off). */
+  publish?: import('../git/publish.ts').PublishConfig;
   /** Spend per account: recorded on every charge, and a cap that stops turns. */
   spend?: { add(owner: string | undefined, usd: number): void; over(owner: string | undefined): string | undefined };
 }
@@ -138,7 +143,7 @@ export class Session {
     return this.meta.runtime.kind === 'local' && this.meta.runtime.path ? this.meta.runtime.path : path.join(this.deps.dataDir, 'workspaces', this.meta.id);
   }
 
-  static async create(deps: SessionDeps, opts: { title?: string; model: string; effort?: Effort; mode?: PermissionMode; runtime: SessionMeta['runtime']; gitUrl?: string; owner?: string }): Promise<Session> {
+  static async create(deps: SessionDeps, opts: { title?: string; model: string; effort?: Effort; mode?: PermissionMode; runtime: SessionMeta['runtime']; gitUrl?: string; owner?: string; allowHosts?: string[] }): Promise<Session> {
     const model = deps.registry.model(opts.model);
     const id = crypto.randomBytes(8).toString('hex');
     const now = Date.now();
@@ -147,8 +152,13 @@ export class Session {
       mode: opts.mode ?? 'default', runtime: opts.runtime, createdAt: now, updatedAt: now,
       usage: emptyUsage(), cost: 0, byModel: {}, todos: [], contextStart: 0, compactions: 0, lastPromptTokens: 0, sessionRules: [], turns: 0,
       ...(opts.owner ? { owner: opts.owner } : {}),
+      ...(opts.gitUrl ? { gitUrl: opts.gitUrl } : {}),
     }, deps);
     await fs.mkdir(s.dir, { recursive: true });
+    if (opts.runtime.network === 'allowlist') {
+      await fs.mkdir(path.dirname(s.policyFile()), { recursive: true });
+      await fs.writeFile(s.policyFile(), JSON.stringify({ hosts: opts.allowHosts ?? defaultAllowHosts() }, null, 1));
+    }
     if (opts.runtime.kind !== 'companion') {
       await fs.mkdir(s.workspace, { recursive: true });
       if (opts.gitUrl) {
@@ -263,11 +273,41 @@ export class Session {
   private async getHost(): Promise<ToolHost> {
     if (this.host) return this.host;
     const r = this.meta.runtime;
-    if (r.kind === 'docker') this.host = new DockerHost(this.meta.id, this.workspace, { ...dockerDefaults(), network: r.network });
+    if (r.kind === 'docker') {
+      const blocked = new Set<string>();
+      this.host = new DockerHost(this.meta.id, this.workspace, {
+        ...dockerDefaults(), network: r.network, policyFile: this.policyFile(),
+        onEgress: (e) => {
+          if (e.allowed || blocked.has(e.host)) return;
+          blocked.add(e.host);
+          this.emit({ kind: 'notice', level: 'warn', text: `The sandbox tried to reach ${e.host}:${e.port}, which is not allowed (${e.why}). Allow it in the session's network settings if it should be.` });
+        },
+      });
+    }
     else if (r.kind === 'local') this.host = new LocalHost(this.workspace);
     else this.host = this.deps.companions.host(r.companionId ?? '', this.meta.id);
     if (this.host.kind !== 'companion') this.checkpoints = new Checkpoints(this.dir, this.workspace);
     return this.host;
+  }
+
+  private policyFile(): string { return path.join(this.dir, 'egress', 'allow.json'); }
+
+  /** The hosts an allowlist sandbox may reach. */
+  async allowHosts(): Promise<string[]> {
+    try { return (JSON.parse(await fs.readFile(this.policyFile(), 'utf8')) as { hosts?: string[] }).hosts ?? []; } catch { return this.meta.runtime.network === 'allowlist' ? defaultAllowHosts() : []; }
+  }
+
+  /** Changes the allowlist; the proxy applies it to the next connection, and the agent is told. */
+  async setAllowHosts(hosts: string[]): Promise<string[]> {
+    if (this.meta.runtime.network !== 'allowlist') throw new Error('This session\'s network is not an allowlist.');
+    const clean = [...new Set(hosts.map((h) => h.trim().toLowerCase()).filter((h) => /^(\*\.)?[a-z0-9.-]+(:\d{1,5})?$/.test(h)))].slice(0, 200);
+    await fs.mkdir(path.dirname(this.policyFile()), { recursive: true });
+    const tmp = `${this.policyFile()}.${crypto.randomUUID().slice(0, 8)}.tmp`;
+    await fs.writeFile(tmp, JSON.stringify({ hosts: clean }, null, 1));
+    await fs.rename(tmp, this.policyFile());
+    this.queued.push(`<system-reminder>The user changed the sandbox's allowed hosts. Now allowed: ${clean.join(', ') || 'none'}.</system-reminder>`);
+    this.emit({ kind: 'notice', level: 'info', text: `Allowed hosts: ${clean.join(', ') || 'none'}` });
+    return clean;
   }
 
   /** Repository content is trusted to run code only inside the sandbox (or when the operator says so). */
@@ -333,13 +373,30 @@ export class Session {
     return this.memory;
   }
 
+  /** Publishing needs a workspace here and a repository it may go to. */
+  private canPublish(): boolean {
+    const cfg = this.deps.publish;
+    return !!cfg && this.meta.runtime.kind !== 'companion' && (!!this.meta.gitUrl || !!cfg.repos?.length);
+  }
+
   /** Harness services for an agent's tools. Sub-agents read memory but do not change it. */
   private async services(main: boolean): Promise<ToolServices> {
     const memory = await this.memoryStore();
+    const cfg = this.deps.publish;
     return {
       memory: main ? memory : memory?.reader(),
       sources: this.sources,
       search: this.deps.search,
+      publish: this.canPublish() && cfg ? async (input, signal) => {
+        const host = await this.getHost();
+        return publish({
+          workspace: this.workspace, sessionGitUrl: this.meta.gitUrl, input, cfg, signal,
+          commit: async (message, author) => {
+            const r = await host.exec(`git add -A && (git diff --cached --quiet || git -c user.name=${shq(author.name)} -c user.email=${shq(author.email)} -c commit.gpgsign=false commit -q -m ${shq(message)})`, { timeoutMs: 120_000, signal });
+            if (r.code !== 0) throw new PublishError(`git commit failed: ${(r.stderr || r.stdout).trim().slice(0, 400)}`);
+          },
+        });
+      } : undefined,
       charge: (what, cost) => {
         this.meta.cost += cost;
         this.deps.spend?.add(this.meta.owner, cost);
@@ -361,7 +418,7 @@ export class Session {
     const reg = this.deps.registry;
     const memory = await this.memoryStore();
     // Tools for services that are off are left out: a tool that can only fail is noise in every request.
-    const tools: Tool[] = [...reg.tools.values()].filter((t) => !(t.spec.name === 'memory' && !memory) && !(t.spec.name === 'web_search' && !this.deps.search));
+    const tools: Tool[] = [...reg.tools.values()].filter((t) => !(t.spec.name === 'memory' && !memory) && !(t.spec.name === 'web_search' && !this.deps.search) && !(t.spec.name === 'publish_branch' && !this.canPublish()));
 
     // Skills: operator plugins first, then the workspace's (a name is taken once).
     const skills: Skill[] = [];

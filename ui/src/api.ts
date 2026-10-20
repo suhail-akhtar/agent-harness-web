@@ -43,7 +43,7 @@ export interface Usage { input: number; cacheRead: number; cacheWrite: number; o
 export interface Todo { content: string; status: 'pending' | 'in_progress' | 'completed' }
 export interface SessionMeta {
   id: string; title: string; model: string; effort: Effort; mode: Mode;
-  runtime: { kind: 'docker' | 'local' | 'companion'; network: 'none' | 'full'; companionId?: string; path?: string };
+  runtime: { kind: 'docker' | 'local' | 'companion'; network: 'none' | 'full' | 'allowlist'; companionId?: string; path?: string };
   createdAt: number; updatedAt: number; usage: Usage; cost: number; todos: Todo[];
   byModel: Record<string, { usage: Usage; cost: number; requests: number }>;
   contextStart: number; compactions: number; lastPromptTokens: number; status?: string;

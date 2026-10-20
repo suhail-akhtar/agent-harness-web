@@ -9,8 +9,27 @@
     "length": "600-1000 words"
   },
   "checks": [
-    { "name": "citations check out", "gates": ["citations"] },
-    { "name": "deliverables", "files": ["research/plan.md", "research/report.md", "research/fact-check.md"] },
-    { "name": "facts and sources", "run": "node {{case}}/check-report.mjs research/report.md" }
+    {
+      "name": "citations check out",
+      "gates": [
+        "citations"
+      ]
+    },
+    {
+      "name": "deliverables",
+      "files": [
+        "research/plan.md",
+        "research/report.md",
+        "research/fact-check.md"
+      ]
+    },
+    {
+      "name": "facts and sources",
+      "run": "node {{case}}/check-report.mjs research/report.md"
+    },
+    {
+      "name": "the independent fact-checker approved",
+      "run": "node -e \"const t=require('fs').readFileSync('research/fact-check.md','utf8').trim().split('\\n').filter(Boolean);const last=t[t.length-1].trim();console.log(last);process.exit(/^\\**APPROVE\\**$/.test(last)?0:1)\""
+    }
   ]
 }

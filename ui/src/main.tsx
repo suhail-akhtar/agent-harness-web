@@ -2,7 +2,7 @@ import { render, type VNode } from 'preact';
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { api, ApiError, type CompanionInfo, type Config, type Effort, type HarnessEvent, type Mode, type SessionDetail, type SessionMeta, type Usage, type WorkflowRunView } from './api.ts';
 import { ContextMeter, fmtCost, Modal, PendingPrompt, Timeline, TodoPanel, UsagePanel } from './components.tsx';
-import { CapabilitiesPanel, CheckpointsPanel, MemoryPanel, SourcesPanel, TraceButton } from './panels.tsx';
+import { CapabilitiesPanel, CheckpointsPanel, MemoryPanel, NetworkPanel, SourcesPanel, TraceButton } from './panels.tsx';
 import { apply, fromHistory, type Live } from './timeline.ts';
 import { ApprovalPrompt, RunsPanel, WorkflowDialog } from './workflow.tsx';
 
@@ -45,7 +45,7 @@ function NewSession({ config, onClose, onCreated, onCompanions }: { config: Conf
   const [effort, setEffort] = useState<Effort | ''>('');
   const defaultRuntime = config.runtimes.docker && config.runtimes.dockerImage ? 'docker' : config.companions.length ? 'companion' : config.runtimes.local ? 'local' : 'docker';
   const [runtime, setRuntime] = useState<'docker' | 'local' | 'companion'>(defaultRuntime);
-  const [network, setNetwork] = useState(false);
+  const [network, setNetwork] = useState<'none' | 'allowlist' | 'full'>('allowlist');
   const [gitUrl, setGitUrl] = useState('');
   const [path, setPath] = useState(config.runtimes.localRoots[0] ?? '');
   const [companionId, setCompanionId] = useState(config.companions.find((c) => c.online)?.id ?? config.companions[0]?.id ?? '');
@@ -55,7 +55,7 @@ function NewSession({ config, onClose, onCreated, onCompanions }: { config: Conf
   const create = async () => {
     setBusy(true); setErr('');
     try {
-      const s = await api.post<SessionMeta>('/api/sessions', { model, effort: effort || undefined, runtime, network: network ? 'full' : 'none', gitUrl: gitUrl.trim() || undefined, path: runtime === 'local' ? path : undefined, companionId: runtime === 'companion' ? companionId : undefined, mode });
+      const s = await api.post<SessionMeta>('/api/sessions', { model, effort: effort || undefined, runtime, network, gitUrl: gitUrl.trim() || undefined, path: runtime === 'local' ? path : undefined, companionId: runtime === 'companion' ? companionId : undefined, mode });
       onCreated(s.id);
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
@@ -86,7 +86,13 @@ function NewSession({ config, onClose, onCreated, onCompanions }: { config: Conf
           {!config.runtimes.dockerImage && <div class="notice notice-warn">The sandbox image is not built on the server yet (npm run sandbox:image).</div>}
           <p class="hint">An isolated container per session; commands run inside it, so they don't need approval.</p>
           <label class="field"><span>Clone a git repository (optional)</span><input class="input" placeholder="https://github.com/owner/repo" value={gitUrl} onInput={(e) => setGitUrl((e.target as HTMLInputElement).value)} /></label>
-          <label class="check"><input type="checkbox" checked={network} onChange={(e) => setNetwork((e.target as HTMLInputElement).checked)} /> Allow network access from commands (package installs)</label>
+          <label class="field"><span>Network for commands</span>
+            <select class="input" value={network} onChange={(e) => setNetwork((e.target as HTMLSelectElement).value as 'none' | 'allowlist' | 'full')}>
+              <option value="allowlist">Package registries and GitHub only (editable)</option>
+              <option value="none">None</option>
+              <option value="full">Full internet</option>
+            </select>
+          </label>
         </>
       )}
       {runtime === 'companion' && (
@@ -264,7 +270,7 @@ function SessionView({ id, config, onMeta }: { id: string; config: Config; onMet
       <div class="chat">
         <div class="chat-head">
           <input class="title-input" value={meta.title} onChange={(e) => patch({ title: (e.target as HTMLInputElement).value })} aria-label="Session title" />
-          <span class={`badge rt-${meta.runtime.kind}`}>{RUNTIME_LABEL[meta.runtime.kind]}{meta.runtime.kind === 'docker' ? (meta.runtime.network === 'full' ? ' · net' : ' · offline') : ''}</span>
+          <span class={`badge rt-${meta.runtime.kind}`}>{RUNTIME_LABEL[meta.runtime.kind]}{meta.runtime.kind === 'docker' ? (meta.runtime.network === 'full' ? ' · net' : meta.runtime.network === 'allowlist' ? ' · allowlist' : ' · offline') : ''}</span>
           <span class={`status status-${status}`}>{status === 'running' ? 'Working' : status === 'waiting' ? 'Needs you' : 'Idle'}</span>
           <button class="icon-btn side-toggle" onClick={() => setShowSide(!showSide)} aria-label="Session details">☰</button>
         </div>
@@ -303,6 +309,7 @@ function SessionView({ id, config, onMeta }: { id: string; config: Config; onMet
         <UsagePanel usage={meta.usage} cost={meta.cost} byModel={meta.byModel} />
         <TodoPanel todos={meta.todos} />
         <RunsPanel sessionId={id} refreshKey={runsKey} busy={busy} />
+        {meta.runtime.network === 'allowlist' && <NetworkPanel sessionId={id} />}
         <MemoryPanel sessionId={id} refreshKey={filesKey} />
         <SourcesPanel sessionId={id} refreshKey={filesKey} />
         <CapabilitiesPanel sessionId={id} />

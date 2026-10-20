@@ -161,3 +161,16 @@ test('sign in with an account token: the browser cookie works like the operator\
   assert.equal((await t.call(undefined, 'POST', '/api/login', { token: 'hwu_wrong' })).status, 401);
   await t.close();
 });
+
+test('network API: an allowlist session\'s hosts are read and changed by its owner, cleaned on the way in', async () => {
+  const t = await setup();
+  const s = await t.harness.sessions.create({ model: 'deepseek-flash', runtime: { kind: 'docker', network: 'allowlist' }, allowHosts: ['registry.npmjs.org'] });
+  assert.deepEqual((await t.call(OPERATOR, 'GET', `/api/sessions/${s.meta.id}/network`)).body, { network: 'allowlist', hosts: ['registry.npmjs.org'] });
+  const put = await t.call(OPERATOR, 'PUT', `/api/sessions/${s.meta.id}/network`, { hosts: ['PyPI.org', '*.github.com', 'bad host', 'x.io:8443', 'pypi.org', 'http://evil'] });
+  assert.deepEqual(put.body.hosts, ['pypi.org', '*.github.com', 'x.io:8443']);
+  const policy = JSON.parse(await (await import('node:fs/promises')).readFile(path.join(t.harness.dataDir, 'sessions', s.meta.id, 'egress', 'allow.json'), 'utf8'));
+  assert.deepEqual(policy.hosts, ['pypi.org', '*.github.com', 'x.io:8443'], 'the proxy reads the same file');
+  const plain = await t.harness.sessions.create({ model: 'deepseek-flash', runtime: { kind: 'local', network: 'none', path: t.work } });
+  assert.equal((await t.call(OPERATOR, 'PUT', `/api/sessions/${plain.meta.id}/network`, { hosts: ['a.io'] })).status, 409);
+  await t.close();
+});

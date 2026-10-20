@@ -51,7 +51,7 @@ export class SessionManager {
     return this.sessions.get(id)?.status ?? 'idle';
   }
 
-  async create(opts: { title?: string; model: string; effort?: Effort; mode?: PermissionMode; runtime: SessionMeta['runtime']; gitUrl?: string; owner?: string }): Promise<Session> {
+  async create(opts: { title?: string; model: string; effort?: Effort; mode?: PermissionMode; runtime: SessionMeta['runtime']; gitUrl?: string; owner?: string; allowHosts?: string[] }): Promise<Session> {
     const s = await Session.create(this.deps, opts);
     this.sessions.set(s.meta.id, s);
     return s;

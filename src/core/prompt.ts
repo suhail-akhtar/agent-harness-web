@@ -81,9 +81,13 @@ export async function projectInstructions(host: ToolHost): Promise<string> {
 }
 
 export async function environmentBlock(host: ToolHost, extra?: { gitBranch?: string }): Promise<string> {
+  const allow = host.networkPolicy === 'allowlist' ? await host.allowedHosts?.().catch(() => []) ?? [] : [];
+  const net = host.networkPolicy === 'none' ? 'none (no internet from commands)'
+    : host.networkPolicy === 'allowlist' ? `only these hosts, through a proxy (others are blocked; ask the user to allow one): ${allow.join(', ') || 'none'}`
+    : 'available';
   const lines = [
     `Workspace: ${host.displayRoot}`,
-    `Platform: ${host.platform}; shell: ${host.shell}; commands run ${host.sandboxed ? 'in an isolated container' : "on the user's machine"}; network: ${host.networkPolicy === 'none' ? 'none (no internet from commands)' : 'available'}`,
+    `Platform: ${host.platform}; shell: ${host.shell}; commands run ${host.sandboxed ? 'in an isolated container' : "on the user's machine"}; network: ${net}`,
     `Date: ${new Date().toISOString().slice(0, 10)}`,
   ];
   if (extra?.gitBranch) lines.push(`Git branch: ${extra.gitBranch}`);
