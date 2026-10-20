@@ -1,0 +1,6 @@
+# LF everywhere, on every OS: the shell scripts and sources run in Linux
+# containers (docker-compose.yml) even when the checkout is on Windows.
+* text=auto eol=lf
+*.png binary
+*.glb binary
+*.bundle binary
