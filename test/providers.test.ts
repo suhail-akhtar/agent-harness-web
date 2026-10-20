@@ -103,6 +103,13 @@ test('Claude server-side compaction: requested at the compaction point, costed o
   assert.equal(compact.trigger!.value, model.compactAt);
   assert.match(compact.instructions!, /continuation summary/);
   assert.equal((anthropicBody({ model, system: 'S', tools: [], messages: [], effort: 'low' }, true, false) as typeof body).context_management.edits.length, 1, 'off: clearing only');
+  // HARNESS_COMPACT_AT moves the server's point too, not only the backstop.
+  const lower = anthropicBody({ model, system: 'S', tools: [], messages: [], effort: 'low', compactAt: 60_000 }, true, true) as typeof body;
+  assert.equal(lower.context_management.edits.find((e) => e.type === 'compact_20260112')!.trigger!.value, 60_000);
+  assert.equal(lower.context_management.edits.find((e) => e.type !== 'compact_20260112')!.trigger!.value, 36_000);
+  const { AnthropicProvider } = await import('../src/providers/anthropic.ts');
+  const p = new AnthropicProvider('sk-test');
+  assert.equal(p.compactsServerSide(model, 10_000), false, 'below the API minimum: the harness compacts itself');
 
   // A response that compacted: compaction step, then the reply.
   const r = fromAnthropic(model.id, {

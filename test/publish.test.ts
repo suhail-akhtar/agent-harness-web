@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { test } from 'node:test';
-import { githubRepo, publish, publishTarget, validBranch } from '../src/git/publish.ts';
+import { githubRepo, publish, publishTarget, tokenMayGoTo, validBranch } from '../src/git/publish.ts';
 import { createHarness } from '../src/kernel/harness.ts';
 import { publishTool } from '../src/tools/publish.ts';
 import type { ToolContext } from '../src/tools/types.ts';
@@ -141,4 +141,44 @@ test('publish_branch is offered only to sessions that can publish, and commits i
   await off.close();
   const r = await publishTool.run({ branch: 'b', title: 't' }, { services: {} } as unknown as ToolContext);
   assert.match(r.content, /not available/);
+});
+
+test('publish: the token goes only to GitHub (or the operator\'s Enterprise host), never to a session\'s own git URL', async () => {
+  assert.ok(tokenMayGoTo('https://github.com/acme/shop.git', {}));
+  assert.ok(!tokenMayGoTo('https://evil.example/acme/shop.git', {}));
+  assert.ok(!tokenMayGoTo('https://github.com.evil.example/a/b.git', {}));
+  assert.ok(tokenMayGoTo('https://ghe.corp/a/b.git', { apiBase: 'https://ghe.corp/api/v3' }));
+  assert.ok(tokenMayGoTo('https://git.corp/a/b.git', { tokenHosts: ['git.corp'] }));
+  const { ws } = await repos();
+  await fs.writeFile(path.join(ws, 'x.txt'), 'x');
+  g(ws, 'add', '-A'); g(ws, 'commit', '-q', '-m', 'x');
+  const seen: (string | undefined)[] = [];
+  const evil = http.createServer((req, res) => { seen.push(req.headers.authorization); res.writeHead(401, { 'www-authenticate': 'Basic realm="x"' }); res.end(); });
+  await new Promise<void>((r) => evil.listen(0, '127.0.0.1', r));
+  const prev = process.env.NO_PROXY;
+  process.env.NO_PROXY = '127.0.0.1';
+  try {
+    const url = `http://127.0.0.1:${(evil.address() as { port: number }).port}/acme/shop.git`;
+    await assert.rejects(publish({ workspace: ws, sessionGitUrl: url, input: { branch: 'b', title: 't' }, cfg: { token: 'ghs_secret_token' } }), /Cannot reach/);
+    assert.ok(seen.length > 0, 'git did talk to the server');
+    assert.deepEqual(seen.filter(Boolean), [], 'and never sent it the token');
+  } finally {
+    evil.close();
+    if (prev === undefined) delete process.env.NO_PROXY; else process.env.NO_PROXY = prev;
+  }
+});
+
+test('publish: a .git that is a link, a gitfile or borrows another repository is refused', async () => {
+  const { remote, ws } = await repos();
+  const elsewhere = path.join(await tempDir(), 'server-repo');
+  await fs.rename(path.join(ws, '.git'), elsewhere);
+  await fs.symlink(elsewhere, path.join(ws, '.git'));
+  await assert.rejects(publish({ workspace: ws, input: { branch: 'b', title: 't' }, cfg: { repos: [remote] } }), /not a plain folder/);
+  await fs.rm(path.join(ws, '.git'));
+  await fs.writeFile(path.join(ws, '.git'), `gitdir: ${elsewhere}\n`);
+  await assert.rejects(publish({ workspace: ws, input: { branch: 'b', title: 't' }, cfg: { repos: [remote] } }), /not a plain folder/);
+  await fs.rm(path.join(ws, '.git'));
+  await fs.rename(elsewhere, path.join(ws, '.git'));
+  await fs.writeFile(path.join(ws, '.git', 'objects', 'info', 'alternates'), `${elsewhere}/objects\n`);
+  await assert.rejects(publish({ workspace: ws, input: { branch: 'b', title: 't' }, cfg: { repos: [remote] } }), /points at another repository/);
 });

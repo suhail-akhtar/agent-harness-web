@@ -30,7 +30,7 @@ export function expand(v: string, allowedSecrets?: string[]): string {
 }
 
 /** A server-scope MCP config, with who added it and the secrets it may read. */
-export type ServerMcpConfig = McpServerConfig & { plugin?: string; secrets?: string[] };
+export type ServerMcpConfig = McpServerConfig & { plugin?: string; secrets?: string[]; /** Set only by the harness for HARNESS_MCP_CONFIG: may read any variable. */ operator?: boolean };
 
 const SHIMS = new Set(['npx', 'npm', 'pnpm', 'pnpx', 'yarn', 'corepack']);
 
@@ -52,8 +52,9 @@ export function spawnPlan(command: string, args: string[], platform: string = pr
 async function connect(name: string, cfg: ServerMcpConfig, scope: 'server' | 'project', host?: ToolHost): Promise<McpClient> {
   let client: McpClient;
   const opts = { callTimeoutMs: cfg.timeoutMs };
-  // Operator config (no plugin) may read any variable; a plugin only what it declared.
-  const allowed = cfg.plugin && cfg.plugin !== 'config' ? cfg.secrets ?? [] : undefined;
+  // The operator's own config may read any variable; anything else only what its plugin declared.
+  // (A flag, not a name: a plugin called "config" once got the operator's reach.)
+  const allowed = cfg.operator === true ? undefined : cfg.secrets ?? [];
   const x = (v: string) => (scope === 'server' ? expand(v, allowed) : v);
   if (cfg.type === 'http') {
     const url = x(cfg.url);

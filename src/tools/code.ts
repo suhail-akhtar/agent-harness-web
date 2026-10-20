@@ -17,11 +17,12 @@ const MAX_CALLS = 200;
 const NOT_FROM_SCRIPTS = new Set(['run_script', 'ask_user', 'exit_plan_mode', 'todo_write', 'agent', 'publish_branch']);
 
 let netIsolation: boolean | undefined;
-/** Linux user namespaces give the script process no network at all. */
+/** Linux namespaces: the script process has no network and sees no other process (it cannot signal the server). */
+const UNSHARE = ['-rnpf', '--kill-child'];
 export function scriptNetworkIsolated(): boolean {
   if (netIsolation === undefined) {
     netIsolation = process.platform === 'linux' && process.env.HARNESS_SCRIPT_ISOLATION !== 'off'
-      && spawnSync('unshare', ['-rn', 'true'], { timeout: 5000 }).status === 0;
+      && spawnSync('unshare', [...UNSHARE, 'true'], { timeout: 5000 }).status === 0;
   }
   return netIsolation;
 }
@@ -52,7 +53,7 @@ return \`\${n} of \${files.length} files have TODOs\`;`,
     const timeoutMs = Math.min(600, Math.max(1, num(input.timeout_seconds) ?? 120)) * 1000;
     const names = (ctx.toolNames?.() ?? []).filter((n) => !NOT_FROM_SCRIPTS.has(n) && /^[A-Za-z_$][\w$]*$/.test(n));
     const node = [process.execPath, '--permission', `--allow-fs-read=${RUNNER}`, '--disable-warning=ExperimentalWarning', RUNNER];
-    const [cmd, ...args] = scriptNetworkIsolated() ? ['unshare', '-rn', ...node] : node;
+    const [cmd, ...args] = scriptNetworkIsolated() ? ['unshare', ...UNSHARE, ...node] : node;
     const child = spawn(cmd!, args, { stdio: ['pipe', 'pipe', 'pipe'], env: { PATH: process.env.PATH ?? '' }, windowsHide: true });
     let stderr = '';
     child.stderr.on('data', (d) => { if (stderr.length < 4000) stderr += d; });

@@ -25,6 +25,8 @@ export interface ProviderRequest {
   effort: Effort;
   /** Stable per conversation; used by providers that route caches by key. */
   cacheKey: string;
+  /** Where the context should be compacted (HARNESS_COMPACT_AT, else the model's point); providers that compact themselves use it. */
+  compactAt?: number;
   signal: AbortSignal;
   onText?: (delta: string) => void;
   onReasoning?: (delta: string) => void;
@@ -50,7 +52,7 @@ export interface ProviderResponse {
 export interface Provider {
   send(req: ProviderRequest): Promise<ProviderResponse>;
   /** True when this provider compacts long conversations itself (the loop then only backs it up). */
-  compactsServerSide?(model: ModelSpec): boolean;
+  compactsServerSide?(model: ModelSpec, compactAt?: number): boolean;
 }
 
 export class ProviderError extends Error {

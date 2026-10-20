@@ -8,6 +8,7 @@ import type { PermissionMode } from '../core/types.ts';
 import type { Harness } from '../kernel/harness.ts';
 import { MemoryError, MemoryStore } from '../memory/store.ts';
 import { dockerAvailable, dockerDefaults, imageExists } from '../runtime/docker.ts';
+import { COMPANION_RESULT_LIMIT } from '../runtime/companion.ts';
 import { resolveIn, walk } from '../tools/paths.ts';
 import { RateLimiter, type Role, type SpendLedger, type UserStore } from './users.ts';
 
@@ -152,7 +153,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       const companions = harness.companions;
       const id = token ? companions.authenticate(token) : undefined;
       if (!id) throw new HttpError(401, 'unknown companion token');
-      const body = await readJson(req, 20_000_000);
+      const body = await readJson(req, p === '/api/companion/result' ? COMPANION_RESULT_LIMIT : 1_000_000);
       if (p === '/api/companion/poll') {
         const info = (body.info ?? {}) as { platform?: string; shell?: string; root?: string; version?: string };
         const job = await companions.poll(id, { platform: String(info.platform ?? 'unknown'), shell: String(info.shell ?? 'bash'), root: String(info.root ?? ''), version: info.version });

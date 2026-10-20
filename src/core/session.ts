@@ -63,6 +63,8 @@ export interface SessionMeta {
   toolCost?: number;
   /** The repository the workspace was cloned from (where publish_branch may push). */
   gitUrl?: string;
+  /** Untrusted content has entered the main agent's context (kept across restarts). */
+  tainted?: boolean;
 }
 
 export interface StoredEvent { seq: number; at: number; event: HarnessEvent }
@@ -216,13 +218,19 @@ export class Session {
     await fs.appendFile(path.join(this.dir, 'history.jsonl'), JSON.stringify(m) + '\n');
   }
 
-  async saveMeta(): Promise<void> {
-    this.meta.updatedAt = Date.now();
-    await fs.mkdir(this.dir, { recursive: true });
-    const tmp = path.join(this.dir, 'meta.json.tmp');
-    await fs.writeFile(tmp, JSON.stringify(this.meta, null, 1));
-    await fs.rename(tmp, path.join(this.dir, 'meta.json'));
+  /** Writes meta.json atomically. Saves queue: two at once once shared a temp file and one rename failed. */
+  saveMeta(): Promise<void> {
+    const next = this.metaWrite.catch(() => {}).then(async () => {
+      this.meta.updatedAt = Date.now();
+      await fs.mkdir(this.dir, { recursive: true });
+      const tmp = path.join(this.dir, 'meta.json.tmp');
+      await fs.writeFile(tmp, JSON.stringify(this.meta, null, 1));
+      await fs.rename(tmp, path.join(this.dir, 'meta.json'));
+    });
+    this.metaWrite = next;
+    return next;
   }
+  private metaWrite: Promise<void> = Promise.resolve();
 
   private scheduleSave(): void {
     clearTimeout(this.saveTimer);
@@ -330,6 +338,7 @@ export class Session {
     if (this.meta.runtime.kind === 'docker' || (this.meta.runtime.kind === 'local' && !this.meta.runtime.path)) {
       await fs.rm(path.join(this.deps.dataDir, 'workspaces', this.meta.id), { recursive: true, force: true });
     }
+    if (this.meta.runtime.kind === 'companion') await this.deps.companions.forget(this.meta.id).catch(() => {});
   }
 
   private async getSettings(host: ToolHost): Promise<Settings> {
@@ -368,7 +377,11 @@ export class Session {
       const folder = this.meta.runtime.kind === 'local' && this.meta.runtime.path ? this.meta.runtime.path : undefined;
       const project = projectKey({ gitRemote: remote, folder });
       const user = (this.meta.owner ?? 'default').replace(/[^\w.@-]/g, '_').slice(0, 80);
-      return new MemoryStore({ user: path.join(m.root, 'users', user), project: project && path.join(m.root, 'projects', project.key), projectLabel: project?.label }, { readOnly: m.mode === 'read', session: this.meta.id });
+      // Project memory is per account too: two people working on one repository
+      // must not read (or plant instructions in) each other's notes. Without
+      // accounts there is one person, and the shared folder stays where it was.
+      const projects = this.meta.owner ? path.join(m.root, 'users', user, 'projects') : path.join(m.root, 'projects');
+      return new MemoryStore({ user: path.join(m.root, 'users', user), project: project && path.join(projects, project.key), projectLabel: project?.label }, { readOnly: m.mode === 'read', session: this.meta.id });
     })();
     return this.memory;
   }
@@ -537,13 +550,14 @@ export class Session {
       proposePlan: (p: string) => this.proposePlan(p),
       beforeWrite: this.checkpoints ? (p: string) => this.checkpoints!.before(p) : undefined,
       services: await this.services(true),
+      onTaint: () => { if (!this.meta.tainted) { this.meta.tainted = true; this.saveMeta().catch(() => {}); } },
     };
     if (!this.agent) {
       this.agent = new Agent(cfg, this.hooksFor('main'), this.history.slice(this.meta.contextStart));
       this.agent.lastPromptTokens = this.meta.lastPromptTokens;
       // Reloaded after a restart: untrusted content already in the context still counts.
-      const untrusted = new Set(tb.tools.filter((t) => t.kind === 'network' || t.kind === 'external').map((t) => t.spec.name));
-      this.agent.tainted = this.agent.messages.some((m) => m.content.some((b) => b.type === 'tool_use' && (untrusted.has(b.name) || b.name.startsWith('mcp__') || b.name === 'tool_call')));
+      const untrusted = new Set(tb.tools.filter((t) => t.kind === 'network' || t.kind === 'external' || t.untrusted).map((t) => t.spec.name));
+      this.agent.tainted = !!this.meta.tainted || this.agent.messages.some((m) => m.content.some((b) => b.type === 'tool_use' && (untrusted.has(b.name) || b.name.startsWith('mcp__') || b.name === 'tool_call')));
     } else {
       // Model or effort may have changed between turns; the context stays.
       this.agent.cfg = { ...this.agent.cfg, ...cfg };
@@ -608,7 +622,7 @@ export class Session {
     this.emit({ kind: 'notice', level: 'info', text: `Started ${name} (${def.name}, ${model.id})${a.description ? `: ${a.description}` : ''}`, agent: name });
     const reason = await sub.run(a.signal);
     // Its report carries whatever it read: the delegating agent is now tainted too.
-    if (sub.tainted && this.agent) this.agent.tainted = true;
+    if (sub.tainted && this.agent) this.agent.markTainted();
     this.emit({ kind: 'turn_end', reason, agent: name });
     const last = [...sub.messages].reverse().find((m) => m.role === 'assistant');
     const text = last?.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n').trim() ?? '';

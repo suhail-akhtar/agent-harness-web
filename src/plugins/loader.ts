@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import net from 'node:net';
 import { pathToFileURL } from 'node:url';
 import { loadAgentDir } from '../agents/agents.ts';
 import type { Registry } from '../kernel/registry.ts';
@@ -77,7 +78,7 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void): P
   }
   const declared = { network: (m.permissions?.network ?? []).map(String), secrets: (m.permissions?.secrets ?? []).map(String) };
   for (const [name, cfg] of Object.entries(m.mcpServers ?? {})) {
-    reg.mcpServers.set(name, { ...cfg, plugin: m.name, secrets: declared.secrets } as never);
+    reg.mcpServers.set(name, { ...cfg, plugin: m.name, secrets: declared.secrets, operator: false } as never);
     contributes.push(`mcp:${name}`);
   }
   for (const [ev, specs] of Object.entries(m.hooks ?? {})) {
@@ -98,7 +99,7 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void): P
       registerProvider: (id, p) => { reg.providers.set(id, p); contributes.push(`provider:${id}`); },
       registerAgent: (a) => { reg.agents.set(a.name, { ...a, source: m.name }); contributes.push(`agent:${a.name}`); },
       registerSkills: (d) => { reg.skillDirs.push({ dir: path.resolve(dir, d), source: m.name }); contributes.push('skills'); },
-      registerMcpServer: (name, cfg) => { reg.mcpServers.set(name, { ...cfg, plugin: m.name, secrets: declared.secrets } as never); contributes.push(`mcp:${name}`); },
+      registerMcpServer: (name, cfg) => { reg.mcpServers.set(name, { ...cfg, plugin: m.name, secrets: declared.secrets, operator: false } as never); contributes.push(`mcp:${name}`); },
       secret: (name) => {
         if (!declared.secrets.includes(name)) throw new Error(`${m.name}: the secret ${name} is not declared in harness-plugin.json (permissions.secrets)`);
         return process.env[name];
@@ -157,8 +158,10 @@ export function hostAllowed(host: string, patterns: string[]): boolean {
 
 /**
  * fetch for plugin code: only to the hosts the plugin declared (permissions.network),
- * every redirect re-checked. Public hosts are also checked against private
- * addresses; a private host (a local model server) works only when named exactly.
+ * every redirect re-checked. Every host name is checked against private
+ * addresses, named exactly or not - a declared name can be re-pointed in DNS at
+ * an internal address. A private endpoint (a local model server) is reached
+ * only when declared as an IP address or localhost.
  */
 export async function pluginFetch(plugin: string, allowed: string[], url: string | URL, init: RequestInit = {}): Promise<Response> {
   let u = new URL(String(url));
@@ -166,7 +169,8 @@ export async function pluginFetch(plugin: string, allowed: string[], url: string
     const host = u.host.toLowerCase();
     const exact = allowed.some((p) => p.toLowerCase() === host || p.toLowerCase() === u.hostname.toLowerCase());
     if (!hostAllowed(u.hostname, allowed) && !exact) throw new Error(`${plugin}: ${u.hostname} is not in the plugin's declared network hosts (harness-plugin.json permissions.network)`);
-    if (!exact) await assertPublicUrl(u.toString());
+    const literal = net.isIP(u.hostname.replace(/^\[|\]$/g, '')) !== 0 || u.hostname.toLowerCase() === 'localhost';
+    if (!(exact && literal)) await assertPublicUrl(u.toString());
     const res = await fetch(u, { ...init, redirect: 'manual' });
     const loc = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null;
     if (!loc) return res;

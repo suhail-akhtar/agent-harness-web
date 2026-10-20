@@ -103,6 +103,8 @@ export interface ToolDefinition {
   /** Kinds a particular call needs beyond `kind` (e.g. an option that writes files needs 'edit'). */
   kindsFor?: (input: Record<string, unknown>) => ToolKind[];
   parallelSafe?: boolean;
+  /** Its output carries content from outside the user's control (web pages, a service): saving to memory afterwards is confirmed. */
+  untrusted?: boolean;
   summarize?: (input: Record<string, unknown>) => string;
   run(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutcome | string>;
 }
@@ -113,6 +115,7 @@ export function defineTool(t: ToolDefinition): Tool {
     kind: t.kind ?? 'exec',
     ...(t.kindsFor ? { kindsFor: t.kindsFor } : {}),
     parallelSafe: t.parallelSafe ?? false,
+    ...(t.untrusted ? { untrusted: true } : {}),
     remoteable: false,
     summarize: t.summarize ?? ((i) => `${t.name} ${JSON.stringify(i).slice(0, 80)}`),
     async run(input, ctx) {

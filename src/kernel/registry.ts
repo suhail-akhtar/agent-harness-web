@@ -30,7 +30,7 @@ export class Registry {
   readonly tools = new Map<string, Tool>();
   readonly agents = new Map<string, AgentDef>();
   readonly skillDirs: { dir: string; source: string }[] = [];
-  readonly mcpServers = new Map<string, McpServerConfig & { plugin: string; secrets?: string[] }>();
+  readonly mcpServers = new Map<string, McpServerConfig & { plugin: string; secrets?: string[]; operator?: boolean }>();
   readonly gates = new Map<string, QualityGate & { plugin: string }>();
   readonly workflows = new Map<string, WorkflowDef>();
   /** Search backends from plugins (tried before the built-in ones). */

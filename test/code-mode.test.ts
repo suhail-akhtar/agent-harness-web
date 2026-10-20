@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { runScriptTool, scriptNetworkIsolated } from '../src/tools/code.ts';
 import { editTool, globTool, grepTool, readTool, writeTool } from '../src/tools/files.ts';
 import { todoTool } from '../src/tools/exec.ts';
-import { makeAgent, results } from './helpers.ts';
+import { makeAgent, results, tempDir } from './helpers.ts';
 
 const tools = [runScriptTool, readTool, globTool, grepTool, writeTool, editTool, todoTool];
 
@@ -33,22 +33,50 @@ test('a script calls tools and only its result enters the context', async () => 
   assert.equal(h.events.filter((e) => e.kind === 'tool_call' && e.name === 'read').length, 12);
 });
 
-test('inside a script there is no require, files, processes or network; escaping the context hits the process sandbox', async () => {
+test('inside a script there is no require, files, processes or network, and no way out of the context', async () => {
   const { r } = await scripted(`
-    const out = { require: typeof require, process: typeof process, fetch: typeof fetch };
+    const out = { require: typeof require, process: typeof process, fetch: typeof fetch, escapes: [] };
     try { eval("1") } catch (e) { out.eval = "blocked" }
-    // The classic escape: a function from outside the context gives the outer realm.
-    const P = tools.read.constructor.constructor("return process")();
-    try { P.binding("fs"); out.binding = "allowed" } catch (e) { out.binding = "blocked" }
-    try { const m = P.getBuiltinModule("fs"); m.readFileSync("/etc/hostname"); out.fs = "allowed" } catch (e) { out.fs = e.code || e.message }
-    try { P.getBuiltinModule("child_process").execSync("id"); out.spawn = "allowed" } catch (e) { out.spawn = e.code || e.message }
-    try { await P.getBuiltinModule("http").get ? await new Promise((res) => { const q = P.getBuiltinModule("http").get("http://1.1.1.1", () => res("connected")); q.on("error", (e) => res(e.code)); q.setTimeout(3000, () => { q.destroy(); res("timeout") }) }).then((v) => out.net = v) : 0 } catch (e) { out.net = e.code }
+    // The classic escape: any function or object from outside the context gives the outer realm.
+    let err; try { await tools.read({ path: "missing-file" }) } catch (e) { err = e }
+    const result = await tools.glob({ pattern: "*" });
+    const candidates = {
+      tool: () => tools.read, call: () => tools.call, log: () => console.log, sleep: () => sleep,
+      console: () => console, tools: () => tools, error: () => err, sleeping: () => sleep(1),
+      pending: () => tools.glob({ pattern: "*" }), result: () => result,
+    };
+    for (const [k, get] of Object.entries(candidates)) {
+      for (const via of [(x) => x.constructor.constructor, (x) => x.constructor, (x) => Object.getPrototypeOf(x).constructor.constructor]) {
+        try { const F = via(get()); const P = F("return process")(); if (P) out.escapes.push(k) } catch {}
+      }
+    }
+    try { Error.prepareStackTrace = (e, cs) => cs.map((c) => c.getFunction && c.getFunction()).filter(Boolean); const fns = new Error().stack; for (const f of fns) try { if (f.constructor("return process")()) out.escapes.push("stack") } catch {} } catch {}
     return out;`);
+  assert.equal(r.is_error, undefined, r.content);
   const o = JSON.parse(r.content.split('\n[')[0]!);
   assert.deepEqual([o.require, o.process, o.fetch, o.eval], ['undefined', 'undefined', 'undefined', 'blocked']);
+  assert.deepEqual(o.escapes, [], 'no route reached the host realm');
+});
+
+test('the script process itself: no files, processes, signals or network, even from its own realm', async () => {
+  // What a script would meet if it ever reached the host realm: run the same
+  // sandbox flags with a probe in place of the runner.
+  const { spawnSync } = await import('node:child_process');
+  const probe = path.join(await tempDir(), 'script-probe.mjs');
+  await fs.writeFile(probe, `const o = {};
+for (const [k, f] of Object.entries({
+  fs: () => process.getBuiltinModule('fs').readFileSync('/etc/hostname'),
+  spawn: () => process.getBuiltinModule('child_process').execSync('id'),
+  signal: () => process.kill(Number(process.argv[2]), 0),
+})) { try { f(); o[k] = 'allowed' } catch (e) { o[k] = e.code || e.message } }
+console.log(JSON.stringify(o));`);
+  const node = [process.execPath, '--permission', `--allow-fs-read=${probe}`, probe, String(process.pid)];
+  const args = scriptNetworkIsolated() ? ['unshare', '-rnpf', '--kill-child', ...node] : node;
+  const r = spawnSync(args[0]!, args.slice(1), { encoding: 'utf8' });
+  const o = JSON.parse(r.stdout);
   assert.equal(o.fs, 'ERR_ACCESS_DENIED');
   assert.equal(o.spawn, 'ERR_ACCESS_DENIED');
-  if (scriptNetworkIsolated()) assert.match(o.net, /ENETUNREACH|EHOSTUNREACH|ECONNREFUSED|timeout/);
+  if (scriptNetworkIsolated()) assert.equal(o.signal, 'ESRCH', 'the server\'s process is not visible to signal');
 });
 
 test('a script\'s tool calls get the same permission checks; interactive tools and runaway scripts are refused', async () => {

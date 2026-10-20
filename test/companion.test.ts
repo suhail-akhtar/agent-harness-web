@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createCompanionHandler, type CompanionJob } from '../src/companion/handler.ts';
 import { createHarness } from '../src/kernel/harness.ts';
-import { CompanionHub } from '../src/runtime/companion.ts';
+import { CompanionHub, mirrorPath } from '../src/runtime/companion.ts';
 import { FakeProvider, tempDir } from './helpers.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -71,7 +71,7 @@ test('mirror: a companion that sends paths outside the folder cannot write outsi
   const { id } = await hub.create('evil');
   const dir = await tempDir();
   const stop = runCompanion(hub, id, dir, (job, r) => (job.kind === 'pull'
-    ? { ok: true, value: { files: [{ path: '../../escaped.txt', size: 1, mtime: 1, data: 'eA==' }, { path: '/etc/x', size: 1, mtime: 1, data: 'eA==' }, { path: 'ok.txt', size: 1, mtime: 1, data: 'eA==' }] } }
+    ? { ok: true, value: { files: ['../../escaped.txt', '/etc/x', '..\\..\\escaped.txt', 'a\\..\\..\\..\\escaped.txt', 'C:escaped.txt', 'C:\\escaped.txt', 'a/./b', 'ok.txt'].map((p) => ({ path: p, size: 1, mtime: 1, data: 'eA==' })) } }
     : r));
   try {
     const root = await hub.host(id, 's1').mirror!();
@@ -79,6 +79,48 @@ test('mirror: a companion that sends paths outside the folder cannot write outsi
     await assert.rejects(fs.stat(path.join(data, 'escaped.txt')));
     await assert.rejects(fs.stat(path.join(data, 'mirrors', 'escaped.txt')));
   } finally { stop(); }
+  // What Windows would read as a path out of the copy.
+  const root = path.join(data, 'mirrors', 's1');
+  for (const p of ['..\\..\\users.json', 'a\\..\\..\\x', 'C:x', 'C:\\x', '\\\\server\\share', 'a//b', 'a/../b', '', 'a\0b']) assert.equal(mirrorPath(root, p), undefined, p);
+  assert.equal(mirrorPath(root, 'docs/a.md'), path.join(root, 'docs', 'a.md'));
+});
+
+test('mirror: a large folder comes over in several replies; secrets stay on the computer; the copy goes with the session', async () => {
+  const data = await tempDir();
+  const hub = new CompanionHub(data, { mirrorChunkBytes: 10 });
+  const { id } = await hub.create('laptop');
+  const dir = await tempDir();
+  for (const n of ['a', 'b', 'c']) await fs.writeFile(path.join(dir, `${n}.txt`), `${n}`.repeat(8));
+  await fs.writeFile(path.join(dir, '.env'), 'API_KEY=secret');
+  await fs.writeFile(path.join(dir, 'server.pem'), 'key');
+  let pulls = 0;
+  const stop = runCompanion(hub, id, dir, (job, r) => { if (job.kind === 'pull') pulls++; return r; });
+  try {
+    const root = await hub.host(id, 's1').mirror!();
+    assert.equal(pulls, 3, 'one file per reply at 10 bytes a reply');
+    assert.deepEqual((await fs.readdir(root)).sort(), ['a.txt', 'b.txt', 'c.txt']);
+    // A deletion is applied only once the whole listing is in.
+    await fs.rm(path.join(dir, 'b.txt'));
+    await hub.host(id, 's1').mirror!();
+    assert.deepEqual((await fs.readdir(root)).sort(), ['a.txt', 'c.txt']);
+    await hub.forget('s1');
+    await assert.rejects(fs.stat(root));
+  } finally { stop(); }
+});
+
+test('visual gates on a companion decide from a listing, and an offline companion fails no gate', async () => {
+  const h = await createHarness({ dataDir: await tempDir(), plugins: [path.join(here, '..', 'plugins', 'visual')], search: null, memory: 'off' });
+  try {
+    const gate = (n: string) => h.registry.gates.get(n)!;
+    let mirrored = 0;
+    const host = (list: string | Error) => ({ kind: 'companion', root: '', mirror: async () => { mirrored++; return ''; }, pushFile: async () => {}, remoteTool: async () => { if (list instanceof Error) throw list; return { content: list }; } });
+    const sig = new AbortController().signal;
+    assert.equal(await gate('web-console').applies!(host('public/index.html') as never, sig), true);
+    assert.equal(await gate('playtest').applies!(host('levels/playtest.json') as never, sig), false, 'only the one at the root');
+    assert.equal(await gate('documents-render').applies!(host('No files match **/*.pdf.') as never, sig), false);
+    assert.equal(await gate('documents-render').applies!(host(new Error('companion offline')) as never, sig), false);
+    assert.equal(mirrored, 0, 'deciding copied nothing');
+  } finally { await h.close(); }
 });
 
 test('render on a companion session: the file on the user\'s computer is rendered on the server, results written back', { skip: !hasChromium && 'no Chromium' }, async () => {

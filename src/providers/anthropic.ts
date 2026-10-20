@@ -33,8 +33,8 @@ export class AnthropicProvider implements Provider {
    */
   private serverCompaction = process.env.HARNESS_ANTHROPIC_SERVER_COMPACTION !== 'off';
 
-  compactsServerSide(model: ModelSpec): boolean {
-    return this.contextEditing && this.serverCompaction && model.compactAt >= COMPACT_MIN;
+  compactsServerSide(model: ModelSpec, compactAt = model.compactAt): boolean {
+    return this.contextEditing && this.serverCompaction && compactAt >= COMPACT_MIN;
   }
 
   constructor(apiKey: string) {
@@ -61,7 +61,7 @@ export class AnthropicProvider implements Provider {
   }
 
   private body(req: ProviderRequest): Record<string, unknown> {
-    return anthropicBody(req, this.contextEditing, this.compactsServerSide(req.model));
+    return anthropicBody(req, this.contextEditing, this.compactsServerSide(req.model, req.compactAt));
   }
 
   private async once(req: ProviderRequest): Promise<ProviderResponse> {
@@ -76,7 +76,7 @@ export class AnthropicProvider implements Provider {
     };
     try {
       bump();
-      const params = { ...this.body(req), betas: this.contextEditing ? [...BETAS, ...(this.compactsServerSide(req.model) ? [COMPACT_BETA] : [])] : [] };
+      const params = { ...this.body(req), betas: this.contextEditing ? [...BETAS, ...(this.compactsServerSide(req.model, req.compactAt) ? [COMPACT_BETA] : [])] : [] };
       const stream = this.client.beta.messages.stream(params as unknown as Anthropic.Beta.Messages.MessageCreateParamsStreaming, { signal: ctl.signal });
       stream.on('streamEvent', bump);
       stream.on('text', (d) => req.onText?.(d));
@@ -118,7 +118,7 @@ export class AnthropicProvider implements Provider {
 }
 
 /** The request body (without betas). Exported for tests: caching depends on its exact shape. */
-export function anthropicBody(req: Pick<ProviderRequest, 'model' | 'system' | 'tools' | 'messages' | 'effort'>, contextEditing: boolean, serverCompaction = false): Record<string, unknown> {
+export function anthropicBody(req: Pick<ProviderRequest, 'model' | 'system' | 'tools' | 'messages' | 'effort' | 'compactAt'>, contextEditing: boolean, serverCompaction = false): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: req.model.id,
     max_tokens: req.model.maxOutput,
@@ -138,13 +138,13 @@ export function anthropicBody(req: Pick<ProviderRequest, 'model' | 'system' | 't
         type: 'clear_tool_uses_20250919',
         // Clear well before compaction, in large batches, so each cache
         // reset buys back a lot of context.
-        trigger: { type: 'input_tokens', value: Math.round(req.model.compactAt * 0.6) },
+        trigger: { type: 'input_tokens', value: Math.round((req.compactAt ?? req.model.compactAt) * 0.6) },
         keep: { type: 'tool_uses', value: 6 },
         clear_at_least: { type: 'input_tokens', value: 12_000 },
         exclude_tools: ['todo_write', 'agent'],
       }, ...(serverCompaction ? [{
         type: 'compact_20260112',
-        trigger: { type: 'input_tokens', value: Math.max(COMPACT_MIN, req.model.compactAt) },
+        trigger: { type: 'input_tokens', value: Math.max(COMPACT_MIN, req.compactAt ?? req.model.compactAt) },
         instructions: COMPACT_INSTRUCTIONS,
       }] : [])],
     };

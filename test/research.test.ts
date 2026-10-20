@@ -10,7 +10,7 @@ import { checkCitations, parseReferences } from '../src/research/citations.ts';
 import { anthropicBackend, deepseekBackend, makeSearchService, openaiBackend, type SearchBackend } from '../src/research/search.ts';
 import { normalizeUrl, SourceStore } from '../src/research/sources.ts';
 import { LocalHost } from '../src/runtime/host.ts';
-import { readable, webSearchTool } from '../src/tools/web.ts';
+import { htmlToText, readable, webSearchTool } from '../src/tools/web.ts';
 import type { ToolContext } from '../src/tools/types.ts';
 import { tempDir } from './helpers.ts';
 
@@ -65,6 +65,24 @@ test('readable pages: the article without menus, footers and scripts; a title', 
   assert.match(r.text, /^# Transports/);
   assert.match(r.text, /a \| b \|/);
   assert.doesNotMatch(r.text, /Home \| Docs|Ads|© 2026|x\(\)/);
+});
+
+test('html to text: links, entities and lists; hostile pages take linear time', () => {
+  assert.equal(htmlToText('<ul><li>One <a href="https://x.dev/a">docs</a></li><li>Two &amp;lt; &#x41; &#99999999; &bogus;</li></ul>'), '- One docs (https://x.dev/a)\n- Two &lt; A &#99999999;', 'an out-of-range code point stays as text (it used to throw)');
+  assert.equal(htmlToText('a < b and <!-- note --> c'), 'a < b and  c');
+  for (const [name, html] of [
+    ['unclosed scripts', '<script>'.repeat(40_000)],
+    ['unclosed comments', '<!--x'.repeat(40_000)],
+    ['tags that never close', '<a href="x"'.repeat(20_000)],
+    ['bare angle brackets', '<'.repeat(200_000)],
+    ['unclosed main', '<main>x'.repeat(30_000)],
+    ['unclosed chrome', '<nav>'.repeat(40_000)],
+    ['a long run of spaces', 'a' + ' '.repeat(200_000) + 'b'],
+  ] as [string, string][]) {
+    const t = Date.now();
+    readable(html);
+    assert.ok(Date.now() - t < 1000, `${name}: ${Date.now() - t} ms`);
+  }
 });
 
 test('search service: a named backend, the first available, plugin backends first, or off', () => {

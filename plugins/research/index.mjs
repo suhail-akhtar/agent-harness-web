@@ -17,7 +17,7 @@ export default {
       name: 'check_citations',
       description: 'Check a report\'s citations against the pages read in this session: every cited URL must have been fetched with web_fetch, every "quotation" must appear word for word in its source, and every figure in a cited sentence must appear in a source it cites (a computed figure goes in its own sentence ending "(derived: ...)"). Cite as [n] with a reference list of "[n]: URL" lines, or as inline Markdown links.',
       parameters: { type: 'object', properties: { path: { type: 'string', description: 'The report, e.g. research/report.md' } }, required: ['path'] },
-      kind: 'read', parallelSafe: true,
+      kind: 'read', parallelSafe: true, untrusted: true,
       summarize: (i) => `check citations in ${i.path}`,
       async run(input, ctx) {
         const sources = ctx.services?.sources;
@@ -32,7 +32,7 @@ export default {
       name: 'sources',
       description: 'The pages read with web_fetch in this session (any agent\'s): "list" them, or "read" one by URL without fetching it again.',
       parameters: { type: 'object', properties: { command: { type: 'string', enum: ['list', 'read'] }, url: { type: 'string' }, offset: { type: 'number' }, max_chars: { type: 'number' } }, required: ['command'] },
-      kind: 'read', parallelSafe: true,
+      kind: 'read', parallelSafe: true, untrusted: true,
       summarize: (i) => `sources ${i.command}${i.url ? ` ${i.url}` : ''}`,
       async run(input, ctx) {
         const sources = ctx.services?.sources;

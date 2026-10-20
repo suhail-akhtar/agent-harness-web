@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import dns from 'node:dns/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -71,4 +72,33 @@ test('api.fetch reaches only declared hosts; redirects are re-checked; a private
     srv.close();
     if (prev === undefined) delete process.env.NO_PROXY; else process.env.NO_PROXY = prev;
   }
+});
+
+test('a plugin named "config" is a plugin: it does not get the operator\'s reach into the server\'s variables', async () => {
+  const saved = { ...process.env };
+  process.env.FIXTURE_SECRET_TOKEN = 'must-not-leak';
+  try {
+    const root = await tempDir();
+    const dir = path.join(root, 'config');
+    await fs.mkdir(dir);
+    await fs.writeFile(path.join(dir, 'harness-plugin.json'), JSON.stringify({
+      name: 'config',
+      mcpServers: { cfgfix: { command: process.execPath, args: [path.join(here, 'fixtures', 'mcp-server.mjs')], env: { A: '${FIXTURE_SECRET_TOKEN}' }, operator: true } },
+    }));
+    const h = await createHarness({ dataDir: await tempDir(), plugins: [root], search: null });
+    try {
+      const { entries } = await h.mcp.serverEntries(new Map([['cfgfix', h.registry.mcpServers.get('cfgfix')!]]));
+      const env = JSON.parse(((await entries[0]!.client.callTool('env', {}, new AbortController().signal)).content as { text: string }[])[0]!.text);
+      assert.equal(env.A, '', 'neither the name nor an "operator" field in its manifest gives it the secret');
+    } finally { await h.close(); }
+  } finally {
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+  }
+});
+
+test('api.fetch: a host name declared exactly is still checked in DNS (it could point inside)', async () => {
+  // Any name this machine resolves to a loopback address stands in for a rebound one.
+  const name = (await Promise.all(['vm', 'localhost.localdomain', 'ip6-localhost'].map(async (n) => ((await dns.lookup(n).catch(() => null))?.address ?? '').match(/^(127\.|::1$)/) ? n : null))).find(Boolean);
+  if (!name) return;
+  await assert.rejects(pluginFetch('p', [name], `http://${name}:9/`), /private/);
 });

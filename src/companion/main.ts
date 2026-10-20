@@ -30,7 +30,12 @@ async function post(p: string, body: unknown, signal?: AbortSignal): Promise<Res
 async function run(job: CompanionJob): Promise<void> {
   const { ok, value } = await handle(job);
   for (let i = 0; i < 3; i++) {
-    try { await post('/api/companion/result', { jobId: job.id, ok, value }); return; } catch { await new Promise((r) => setTimeout(r, 1000 * (i + 1))); }
+    try {
+      const res = await post('/api/companion/result', { jobId: job.id, ok, value });
+      // Refused (too large, say): tell the server, so the job fails instead of waiting out its timeout.
+      if (res.status >= 400 && res.status !== 404) await post('/api/companion/result', { jobId: job.id, ok: false, value: { error: `the server refused this result (HTTP ${res.status})` } });
+      return;
+    } catch { await new Promise((r) => setTimeout(r, 1000 * (i + 1))); }
   }
 }
 
@@ -39,7 +44,7 @@ async function loop(): Promise<void> {
   let backoff = 1000;
   while (true) {
     try {
-      const res = await post('/api/companion/poll', { info: { platform: process.platform, shell: resolveShell().kind, root: dir, version: '0.2.0' } }, AbortSignal.timeout(60_000));
+      const res = await post('/api/companion/poll', { info: { platform: process.platform, shell: resolveShell().kind, root: dir, version: '0.3.0' } }, AbortSignal.timeout(60_000));
       if (res.status === 401) { console.error('The server rejected this token. Create a new companion in the web app.'); process.exit(1); }
       if (res.status === 200) run(await res.json() as CompanionJob).catch((e) => console.error(e));
       else if (res.status !== 204) throw new Error(`poll failed: ${res.status}`);

@@ -28,6 +28,42 @@ export interface PublishConfig {
   author?: { name: string; email: string };
   /** URL prefix rewrites for the push, like git's insteadOf (a mirror, or tests). */
   rewrite?: Record<string, string>;
+  /** Hosts the token may be sent to when pushing, besides github.com and the API base's host. */
+  tokenHosts?: string[];
+}
+
+/**
+ * Whether the token may go with a push to this repository URL. The token is for
+ * GitHub (or the operator's GitHub Enterprise); a session cloned from any other
+ * host pushes without it, so a hostile git URL never collects it.
+ */
+export function tokenMayGoTo(url: string, cfg: PublishConfig): boolean {
+  let host: string;
+  try { host = new URL(url).hostname.toLowerCase(); } catch { return false; }
+  const hosts = new Set(['github.com', ...(cfg.tokenHosts ?? []).map((h) => h.toLowerCase())]);
+  if (cfg.apiBase) {
+    try {
+      const api = new URL(cfg.apiBase).hostname.toLowerCase();
+      hosts.add(api === 'api.github.com' ? 'github.com' : api.replace(/^api\./, ''));
+      hosts.add(api);
+    } catch { /* a bad apiBase adds nothing */ }
+  }
+  return hosts.has(host);
+}
+
+/** The workspace's .git must be a real folder inside it - not a link or a gitfile pointing elsewhere on the server. */
+async function ownGitDir(workspace: string): Promise<string> {
+  const dir = path.join(workspace, '.git');
+  const st = await fs.lstat(dir).catch(() => null);
+  if (!st) throw new PublishError('The workspace is not a git repository.');
+  if (st.isSymbolicLink() || !st.isDirectory()) throw new PublishError('The workspace\'s .git is not a plain folder (a link or a gitfile), so it is not published from.');
+  const [real, root] = await Promise.all([fs.realpath(dir), fs.realpath(workspace)]);
+  if (path.dirname(real) !== root) throw new PublishError('The workspace\'s .git resolves outside the workspace.');
+  // Pointers that make git read objects or refs from another repository on this machine.
+  for (const f of ['commondir', path.join('objects', 'info', 'alternates')]) {
+    if (await fs.lstat(path.join(real, f)).catch(() => null)) throw new PublishError(`The workspace's .git has ${f.replace(/\\/g, '/')}, which points at another repository; it is not published from.`);
+  }
+  return real;
 }
 
 export interface PublishInput {
@@ -101,7 +137,7 @@ export async function publish(o: {
   if (!validBranch(input.branch)) throw new PublishError(`"${input.branch}" is not a valid branch name (letters, digits, . _ / -).`);
   if (!input.title.trim()) throw new PublishError('a pull request title is required');
   const target = publishTarget(o.sessionGitUrl, o.repo, cfg);
-  if (!(await fs.stat(path.join(o.workspace, '.git')).catch(() => null))) throw new PublishError('The workspace is not a git repository.');
+  let gitDir = await ownGitDir(o.workspace);
 
   // 1. Commit, if asked - where the session's commands run. `git add` in an
   // agent's workspace runs whatever filters its .git/config defines, so it never
@@ -109,6 +145,7 @@ export async function publish(o: {
   if (input.commitMessage?.trim()) {
     if (!o.commit) throw new PublishError('Commit your changes with git first (this workspace cannot be committed for you).');
     await o.commit(input.commitMessage.trim(), cfg.author ?? { name: 'Harness Agent', email: 'agent@harness.invalid' });
+    gitDir = await ownGitDir(o.workspace); // the commit ran the agent's code; look again
   }
 
   // 2. Copy the commits into a repository the harness owns.
@@ -116,14 +153,15 @@ export async function publish(o: {
   try {
     await git(['init', '-q', '--bare', clean], os.tmpdir(), o.signal);
     // Fetching from a local path runs upload-pack against the workspace; its config cannot add hooks to a fetch.
-    await git(['-c', 'protocol.file.allow=always', 'fetch', '-q', '--no-tags', path.join(o.workspace, '.git'), `+HEAD:refs/heads/${input.branch}`], clean, o.signal);
+    await git(['-c', 'protocol.file.allow=always', 'fetch', '-q', '--no-tags', gitDir, `+HEAD:refs/heads/${input.branch}`], clean, o.signal);
     const commit = await git(['rev-parse', `refs/heads/${input.branch}`], clean, o.signal);
 
-    // 3. Push from there, with the token in a header for this one command.
+    // 3. Push from there, with the token in a header for this one command - and only
+    // when the target is GitHub's (a rewrite is the operator's own config).
     let pushUrl = target.url;
     for (const [from, to] of Object.entries(cfg.rewrite ?? {})) if (pushUrl.startsWith(from)) { pushUrl = to + pushUrl.slice(from.length); break; }
     const isHttp = /^https?:\/\//.test(pushUrl);
-    const auth = cfg.token && isHttp ? ['-c', `http.extraHeader=Authorization: Basic ${Buffer.from(`x-access-token:${cfg.token}`).toString('base64')}`] : [];
+    const auth = cfg.token && isHttp && tokenMayGoTo(target.url, cfg) ? ['-c', 'http.followRedirects=false', '-c', `http.extraHeader=Authorization: Basic ${Buffer.from(`x-access-token:${cfg.token}`).toString('base64')}`] : [];
     const remoteHeads = await run('git', [...auth, '-c', 'protocol.file.allow=always', 'ls-remote', '--symref', pushUrl, 'HEAD', `refs/heads/${input.branch}`], { cwd: clean, env: SAFE_ENV(), signal: o.signal, timeoutMs: 60_000 });
     if (remoteHeads.code !== 0) throw new PublishError(`Cannot reach ${target.owner ? `${target.owner}/${target.name}` : target.url}: ${remoteHeads.stderr.trim().slice(0, 300)}`);
     const defaultBranch = /ref: refs\/heads\/(\S+)\s+HEAD/.exec(remoteHeads.stdout)?.[1];

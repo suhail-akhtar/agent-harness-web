@@ -74,6 +74,8 @@ export interface AgentConfig {
   proposePlan?: ToolContext['proposePlan'];
   beforeWrite?: ToolContext['beforeWrite'];
   services?: ToolContext['services'];
+  /** Called once when untrusted content first enters this context (the session records it). */
+  onTaint?: () => void;
 }
 
 const MAX_RETRIES = 6;
@@ -96,6 +98,12 @@ export class Agent {
   private recentCalls: string[] = [];
   /** Untrusted content (a web page, an MCP result, a sub-agent that read some) has entered this context. */
   tainted = false;
+
+  markTainted(): void {
+    if (this.tainted) return;
+    this.tainted = true;
+    this.cfg.onTaint?.();
+  }
   private scriptCalls = 0;
   private stepsSinceTodo = 0;
 
@@ -111,10 +119,15 @@ export class Agent {
     this.hooks.onAppend(m);
   }
 
+  /** Where this agent's context should be compacted: HARNESS_COMPACT_AT, else the model's point. */
+  compactAt(): number {
+    return Math.min(this.cfg.settings.compactAt ?? this.cfg.model.compactAt, Math.floor(this.cfg.model.contextWindow * 0.85));
+  }
+
   compactThreshold(): number {
-    const at = Math.min(this.cfg.settings.compactAt ?? this.cfg.model.compactAt, Math.floor(this.cfg.model.contextWindow * 0.85));
+    const at = this.compactAt();
     // A provider that compacts itself does it at `at`; ours is only the backstop.
-    return this.cfg.provider.compactsServerSide?.(this.cfg.model) ? Math.min(Math.floor(this.cfg.model.contextWindow * 0.85), Math.round(at * 1.5)) : at;
+    return this.cfg.provider.compactsServerSide?.(this.cfg.model, at) ? Math.min(Math.floor(this.cfg.model.contextWindow * 0.85), Math.round(at * 1.5)) : at;
   }
 
   private hookRun(event: HookEvent, payload: Record<string, unknown>, matchName: string | undefined, signal: AbortSignal) {
@@ -219,6 +232,7 @@ export class Agent {
       messages,
       effort: this.cfg.effort,
       cacheKey: this.cfg.cacheKey,
+      compactAt: this.compactAt(),
       signal,
       onText: (text) => this.hooks.emit({ kind: 'text_delta', text, agent: this.cfg.name }),
       onReasoning: (text) => this.hooks.emit({ kind: 'reasoning_delta', text, agent: this.cfg.name }),
@@ -334,7 +348,7 @@ export class Agent {
       return finish(msg, true, undefined, undefined, name);
     }
     if (name === 'todo_write') this.stepsSinceTodo = 0;
-    if (tool.kind === 'network' || tool.kind === 'external' || outcome.untrusted) this.tainted = true;
+    if (tool.kind === 'network' || tool.kind === 'external' || tool.untrusted || outcome.untrusted) this.markTainted();
 
     let content = outcome.content;
     const post = await this.hookRun('PostToolUse', { tool: name, input, is_error: !!outcome.is_error }, name, signal);

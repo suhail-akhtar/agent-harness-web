@@ -31,21 +31,83 @@ export async function assertPublicUrl(raw: string): Promise<URL> {
   return u;
 }
 
-export function htmlToText(html: string): string {
-  return html
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/<(script|style|noscript|svg|head|template|iframe)[\s\S]*?<\/\1>/gi, '')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/(p|div|section|article|li|tr|h[1-6]|pre|blockquote|table|ul|ol|dl|dd|dt|figcaption)>/gi, '\n')
-    .replace(/<\/t[dh]>/gi, ' | ')
-    .replace(/<li[^>]*>/gi, '- ')
-    .replace(/<h([1-6])[^>]*>/gi, (_m, n) => '\n' + '#'.repeat(Number(n)) + ' ')
-    .replace(/<a [^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, (_m, href, text) => (/^(#|javascript:)/i.test(href) ? text : `${text} (${href})`))
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;|&apos;|&#x27;/g, "'")
-    .replace(/&#(\d+);/g, (_m, n) => String.fromCodePoint(Number(n))).replace(/&#x([0-9a-f]+);/gi, (_m, n) => String.fromCodePoint(parseInt(n, 16)))
-    .replace(/&[a-z]+;/gi, ' ')
-    .replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+const SKIP = new Set(['script', 'style', 'noscript', 'svg', 'head', 'template', 'iframe']);
+const CHROME = new Set(['nav', 'header', 'footer', 'aside', 'form']);
+const BLOCK_END = new Set(['p', 'div', 'section', 'article', 'li', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'pre', 'blockquote', 'table', 'ul', 'ol', 'dl', 'dd', 'dt', 'figcaption']);
+
+/**
+ * HTML to plain text in one pass. Pages are hostile input, so nothing here may
+ * backtrack: a regex like <script[\s\S]*?<\/script> rescans the rest of the page
+ * for every unclosed tag (200 KB of them took seconds). Each step below moves
+ * forward with indexOf, so the cost is linear in the page.
+ */
+export function htmlToText(html: string, opts: { dropChrome?: boolean } = {}): string {
+  const lower = html.toLowerCase();
+  const out: string[] = [];
+  let href: string | undefined;
+  let i = 0;
+  while (i < html.length) {
+    const lt = html.indexOf('<', i);
+    if (lt < 0) { out.push(html.slice(i)); break; }
+    if (lt > i) out.push(html.slice(i, lt));
+    if (lower.startsWith('<!--', lt)) {
+      const e = html.indexOf('-->', lt + 4);
+      if (e < 0) break;
+      i = e + 3;
+      continue;
+    }
+    // Text like "a < b" is not a tag: only "<x", "</x", "<!" and "<?" start one.
+    if (!/^<(\/?[a-z]|[!?])/i.test(html.slice(lt, lt + 3))) { out.push('<'); i = lt + 1; continue; }
+    const gt = html.indexOf('>', lt + 1);
+    if (gt < 0) break;
+    const inner = html.slice(lt + 1, gt);
+    const closing = inner.startsWith('/');
+    const name = /^\/?([a-z][a-z0-9-]*)/i.exec(inner)?.[1]?.toLowerCase();
+    i = gt + 1;
+    if (!name) continue; // <!doctype>, <?xml?>
+    if (!closing && (SKIP.has(name) || (opts.dropChrome && CHROME.has(name))) && !inner.endsWith('/')) {
+      // Drop the element; an unclosed one runs to the end, as in a browser.
+      const close = lower.indexOf(`</${name}`, i);
+      if (close < 0) break;
+      const e = html.indexOf('>', close);
+      i = e < 0 ? html.length : e + 1;
+      continue;
+    }
+    if (name === 'br') out.push('\n');
+    else if (closing && (name === 'td' || name === 'th')) out.push(' | ');
+    else if (closing && BLOCK_END.has(name)) out.push('\n');
+    else if (!closing && name === 'li') out.push('- ');
+    else if (!closing && /^h[1-6]$/.test(name)) out.push('\n' + '#'.repeat(Number(name[1])) + ' ');
+    else if (!closing && name === 'a') href = /\bhref\s*=\s*"([^"]*)"/i.exec(inner)?.[1] ?? /\bhref\s*=\s*'([^']*)'/i.exec(inner)?.[1];
+    else if (closing && name === 'a') { if (href && !/^(#|javascript:)/i.test(href)) out.push(` (${href})`); href = undefined; }
+  }
+  return out.join('')
+    .replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;|&apos;|&#x27;/g, "'")
+    .replace(/&#(\d{1,7});/g, (_m, n) => safeCodePoint(Number(n))).replace(/&#x([0-9a-f]{1,6});/gi, (_m, n) => safeCodePoint(parseInt(n, 16)))
+    .replace(/&(?!amp;)[a-z]{1,32};/gi, ' ').replace(/&amp;/g, '&')
+    .split('\n').map((l) => l.trimEnd()).join('\n')
+    .replace(/\n{3,}/g, '\n\n').trim();
+}
+
+const safeCodePoint = (n: number) => (n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : ' ');
+
+/** The inner HTML of each <tag>...</tag>, found with indexOf (no backtracking). */
+function sections(html: string, lower: string, tag: string): string[] {
+  const out: string[] = [];
+  let i = 0;
+  while (true) {
+    const open = lower.indexOf(`<${tag}`, i);
+    if (open < 0) break;
+    const after = lower[open + tag.length + 1];
+    if (after && /[a-z0-9-]/.test(after)) { i = open + 1; continue; }
+    const gt = html.indexOf('>', open);
+    if (gt < 0) break;
+    const close = lower.indexOf(`</${tag}`, gt);
+    if (close < 0) break;
+    out.push(html.slice(gt + 1, close));
+    i = close + tag.length + 2;
+  }
+  return out;
 }
 
 /**
@@ -54,15 +116,15 @@ export function htmlToText(html: string): string {
  * model reading menus on every fetch.
  */
 export function readable(html: string): { title?: string; text: string } {
-  const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1]?.replace(/\s+/g, ' ').trim();
-  const body = html.replace(/<(nav|header|footer|aside|form)\b[\s\S]*?<\/\1>/gi, '');
-  const full = htmlToText(body);
+  const lower = html.toLowerCase();
+  const t = sections(html, lower, 'title')[0];
+  const title = t ? htmlToText(t).replace(/\s+/g, ' ').trim() || undefined : undefined;
+  const full = htmlToText(html, { dropChrome: true });
   for (const tag of ['main', 'article']) {
-    const parts = [...body.matchAll(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'gi'))].map((m) => htmlToText(m[1]!));
-    const text = parts.join('\n\n').trim();
-    if (text.length > 400 && text.length > full.length * 0.4) return { title: title ? htmlToText(title) : undefined, text };
+    const text = sections(html, lower, tag).map((m) => htmlToText(m, { dropChrome: true })).join('\n\n').trim();
+    if (text.length > 400 && text.length > full.length * 0.4) return { title, text };
   }
-  return { title: title ? htmlToText(title) : undefined, text: full || htmlToText(html) };
+  return { title, text: full || htmlToText(html) };
 }
 
 async function pdfText(bytes: Buffer, signal: AbortSignal): Promise<string | undefined> {

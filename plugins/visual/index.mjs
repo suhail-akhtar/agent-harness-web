@@ -30,6 +30,23 @@ async function siteOf(host, signal) {
   return { host: { root, displayRoot: host.displayRoot }, root, push: (rel, data) => host.pushFile(rel.split(path.sep).join('/'), data, signal) };
 }
 
+/**
+ * Whether a gate applies, decided without copying anything: on a companion a
+ * listing on the user's computer, elsewhere a look at the workspace. A gate
+ * that cannot tell (the companion is offline) does not apply - it never fails
+ * a run on its own account.
+ */
+async function hasFiles(h, signal, { glob, want = () => true, local }) {
+  try {
+    if (h.kind === 'companion') {
+      if (!h.remoteTool) return false;
+      const r = await h.remoteTool('glob', { pattern: glob }, signal);
+      return !r.is_error && !/^No files match/.test(r.content) && r.content.split('\n').some((l) => want(l.trim()));
+    }
+    return await local(h.root);
+  } catch { return false; }
+}
+
 async function workspacePath(host, p) {
   const real = await resolveIn(host, p);
   return path.relative(await fsp.realpath(host.root), real) || '.';
@@ -195,7 +212,7 @@ export default {
     api.registerGate({
       name: 'documents-render',
       description: 'Every document in the workspace (docx, pptx, xlsx, odt, odp, pdf) opens and renders, and no slide has text cut off at its edge.',
-      applies: async (h, signal) => (await walk((await siteOf(h, signal)).root, [...OFFICE, '.pdf'], 1)).length > 0,
+      applies: (h, signal) => hasFiles(h, signal, { glob: `**/*.{${[...OFFICE, '.pdf'].map((e) => e.slice(1)).join(',')}}`, local: async (root) => (await walk(root, [...OFFICE, '.pdf'], 1)).length > 0 }),
       async run({ host: h, signal }) {
         const host = (await siteOf(h, signal)).host;
         const files = await walk(host.root, [...OFFICE, '.pdf'], 8);
@@ -221,7 +238,7 @@ export default {
     api.registerGate({
       name: 'web-console',
       description: 'The workspace page (index.html) opens offline with no uncaught errors, console errors or missing files, and draws something.',
-      applies: async (h, signal) => !!(await entryPage((await siteOf(h, signal)).root)),
+      applies: (h, signal) => hasFiles(h, signal, { glob: '{index.html,public/index.html}', want: (l) => l === 'index.html' || l === 'public/index.html', local: async (root) => !!(await entryPage(root)) }),
       async run({ host: h, signal }) {
         const host = (await siteOf(h, signal)).host;
         const page = await entryPage(host.root);
@@ -242,7 +259,7 @@ export default {
     api.registerGate({
       name: 'playtest',
       description: 'The scenarios in playtest.json pass: scripted input, then checks on the page state (window.* values).',
-      applies: async (h, signal) => exists(path.join((await siteOf(h, signal)).root, 'playtest.json')),
+      applies: (h, signal) => hasFiles(h, signal, { glob: 'playtest.json', want: (l) => l === 'playtest.json', local: (root) => exists(path.join(root, 'playtest.json')) }),
       async run({ host: h, signal }) {
         const host = (await siteOf(h, signal)).host;
         let results;

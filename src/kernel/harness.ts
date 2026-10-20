@@ -153,7 +153,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     const servers = typeof opts.mcp === 'string'
       ? (JSON.parse(await fs.readFile(opts.mcp, 'utf8')) as { mcpServers?: Record<string, McpServerConfig> }).mcpServers ?? {}
       : opts.mcp;
-    for (const [name, cfg] of Object.entries(servers)) registry.mcpServers.set(name, { ...cfg, plugin: 'config' } as never);
+    for (const [name, cfg] of Object.entries(servers)) registry.mcpServers.set(name, { ...cfg, plugin: 'config', operator: true } as never);
   }
   await fs.mkdir(opts.dataDir, { recursive: true });
   const companions = new CompanionHub(opts.dataDir);
@@ -261,6 +261,7 @@ function publishFromEnv(): SessionDeps['publish'] {
   const repos = (process.env.HARNESS_PUBLISH_REPOS ?? '').split(',').map((r) => r.trim()).filter(Boolean);
   if (!token && !repos.length) return undefined;
   const a = /^(.+?)\s*<([^>]+)>$/.exec(process.env.HARNESS_GIT_AUTHOR ?? '');
-  return { token, repos, apiBase: process.env.HARNESS_GITHUB_API || undefined, author: a ? { name: a[1]!, email: a[2]! } : undefined };
+  const tokenHosts = (process.env.HARNESS_PUBLISH_TOKEN_HOSTS ?? '').split(',').map((h) => h.trim()).filter(Boolean);
+  return { token, repos, apiBase: process.env.HARNESS_GITHUB_API || undefined, author: a ? { name: a[1]!, email: a[2]! } : undefined, ...(tokenHosts.length ? { tokenHosts } : {}) };
 }
 

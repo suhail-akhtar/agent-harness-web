@@ -54,6 +54,8 @@ export interface Tool {
   run(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutcome>;
   /** True when this call keeps something beyond the session (memory): confirmed after untrusted input. */
   persists?(input: Record<string, unknown>): boolean;
+  /** Its output comes from outside the user's control (a service, stored web pages), whatever its kind. */
+  untrusted?: boolean;
   /** The permission kinds this call needs, when they depend on the input (default: [kind]). */
   kindsFor?(input: Record<string, unknown>): ToolKind[];
   /** One line for permission prompts and the UI. */

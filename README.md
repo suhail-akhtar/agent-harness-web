@@ -325,7 +325,7 @@ A script runs in a fresh V8 context with no `require`, `process`, `fetch` or `ev
 2. It copies the commits **out of the workspace** into a repository the harness owns, and pushes from there. So nothing in the workspace's git config runs on the server or redirects the push: no hooks, fsmonitor, url rewrites or filters.
 3. It opens the pull request through the GitHub API, or finds the one already open.
 
-The token (`HARNESS_GITHUB_TOKEN`) goes in a header for that one command; it is never written to disk, the workspace or the model's context. It pushes only to the repository the session was cloned from, or one in `HARNESS_PUBLISH_REPOS`, and never force-pushes or pushes to the base branch.
+The token (`HARNESS_GITHUB_TOKEN`) goes in a header for that one command; it is never written to disk, the workspace or the model's context. It pushes only to the repository the session was cloned from, or one in `HARNESS_PUBLISH_REPOS`, and never force-pushes or pushes to the base branch. The token goes only to github.com (or the GitHub Enterprise host of `HARNESS_GITHUB_API`, or a host in `HARNESS_PUBLISH_TOKEN_HOSTS`): a session cloned from anywhere else pushes without it. A workspace whose `.git` is a link, a gitfile or borrows objects from another repository is refused.
 
 ## Shared servers: accounts and limits
 
@@ -427,7 +427,7 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 | `HARNESS_MEMORY` | on | `read` (load, never change) or `off`. |
 | `HARNESS_SEARCH` | first available | `brave`, `tavily`, `exa`, `searxng`, `deepseek`, `anthropic`, `openai` or `off`; keys `BRAVE_API_KEY`, `TAVILY_API_KEY`, `EXA_API_KEY`, `HARNESS_SEARXNG_URL`. |
 | `HARNESS_SEARCH_ANTHROPIC_MODEL` / `HARNESS_SEARCH_OPENAI_MODEL` | `claude-haiku-5-5` / `gpt-6-luna` | The small model that runs a provider's built-in search. |
-| `HARNESS_GITHUB_TOKEN`, `HARNESS_PUBLISH_REPOS`, `HARNESS_GITHUB_API`, `HARNESS_GIT_AUTHOR` | | `publish_branch`: token, extra repositories it may push to, API base (GitHub Enterprise), commit author `"Name <email>"`. |
+| `HARNESS_GITHUB_TOKEN`, `HARNESS_PUBLISH_REPOS`, `HARNESS_GITHUB_API`, `HARNESS_GIT_AUTHOR`, `HARNESS_PUBLISH_TOKEN_HOSTS` | | `publish_branch`: token, extra repositories it may push to, API base (GitHub Enterprise), commit author `"Name <email>"`, other git hosts the token may be sent to. |
 | `HARNESS_SANDBOX_ALLOW_HOSTS` | registries + GitHub | Comma-separated hosts an allowlist sandbox may reach; `HARNESS_SANDBOX_UPSTREAM_PROXY` chains its proxy through a corporate one. |
 | `HARNESS_USER_DAILY_USD` | none | Daily spend cap per account. |
 | `HARNESS_RATE_LIMIT` / `HARNESS_MESSAGE_RATE_LIMIT` | 600 / 30 | Requests / messages per minute per person (0 = none). |
@@ -456,6 +456,8 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 - **Limits of what was built:**
   - Plugin code runs in the server process. Declared permissions are enforced on the channels the harness hands out, not on code that ignores them; signing is the control for that.
   - Scripts (`run_script`) have no network namespace outside Linux, so there they ask before running.
+  - A plugin's `api.fetch` and `web_fetch` check a host's addresses before connecting, then connect by name; a DNS server that changes its answer in between (rebinding) is not stopped. Pinning the checked address needs an HTTP client with a custom lookup, which Node's built-in fetch does not take.
+  - Companion mirrors (the server's copy for render and browser) leave out `.env`, key files, names with `\` or `:`, and files over 20 MB.
   - The allowlist network needs Linux Docker networking; it was tested on Linux, not on Docker Desktop.
 - **Not tested here:**
   - the full sandbox image (this environment's proxy blocks Debian packages, so tests used a plain Node image);

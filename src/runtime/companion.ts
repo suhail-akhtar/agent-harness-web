@@ -14,6 +14,22 @@ import type { CompanionJob } from '../companion/handler.ts';
 
 /** How much a companion folder may hold for server-side tools (render, browser). */
 const MIRROR_MAX = Number(process.env.HARNESS_MIRROR_MAX_MB ?? 100) * 1024 * 1024;
+/** File data per pull reply: base64 of this (and of one file up to 20 MB) stays under the result route's limit. */
+const MIRROR_CHUNK = 16 * 1024 * 1024;
+export const COMPANION_RESULT_LIMIT = 48_000_000;
+
+/**
+ * A path from a companion as a path inside `root`, or undefined. A companion is
+ * someone's computer: on Windows "..\\x" or "C:x" are paths too, so anything but
+ * plain forward-slash segments is refused, and the result is checked to be inside.
+ */
+export function mirrorPath(root: string, p: unknown): string | undefined {
+  if (typeof p !== 'string' || !p || p.length > 1000 || /[\\:\0]/.test(p) || p.startsWith('/')) return undefined;
+  const parts = p.split('/');
+  if (parts.some((s) => !s || s === '.' || s === '..')) return undefined;
+  const target = path.resolve(root, ...parts);
+  return target.startsWith(path.resolve(root) + path.sep) ? target : undefined;
+}
 
 type NewJob = CompanionJob extends infer J ? (J extends CompanionJob ? Omit<J, 'id'> : never) : never;
 
@@ -46,9 +62,12 @@ export class CompanionHub {
   private records = new Map<string, CompanionRecord>();
   private live = new Map<string, Live>();
 
-  constructor(dataDir: string) {
+  private chunkBytes: number;
+
+  constructor(dataDir: string, opts: { mirrorChunkBytes?: number } = {}) {
     this.file = path.join(dataDir, 'companions.json');
     this.dataDir = dataDir;
+    this.chunkBytes = opts.mirrorChunkBytes ?? MIRROR_CHUNK;
   }
 
   /**
@@ -61,26 +80,40 @@ export class CompanionHub {
     const m = this.mirrors.get(sessionId) ?? { known: {}, queue: Promise.resolve() };
     this.mirrors.set(sessionId, m);
     const next = m.queue.catch(() => {}).then(async () => {
-      const r = await this.dispatch<{ files: { path: string; size: number; mtime: number; data?: string }[] }>(id, { kind: 'pull', sessionId, known: m.known, maxBytes: MIRROR_MAX }, signal, 10 * 60_000);
       const seen = new Set<string>();
-      for (const f of r.files) {
-        const rel = f.path.split('/').filter((p) => p && p !== '..' && p !== '.').join('/');
-        if (!rel || rel !== f.path) continue; // a companion only ever sends plain relative paths
-        seen.add(rel);
-        if (f.data === undefined) continue;
-        const target = path.join(root, rel);
-        await fs.mkdir(path.dirname(target), { recursive: true });
-        await fs.writeFile(target, Buffer.from(f.data, 'base64'));
-        m.known[rel] = [f.size, f.mtime];
+      let total = 0;
+      for (let round = 0; ; round++) {
+        const r = await this.dispatch<{ files: { path: string; size: number; mtime: number; data?: string }[]; more?: boolean }>(id, { kind: 'pull', sessionId, known: m.known, maxBytes: MIRROR_MAX, chunkBytes: this.chunkBytes }, signal, 10 * 60_000);
+        for (const f of r.files) {
+          const target = mirrorPath(root, f.path);
+          if (!target) continue; // a companion only ever sends plain relative paths
+          seen.add(f.path);
+          if (f.data === undefined) continue;
+          const data = Buffer.from(f.data, 'base64');
+          total += data.length;
+          if (total > MIRROR_MAX) throw new Error(`the folder has more than ${Math.round(MIRROR_MAX / 1048576)} MB to copy for this tool (node_modules, .git and build output are skipped)`);
+          await fs.mkdir(path.dirname(target), { recursive: true });
+          await fs.writeFile(target, data);
+          m.known[f.path] = [f.size, f.mtime];
+        }
+        if (!r.more || round > 1000) break;
       }
       for (const rel of Object.keys(m.known)) {
-        if (!seen.has(rel)) { delete m.known[rel]; await fs.rm(path.join(root, rel), { force: true }); }
+        if (!seen.has(rel)) { delete m.known[rel]; const t = mirrorPath(root, rel); if (t) await fs.rm(t, { force: true }); }
       }
       await fs.mkdir(root, { recursive: true });
       return root;
     });
     m.queue = next;
     return next;
+  }
+
+  /** Drops a session's server-side copy (the session is gone). */
+  async forget(sessionId: string): Promise<void> {
+    if (!/^[\w-]+$/.test(sessionId)) return;
+    await this.mirrors.get(sessionId)?.queue.catch(() => {});
+    this.mirrors.delete(sessionId);
+    await fs.rm(path.join(this.dataDir, 'mirrors', sessionId), { recursive: true, force: true });
   }
 
   /** Writes a file the server made (an export, a saved render) into the companion folder. */

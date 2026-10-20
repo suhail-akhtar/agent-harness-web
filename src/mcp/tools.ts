@@ -53,6 +53,8 @@ export function mcpTool(e: McpEntry): Tool {
   const readOnly = e.tool.annotations?.readOnlyHint === true;
   return {
     kind: readOnly ? 'read' : 'external',
+    // Read-only or not, what a service returns is not the user's.
+    untrusted: true,
     parallelSafe: readOnly,
     remoteable: false,
     spec: { name: e.qualified, description: (e.tool.description ?? e.tool.annotations?.title ?? e.tool.name).slice(0, 1000), input_schema: schemaOf(e.tool) },
