@@ -25,7 +25,8 @@ const loopback = HOST === '127.0.0.1' || HOST === 'localhost' || HOST === '::1';
 const AUTH_OFF = process.env.HARNESS_AUTH === 'off' && loopback;
 const TOKEN = process.env.HARNESS_TOKEN || crypto.randomBytes(18).toString('base64url');
 
-const PLUGIN_DIRS = [path.join(appRoot, 'plugins'), ...(process.env.HARNESS_PLUGINS || '').split(path.delimiter).filter(Boolean)];
+// Bundled plugins (quality gates, SDLC) load unless HARNESS_BUNDLED_PLUGINS=off.
+const PLUGIN_DIRS = [...(process.env.HARNESS_BUNDLED_PLUGINS === 'off' ? [] : [path.join(appRoot, 'plugins')]), ...(process.env.HARNESS_PLUGINS || '').split(path.delimiter).filter(Boolean)];
 let harness: Harness;
 
 class HttpError extends Error {
@@ -184,6 +185,13 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
     return send(res, 201, s.meta);
   }
 
+  const rm = /^\/api\/sessions\/([a-f0-9]{16})\/runs\/(run_[a-f0-9]+)(?:\/(resume))?$/.exec(p);
+  if (rm) {
+    const s = sessions.get(rm[1]!);
+    if (!s) throw new HttpError(404, 'no such session');
+    if (!rm[3] && method === 'GET') { try { return send(res, 200, await s.readRun(rm[2]!)); } catch { throw new HttpError(404, 'no such run'); } }
+    if (rm[3] === 'resume' && method === 'POST') { try { return send(res, 202, await s.resumeRun(rm[2]!)); } catch (e) { throw new HttpError(409, (e as Error).message); } }
+  }
   const m = /^\/api\/sessions\/([a-f0-9]{16})(?:\/(\w+))?$/.exec(p);
   if (m) {
     const s = sessions.get(m[1]!);
@@ -216,6 +224,20 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
       try { return send(res, 200, { files: await s.rewind(turn) }); } catch (e) { throw new HttpError(409, (e as Error).message); }
     }
     if (action === 'trace' && method === 'GET') return send(res, 200, await s.readTrace());
+    if (action === 'workflows' && method === 'GET') {
+      const wfs = await s.workflows();
+      return send(res, 200, {
+        workflows: wfs.map((w) => ({ name: w.name, description: w.description, inputs: w.inputs ?? {}, source: w.source, nodes: Object.entries(w.nodes).map(([id, n]) => ({ id, type: n.type, title: n.title })) })),
+        runs: await s.listRuns(),
+      });
+    }
+    if (action === 'workflows' && method === 'POST') {
+      const b = await readJson(req);
+      const input = (b.input && typeof b.input === 'object' ? b.input : {}) as Record<string, unknown>;
+      try {
+        return send(res, 202, await s.startWorkflow(String(b.name ?? ''), Object.fromEntries(Object.entries(input).map(([k, v]) => [k, String(v)]))));
+      } catch (e) { throw new HttpError(409, (e as Error).message); }
+    }
     if (action === 'respond' && method === 'POST') {
       const b = await readJson(req);
       const ok = s.respond(String(b.requestId), { decision: String(b.decision ?? 'deny'), feedback: typeof b.feedback === 'string' ? b.feedback : undefined, answer: typeof b.answer === 'string' ? b.answer : undefined });

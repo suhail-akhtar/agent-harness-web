@@ -23,12 +23,18 @@ export function printEvent(e: HarnessEvent, quiet = false): void {
     case 'retry': console.log(`\n[retry ${e.attempt} in ${e.delayMs}ms] ${e.reason}`); break;
     case 'compaction': console.log(`\n[compaction] ${e.before} -> ${e.after} tokens`); break;
     case 'turn_end': if (!tag) console.log(`\n[turn end: ${e.reason}]`); break;
+    case 'workflow':
+      if (e.phase === 'node_started') console.log(`\n=== [workflow] ${e.node} started`);
+      if (e.phase === 'node_finished') { const h = [...e.run.history].reverse().find((x) => x.node === e.node); console.log(`=== [workflow] ${e.node} ${h?.status}${h?.outcome ? ` -> ${h.outcome}` : ''}: ${h?.summary ?? ''} ($${(h?.cost ?? 0).toFixed(4)})`); }
+      if (e.phase === 'finished') console.log(`\n=== [workflow] ${e.run.workflow} ${e.run.status}${e.run.error ? `: ${e.run.error}` : ''} ($${e.run.cost.toFixed(4)})`);
+      break;
   }
 }
 
 async function main() {
   const prompt = process.argv.slice(2).filter((a, i, all) => !a.startsWith('--') && !all[i - 1]?.startsWith('--')).join(' ');
-  if (!prompt) { console.error('usage: npm run cli -- [--model id] [--runtime docker|local] [--dir path] [--mode default|acceptEdits|plan|bypass] "task"'); process.exit(2); }
+  const workflow = arg('workflow');
+  if (!prompt && !workflow) { console.error('usage: npm run cli -- [--model id] [--runtime docker|local] [--dir path] [--mode default|acceptEdits|plan|bypass] "task"'); process.exit(2); }
   const dataDir = path.resolve(arg('data', path.join(os.tmpdir(), 'harness-cli'))!);
   const runtime = (arg('runtime', 'local') === 'docker' ? 'docker' : 'local') as 'docker' | 'local';
   const dir = arg('dir');
@@ -50,10 +56,19 @@ async function main() {
       if (event.kind === 'permission_request') s.respond(event.requestId, { decision: 'allow' });
       if (event.kind === 'question') s.respond(event.requestId, { decision: 'answer', answer: 'Use your best judgement.' });
       if (event.kind === 'plan_proposed') s.respond(event.requestId, { decision: 'approve' });
+      if (event.kind === 'approval_request') { console.log(`\n[approval] ${event.title}: auto-approved (headless)`); s.respond(event.requestId, { decision: 'approve' }); }
       if (event.kind === 'turn_end' && !event.agent) resolve();
     });
   });
-  await s.send(prompt);
+  if (workflow) {
+    // --input key=value (repeatable); the prompt text, if any, becomes input.request.
+    const input: Record<string, string> = {};
+    process.argv.forEach((a, i) => { if (a === '--input') { const [k, ...v] = (process.argv[i + 1] ?? '').split('='); if (k) input[k] = v.join('='); } });
+    if (prompt && !input.request) input.request = prompt;
+    await s.startWorkflow(workflow, input);
+  } else {
+    await s.send(prompt);
+  }
   await done;
   const u = s.meta.usage;
   const total = u.input + u.cacheRead + u.cacheWrite;
@@ -61,6 +76,9 @@ async function main() {
   const spans = await s.readTrace();
   const models = spans.filter((x) => x.type === 'model');
   const tools = spans.filter((x) => x.type === 'tool');
+  const byAgent = new Map<string, { calls: number; cost: number }>();
+  for (const m of models) { const b = byAgent.get(m.agent) ?? { calls: 0, cost: 0 }; b.calls++; b.cost += m.cost; byAgent.set(m.agent, b); }
+  if (byAgent.size > 1) console.log(`per agent: ${[...byAgent].map(([a, b]) => `${a} ${b.calls} calls $${b.cost.toFixed(4)}`).join(' | ')}`);
   console.log(`trace: ${models.length} model calls (${Math.round(models.reduce((a, x) => a + x.ms, 0) / 1000)}s), ${tools.length} tool calls (${tools.filter((x) => x.type === 'tool' && x.error).length} errors)`);
   await h.close();
 }

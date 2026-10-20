@@ -1,0 +1,8 @@
+{
+  "name": "sdlc",
+  "version": "1.0.0",
+  "description": "Software delivery lifecycle: role agents (analyst, architect, planner, engineer, reviewers, tech writer), engineering skills, and the build-feature workflow from requirements to a verified, reviewed, documented delivery.",
+  "agents": "agents",
+  "skills": "skills",
+  "workflows": "workflows"
+}

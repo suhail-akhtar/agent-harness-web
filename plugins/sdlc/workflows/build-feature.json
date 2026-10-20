@@ -1,0 +1,92 @@
+{
+  "name": "build-feature",
+  "description": "From a written request to a verified delivery: requirements, architecture and ADRs, (approval), plan, test-first implementation, quality gates with a fix loop, parallel code and security review, fixes, documentation and a delivery report with traceability.",
+  "inputs": {
+    "request": { "description": "What to build: the requirements as you would write them for a team.", "required": true },
+    "stack": { "description": "Stack preference or constraints (optional).", "default": "Use what the repository already uses; otherwise choose a mainstream stack with few dependencies." },
+    "approval": { "description": "\"auto\" to skip the design approval step, \"manual\" to approve requirements and architecture before building.", "default": "manual" }
+  },
+  "start": "requirements",
+  "maxAgentRuns": 24,
+  "nodes": {
+    "requirements": {
+      "type": "agent", "title": "Requirements", "agent": "analyst",
+      "prompt": "Write docs/requirements.md for this request, following the requirements-spec skill.\n\n<request>\n{{input.request}}\n</request>\n\nStack/constraints: {{input.stack}}\nEarlier feedback to take into account: {{feedback}}\n\nReport: the requirement IDs with one line each, and your assumptions.",
+      "next": "architecture"
+    },
+    "architecture": {
+      "type": "agent", "title": "Architecture & ADRs", "agent": "architect",
+      "prompt": "Design the solution for docs/requirements.md. Write docs/architecture.md and ADRs in docs/adr/.\nStack/constraints: {{input.stack}}\nFeedback from the design review, if any: {{feedback}}\n\nReport: the stack, the components, and the ADR titles.",
+      "next": "approval-mode"
+    },
+    "approval-mode": {
+      "type": "branch", "title": "Approval needed?", "value": "{{input.approval}}",
+      "next": { "on": { "auto": "plan" }, "default": "approve-design" }
+    },
+    "approve-design": {
+      "type": "approval", "title": "Approve the design",
+      "message": "Requirements and architecture are ready. Approve to start building, or reject with what to change.\n\nArchitect's summary:\n{{state.architecture}}",
+      "files": ["docs/requirements.md", "docs/architecture.md"],
+      "next": { "on": { "approve": "plan", "reject": "requirements" } }
+    },
+    "plan": {
+      "type": "agent", "title": "Implementation plan", "agent": "planner",
+      "prompt": "Write docs/plan.md for docs/requirements.md and docs/architecture.md.\n\nReport: the task list in one line per task.",
+      "next": "implement"
+    },
+    "implement": {
+      "type": "agent", "title": "Implement (test-first)", "agent": "engineer",
+      "prompt": "Implement docs/plan.md, task by task, test-first, following docs/architecture.md. Every requirement in docs/requirements.md must be implemented and covered by tests. Run the quality_gates tool before you finish and fix what fails.\n\nReport: what you built (files), the test command and its result.",
+      "next": "gates"
+    },
+    "gates": {
+      "type": "gate", "title": "Quality gates", "gates": "applicable", "maxFailures": 4,
+      "next": { "on": { "pass": "review", "fail": "fix", "exhausted": "failed" } }
+    },
+    "fix": {
+      "type": "agent", "title": "Fix failing gates", "agent": "engineer",
+      "prompt": "The quality gates failed. Fix the root causes in the code (change a test only if the test itself is wrong, and say so).\n\n{{feedback}}\n\nReport: what was wrong and what you changed.",
+      "next": "gates"
+    },
+    "review": {
+      "type": "parallel", "title": "Code & security review", "branches": ["code-review", "security-review"],
+      "next": { "on": { "REQUEST_CHANGES": "address-review" }, "default": "docs" }
+    },
+    "code-review": {
+      "type": "agent", "title": "Code review", "agent": "code-reviewer",
+      "prompt": "Review the implementation against docs/requirements.md. Write docs/reviews/code-review.md.",
+      "decide": ["APPROVE", "REQUEST_CHANGES"]
+    },
+    "security-review": {
+      "type": "agent", "title": "Security review", "agent": "security-reviewer",
+      "prompt": "Review the implementation for security problems. Write docs/reviews/security-review.md.",
+      "decide": ["APPROVE", "REQUEST_CHANGES"]
+    },
+    "address-review": {
+      "type": "agent", "title": "Address review findings", "agent": "engineer",
+      "prompt": "Address every BLOCKING and MAJOR finding in docs/reviews/code-review.md and docs/reviews/security-review.md, with tests for each fix. Note how each was resolved at the end of the review file.\n\nCode review: {{state.code-review}}\n\nSecurity review: {{state.security-review}}\n\nReport: each finding and its resolution.",
+      "next": "gates-final"
+    },
+    "gates-final": {
+      "type": "gate", "title": "Quality gates (after review)", "gates": "applicable", "maxFailures": 3,
+      "next": { "on": { "pass": "docs", "fail": "fix-final", "exhausted": "failed" } }
+    },
+    "fix-final": {
+      "type": "agent", "title": "Fix failing gates", "agent": "engineer",
+      "prompt": "The quality gates failed after the review fixes. Fix the root causes.\n\n{{feedback}}",
+      "next": "gates-final"
+    },
+    "docs": {
+      "type": "agent", "title": "Documentation", "agent": "tech-writer",
+      "prompt": "Write or update README.md (what it is, setup, configuration, usage with runnable examples, API reference with request/response examples, how to test) and add an entry to CHANGELOG.md. Confirm every command you document actually works.",
+      "next": "deliver"
+    },
+    "deliver": {
+      "type": "agent", "title": "Delivery report", "agent": "tech-writer",
+      "prompt": "Write docs/delivery-report.md using the delivery-report skill. Run the quality_gates tool and the tests yourself for the results you report.\n\nReview verdicts: code review - {{state.code-review}}; security review - {{state.security-review}}\n\nReport: the summary section of the delivery report.",
+      "next": "done"
+    },
+    "done": { "type": "end", "title": "Delivered", "status": "success" },
+    "failed": { "type": "end", "title": "Stopped: quality gates still failing", "status": "failed" }
+  }
+}

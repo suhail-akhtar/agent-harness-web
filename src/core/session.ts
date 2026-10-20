@@ -2,6 +2,11 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { BUILTIN_AGENTS, INTERACTIVE_TOOLS, loadAgentDir, makeAgentTool } from '../agents/agents.ts';
+import { formatGates, makeGatesTool, runGates } from '../gates/gates.ts';
+import { newRun, WorkflowRunner } from '../graph/runner.ts';
+import type { RunRecord, WorkflowDef, WorkflowHost } from '../graph/types.ts';
+import type { InProcessHook } from '../kernel/registry.ts';
+import { loadWorkflowDir } from '../plugins/loader.ts';
 import type { Registry } from '../kernel/registry.ts';
 import type { McpManager, McpStatus } from '../mcp/manager.ts';
 import { deferredTools, MCP_INLINE_MAX, type McpEntry, mcpTool } from '../mcp/tools.ts';
@@ -19,7 +24,7 @@ import { runHooks } from './hooks.ts';
 import type { Effort, ModelSpec } from './models.ts';
 import { environmentBlock, firstMessageText, projectInstructions, SUBAGENT_PROMPT, SYSTEM_PROMPT } from './prompt.ts';
 import { defaultSettings, loadProjectSettings, mergeSettings, type Settings } from './settings.ts';
-import type { HarnessEvent, Message, PermissionMode, SessionStatus, Todo, ToolUseBlock, TurnEndReason, Usage } from './types.ts';
+import type { HarnessEvent, Message, PermissionMode, SessionStatus, Todo, ToolUseBlock, TurnEndReason, Usage, WorkflowRunView } from './types.ts';
 import { addUsage, emptyUsage } from './types.ts';
 
 export type RuntimeKind = 'docker' | 'local' | 'companion';
@@ -52,7 +57,7 @@ export interface SessionMeta {
 export interface StoredEvent { seq: number; at: number; event: HarnessEvent }
 
 interface PendingRequest {
-  kind: 'permission' | 'question' | 'plan';
+  kind: 'permission' | 'question' | 'plan' | 'approval';
   resolve(v: { decision: string; feedback?: string; answer?: string }): void;
   event: HarnessEvent;
 }
@@ -65,11 +70,20 @@ interface Toolbox {
   agents: AgentDef[];
   skills: Skill[];
   mcp: McpStatus[];
+  workflows: WorkflowDef[];
   closeProject(): Promise<void>;
 }
 
 const EVENT_BUFFER = 4000;
 const TRUST_PROJECT = process.env.HARNESS_TRUST_PROJECT === '1';
+
+export function runView(run: RunRecord, w?: WorkflowDef): WorkflowRunView {
+  return {
+    id: run.id, workflow: run.workflow, status: run.status, current: run.current, cost: run.cost, error: run.error,
+    nodes: w ? Object.entries(w.nodes).map(([id, n]) => ({ id, type: n.type, title: n.title })) : [],
+    history: run.history.map((h) => ({ node: h.node, type: h.type, status: h.status, outcome: h.outcome, summary: h.summary, startedAt: h.startedAt, endedAt: h.endedAt, cost: h.cost })),
+  };
+}
 
 export class Session {
   meta: SessionMeta;
@@ -299,6 +313,16 @@ export class Session {
       }
     }
     tools.push(makeAgentTool([...agents.values()]));
+    if (reg.gates.size) tools.push(makeGatesTool(reg));
+
+    // Workflows: plugins', then the project's (JSON; a shell node runs only where project commands are trusted).
+    const workflows = new Map<string, WorkflowDef>(reg.workflows);
+    if (host.kind !== 'companion') {
+      for (const w of await loadWorkflowDir(path.join(host.root, '.harness', 'workflows'), 'project')) {
+        if (!this.projectTrusted(host) && Object.values(w.nodes).some((n) => n.type === 'shell')) continue;
+        workflows.set(w.name, w);
+      }
+    }
 
     // MCP: operator servers (shared) and the project's (this session's).
     const server = await this.deps.mcp.serverEntries(new Map([...reg.mcpServers].map(([k, v]) => [k, v])));
@@ -313,7 +337,7 @@ export class Session {
     }
     const mcp = [...server.status, ...project.status];
     for (const st of mcp.filter((x) => !x.ok)) this.emit({ kind: 'notice', level: 'warn', text: `MCP server ${st.name} (${st.scope}) is not available: ${st.error}` });
-    return { tools: sortTools(tools), agents: [...agents.values()], skills, mcp, closeProject: project.close };
+    return { tools: sortTools(tools), agents: [...agents.values()], skills, mcp, workflows: [...workflows.values()], closeProject: project.close };
   }
 
   async capabilities(): Promise<{ tools: { name: string; kind: string }[]; agents: { name: string; description: string; source?: string }[]; skills: { name: string; description: string; source: string }[]; mcp: McpStatus[]; plugins: Registry['plugins'] }> {
@@ -337,7 +361,7 @@ export class Session {
     return firstMessageText(await environmentBlock(host, { gitBranch: branch }), [await projectInstructions(host), skillsListing(tb.skills)].filter(Boolean).join('\n\n'), '');
   }
 
-  private hooksFor(name: string): AgentHooks {
+  private hooksFor(name: string, costSink?: (c: number) => void): AgentHooks {
     return {
       emit: (e) => this.emit(name === 'main' ? e : { ...e, agent: name } as HarnessEvent),
       onAppend: (m) => { if (name === 'main') this.appendHistory(m).catch((err) => this.emit({ kind: 'notice', level: 'error', text: `could not save history: ${err.message}` })); },
@@ -349,6 +373,7 @@ export class Session {
         this.scheduleSave();
       },
       onUsage: (m, u, cost) => {
+        costSink?.(cost);
         this.meta.usage = addUsage(this.meta.usage, u);
         this.meta.cost += cost;
         const b = (this.meta.byModel[m.id] ??= { usage: emptyUsage(), cost: 0, requests: 0 });
@@ -379,7 +404,7 @@ export class Session {
     const cfg = {
       name: 'main', model, provider: this.deps.registry.provider(model), effort: this.meta.effort, system: SYSTEM_PROMPT, tools: tb.tools, host, settings,
       cacheKey: `hw-${this.meta.id}`, maxSteps: settings.maxSteps, readFiles: this.readFiles,
-      inProcessHooks: this.deps.registry.hooks,
+      inProcessHooks: [...this.deps.registry.hooks, ...this.gatesOnStopHook(settings)],
       runSubagent: (a: { description: string; prompt: string; type: string }) => this.runSubagent(a),
       askUser: (q: string, o: string[]) => this.ask(q, o),
       proposePlan: (p: string) => this.proposePlan(p),
@@ -404,33 +429,166 @@ export class Session {
     return this.deps.registry.model(this.meta.model);
   }
 
+  /** "Don't finish while a blocking gate fails" (settings.gatesOnStop / HARNESS_GATES_ON_STOP=1). */
+  private gatesOnStopHook(settings: Settings): InProcessHook[] {
+    if (!settings.gatesOnStop || !this.deps.registry.gates.size) return [];
+    return [{
+      event: 'Stop', plugin: 'harness', handler: async (_p, ctx) => {
+        const results = await runGates(this.deps.registry, ctx.host, 'applicable', ctx.signal);
+        const failing = results.filter((r) => !r.pass && r.severity !== 'advisory');
+        if (!failing.length) return undefined;
+        return { block: true, feedback: `Quality gates are failing - fix them before you finish:\n${formatGates(results)}` };
+      },
+    }];
+  }
+
   private async runSubagent(a: { description: string; prompt: string; type: string }): Promise<string> {
+    const r = await this.runAgent({ agent: a.type, description: a.description, prompt: a.prompt, signal: this.abortCtl?.signal ?? new AbortController().signal });
+    return r.report;
+  }
+
+  /**
+   * Runs a named agent in a fresh context: a chat sub-agent, or a workflow's
+   * agent node. One cache key per agent kind, so sibling runs share a prefix.
+   */
+  async runAgent(a: { agent: string; prompt: string; signal: AbortSignal; label?: string; description?: string; model?: string; effort?: Effort; allowTodos?: boolean }): Promise<{ report: string; reason: string; cost: number }> {
     const host = await this.getHost();
     const settings = await this.getSettings(host);
     const tb = await this.getToolbox(host);
-    const def = tb.agents.find((x) => x.name === a.type) ?? tb.agents.find((x) => x.name === 'explore')!;
+    const def = tb.agents.find((x) => x.name === a.agent) ?? tb.agents.find((x) => x.name === 'general')!;
     const n = ++this.subagents;
-    const name = `${def.name}-${n}`;
-    const model = this.subagentModel(def, settings);
-    const tools = tb.tools.filter((t) => (def.tools ? def.tools.includes(t.spec.name) : !INTERACTIVE_TOOLS.includes(t.spec.name)) && t.spec.name !== 'agent');
-    const effort = def.effort && model.efforts.includes(def.effort) ? def.effort : (model.efforts.includes(this.meta.effort) ? this.meta.effort : model.effort);
+    const name = a.label ?? `${def.name}-${n}`;
+    const model = this.subagentModel({ ...def, model: a.model ?? def.model }, settings);
+    const banned = a.allowTodos ? INTERACTIVE_TOOLS.filter((t) => t !== 'todo_write') : INTERACTIVE_TOOLS;
+    const tools = tb.tools.filter((t) => (def.tools ? def.tools.includes(t.spec.name) || (a.allowTodos && t.spec.name === 'todo_write') : !banned.includes(t.spec.name)) && t.spec.name !== 'agent');
+    const wanted = a.effort ?? def.effort;
+    const effort = wanted && model.efforts.includes(wanted) ? wanted : (model.efforts.includes(this.meta.effort) ? this.meta.effort : model.effort);
+    let cost = 0;
     const sub = new Agent({
       name, model, provider: this.deps.registry.provider(model), effort,
       system: SUBAGENT_PROMPT, tools, host, settings,
-      // One cache key per agent kind: sibling sub-agents share their prefix.
-      cacheKey: `hw-${this.meta.id}-${def.name}`, maxSteps: Math.min(60, settings.maxSteps), readFiles: new Map<string, FileStamp>(),
+      cacheKey: `hw-${this.meta.id}-${def.name}`, maxSteps: Math.min(a.allowTodos ? 120 : 60, settings.maxSteps), readFiles: new Map<string, FileStamp>(),
       inProcessHooks: this.deps.registry.hooks,
       beforeWrite: this.checkpoints ? (p: string) => this.checkpoints!.before(p) : undefined,
-    }, this.hooksFor(name));
+    }, this.hooksFor(name, (c) => { cost += c; }));
     const env = await this.preamble(host);
     sub.append({ role: 'user', content: [{ type: 'text', text: `${env}${def.prompt ? `\n\n<role>\n${def.prompt}\n</role>` : ''}\n\n<brief>\n${a.prompt}\n</brief>` }] });
-    this.emit({ kind: 'notice', level: 'info', text: `Started ${name} (${model.id}): ${a.description}`, agent: name });
-    const reason = await sub.run(this.abortCtl?.signal ?? new AbortController().signal);
+    this.emit({ kind: 'notice', level: 'info', text: `Started ${name} (${def.name}, ${model.id})${a.description ? `: ${a.description}` : ''}`, agent: name });
+    const reason = await sub.run(a.signal);
     this.emit({ kind: 'turn_end', reason, agent: name });
     const last = [...sub.messages].reverse().find((m) => m.role === 'assistant');
     const text = last?.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n').trim() ?? '';
-    const report = text ? (text.length > 16_000 ? text.slice(0, 16_000) + '\n[report truncated]' : text) : 'The sub-agent finished without a report.';
-    return reason === 'done' ? report : `${report}\n\n(The sub-agent stopped early: ${reason}.)`;
+    const report = text ? (text.length > 16_000 ? text.slice(0, 16_000) + '\n[report truncated]' : text) : 'The agent finished without a report.';
+    return { report: reason === 'done' ? report : `${report}\n\n(The agent stopped early: ${reason}.)`, reason, cost };
+  }
+
+  // ---------- workflows ----------
+
+  private runsDir() { return path.join(this.dir, 'runs'); }
+
+  async workflows(): Promise<WorkflowDef[]> {
+    return (await this.getToolbox(await this.getHost())).workflows;
+  }
+
+  async listRuns(): Promise<WorkflowRunView[]> {
+    let names: string[];
+    try { names = await fs.readdir(this.runsDir()); } catch { return []; }
+    const wfs = await this.workflows().catch(() => [] as WorkflowDef[]);
+    const out: WorkflowRunView[] = [];
+    for (const n of names.filter((x) => x.endsWith('.json'))) {
+      try {
+        const r = JSON.parse(await fs.readFile(path.join(this.runsDir(), n), 'utf8')) as RunRecord;
+        out.push(runView(r, wfs.find((w) => w.name === r.workflow)));
+      } catch { /* partial */ }
+    }
+    return out.sort((a, b) => (b.history[0]?.startedAt ?? 0) - (a.history[0]?.startedAt ?? 0));
+  }
+
+  async readRun(runId: string): Promise<RunRecord> {
+    if (!/^run_[a-f0-9]+$/.test(runId)) throw new Error('bad run id');
+    return JSON.parse(await fs.readFile(path.join(this.runsDir(), `${runId}.json`), 'utf8')) as RunRecord;
+  }
+
+  private async saveRun(run: RunRecord): Promise<void> {
+    await fs.mkdir(this.runsDir(), { recursive: true });
+    const f = path.join(this.runsDir(), `${run.id}.json`);
+    await fs.writeFile(`${f}.tmp`, JSON.stringify(run, null, 1));
+    await fs.rename(`${f}.tmp`, f);
+  }
+
+  /** Runs marked running when the server stopped become "interrupted" (resumable). */
+  async recoverRuns(): Promise<void> {
+    let names: string[];
+    try { names = await fs.readdir(this.runsDir()); } catch { return; }
+    for (const n of names.filter((x) => x.endsWith('.json'))) {
+      const r = JSON.parse(await fs.readFile(path.join(this.runsDir(), n), 'utf8')) as RunRecord;
+      if (r.status === 'running' || r.status === 'waiting') { r.status = 'interrupted'; await this.saveRun(r); }
+    }
+  }
+
+  private workflowHost(w: WorkflowDef): WorkflowHost {
+    return {
+      host: () => this.getHost(),
+      runAgent: (a) => this.runAgent({ ...a, allowTodos: true }),
+      runGates: async (names, signal) => runGates(this.deps.registry, await this.getHost(), names, signal),
+      approve: async ({ runId, node, title, message, files }) => {
+        const host = await this.getHost();
+        const shown: { path: string; content: string }[] = [];
+        for (const f of files.slice(0, 4)) {
+          if (host.kind === 'companion') break;
+          const content = await fs.readFile(path.join(host.root, f), 'utf8').catch(() => '');
+          if (content) shown.push({ path: f, content: content.slice(0, 30_000) });
+        }
+        const r = await this.request('approval', { kind: 'approval_request', requestId: crypto.randomUUID(), runId, node, title, message, files: shown });
+        return { approved: r.decision === 'approve', feedback: r.feedback };
+      },
+      emit: (e) => this.emit({ kind: 'workflow', phase: e.phase, node: e.node, run: runView(e.run, w) }),
+      save: (run) => this.saveRun(run),
+    };
+  }
+
+  /** Starts a workflow run in this session's workspace. */
+  async startWorkflow(name: string, input: Record<string, string>): Promise<WorkflowRunView> {
+    if (this.status !== 'idle') throw new Error('The session is busy; wait for it to finish or stop it.');
+    const w = (await this.workflows()).find((x) => x.name === name);
+    if (!w) throw new Error(`No workflow named "${name}".`);
+    const run = newRun(w, this.meta.id, input);
+    await this.saveRun(run);
+    this.executeRun(w, run).catch(() => {});
+    return runView(run, w);
+  }
+
+  async resumeRun(runId: string): Promise<WorkflowRunView> {
+    if (this.status !== 'idle') throw new Error('The session is busy.');
+    const run = await this.readRun(runId);
+    if (!['interrupted', 'aborted', 'failed'].includes(run.status) || !run.current) throw new Error(`Run ${runId} cannot be resumed (status ${run.status}).`);
+    const w = (await this.workflows()).find((x) => x.name === run.workflow);
+    if (!w) throw new Error(`Workflow ${run.workflow} is no longer available.`);
+    run.error = undefined;
+    this.executeRun(w, run).catch(() => {});
+    return runView(run, w);
+  }
+
+  private async executeRun(w: WorkflowDef, run: RunRecord): Promise<void> {
+    this.abortCtl = new AbortController();
+    const signal = this.abortCtl.signal;
+    this.setStatus('running');
+    this.meta.turns = (this.meta.turns ?? 0) + 1;
+    try {
+      await this.mainAgent();
+      this.checkpoints?.begin(this.meta.turns, `workflow ${w.name}`);
+      const runner = new WorkflowRunner(w, this.workflowHost(w), run);
+      const done = await runner.execute(signal);
+      this.emit({ kind: 'notice', level: done.status === 'succeeded' ? 'info' : 'warn', text: `Workflow ${w.name} ${done.status}${done.error ? `: ${done.error}` : ''} ($${done.cost.toFixed(4)}).` });
+    } catch (err) {
+      this.emit({ kind: 'notice', level: 'error', text: `Workflow ${w.name} could not run: ${(err as Error).message}` });
+    } finally {
+      this.abortCtl = undefined;
+      for (const [id] of this.pending) this.respond(id, { decision: 'deny', feedback: 'run ended' });
+      this.emit({ kind: 'turn_end', reason: signal.aborted ? 'aborted' : 'done' });
+      this.setStatus('idle');
+      await this.saveMeta().catch(() => {});
+    }
   }
 
   // ---------- checkpoints ----------

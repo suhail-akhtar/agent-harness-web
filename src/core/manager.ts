@@ -25,6 +25,7 @@ export class SessionManager {
         this.sessions.set(id, s);
         // Mid-turn when the server stopped: close the turn out cleanly.
         if (await s.recoverInterrupted()) resume.push(s);
+        await s.recoverRuns();
       } catch { /* not a session */ }
     }
     if (process.env.HARNESS_AUTO_RESUME === '1') {

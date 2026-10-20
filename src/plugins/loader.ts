@@ -3,6 +3,8 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadAgentDir } from '../agents/agents.ts';
 import type { Registry } from '../kernel/registry.ts';
+import type { WorkflowDef } from '../graph/types.ts';
+import { validateWorkflow } from '../graph/validate.ts';
 import type { PluginAPI, PluginDefinition, PluginManifest } from './api.ts';
 
 // Plugins are folders with a harness-plugin.json. The operator lists plugin
@@ -54,6 +56,9 @@ export async function loadPlugin(reg: Registry, dir: string, log: (m: string) =>
     }
     contributes.push('agents');
   }
+  if (m.workflows) {
+    for (const w of await loadWorkflowDir(within(m.workflows), m.name)) { reg.workflows.set(w.name, w); contributes.push(`workflow:${w.name}`); }
+  }
   for (const [name, cfg] of Object.entries(m.mcpServers ?? {})) {
     reg.mcpServers.set(name, { ...cfg, plugin: m.name } as never);
     contributes.push(`mcp:${name}`);
@@ -77,10 +82,36 @@ export async function loadPlugin(reg: Registry, dir: string, log: (m: string) =>
       registerSkills: (d) => { reg.skillDirs.push({ dir: path.resolve(dir, d), source: m.name }); contributes.push('skills'); },
       registerMcpServer: (name, cfg) => { reg.mcpServers.set(name, { ...cfg, plugin: m.name } as never); contributes.push(`mcp:${name}`); },
       registerGate: (g) => { reg.gates.set(g.name, { ...g, plugin: m.name }); contributes.push(`gate:${g.name}`); },
+      registerWorkflow: (w) => {
+        const errors = validateWorkflow(w);
+        if (errors.length) throw new Error(`${m.name}: workflow ${w.name} is invalid: ${errors.join('; ')}`);
+        reg.workflows.set(w.name, { ...w, source: m.name });
+        contributes.push(`workflow:${w.name}`);
+      },
       on: (event, handler, matcher) => { reg.hooks.push({ event, handler, matcher, plugin: m.name }); contributes.push(`hook:${event}`); },
       log: (msg) => log(`[${m.name}] ${msg}`),
     };
     await def.setup(api);
   }
   reg.plugins.push({ name: m.name, version: m.version ?? '0.0.0', description: m.description ?? '', dir, trusted: true, contributes: [...new Set(contributes)] });
+}
+
+/** JSON workflows from a directory. Declarative only: a JSON workflow cannot hold code nodes. */
+export async function loadWorkflowDir(dir: string, source: string, log: (m: string) => void = () => {}): Promise<WorkflowDef[]> {
+  let names: string[];
+  try { names = await fs.readdir(dir); } catch { return []; }
+  const out: WorkflowDef[] = [];
+  for (const n of names.sort()) {
+    if (!n.endsWith('.json')) continue;
+    try {
+      const w = JSON.parse(await fs.readFile(path.join(dir, n), 'utf8')) as WorkflowDef;
+      if (Object.values(w.nodes ?? {}).some((x) => x.type === 'code')) throw new Error('code nodes are only allowed in TypeScript workflows');
+      const errors = validateWorkflow(w);
+      if (errors.length) throw new Error(errors.join('; '));
+      out.push({ ...w, source });
+    } catch (err) {
+      log(`workflow ${path.join(dir, n)} skipped: ${(err as Error).message}`);
+    }
+  }
+  return out;
 }

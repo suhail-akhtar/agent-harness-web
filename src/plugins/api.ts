@@ -1,4 +1,5 @@
 import type { Effort, ModelSpec } from '../core/models.ts';
+import type { WorkflowDef } from '../graph/types.ts';
 import type { HookEvent } from '../core/settings.ts';
 import type { Provider, JsonSchema } from '../providers/types.ts';
 import type { ToolHost } from '../runtime/host.ts';
@@ -64,6 +65,8 @@ export interface PluginAPI {
   registerSkills(dir: string): void;
   registerMcpServer(name: string, cfg: McpServerConfig): void;
   registerGate(gate: QualityGate): void;
+  /** A workflow graph (TypeScript workflows may use code nodes). Validated before every run. */
+  registerWorkflow(def: WorkflowDef): void;
   on(event: HookEvent, handler: HookHandler, matcher?: string): void;
   log(message: string): void;
 }
@@ -113,6 +116,8 @@ export interface PluginManifest {
   agents?: string;
   mcpServers?: Record<string, McpServerConfig>;
   hooks?: Partial<Record<HookEvent, { matcher?: string; command: string; timeoutMs?: number }[]>>;
+  /** Directory of workflow definitions (*.json). */
+  workflows?: string;
   /** What the plugin needs; shown to the operator and enforced where possible. */
   permissions?: { network?: string[]; secrets?: string[] };
 }

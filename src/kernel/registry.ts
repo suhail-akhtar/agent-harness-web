@@ -1,4 +1,5 @@
 import type { ModelSpec } from '../core/models.ts';
+import type { WorkflowDef } from '../graph/types.ts';
 import type { HookEvent, HookSpec } from '../core/settings.ts';
 import type { AgentDef, HookHandler, McpServerConfig, ProviderDef, QualityGate } from '../plugins/api.ts';
 import type { Provider } from '../providers/types.ts';
@@ -26,6 +27,7 @@ export class Registry {
   readonly skillDirs: { dir: string; source: string }[] = [];
   readonly mcpServers = new Map<string, McpServerConfig & { plugin: string }>();
   readonly gates = new Map<string, QualityGate & { plugin: string }>();
+  readonly workflows = new Map<string, WorkflowDef>();
   readonly hooks: InProcessHook[] = [];
   readonly shellHooks: Partial<Record<HookEvent, HookSpec[]>> = {};
   readonly plugins: LoadedPlugin[] = [];
