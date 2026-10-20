@@ -15,7 +15,7 @@
     },
     {
       "name": "hidden acceptance checks",
-      "run": "bash {{case}}/acceptance.sh {{ws}} \"npm start\" 4590",
+      "run": "bash {{case}}/acceptance.sh {{ws}} \"npm start\" {{port}}",
       "timeoutSec": 180
     },
     {

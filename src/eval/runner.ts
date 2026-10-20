@@ -9,7 +9,7 @@
 //     "timeoutMin": 90,
 //     "checks": [
 //       { "name": "own tests pass", "run": "npm test" },             // exit 0 passes; {{case}} = this folder
-//       { "name": "acceptance", "run": "bash {{case}}/acceptance.sh" },
+//       { "name": "acceptance", "run": "bash {{case}}/acceptance.sh {{ws}} {{port}}" }, // {{port}}: a free port
 //       { "name": "documents", "gates": ["documents-render"] },
 //       { "name": "deliverables", "files": ["docs/requirements.md"] },
 //       { "name": "plays", "playtest": "hidden-playtest.json" }        // a playtest file in this folder
@@ -57,13 +57,23 @@ export async function loadCases(root: string, packs?: string[], only?: string[])
   return out;
 }
 
+async function freePort(): Promise<number> {
+  const net = await import('node:net');
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => { const port = (srv.address() as { port: number }).port; srv.close(() => resolve(port)); });
+  });
+}
+
 export async function runChecks(h: Harness, c: EvalCase, ws: string, signal: AbortSignal): Promise<CheckResult[]> {
   const host = new LocalHost(ws);
   const results: CheckResult[] = [];
   for (const ch of c.checks) {
     try {
       if (ch.run) {
-        const cmd = ch.run.replaceAll('{{case}}', c.dir).replaceAll('{{ws}}', ws);
+        // {{port}}: a free port for this check, so runs in parallel never collide.
+        const cmd = ch.run.replaceAll('{{case}}', c.dir).replaceAll('{{ws}}', ws).replaceAll('{{port}}', String(await freePort()));
         const r = await host.exec(cmd, { timeoutMs: (ch.timeoutSec ?? 300) * 1000, signal });
         const out = `${r.stdout}\n${r.stderr}`.trim().split('\n').slice(-6).join('\n');
         results.push({ name: ch.name, pass: r.code === 0 && !r.timedOut, detail: r.timedOut ? 'timed out' : `exit ${r.code}${out ? `: ${out.slice(-600)}` : ''}` });
