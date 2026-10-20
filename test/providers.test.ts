@@ -94,3 +94,45 @@ test('a stream that breaks mid-way is a retryable network error, not the end of 
     (e: unknown) => e instanceof ProviderError && e.retryable && /mid-stream: terminated/.test(e.message));
   assert.deepEqual(seen, ['{"a":1}']);
 });
+
+test('Claude server-side compaction: requested at the compaction point, costed over every step, context from the last', async () => {
+  const { fromAnthropic } = await import('../src/providers/anthropic.ts');
+  const model = getModel('claude-haiku-5-5');
+  const body = anthropicBody({ model, system: 'S', tools: [], messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }], effort: 'low' }, true, true) as { context_management: { edits: { type: string; trigger?: { value: number }; instructions?: string }[] } };
+  const compact = body.context_management.edits.find((e) => e.type === 'compact_20260112')!;
+  assert.equal(compact.trigger!.value, model.compactAt);
+  assert.match(compact.instructions!, /continuation summary/);
+  assert.equal((anthropicBody({ model, system: 'S', tools: [], messages: [], effort: 'low' }, true, false) as typeof body).context_management.edits.length, 1, 'off: clearing only');
+
+  // A response that compacted: compaction step, then the reply.
+  const r = fromAnthropic(model.id, {
+    content: [{ type: 'compaction', content: 'summary...' }, { type: 'text', text: 'OK' }], stop_reason: 'end_turn',
+    usage: { input_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 623, output_tokens: 246,
+      iterations: [
+        { type: 'compaction', input_tokens: 48, output_tokens: 634, cache_read_input_tokens: 100_000, cache_creation_input_tokens: 15_439 },
+        { type: 'message', input_tokens: 2, output_tokens: 246, cache_read_input_tokens: 0, cache_creation_input_tokens: 623 },
+      ] },
+  } as never);
+  assert.deepEqual(r.usage, { input: 50, cacheRead: 100_000, cacheWrite: 16_062, output: 880, reasoning: 0 });
+  assert.equal(r.contextTokens, 625);
+  assert.deepEqual(r.compacted, { summaryTokens: 634, before: 115_487 });
+  assert.deepEqual((r.message.raw as { payload: { type: string }[] }).payload.map((b) => b.type), ['compaction', 'text'], 'replayed verbatim, compaction block included');
+  // An ordinary response has neither.
+  const plain = fromAnthropic(model.id, { content: [{ type: 'text', text: 'x' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 1 } } as never);
+  assert.equal(plain.contextTokens, undefined);
+  assert.equal(plain.compacted, undefined);
+});
+
+test('a provider that compacts itself: the loop backs it up later instead of compacting first, and reports the server\'s compaction', async () => {
+  const { makeAgent } = await import('./helpers.ts');
+  const h = await makeAgent([{ text: 'one' }, { text: 'two' }]);
+  const at = h.agent.compactThreshold();
+  (h.provider as unknown as { compactsServerSide: () => boolean }).compactsServerSide = () => true;
+  assert.ok(h.agent.compactThreshold() > at, 'client compaction is only the backstop');
+  const orig = h.provider.send.bind(h.provider);
+  h.provider.send = async (req) => ({ ...(await orig(req)), contextTokens: 900, compacted: { summaryTokens: 600, before: 120_000 } });
+  h.agent.append({ role: 'user', content: [{ type: 'text', text: 'go' }] });
+  await h.agent.run(new AbortController().signal);
+  assert.equal(h.agent.lastPromptTokens, 900);
+  assert.ok(h.events.some((e) => e.kind === 'compaction' && e.before === 120_000 && e.after === 900));
+});

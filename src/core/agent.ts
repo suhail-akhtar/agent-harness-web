@@ -111,7 +111,9 @@ export class Agent {
   }
 
   compactThreshold(): number {
-    return Math.min(this.cfg.settings.compactAt ?? this.cfg.model.compactAt, Math.floor(this.cfg.model.contextWindow * 0.85));
+    const at = Math.min(this.cfg.settings.compactAt ?? this.cfg.model.compactAt, Math.floor(this.cfg.model.contextWindow * 0.85));
+    // A provider that compacts itself does it at `at`; ours is only the backstop.
+    return this.cfg.provider.compactsServerSide?.(this.cfg.model) ? Math.min(Math.floor(this.cfg.model.contextWindow * 0.85), Math.round(at * 1.5)) : at;
   }
 
   private hookRun(event: HookEvent, payload: Record<string, unknown>, matchName: string | undefined, signal: AbortSignal) {
@@ -197,7 +199,8 @@ export class Agent {
 
   private recordUsage(resp: ProviderResponse): number {
     const cost = costOf(this.cfg.model, resp.usage);
-    this.lastPromptTokens = promptTokens(resp.usage);
+    this.lastPromptTokens = resp.contextTokens ?? promptTokens(resp.usage);
+    if (resp.compacted) this.hooks.emit({ kind: 'compaction', before: resp.compacted.before, after: this.lastPromptTokens, summaryTokens: resp.compacted.summaryTokens });
     this.hooks.onUsage(this.cfg.model, resp.usage, cost);
     this.hooks.emit({
       kind: 'usage', model: this.cfg.model.id, usage: resp.usage, cost,
@@ -224,7 +227,7 @@ export class Agent {
     for (let attempt = 0; ; attempt++) {
       try {
         const resp = await this.cfg.provider.send(req);
-        this.hooks.onTrace?.({ type: 'model', agent: this.cfg.name, model: this.cfg.model.id, ms: Date.now() - t0, usage: resp.usage, cost: costOf(this.cfg.model, resp.usage), stop: resp.stop, retries: attempt, ...(compaction ? { compaction } : {}) });
+        this.hooks.onTrace?.({ type: 'model', agent: this.cfg.name, model: this.cfg.model.id, ms: Date.now() - t0, usage: resp.usage, cost: costOf(this.cfg.model, resp.usage), stop: resp.stop, retries: attempt, ...(compaction || resp.compacted ? { compaction: true } : {}) });
         return resp;
       } catch (err) {
         if (signal.aborted) throw err;

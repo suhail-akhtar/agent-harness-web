@@ -38,10 +38,19 @@ export interface ProviderResponse {
   usage: Usage;
   /** Extra detail worth surfacing, e.g. a refusal category. */
   notice?: string;
+  /**
+   * Prompt tokens of the context the model answered from, when it differs from
+   * usage (the provider compacted the conversation inside this request).
+   */
+  contextTokens?: number;
+  /** The provider summarised earlier context in this request (server-side compaction). */
+  compacted?: { summaryTokens: number; before: number };
 }
 
 export interface Provider {
   send(req: ProviderRequest): Promise<ProviderResponse>;
+  /** True when this provider compacts long conversations itself (the loop then only backs it up). */
+  compactsServerSide?(model: ModelSpec): boolean;
 }
 
 export class ProviderError extends Error {

@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { Block, Message } from '../core/types.ts';
+import type { ModelSpec } from '../core/models.ts';
 import type { Provider, ProviderRequest, ProviderResponse, StopKind, ToolSpec } from './types.ts';
 import { ProviderError } from './types.ts';
 
@@ -13,11 +14,28 @@ import { ProviderError } from './types.ts';
 
 const IDLE_MS = Number(process.env.HARNESS_STREAM_IDLE_MS ?? 180_000);
 const BETAS = ['context-management-2025-06-27'];
+const COMPACT_BETA = 'compact-2026-01-12';
+/** The API's minimum trigger for server-side compaction. */
+const COMPACT_MIN = 50_000;
+
+/** What the summary must keep: the same brief as the client-side compaction prompt. */
+export const COMPACT_INSTRUCTIONS = `Write a continuation summary of this session so far: the only record the agent will have when work resumes. Include, densely: (1) the user's requests and constraints, quoting them where the wording matters; (2) what has been done: files created or changed (paths) and key decisions, with reasons; (3) the current state: what works, what fails, exact error messages that still matter; (4) important facts discovered: paths, commands, APIs, conventions, gotchas; (5) what remains, as a concrete list of next steps, starting with the one in progress.`;
 
 export class AnthropicProvider implements Provider {
   private client: Anthropic;
   /** Context editing is beta; if the API refuses it we stop sending it for this process. */
   private contextEditing = true;
+  /**
+   * Server-side compaction (beta): the API summarises inside the request when
+   * the prompt passes the model's compaction point - no extra round trip, and
+   * the history stays append-only (preserved thinking stays valid). Off with
+   * HARNESS_ANTHROPIC_SERVER_COMPACTION=off, or if the API refuses it.
+   */
+  private serverCompaction = process.env.HARNESS_ANTHROPIC_SERVER_COMPACTION !== 'off';
+
+  compactsServerSide(model: ModelSpec): boolean {
+    return this.contextEditing && this.serverCompaction && model.compactAt >= COMPACT_MIN;
+  }
 
   constructor(apiKey: string) {
     // The SDK reads ANTHROPIC_BASE_URL; ignore it unless explicitly meant for us.
@@ -29,7 +47,11 @@ export class AnthropicProvider implements Provider {
       try {
         return await this.once(req);
       } catch (err) {
-        if (err instanceof Anthropic.BadRequestError && this.contextEditing && /context_management|context-management/i.test(err.message) && attempt === 0) {
+        if (err instanceof Anthropic.BadRequestError && this.serverCompaction && /compact/i.test(err.message) && attempt < 2) {
+          this.serverCompaction = false;
+          continue;
+        }
+        if (err instanceof Anthropic.BadRequestError && this.contextEditing && /context_management|context-management/i.test(err.message) && attempt < 2) {
           this.contextEditing = false;
           continue;
         }
@@ -39,7 +61,7 @@ export class AnthropicProvider implements Provider {
   }
 
   private body(req: ProviderRequest): Record<string, unknown> {
-    return anthropicBody(req, this.contextEditing);
+    return anthropicBody(req, this.contextEditing, this.compactsServerSide(req.model));
   }
 
   private async once(req: ProviderRequest): Promise<ProviderResponse> {
@@ -54,7 +76,7 @@ export class AnthropicProvider implements Provider {
     };
     try {
       bump();
-      const params = { ...this.body(req), betas: this.contextEditing ? BETAS : [] };
+      const params = { ...this.body(req), betas: this.contextEditing ? [...BETAS, ...(this.compactsServerSide(req.model) ? [COMPACT_BETA] : [])] : [] };
       const stream = this.client.beta.messages.stream(params as unknown as Anthropic.Beta.Messages.MessageCreateParamsStreaming, { signal: ctl.signal });
       stream.on('streamEvent', bump);
       stream.on('text', (d) => req.onText?.(d));
@@ -96,7 +118,7 @@ export class AnthropicProvider implements Provider {
 }
 
 /** The request body (without betas). Exported for tests: caching depends on its exact shape. */
-export function anthropicBody(req: Pick<ProviderRequest, 'model' | 'system' | 'tools' | 'messages' | 'effort'>, contextEditing: boolean): Record<string, unknown> {
+export function anthropicBody(req: Pick<ProviderRequest, 'model' | 'system' | 'tools' | 'messages' | 'effort'>, contextEditing: boolean, serverCompaction = false): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: req.model.id,
     max_tokens: req.model.maxOutput,
@@ -120,7 +142,11 @@ export function anthropicBody(req: Pick<ProviderRequest, 'model' | 'system' | 't
         keep: { type: 'tool_uses', value: 6 },
         clear_at_least: { type: 'input_tokens', value: 12_000 },
         exclude_tools: ['todo_write', 'agent'],
-      }],
+      }, ...(serverCompaction ? [{
+        type: 'compact_20260112',
+        trigger: { type: 'input_tokens', value: Math.max(COMPACT_MIN, req.model.compactAt) },
+        instructions: COMPACT_INSTRUCTIONS,
+      }] : [])],
     };
   }
   return body;
@@ -152,7 +178,7 @@ function toAnthropicMessage(m: Message) {
   return { role: m.role, content };
 }
 
-function fromAnthropic(model: string, msg: Anthropic.Beta.Messages.BetaMessage): ProviderResponse {
+export function fromAnthropic(model: string, msg: Anthropic.Beta.Messages.BetaMessage): ProviderResponse {
   const blocks: Block[] = [];
   for (const b of msg.content) {
     if (b.type === 'text') blocks.push({ type: 'text', text: b.text });
@@ -162,7 +188,13 @@ function fromAnthropic(model: string, msg: Anthropic.Beta.Messages.BetaMessage):
       blocks.push({ type: 'tool_use', id: b.id, name: b.name, input });
     }
   }
+  // With server-side compaction the request ran more than one step (summary,
+  // then the reply): the cost is all of them; the context is the last one's.
+  type Iter = { type?: string; input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
+  const iters = ((msg.usage as unknown as { iterations?: Iter[] }).iterations ?? []);
   const u = msg.usage;
+  const sum = (k: keyof Iter) => iters.reduce((a, it) => a + (Number(it[k]) || 0), 0);
+  const compaction = iters.find((it) => it.type === 'compaction');
   const stopMap: Record<string, StopKind> = { end_turn: 'end', tool_use: 'tool_use', max_tokens: 'max_tokens', refusal: 'refusal', stop_sequence: 'end', pause_turn: 'other' };
   const stop = stopMap[msg.stop_reason ?? ''] ?? 'other';
   let notice: string | undefined;
@@ -170,16 +202,15 @@ function fromAnthropic(model: string, msg: Anthropic.Beta.Messages.BetaMessage):
     const d = (msg as unknown as { stop_details?: { category?: string | null; explanation?: string } }).stop_details;
     notice = `The model declined this request${d?.category ? ` (${d.category})` : ''}.${d?.explanation ? ' ' + d.explanation : ''}`;
   }
+  const last = { input: u.input_tokens ?? 0, cacheRead: u.cache_read_input_tokens ?? 0, cacheWrite: u.cache_creation_input_tokens ?? 0 };
   return {
     message: { role: 'assistant', content: blocks, raw: { provider: 'anthropic', model, payload: msg.content } },
     stop,
-    usage: {
-      input: u.input_tokens ?? 0,
-      cacheRead: u.cache_read_input_tokens ?? 0,
-      cacheWrite: u.cache_creation_input_tokens ?? 0,
-      output: u.output_tokens ?? 0,
-      reasoning: 0,
-    },
+    usage: iters.length > 1
+      ? { input: sum('input_tokens'), cacheRead: sum('cache_read_input_tokens'), cacheWrite: sum('cache_creation_input_tokens'), output: sum('output_tokens'), reasoning: 0 }
+      : { ...last, output: u.output_tokens ?? 0, reasoning: 0 },
     notice,
+    ...(iters.length > 1 ? { contextTokens: last.input + last.cacheRead + last.cacheWrite } : {}),
+    ...(compaction ? { compacted: { summaryTokens: compaction.output_tokens ?? 0, before: (compaction.input_tokens ?? 0) + (compaction.cache_read_input_tokens ?? 0) + (compaction.cache_creation_input_tokens ?? 0) } } : {}),
   };
 }
