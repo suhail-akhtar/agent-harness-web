@@ -126,9 +126,11 @@ export async function renderFile({ root, rel, pages, width = 1000, max = 4, sign
         await fsp.writeFile(path.join(out, name), r.stdout.replace(/<head>/i, `<head>${base}`));
         page = `.harness/render/_md/${name}`;
       }
-      const p = await runPage({ root, file: page, viewport: { width: Math.min(Math.max(width, 320), 1920), height: Math.round(width * 0.5625) }, fullPage: true, waitMs: 500, signal });
-      result.pages = 1;
-      result.images.push({ page: 1, media_type: 'image/png', data: p.shots[0].png });
+      const w = Math.min(Math.max(width, 320), 1920);
+      // Pages in A4 proportions (Markdown, long HTML); an SVG or short page is one page.
+      const p = await runPage({ root, file: page, viewport: { width: w, height: Math.round(w * 0.5625) }, screenshot: false, paged: { height: Math.round(w * 1.414), want: (total) => parsePages(pages, total, max) }, waitMs: 500, signal });
+      result.pages = p.pageCount;
+      for (const s of p.shots) result.images.push({ page: s.page, media_type: 'image/png', data: s.png });
       if (p.errors.length) result.warnings.push(`page errors: ${p.errors.join(' | ').slice(0, 400)}`);
       if (p.missing.length) result.warnings.push(`missing: ${p.missing.join(', ')}`);
       if (p.blocked.length) result.warnings.push(`blocked (offline): ${p.blocked.slice(0, 5).join(', ')}`);

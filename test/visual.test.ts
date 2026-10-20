@@ -149,3 +149,18 @@ test('render shows slides and catches text that does not fit; the gate fails on 
   assert.match(g!.details ?? '', /deck\.pptx: slide 2: text does not fit[\s\S]*slide 3: text too small/);
   await h.close();
 });
+
+test('a long Markdown file renders as pages, never one giant image', { skip: !hasChromium && 'no Chromium' }, async () => {
+  const { h, root, ctx, tool } = await setup();
+  await fs.writeFile(path.join(root, 'plan.md'), `# Plan\n\n${Array.from({ length: 120 }, (_, i) => `${i + 1}. A line of the plan that takes some room on the page.`).join('\n')}\n`);
+  const r = await tool('render').run({ path: 'plan.md', width: 800 }, ctx);
+  const pages = Number(/plan\.md: (\d+) page/.exec(r.content)?.[1]);
+  assert.ok(pages >= 3, `${pages} pages`);
+  assert.equal(r.images?.length, Math.min(pages, 4));
+  for (const img of r.images!) {
+    const png = Buffer.from(img.data, 'base64');
+    assert.equal(png.readUInt32BE(16), 800);
+    assert.ok(png.readUInt32BE(20) <= Math.round(800 * 1.414), `page height ${png.readUInt32BE(20)}`);
+  }
+  await h.close();
+});

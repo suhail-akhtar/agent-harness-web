@@ -90,7 +90,7 @@ const keyOf = (a) => Object.keys(a).find((k) => k !== 'hold' && k !== 'timeout' 
  *   | {click: selector | [x, y]} | {move: [x, y]} | {drag: [[x1, y1], [x2, y2]]} | {scroll: dy}
  *   | {eval: js} | {waitFor: js, timeout?: ms} | {screenshot: label}]
  */
-export async function runPage({ root, file = 'index.html', query = '', viewport = { width: 1280, height: 720 }, actions = [], evaluate, save, screenshot = true, fullPage = false, waitMs = 1000, timeoutMs = 90_000, signal }) {
+export async function runPage({ root, file = 'index.html', query = '', viewport = { width: 1280, height: 720 }, actions = [], evaluate, save, screenshot = true, fullPage = false, paged, waitMs = 1000, timeoutMs = 90_000, signal }) {
   const srv = await serveDir(root);
   const out = { url: '', title: '', console: [], errors: [], blocked: [], missing: [], evals: [], shots: [], result: undefined };
   try {
@@ -138,14 +138,22 @@ export async function runPage({ root, file = 'index.html', query = '', viewport 
             case 'scroll': await page.mouse.wheel(0, Number(v) || 0); break;
             case 'eval': out.evals.push({ js: String(v).slice(0, 200), value: await safeEval(page, String(v)) }); break;
             case 'waitFor': await page.waitForFunction(String(v), undefined, { timeout: Math.min(Number(a.timeout) || 5000, left()) }).catch(() => out.evals.push({ js: String(v).slice(0, 200), value: 'waitFor timed out' })); break;
-            case 'screenshot': out.shots.push({ label: String(v || `after step ${out.shots.length + 1}`), png: await page.screenshot({ fullPage }) }); break;
+            case 'screenshot': out.shots.push({ label: String(v || `after step ${out.shots.length + 1}`), png: await shoot(page, fullPage, viewport, out) }); break;
             default: out.errors.push(`unknown action ${JSON.stringify(a).slice(0, 100)}`);
           }
         }
         out.title = await page.title().catch(() => '');
         if (evaluate) out.result = await safeEval(page, evaluate);
         if (save) out.saved = await saveFromPage(page, save);
-        if (screenshot && !out.shots.length) out.shots.push({ label: 'final', png: await page.screenshot({ fullPage }) });
+        if (paged) {
+          // Long pages as pages: slices of a fixed height, like a PDF, never one giant image.
+          const height = await page.evaluate(() => Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight ?? 0));
+          out.pageCount = Math.max(1, Math.min(50, Math.ceil(height / paged.height)));
+          for (const n of paged.want(out.pageCount)) {
+            const y = (n - 1) * paged.height;
+            out.shots.push({ label: `page ${n}`, page: n, png: await page.screenshot({ fullPage: true, clip: { x: 0, y, width: viewport.width, height: Math.min(paged.height, height - y) } }) });
+          }
+        } else if (screenshot && !out.shots.length) out.shots.push({ label: 'final', png: await shoot(page, fullPage, viewport, out) });
         for (const s of out.shots) s.stats = await frameStats(ctx, s.png);
         return out;
       } finally {
@@ -186,6 +194,16 @@ async function saveFromPage(page, { file, js, encoding = 'auto' }) {
   await fsp.mkdir(path.dirname(file), { recursive: true });
   await fsp.writeFile(file, buf);
   return { bytes: buf.length };
+}
+
+/** Providers reject very tall images: a full-page shot stops at four screens and says so. */
+async function shoot(page, fullPage, viewport, out) {
+  if (!fullPage) return page.screenshot();
+  const height = await page.evaluate(() => Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight ?? 0));
+  const max = viewport.height * 4;
+  if (height <= max) return page.screenshot({ fullPage: true });
+  out.console.push(`note: the page is ${height}px tall; the screenshot shows the first ${max}px (scroll with actions to see the rest)`);
+  return page.screenshot({ fullPage: true, clip: { x: 0, y: 0, width: viewport.width, height: max } });
 }
 
 async function safeEval(page, js) {

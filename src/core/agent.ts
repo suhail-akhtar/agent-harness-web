@@ -217,6 +217,7 @@ export class Agent {
       onReasoning: (text) => this.hooks.emit({ kind: 'reasoning_delta', text, agent: this.cfg.name }),
     };
     const t0 = Date.now();
+    let imagesDropped = false;
     for (let attempt = 0; ; attempt++) {
       try {
         const resp = await this.cfg.provider.send(req);
@@ -224,6 +225,16 @@ export class Agent {
         return resp;
       } catch (err) {
         if (signal.aborted) throw err;
+        // A provider that rejects an image (format, size) would fail every later
+        // request too: replace images with a note in the live context and go on.
+        if (err instanceof ProviderError && err.status === 400 && /image/i.test(err.message) && !imagesDropped && hasImages(req.messages)) {
+          imagesDropped = true;
+          const stripped = stripImages(req.messages);
+          if (messages === this.messages) this.messages = stripped;
+          req.messages = stripped;
+          this.hooks.emit({ kind: 'notice', level: 'warn', text: `The provider rejected an image (${err.message.slice(0, 120)}); continuing without images.`, agent: this.cfg.name });
+          continue;
+        }
         if (!(err instanceof ProviderError) || !err.retryable || attempt >= MAX_RETRIES) throw err;
         const delay = Math.min(60_000, err.retryAfterMs ?? 1000 * 2 ** attempt + Math.random() * 500);
         this.hooks.emit({ kind: 'retry', attempt: attempt + 1, delayMs: Math.round(delay), reason: err.message.slice(0, 200) });
@@ -434,5 +445,26 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     const t = setTimeout(resolve, ms);
     signal.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true });
+  });
+}
+
+function hasImages(messages: Message[]): boolean {
+  return messages.some((m) => m.content.some((b) => b.type === 'image' || (b.type === 'tool_result' && !!b.images?.length)));
+}
+
+const IMAGE_REJECTED = '[The image(s) here were not sent: the model provider rejected an image. Rely on the text results, or make a smaller or simpler image.]';
+
+/** Copies of the messages with every image replaced by a note (the stored history keeps them). */
+function stripImages(messages: Message[]): Message[] {
+  return messages.map((m) => {
+    if (!hasImages([m])) return m;
+    return {
+      ...m,
+      content: m.content.map((b): Block => {
+        if (b.type === 'image') return { type: 'text', text: IMAGE_REJECTED };
+        if (b.type === 'tool_result' && b.images?.length) return { ...b, images: undefined, content: `${b.content}\n${IMAGE_REJECTED}` };
+        return b;
+      }),
+    };
   });
 }
