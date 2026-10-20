@@ -1,7 +1,10 @@
 // Documents to page images, the way a reader will see them: office files
-// through LibreOffice to PDF, PDF pages through poppler, web pages, SVG and
-// Markdown through Chromium. Plus cheap checks a model without vision can use:
-// page count, words per page, and text a slide drops because it does not fit.
+// through LibreOffice to PDF; PDF pages through pdf.js in Chromium; web pages,
+// SVG and Markdown through Chromium. Plus cheap checks a model without vision
+// can use: page count, words per page, text too small, and text a slide drops
+// because it does not fit. Only Office files need anything installed besides
+// Chromium; poppler and pandoc are used when pdf.js or marked are missing
+// (HARNESS_RENDER_PDF=poppler forces poppler).
 
 import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
@@ -10,6 +13,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { findBinary, missingMessage } from './binaries.mjs';
 import { runPage } from './browser.mjs';
+import { pdfFacts, pdfjsDir, renderPdfPages } from './pdf.mjs';
+
+const usePdfjs = () => process.env.HARNESS_RENDER_PDF !== 'poppler' && !!pdfjsDir();
+async function markdown(text) {
+  try { const { marked } = await import('marked'); return marked.parse(text, { async: false, gfm: true }); } catch { return null; }
+}
 
 export const OFFICE = ['.docx', '.doc', '.odt', '.rtf', '.pptx', '.ppt', '.odp', '.xlsx', '.xls', '.ods'];
 export const WEB = ['.html', '.htm', '.svg'];
@@ -127,14 +136,19 @@ export async function renderFile({ root, rel, pages, width = 1000, max = 4, sign
         // No --embed-resources: pandoc would fetch remote URLs from the server.
         // The HTML goes into the workspace and opens through the offline browser.
         const css = 'body{max-width:820px;margin:40px auto;padding:0 24px;font:16px/1.6 system-ui,sans-serif;color:#222}img{max-width:100%}table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:4px 8px}pre{background:#f5f5f5;padding:8px;overflow:auto}';
-        const r = await run('pandoc', ['-s', '--metadata', `pagetitle=${path.basename(rel)}`, '-t', 'html5', file], { cwd: path.dirname(file), signal });
-        if (r.code !== 0) throw new Error(`pandoc failed: ${r.stderr.trim().slice(0, 400)}`);
+        let html = await markdown(await fsp.readFile(file, 'utf8'));
+        if (html !== null) html = `<!doctype html><html><head><meta charset="utf-8"><title>${path.basename(rel)}</title></head><body>${html}</body></html>`;
+        else {
+          const r = await run('pandoc', ['-s', '--metadata', `pagetitle=${path.basename(rel)}`, '-t', 'html5', file], { cwd: path.dirname(file), signal });
+          if (r.code !== 0) throw new Error(`pandoc failed: ${r.stderr.trim().slice(0, 400)}`);
+          html = r.stdout;
+        }
         const dir = path.posix.dirname(rel.split(path.sep).join('/'));
         const base = `<base href="/${dir === '.' ? '' : `${dir.split('/').map(encodeURIComponent).join('/')}/`}"><style>${css}</style>`;
         const out = path.join(root, '.harness', 'render', '_md');
         await fsp.mkdir(out, { recursive: true });
         const name = `${rel.replace(/[^A-Za-z0-9._-]+/g, '_')}.html`;
-        await fsp.writeFile(path.join(out, name), r.stdout.replace(/<head>/i, `<head>${base}`));
+        await fsp.writeFile(path.join(out, name), html.replace(/<head>/i, `<head>${base}`));
         page = `.harness/render/_md/${name}`;
       }
       const w = Math.min(Math.max(width, 320), 1920);
@@ -150,13 +164,15 @@ export async function renderFile({ root, rel, pages, width = 1000, max = 4, sign
     let pdf = file;
     if (OFFICE.includes(ext)) pdf = await officeToPdf(file, tmp, signal);
     else if (ext !== '.pdf') throw new Error(`Cannot render ${ext || 'files without an extension'}. Supported: ${RENDERABLE.join(' ')}`);
-    const info = await pdfInfo(pdf, signal);
+    const facts = usePdfjs() ? await pdfFacts(pdf) : null;
+    const info = facts ?? await pdfInfo(pdf, signal);
     result.pages = info.pages;
     result.size = info.width ? `${Math.round(info.width)} x ${Math.round(info.height)} pt` : null;
     result.pdf = pdf;
     const slides = ext === '.pptx' ? await pptxSlideTexts(file).catch(() => null) : null;
     for (let n = 1; n <= info.pages; n++) {
-      const w = await pageWords(pdf, n, signal);
+      // Font sizes in points: pdf.js reads them; poppler's word boxes are ~1.25x the size.
+      const w = facts ? { words: facts.perPage[n - 1].words, heights: facts.perPage[n - 1].sizes.map((s) => s * 1.25) } : await pageWords(pdf, n, signal);
       const fact = { page: n, words: w.words };
       if (slides && slides[n - 1] !== undefined) {
         const own = words(slides[n - 1]);
@@ -174,6 +190,15 @@ export async function renderFile({ root, rel, pages, width = 1000, max = 4, sign
       result.facts.push(fact);
     }
     const want = parsePages(pages, info.pages, max);
+    if (facts) {
+      try {
+        for (const s of await renderPdfPages(pdf, want, width, { signal })) result.images.push({ page: s.page, media_type: 'image/png', data: s.png });
+        return result;
+      } catch (e) {
+        if (!findBinary('pdftoppm')) throw new Error(`could not draw the pages: ${e.message}`);
+        result.warnings.push(`pages drawn with poppler (the browser could not: ${String(e.message).slice(0, 120)})`);
+      }
+    }
     for (const n of want) {
       const base = path.join(tmp, `p${n}`);
       const r = await run('pdftoppm', ['-png', '-f', String(n), '-l', String(n), '-singlefile', '-scale-to-x', String(width), '-scale-to-y', '-1', pdf, base], { timeoutMs: 60_000, signal });

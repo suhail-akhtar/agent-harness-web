@@ -182,3 +182,48 @@ test('a waitFor that times out fails the scenario and does not shift the checks 
   assert.doesNotMatch(g!.details ?? '', /expected window\.__game\.state == "playing"/, 'the state check read its own value, not the timeout');
   await h.close();
 });
+
+/** A one-page PDF with given text lines (Helvetica at the given sizes), built by hand. */
+function tinyPdf(lines: [string, number][]): Buffer {
+  const content = lines.map(([t, size], i) => `BT /F1 ${size} Tf 72 ${700 - i * 40} Td (${t}) Tj ET`).join('\n');
+  const objs = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
+    `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ];
+  let out = '%PDF-1.4\n';
+  const offs: number[] = [];
+  objs.forEach((o, i) => { offs.push(out.length); out += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+  const xref = out.length;
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${offs.map((o) => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(out, 'latin1');
+}
+
+test('PDF and Markdown render with Chromium alone: no poppler, no pandoc', { skip: !hasChromium && 'no Chromium' }, async () => {
+  // @ts-expect-error plain JS module
+  const { renderFile } = await import('../plugins/visual/lib/render.mjs');
+  const saved = { ...process.env };
+  // Point every poppler and pandoc binary at nothing: any use of them would fail.
+  for (const b of ['PDFTOPPM', 'PDFTOTEXT', 'PDFINFO', 'PANDOC']) process.env[`HARNESS_${b}`] = '/nonexistent/' + b.toLowerCase();
+  try {
+    const root = await tempDir();
+    await fs.writeFile(path.join(root, 'doc.pdf'), tinyPdf([['Quarterly results', 24], ['tiny footnote text here', 8]]));
+    const r = await renderFile({ root, rel: 'doc.pdf', width: 600 });
+    assert.equal(r.pages, 1);
+    assert.equal(r.size, '612 x 792 pt');
+    assert.deepEqual(r.facts[0], { page: 1, words: 6, smallestPt: 8 });
+    assert.equal(r.images.length, 1);
+    assert.equal(r.images[0].data.readUInt32BE(16), 600, 'a PNG 600 pixels wide');
+    await fs.writeFile(path.join(root, 'notes.md'), '# Title\n\nSome *text* and a table:\n\n| a | b |\n|---|---|\n| 1 | 2 |\n');
+    const m = await renderFile({ root, rel: 'notes.md', width: 800 });
+    assert.equal(m.pages, 1);
+    assert.equal(m.images.length, 1);
+    const html = await fs.readFile(path.join(root, '.harness', 'render', '_md', 'notes.md.html'), 'utf8');
+    assert.match(html, /<h1[^>]*>Title<\/h1>/);
+    assert.match(html, /<table>/);
+  } finally {
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+  }
+});

@@ -31,6 +31,8 @@
   },
   "optionalDependencies": {
     "docx": "9.13.0",
+    "marked": "18.0.14",
+    "pdfjs-dist": "6.3.289",
     "playwright-core": "1.56.1",
     "pptxgenjs": "4.0.1",
     "three": "0.186.1"
