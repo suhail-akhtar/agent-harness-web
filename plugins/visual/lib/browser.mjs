@@ -128,11 +128,13 @@ export async function runPage({ root, file = 'index.html', query = '', viewport 
           const v = a[k];
           switch (k) {
             case 'wait': { const ms = Math.min(Number(v) || 0, 30_000 - waited); waited += ms; await page.waitForTimeout(Math.max(0, ms)); break; }
-            case 'press': await page.keyboard.down(String(v)); await page.waitForTimeout(Math.min(Number(a.hold) || 60, 10_000)); await page.keyboard.up(String(v)); break;
-            case 'down': await page.keyboard.down(String(v)); break;
-            case 'up': await page.keyboard.up(String(v)); break;
-            case 'type': await page.keyboard.type(String(v), { delay: 20 }); break;
-            case 'click': if (Array.isArray(v)) await page.mouse.click(Number(v[0]), Number(v[1])); else await page.click(String(v), { timeout: Math.min(10_000, left()) }); break;
+            // Input is frame-synchronised: a game that reads keys once per frame sees every
+            // press even when a busy machine renders few frames (a fixed 60 ms could fall between two).
+            case 'press': await page.keyboard.down(String(v)); await frames(page); await page.waitForTimeout(Math.min(Number(a.hold) || 60, 10_000)); await page.keyboard.up(String(v)); await frames(page); break;
+            case 'down': await page.keyboard.down(String(v)); await frames(page); break;
+            case 'up': await page.keyboard.up(String(v)); await frames(page); break;
+            case 'type': await page.keyboard.type(String(v), { delay: 20 }); await frames(page); break;
+            case 'click': if (Array.isArray(v)) await page.mouse.click(Number(v[0]), Number(v[1])); else await page.click(String(v), { timeout: Math.min(10_000, left()) }); await frames(page); break;
             case 'move': await page.mouse.move(Number(v[0]), Number(v[1]), { steps: 5 }); break;
             case 'drag': await page.mouse.move(v[0][0], v[0][1]); await page.mouse.down(); await page.mouse.move(v[1][0], v[1][1], { steps: 10 }); await page.mouse.up(); break;
             case 'scroll': await page.mouse.wheel(0, Number(v) || 0); break;
@@ -165,6 +167,14 @@ export async function runPage({ root, file = 'index.html', query = '', viewport 
     await srv.close();
   }
 }
+
+/** Waits for the page to render n more animation frames (bounded, for pages that never draw). */
+const frames = (page, n = 2) => page.evaluate((count) => new Promise((resolve) => {
+  let left = count;
+  const tick = () => (--left <= 0 ? resolve() : requestAnimationFrame(tick));
+  requestAnimationFrame(tick);
+  setTimeout(resolve, 1000);
+}), n).catch(() => {});
 
 const MAX_SAVE = 50 * 1024 * 1024;
 

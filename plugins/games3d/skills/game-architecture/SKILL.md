@@ -122,6 +122,7 @@ window.__game = {
 (Playwright key names: `ArrowLeft`, `Enter`, `Space`, `KeyP`, `KeyA`...)
 
 ## Testing a game
+- Make scenarios deterministic: use `?seed=N`, and advance time with `{"eval": "window.__game.step(n)"}` instead of long real-time waits; never assert on something that only holds within a few milliseconds of a key press. A scenario must pass on a slow, busy machine.
 - `playtest.json` covers: the start screen, starting, every control, scoring, losing (use `step(n)` to fast-forward), pause, restart. The `playtest` gate runs it; `web-console` checks the page opens clean.
 - Then **play it** with the browser tool and look: `browser {query: "?seed=2&autostart=1", actions: [{"press":"ArrowRight","hold":800},{"screenshot":"mid-game"},{"eval":"window.__game.step(600)"},{"screenshot":"later"}]}`. Is it readable, does it feel responsive, is the difficulty right, is game over clear?
 
