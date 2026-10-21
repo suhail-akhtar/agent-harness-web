@@ -102,13 +102,13 @@ export interface ToolDefinition {
   description: string;
   parameters: JsonSchema;
   kind?: ToolKind;
-  /** Kinds a particular call needs beyond `kind` (e.g. an option that writes files needs 'edit'). */
-  kindsFor?: (input: Record<string, unknown>) => ToolKind[];
+  /** Kinds a particular call needs beyond `kind` (e.g. an option that writes files needs 'edit'); `where` says where tools run. */
+  kindsFor?: Tool['kindsFor'];
   parallelSafe?: boolean;
   /** Its output carries content from outside the user's control (web pages, a service): saving to memory afterwards is confirmed. */
   untrusted?: boolean;
   /** Whether a call can carry data out of the session (default: from its kind, or true for a plugin that declares network hosts). */
-  sendsOut?: boolean | ((input: Record<string, unknown>) => boolean);
+  sendsOut?: Tool['sendsOut'];
   summarize?: (input: Record<string, unknown>) => string;
   /** Whether a session on this host gets the tool at all (e.g. only where the sandbox image has the program). */
   availableIn?: Tool['availableIn'];

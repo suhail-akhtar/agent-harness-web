@@ -1,7 +1,7 @@
 {
   "name": "computer",
   "version": "1.0.0",
-  "description": "Computer use: operate a desktop in the session's Docker sandbox through screenshots, mouse and keyboard (the computer tool), for GUI apps and pages that need a real browser. Needs the desktop sandbox image (npm run sandbox:image:desktop).",
+  "description": "Computer use: operate a desktop through screenshots, mouse and keyboard (the computer tool), for GUI apps and pages that need a real browser. In the session's Docker sandbox (the desktop image, npm run sandbox:image:desktop), or on the user's real screen through a companion started with --allow-desktop (each action approved).",
   "main": "index.mjs",
   "skills": "skills"
 }

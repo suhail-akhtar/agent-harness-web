@@ -4,6 +4,7 @@ import { LocalHost, type ToolHost } from '../runtime/host.ts';
 import { toolByName } from '../tools/index.ts';
 import { resolveIn } from '../tools/paths.ts';
 import type { FileStamp, ToolContext } from '../tools/types.ts';
+import { checkRequest, type DesktopExecutor, type DesktopRequest, systemDesktop } from './desktop.ts';
 
 // What a companion does with each job from the server, kept apart from the
 // network loop so it can be tested. Everything is confined to the folder the
@@ -20,7 +21,12 @@ export type CompanionJob =
    * A project MCP server on this computer: start it, or send it a message and get
    * back what it has said since (a request waits for its own answer).
    */
-  | { id: string; kind: 'mcp'; sessionId: string; op: 'start' | 'send' | 'stop'; server: string; command?: string; args?: string[]; env?: Record<string, string>; message?: Record<string, unknown>; timeoutMs?: number };
+  | { id: string; kind: 'mcp'; sessionId: string; op: 'start' | 'send' | 'stop'; server: string; command?: string; args?: string[]; env?: Record<string, string>; message?: Record<string, unknown>; timeoutMs?: number }
+  /** The computer tool on this computer's real screen: only with --allow-desktop. */
+  | { id: string; kind: 'desktop'; sessionId: string; request: DesktopRequest };
+
+/** Why a desktop job is refused, and how to allow it. */
+export const DESKTOP_OFF = 'desktop control is off on this companion: the user can restart it with --allow-desktop to let the agent see this screen and use the mouse and keyboard (each action is approved in the web app)';
 
 /** Folders never copied to the server: big, regenerated, or private to tools. */
 export const MIRROR_SKIP = new Set(['node_modules', '.git', '.harness', '.venv', 'venv', '__pycache__', '.next', 'target', 'dist', 'build', 'coverage']);
@@ -35,8 +41,16 @@ const MCP_INBOX_MAX = 32 * 1024 * 1024;
 /** A project MCP server running here: what it said and the server has not yet read. */
 interface McpRelay { child: import('node:child_process').ChildProcessWithoutNullStreams; inbox: Record<string, unknown>[]; held: number; waiters: (() => void)[]; closed?: string }
 
-export function createCompanionHandler(dir: string, opts: { allowHooks?: boolean; /** Project MCP servers (.mcp.json) may start here without a sandbox. */ trustProject?: boolean; log?: (m: string) => void; /** Where commands run: a sandboxed host for the folder (default: plain). */ host?: ToolHost } = {}) {
+export function createCompanionHandler(dir: string, opts: {
+  allowHooks?: boolean;
+  /** Project MCP servers (.mcp.json) may start here without a sandbox. */ trustProject?: boolean;
+  /** The agent may see this screen and use the mouse and keyboard (--allow-desktop). */ allowDesktop?: boolean;
+  /** How desktop jobs run (default: this OS's own tools; tests pass a stand-in). */ desktop?: DesktopExecutor;
+  log?: (m: string) => void;
+  /** Where commands run: a sandboxed host for the folder (default: plain). */ host?: ToolHost;
+} = {}) {
   const host: ToolHost = opts.host ?? new LocalHost(dir);
+  const desktop = opts.desktop ?? systemDesktop(dir);
   const readFiles = new Map<string, Map<string, FileStamp>>();
 
   /**
@@ -138,6 +152,15 @@ export function createCompanionHandler(dir: string, opts: { allowHooks?: boolean
         return { ok: true, value: { data: (await fs.readFile(real)).toString('base64') } };
       }
       if (job.kind === 'mcp') return { ok: true, value: await mcp(job) };
+      if (job.kind === 'desktop') {
+        if (!opts.allowDesktop) throw new Error(DESKTOP_OFF);
+        const req = job.request;
+        checkRequest(req);
+        // Never the typed text itself: it shows on the screen, not in this log.
+        const typed = req.steps.find((s) => s.t === 'type');
+        opts.log?.(`desktop: ${req.action}${typed && typed.t === 'type' ? ` (${typed.text.length} characters)` : ''}${req.launch ? ` ${req.launch.slice(0, 200)}` : ''}`);
+        return { ok: true, value: await desktop(req) };
+      }
       if (job.kind === 'push') {
         const real = await resolveIn(host, job.path);
         await fs.mkdir(path.dirname(real), { recursive: true });

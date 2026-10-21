@@ -9,6 +9,7 @@ import { globMatcher } from '../tools/paths.ts';
 //               tool(spec)      bash: exact command, or "prefix:*"
 //                               edit/write/read: a glob over the path
 //                               web_fetch: "domain:example.com"
+//                               computer: actions, e.g. "screenshot|zoom"
 
 export interface Rules {
   allow: string[]; deny: string[]; ask: string[];
@@ -39,7 +40,8 @@ export interface PermissionContext {
  * allowlist (the operator's hosts) are not a way out.
  */
 export function sendsOut(tool: Tool, input: Record<string, unknown>, network: PermissionContext['network'], hostKind?: string): boolean {
-  if (tool.sendsOut !== undefined) return typeof tool.sendsOut === 'function' ? tool.sendsOut(input) : tool.sendsOut;
+  const own = typeof tool.sendsOut === 'function' ? tool.sendsOut(input, { hostKind }) : tool.sendsOut;
+  if (own !== undefined) return own;
   const kinds = tool.kindsFor?.(input, { hostKind }) ?? [tool.kind];
   return kinds.some((k) => k === 'network' || k === 'external' || (k === 'exec' && network === 'full' && !isReadOnlyCommand(String(input.command ?? ''))));
 }
@@ -71,6 +73,7 @@ export function ruleMatches(rule: string, tool: Tool, input: Record<string, unkn
       return host === d || host.endsWith('.' + d);
     } catch { return false; }
   }
+  if (name === 'computer') return spec.split('|').map((s) => s.trim()).includes(String(input.action ?? ''));
   const p = String(input.path ?? '').replace(/\\/g, '/').replace(/^\/workspace\//, '').replace(/^\.\//, '');
   return globMatcher(spec)(p);
 }
@@ -170,5 +173,7 @@ export function suggestRule(tool: Tool, input: Record<string, unknown>): string 
     try { return `web_fetch(domain:${new URL(String(input.url)).hostname})`; } catch { return 'web_fetch'; }
   }
   if (name === 'edit' || name === 'write') return 'edit_all';
+  // One action at a time: allowing screenshots is not allowing clicks.
+  if (name === 'computer' && typeof input.action === 'string' && /^[a-z_]+$/.test(input.action)) return `computer(${input.action})`;
   return name;
 }
