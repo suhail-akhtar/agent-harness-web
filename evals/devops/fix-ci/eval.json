@@ -1,0 +1,13 @@
+{
+  "name": "fix-ci",
+  "description": "A failing CI pipeline (a workflow error and failing code) fixed with the pipeline-fix workflow in local mode (no GitHub): hidden checks run actionlint and the job's run: steps in the ops image, and make sure the tests were not weakened. Run with HARNESS_DEVOPS_IMAGE=harness-sandbox-ops:latest.",
+  "workflow": "pipeline-fix",
+  "input": { "source": "local", "branch": "main" },
+  "fixtures": "fixtures",
+  "timeoutMin": 45,
+  "checks": [
+    { "name": "hidden: actionlint", "run": "node {{case}}/check-ci.mjs {{ws}} lint", "timeoutSec": 300 },
+    { "name": "hidden: the job's steps pass", "run": "node {{case}}/check-ci.mjs {{ws}} steps", "timeoutSec": 600 },
+    { "name": "hidden: tests unchanged", "run": "node {{case}}/check-ci.mjs {{ws}} tests", "timeoutSec": 60 }
+  ]
+}

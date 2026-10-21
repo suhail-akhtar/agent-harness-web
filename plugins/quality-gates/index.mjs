@@ -141,6 +141,9 @@ const gates = [
   },
 ];
 
+/** The gates themselves, for plugins that build on one (devops' secrets-in-repo runs the secrets scan). */
+export { gates };
+
 export default {
   name: 'quality-gates',
   setup(api) {

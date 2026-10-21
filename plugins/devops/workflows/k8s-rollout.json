@@ -1,0 +1,90 @@
+{
+  "name": "k8s-rollout",
+  "description": "A Kubernetes change rolled out safely: validate and diff against the cluster, gates, human approval of the diff, apply, wait for the rollout, verify (ready pods, no warning events, smoke checks), undo automatically on failure, and a change record.",
+  "inputs": {
+    "paths": { "description": "The manifests to apply (files or folders in the workspace)", "required": true },
+    "workloads": { "description": "The workloads to watch, e.g. \"deployment/web deployment/worker\" (default: the ones apply changes)", "default": "" },
+    "kubeconfig": { "description": "Key Vault secret holding the kubeconfig (empty: the runtime's own)", "default": "" },
+    "namespace": { "description": "Namespace (empty: the manifests' or the context's)", "default": "" },
+    "context": { "description": "kubeconfig context (empty: the current one)", "default": "" },
+    "smoke": { "description": "Smoke checks after the rollout (commands or URLs that must succeed)", "default": "" }
+  },
+  "start": "diff",
+  "maxAgentRuns": 12,
+  "state": {
+    "diffSummary": { "type": "string", "description": "What changes in the cluster" },
+    "rolledOut": { "type": "boolean", "description": "apply and every rollout completed" },
+    "healthy": { "type": "boolean", "description": "Verification passed" },
+    "undone": { "type": "boolean", "description": "The rollout was undone" }
+  },
+  "nodes": {
+    "diff": {
+      "type": "agent",
+      "title": "Validate and diff",
+      "agent": "platform-engineer",
+      "prompt": "Prepare this rollout; do not apply. Load kubernetes-operations.\n\nManifests: {{input.paths}}. Cluster: kubeconfig {{input.kubeconfig}}, namespace {{input.namespace}}, context {{input.context}} (empty means the default; pass only the non-empty ones to the k8s tool).\nFeedback, if any: {{feedback}}\n\nk8s validate the manifests (fix what is invalid), then k8s diff them against the cluster. diffSummary: the objects that change and how (images, replicas, env, probes), in a few lines.",
+      "outputs": ["diffSummary"],
+      "next": "gates"
+    },
+    "gates": {
+      "type": "gate",
+      "title": "Manifest gates",
+      "gates": ["k8s-manifests-valid", "iac-security", "secrets-in-repo"],
+      "maxFailures": 3,
+      "next": { "on": { "pass": "approve", "fail": "fix", "exhausted": "failed" } }
+    },
+    "fix": {
+      "type": "agent",
+      "title": "Fix the manifests",
+      "agent": "platform-engineer",
+      "prompt": "The manifest gates failed. Fix the manifests (not the gates).\n\n{{feedback}}",
+      "next": "diff"
+    },
+    "approve": {
+      "type": "approval",
+      "title": "Approve the rollout",
+      "message": "Apply {{input.paths}} to the cluster (kubeconfig {{input.kubeconfig}}, namespace {{input.namespace}}, context {{input.context}})?\n\n{{state.diffSummary}}",
+      "next": { "on": { "approve": "apply", "reject": "diff" } }
+    },
+    "apply": {
+      "type": "agent",
+      "title": "Apply and roll out",
+      "agent": "release-manager",
+      "prompt": "The human approved this rollout. k8s apply {{input.paths}} (it waits for the rollouts), then k8s rollout-status for each workload: {{input.workloads}} (or the ones apply changed). Cluster: kubeconfig {{input.kubeconfig}}, namespace {{input.namespace}}, context {{input.context}} (pass only non-empty ones).\n\nApproved diff:\n{{state.diffSummary}}\n\nrolledOut is true only if apply succeeded and every rollout completed.",
+      "outputs": ["rolledOut"],
+      "next": "verify"
+    },
+    "verify": {
+      "type": "agent",
+      "title": "Verify",
+      "agent": "release-manager",
+      "prompt": "Verify the rollout: k8s get the workloads and their pods (all ready, no restarts), k8s events (no new Warning events for them), and the smoke checks:\n{{input.smoke}}\n\nCluster: kubeconfig {{input.kubeconfig}}, namespace {{input.namespace}}, context {{input.context}}. Rollout result: {{state.apply}}\n\nhealthy is true only if all of it passed (a rollout that did not complete is not healthy).",
+      "outputs": ["healthy"],
+      "decide": ["HEALTHY", "UNHEALTHY"],
+      "next": { "on": { "UNHEALTHY": "undo" }, "default": "record" }
+    },
+    "undo": {
+      "type": "agent",
+      "title": "Undo the rollout",
+      "agent": "release-manager",
+      "prompt": "The rollout is not healthy. k8s rollout-undo every workload it changed ({{input.workloads}} or the ones in: {{state.apply}}), then rollout-status and get to confirm the previous version runs healthy again. Cluster: kubeconfig {{input.kubeconfig}}, namespace {{input.namespace}}, context {{input.context}}.\n\nWhy: {{state.verify}}",
+      "outputs": ["undone"],
+      "next": "record"
+    },
+    "record": {
+      "type": "agent",
+      "title": "Change record",
+      "agent": "release-manager",
+      "prompt": "Write the change record (docs/changes/<today>-<short-name>.md).\n\nManifests: {{input.paths}}\nDiff:\n{{state.diffSummary}}\nGates: {{state.gates}}\nApproval: {{state.approve}}\nRollout: {{state.apply}}\nVerification: {{state.verify}}\nUndo: {{state.undo}}",
+      "next": "outcome"
+    },
+    "outcome": {
+      "type": "branch",
+      "title": "Healthy?",
+      "when": "state.rolledOut && state.healthy && !state.undone",
+      "next": { "on": { "true": "done", "false": "failed" } }
+    },
+    "done": { "type": "end", "title": "Rolled out and verified", "status": "success" },
+    "failed": { "type": "end", "title": "Not rolled out (or undone): see the change record", "status": "failed" }
+  }
+}
