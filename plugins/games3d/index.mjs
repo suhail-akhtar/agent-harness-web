@@ -1,6 +1,7 @@
 // Games and 3D: agents, skills and workflows live in their folders; this adds
-// the gltf-valid gate (and a model_info tool) for exported models, and the
-// blender and godot tools with their gates (blender-file, godot-project).
+// the gltf-valid and model-preview gates (and a model_info tool) for exported
+// models, and the blender and godot tools with their gates (blender-file,
+// godot-project, godot-selftest).
 // Blender and Godot run where the session's commands run, so in a sandbox
 // they come from its image (docker/Dockerfile.sandbox-3d).
 
@@ -9,15 +10,18 @@ import path from 'node:path';
 import { defineTool } from '../../src/plugins/api.ts';
 import { resolveIn } from '../../src/tools/paths.ts';
 import {
-  blendCheckArgs, blenderArgs, checkGodot, findFiles, findRemote, godotArgs, godotProblems, locate, missingIn,
-  newId, readIn, relIn, runIn, runtimePath, tail, withDisplay, writeIn,
+  blendCheckArgs, blenderArgs, checkGodot, findFiles, findRemote, godotArgs, godotProblems, listIn, locate, missingIn, mkdirIn,
+  newId, PRESET_KINDS, presetsIn, readIn, readTextIn, relIn, removeIn, runIn, runtimePath, SELFTEST_FRAMES, selftestGodot, tail,
+  withDisplay, withPreset, writeIn,
 } from './lib-engines.mjs';
 import { describeGltf, inspectGltf } from './lib-gltf.mjs';
+import { pngStats } from './lib-png.mjs';
 
 const IMAGE_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' };
 const seconds = (v, def) => Math.min(Math.max(Number(v) || def, 10), 1800) * 1000;
 const isBlend = (n) => /\.blend$/i.test(n);
 const isProject = (n) => n === 'project.godot';
+const isPng = (n) => /\.png$/i.test(n);
 
 /** Images the agent asked to see after a run (a preview render), as tool images. */
 async function showImages(host, list, signal) {
@@ -69,6 +73,8 @@ async function runGodot(input, host, signal) {
       : `godot check: ${project} imports cleanly; ${Number.isNaN(r.checked) ? 'its' : r.checked} scripts and scenes load without errors.`;
   }
 
+  if (action === 'export') return exportGodot(input, host, bin, project, signal);
+  if (!['run', 'screenshot'].includes(action)) return { content: `Unknown action ${action}: use check, run, screenshot or export.`, is_error: true };
   const imp = await runIn(host, bin, godotArgs('import', { project }), { timeoutMs: 300_000, signal });
   if (imp.timedOut) return { content: 'godot: the import timed out after 5 minutes', is_error: true };
 
@@ -80,39 +86,78 @@ async function runGodot(input, host, signal) {
   }
 
   if (action === 'screenshot') {
-    if (host.kind === 'companion') return { content: 'godot screenshot needs a sandbox or server-folder session (the frames are read on the server).', is_error: true };
+    // Godot draws where it runs - in the sandbox, the server folder, or on the
+    // companion's computer - and writes the frames into the workspace there;
+    // the last one is brought back (a companion sends that one file).
     const out = await relIn(host, String(input.out ?? '.harness/godot/screenshot.png'));
     if (path.extname(out).toLowerCase() !== '.png') return { content: 'out must be a .png file', is_error: true };
     const framesDir = `.harness/godot/frames-${newId()}`;
-    await fsp.mkdir(path.join(host.root, framesDir), { recursive: true });
+    await mkdirIn(host, framesDir, signal);
     try {
       const r = await runIn(host, bin, godotArgs('screenshot', { project, frames, scene: input.scene, args: input.args, movie: runtimePath(host, `${framesDir}/frame.png`) }), { timeoutMs, signal, prefix: withDisplay(host) });
-      const shots = (await fsp.readdir(path.join(host.root, framesDir))).filter((f) => /^frame\d+\.png$/.test(f)).sort();
+      const shots = (await listIn(host, framesDir, signal)).filter((f) => /^frame\d+\.png$/.test(f)).sort();
       const problems = godotProblems(r.output);
       if (!shots.length) return { content: `godot screenshot: no frame was drawn (exit ${r.code}${r.timedOut ? ', timed out' : ''}). A display is needed: Xvfb on Linux (the 3D sandbox image has it).${problems.length ? `\n${problems.slice(0, 20).join('\n')}` : ''}\n\nOutput (end):\n${tail(r.output, 40)}`, is_error: true };
-      const png = await fsp.readFile(path.join(host.root, framesDir, shots.at(-1)));
-      await fsp.mkdir(path.dirname(path.join(host.root, out)), { recursive: true });
-      await fsp.writeFile(path.join(host.root, out), png);
+      const png = await readIn(host, `${framesDir}/${shots.at(-1)}`, signal);
+      await writeIn(host, out, png, signal);
       return {
         content: `godot screenshot: frame ${shots.length} of ${frames} saved to ${out} (${r.took}).${problems.length ? `\n${problems.length} error(s) while running:\n${problems.slice(0, 20).join('\n')}` : ' No errors while running.'}`,
         is_error: problems.length > 0,
         images: [{ media_type: 'image/png', data: png.toString('base64') }],
       };
-    } finally { await fsp.rm(path.join(host.root, framesDir), { recursive: true, force: true }); }
+    } finally { await removeIn(host, framesDir, signal).catch(() => {}); }
   }
+  throw new Error(`unreachable: ${action}`);
+}
 
-  if (action === 'export') {
-    if (!input.preset || !input.output) return { content: 'export needs preset (a name in export_presets.cfg) and output (the file to write, e.g. build/game.x86_64)', is_error: true };
-    const output = await relIn(host, String(input.output));
-    if (host.kind !== 'companion') await fsp.mkdir(path.dirname(path.join(host.root, output)), { recursive: true });
-    const r = await runIn(host, bin, godotArgs('export', { project, preset: String(input.preset), output: runtimePath(host, output), debug: input.debug === true }), { timeoutMs: seconds(input.timeoutSec, 600), signal });
-    if (/No export template found/i.test(r.output)) return { content: `godot export: Godot's export templates are not installed in this runtime, so it cannot export. Install the templates for this Godot version (Editor > Manage Export Templates, or unpack Godot_v<version>-stable_export_templates.tpz into ~/.local/share/godot/export_templates/<version>.stable/). Everything else can still be checked with check, run and screenshot.\n\n${tail(r.output, 12)}`, is_error: true };
-    if (/presets were detected|Invalid export preset name|no export_presets/i.test(r.output)) return { content: `godot export: no preset named "${input.preset}" in export_presets.cfg.\n\n${tail(r.output, 12)}`, is_error: true };
-    return r.code === 0
-      ? `godot export: ${input.preset} -> ${output} in ${r.took}`
-      : { content: `godot export failed (exit ${r.code}${r.timedOut ? ', timed out' : ''}):\n${tail(r.output, 40)}`, is_error: true };
+const templatesMissing = (host) => (host.kind === 'docker'
+  ? 'Godot\'s export templates are not in this sandbox image. The operator builds the image with them (npm run sandbox:image:3d-export: harness-sandbox-3d:export, Linux and Web templates), allows it with HARNESS_SANDBOX_IMAGES, and a new session picks it.'
+  : 'Godot\'s export templates are not installed for this Godot version. Install them (Editor > Manage Export Templates, or unpack Godot_v<version>-stable_export_templates.tpz into ~/.local/share/godot/export_templates/<version>.stable/; on Windows %APPDATA%\\Godot\\export_templates\\<version>.stable\\).');
+
+/**
+ * Exports with a preset from export_presets.cfg. A missing preset is an
+ * error that names the ones there; only with createPreset ("linux" or "web")
+ * does the tool add a minimal one, and it says so.
+ */
+async function exportGodot(input, host, bin, project, signal) {
+  const kind = input.createPreset === undefined || input.createPreset === '' ? undefined : String(input.createPreset).toLowerCase();
+  if (kind && !PRESET_KINDS[kind]) return { content: 'createPreset must be "linux" or "web".', is_error: true };
+  const preset = String(input.preset ?? (kind ? PRESET_KINDS[kind].name : ''));
+  const outputIn = input.output ?? (kind ? PRESET_KINDS[kind].output : undefined);
+  if (!preset || !outputIn) return { content: 'export needs preset (a name in export_presets.cfg) and output (the file to write, e.g. build/linux/game.x86_64 or build/web/index.html); or createPreset ("linux" or "web") to add a minimal preset when the project has none.', is_error: true };
+  const output = await relIn(host, String(outputIn));
+  const cfgRel = project === '.' ? 'export_presets.cfg' : `${project}/export_presets.cfg`;
+  const cfg = await readTextIn(host, cfgRel, signal);
+  const presets = cfg === null ? [] : presetsIn(cfg);
+  let note = '';
+  if (!presets.some((p) => p.name === preset)) {
+    if (!kind) {
+      const there = presets.length ? `The presets there: ${presets.map((p) => `"${p.name}" (${p.platform})`).join(', ')}.` : cfg === null ? `${cfgRel} does not exist.` : `${cfgRel} has no presets.`;
+      return { content: `godot export: no preset named "${preset}". ${there} Add one to export_presets.cfg (godot-essentials has minimal Linux and Web presets), or call export again with createPreset: "linux" or "web" to have a minimal one written.`, is_error: true };
+    }
+    const exportPath = path.posix.relative(project === '.' ? '' : project, output);
+    await writeIn(host, cfgRel, withPreset(cfg ?? '', kind, preset, exportPath), signal);
+    note = `\nWrote a minimal ${PRESET_KINDS[kind].platform} preset "${preset}" to ${cfgRel} (it was not there).`;
+  } else if (kind) note = `\nUsed the preset "${preset}" already in ${cfgRel} (createPreset changed nothing).`;
+  const imp = await runIn(host, bin, godotArgs('import', { project }), { timeoutMs: 300_000, signal });
+  if (imp.timedOut) return { content: `godot: the import timed out after 5 minutes${note}`, is_error: true };
+  await mkdirIn(host, path.posix.dirname(output), signal);
+  const r = await runIn(host, bin, godotArgs('export', { project, preset, output: runtimePath(host, output), debug: input.debug === true }), { timeoutMs: seconds(input.timeoutSec, 600), signal });
+  if (/No export template found/i.test(r.output)) return { content: `godot export: ${templatesMissing(host)} Everything else can still be checked with check, run and screenshot.${note}\n\n${tail(r.output, 12)}`, is_error: true };
+  if (/presets were detected|Invalid export preset name|no export_presets/i.test(r.output)) return { content: `godot export: Godot did not find the preset "${preset}" in export_presets.cfg.${note}\n\n${tail(r.output, 12)}`, is_error: true };
+  const problems = godotProblems(r.output);
+  if (r.code !== 0 || r.timedOut) return { content: `godot export failed (exit ${r.code}${r.timedOut ? ', timed out' : ''}):${note}\n${problems.length ? `${problems.slice(0, 20).join('\n')}\n\n` : ''}${tail(r.output, 40)}`, is_error: true };
+  // What was written: the files beside the output (a Linux binary and its .pck, a Web page and its .wasm/.pck/.js).
+  const dir = path.posix.dirname(output);
+  const base = path.posix.basename(output).replace(/\.[^.]+$/, '');
+  const written = (await listIn(host, dir, signal)).filter((f) => f === path.posix.basename(output) || f.startsWith(`${base}.`)).sort();
+  if (!written.includes(path.posix.basename(output))) return { content: `godot export: Godot exited 0 but ${output} was not written.${note}\n\n${tail(r.output, 40)}`, is_error: true };
+  let sizes = '';
+  if (host.kind !== 'companion') {
+    const st = await Promise.all(written.map(async (f) => `${f} ${((await fsp.stat(path.join(host.root, dir, f))).size / 1048576).toFixed(1)} MB`));
+    sizes = st.join(', ');
   }
-  return { content: `Unknown action ${action}: use check, run, screenshot or export.`, is_error: true };
+  return `godot export: ${preset} -> ${output} in ${r.took}${input.debug === true ? ' (debug)' : ''}.${note}\nWritten in ${dir}: ${sizes || written.join(', ')}`;
 }
 
 const SKIP = new Set(['node_modules', '.git', 'vendor', '.harness', 'dist', 'build']);
@@ -207,7 +252,7 @@ export default {
 
     api.registerTool(defineTool({
       name: 'godot',
-      description: 'Run Godot 4 headless on a project in the workspace (the folder with project.godot). action: "check" imports the project and loads every script and scene, reporting parse errors and missing resources; "run" plays N frames headless at a fixed 60 per second (default 120: two seconds of game time, as fast as the machine runs) and reports script errors; "screenshot" draws N frames (default 60) and saves the last as a PNG you see; "export" builds with a preset from export_presets.cfg (needs Godot\'s export templates). Load the godot-essentials skill first.',
+      description: 'Run Godot 4 headless on a project in the workspace (the folder with project.godot). action: "check" imports the project and loads every script and scene, reporting parse errors and missing resources; "run" plays N frames headless at a fixed 60 per second (default 120: two seconds of game time, as fast as the machine runs) and reports script errors; "screenshot" draws N frames (default 60) and saves the last as a PNG you see; "export" builds with a preset from export_presets.cfg (needs Godot\'s export templates; a missing preset is an error unless you pass createPreset "linux" or "web", which writes a minimal one). Load the godot-essentials skill first.',
       parameters: {
         type: 'object',
         properties: {
@@ -217,8 +262,9 @@ export default {
           frames: { type: 'number', description: 'run/screenshot: frames to play (60 per second of game time)' },
           args: { type: 'array', items: { type: 'string' }, description: 'run/screenshot: arguments for the game, read with OS.get_cmdline_user_args() (e.g. ["--selftest"])' },
           out: { type: 'string', description: 'screenshot: PNG path in the workspace (default .harness/godot/screenshot.png)' },
-          preset: { type: 'string', description: 'export: preset name in export_presets.cfg' },
-          output: { type: 'string', description: 'export: file to write, e.g. build/game.x86_64 or build/web/index.html' },
+          preset: { type: 'string', description: 'export: preset name in export_presets.cfg (with createPreset, default "Linux" or "Web")' },
+          output: { type: 'string', description: 'export: file to write, e.g. build/linux/game.x86_64 or build/web/index.html (the default with createPreset)' },
+          createPreset: { type: 'string', enum: ['linux', 'web'], description: 'export: when export_presets.cfg has no preset of that name, write a minimal Linux (x86_64) or Web (no threads) one first. Never done without this.' },
           debug: { type: 'boolean', description: 'export: a debug build' },
           timeoutSec: { type: 'number', description: 'Default 300 (export 600), at most 1800' },
         },
@@ -251,6 +297,74 @@ export default {
         return bad.length
           ? { pass: false, summary: `${bad.length} of ${projects.length} Godot project(s) have errors`, details: `${bad.join('\n')}\nRun the godot tool (check, run) to see them.` }
           : { pass: true, summary: `${projects.length} Godot project(s) import, load and run cleanly: ${projects.join(', ')}` };
+      },
+    });
+
+    api.registerGate({
+      name: 'godot-selftest',
+      description: `Each Godot project that has a --selftest mode runs it headless (up to ${SELFTEST_FRAMES} frames): it must print SELFTEST PASS and report no errors.`,
+      applies: async (host, signal) => {
+        try {
+          if (host.kind === 'companion') return false; // decided by name in a workflow; a listing cannot see the scripts' text
+          for (const p of await godotProjects(host, signal)) {
+            for (const f of await findFiles(path.join(host.root, p), (n) => n.endsWith('.gd'), { max: 50, depth: 4 })) {
+              if ((await fsp.readFile(path.join(host.root, p, f), 'utf8')).includes('--selftest')) return true;
+            }
+          }
+        } catch { /* not applicable */ }
+        return false;
+      },
+      async run({ host, signal }) {
+        const projects = await godotProjects(host, signal);
+        if (!projects.length) return { pass: false, summary: 'no Godot project (project.godot) in the workspace to self-test' };
+        const bin = await locate(host, 'godot', signal);
+        if (!bin) return notChecked(host, 'godot');
+        const bad = [];
+        const ok = [];
+        for (const project of projects) {
+          const r = await selftestGodot(host, bin, project, signal);
+          if (r.passed) ok.push(`${project} (${r.took})`);
+          else bad.push(`${project}:\n  ${r.problems.slice(0, 15).join('\n  ')}\n  Output (end):\n  ${tail(r.output, 15, 1500).replace(/\n/g, '\n  ')}`);
+        }
+        return bad.length
+          ? { pass: false, summary: `${bad.length} of ${projects.length} Godot self-test(s) failed`, details: `${bad.join('\n')}\nRun it with the godot tool: {"action": "run", "args": ["--selftest"], "frames": ${SELFTEST_FRAMES}}.` }
+          : { pass: true, summary: `${projects.length} Godot self-test(s) passed: ${ok.join(', ')}` };
+      },
+    });
+
+    api.registerGate({
+      name: 'model-preview',
+      description: 'Rendered previews of the models (PNG files in previews/) exist, were rendered after the last export, and show something (not one colour).',
+      applies: async (host) => {
+        if (host.kind === 'companion') return false;
+        return (await findModels(host.root)).length > 0 && (await findFiles(path.join(host.root, 'previews'), isPng, { max: 1, depth: 2 })).length > 0;
+      },
+      async run({ host, signal }) {
+        const root = host.kind === 'companion' ? await host.mirror?.(signal) : host.root;
+        if (!root) return { pass: false, summary: 'this companion cannot send files to the server' };
+        const models = await findModels(root);
+        if (!models.length) return { pass: false, summary: 'no model (.glb/.gltf) to preview', details: 'Export the model first (model.glb).' };
+        const shots = (await findFiles(path.join(root, 'previews'), isPng, { max: 20, depth: 2 })).sort();
+        const how = 'Render previews of the exported model into previews/ (e.g. previews/front.png, side.png, top.png) after the last export, and look at them (blender-scripting: previews).';
+        if (!shots.length) return { pass: false, summary: 'no preview renders in previews/', details: how };
+        const newest = Math.max(...await Promise.all(models.map(async (m) => (await fsp.stat(path.join(root, m))).mtimeMs)));
+        const bad = [];
+        const ok = [];
+        for (const s of shots) {
+          const file = path.join(root, 'previews', s);
+          try {
+            const st = await fsp.stat(file);
+            const p = pngStats(await fsp.readFile(file));
+            // A companion's copy has the copy's times, not the originals': there the order is not checked.
+            if (host.kind !== 'companion' && st.mtimeMs + 2000 < newest) bad.push(`previews/${s}: older than the last model export (render it again)`);
+            else if (p.width < 64 || p.height < 64) bad.push(`previews/${s}: ${p.width}x${p.height} is too small to judge`);
+            else if (p.blank) bad.push(`previews/${s}: blank (${p.colours} colour(s)): the model is not in view or not lit`);
+            else ok.push(`previews/${s} ${p.width}x${p.height}${p.colours === null ? '' : `, ${p.colours} colours`}`);
+          } catch (e) { bad.push(`previews/${s}: ${e.message}`); }
+        }
+        return bad.length
+          ? { pass: false, summary: `${bad.length} of ${shots.length} preview(s) unusable`, details: `${bad.join('\n')}\n${how}` }
+          : { pass: true, summary: `${shots.length} preview(s) of ${models.length} model(s): ${ok.join(', ')}` };
       },
     });
 

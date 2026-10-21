@@ -9,7 +9,7 @@ import { DockerHost, dockerAvailable, dockerDefaults, imageExists } from '../src
 import { type ExecOptions, type ExecResult, LocalHost, type ToolHost } from '../src/runtime/host.ts';
 import { skillsIn } from '../src/skills/skills.ts';
 import type { ToolContext } from '../src/tools/types.ts';
-import { tempDir } from './helpers.ts';
+import { fakeGodot, glbBytes, pngBytes, tempDir, testPicture } from './helpers.ts';
 
 // Blender and Godot in the games3d plugin. The unit tests use stub hosts; the
 // integration tests run the real programs: Blender on this machine when it is
@@ -26,6 +26,9 @@ const { findBinary } = await import('../plugins/visual/lib/binaries.mjs');
 const blenderBin = findBinary('blender') as string | null;
 const IMAGE_3D = 'harness-sandbox-3d:latest';
 const has3dImage = (await dockerAvailable()) && (await imageExists(IMAGE_3D));
+// The 3D image with Godot's export templates (npm run sandbox:image:3d-export).
+const IMAGE_EXPORT = 'harness-sandbox-3d:export';
+const hasExportImage = (await dockerAvailable()) && (await imageExists(IMAGE_EXPORT));
 
 /** A host whose commands are answered by `answer` and recorded. */
 function stubHost(kind: 'docker' | 'local' | 'companion', root: string, answer: (cmd: string) => Partial<ExecResult>): ToolHost & { cmds: string[] } {
@@ -37,6 +40,10 @@ function stubHost(kind: 'docker' | 'local' | 'companion', root: string, answer: 
 }
 
 const ctxOf = (host: ToolHost) => ({ host, signal: new AbortController().signal, readFiles: new Map(), todos: [], setTodos() {}, emit() {} }) as unknown as ToolContext;
+
+const PROJECT = 'config_version=5\n\n[application]\n\nconfig/name="Demo"\nrun/main_scene="res://main.tscn"\n';
+const MAIN_TSCN = '[gd_scene load_steps=2 format=3]\n\n[ext_resource type="Script" path="res://main.gd" id="1"]\n\n[node name="Main" type="Node2D"]\nscript = ExtResource("1")\n';
+const MAIN_GD = 'extends Node2D\n\nvar frames := 0\n\nfunc _ready() -> void:\n\tprint("ARGS ", OS.get_cmdline_user_args())\n\nfunc _process(_delta: float) -> void:\n\tframes += 1\n\tqueue_redraw()\n\nfunc _draw() -> void:\n\tdraw_rect(Rect2(100, 100, 200, 120), Color(1, 0.6, 0.1))\n';
 
 async function harness() {
   return createHarness({ dataDir: await tempDir(), plugins: [path.join(here, '..', 'plugins')] });
@@ -177,6 +184,182 @@ test('godot-project and blender-file gates apply only to their files, and withou
   await h.close();
 });
 
+// ---------- Godot export presets, self-tests and previews (with a stand-in Godot) ----------
+
+test('export presets: read from export_presets.cfg; a minimal Linux or Web preset is written only when asked', () => {
+  const cfg = '[preset.0]\n\nname="Linux \\"x\\""\nplatform="Linux"\nrunnable=true\n\n[preset.0.options]\n\nname="not a preset name"\n\n[preset.3]\nname="Web"\nplatform="Web"\n';
+  assert.deepEqual(E.presetsIn(cfg), [{ index: 0, name: 'Linux "x"', platform: 'Linux' }, { index: 3, name: 'Web', platform: 'Web' }]);
+  assert.deepEqual(E.presetsIn(''), []);
+  const linux = E.withPreset('', 'linux', 'Linux', 'build/linux/game.x86_64');
+  assert.match(linux, /^\[preset\.0\]\n\nname="Linux"\nplatform="Linux"\nrunnable=true\n[\s\S]*export_path="build\/linux\/game\.x86_64"\n\n\[preset\.0\.options\]\n\nbinary_format\/embed_pck=false\nbinary_format\/architecture="x86_64"\n$/);
+  const both = E.withPreset(cfg, 'web', 'Web build', '../build/web/index.html');
+  assert.ok(both.startsWith(cfg.trimEnd()), 'what was there is kept as it was');
+  assert.deepEqual(E.presetsIn(both).map((p: { index: number; name: string }) => `${p.index}:${p.name}`), ['0:Linux "x"', '3:Web', '4:Web build']);
+  assert.match(both, /\[preset\.4\.options\]\n\nvariant\/extensions_support=false\nvariant\/thread_support=false/);
+  assert.throws(() => E.minimalPreset('android', 0, 'A', 'a.apk'), /unknown preset kind/);
+});
+
+test('PNG reader: size and blank detection through every row filter, RGB and RGBA', async () => {
+  // @ts-expect-error plain JS module
+  const { pixels, pngStats } = await import('../plugins/games3d/lib-png.mjs');
+  const pic = pngStats(testPicture());
+  assert.deepEqual([pic.width, pic.height, pic.blank], [96, 64, false]);
+  assert.ok(pic.colours > 50 && pic.stddev > 10, JSON.stringify(pic));
+  const flat = pngStats(pngBytes(80, 80, () => [40, 40, 40, 255], true));
+  assert.deepEqual([flat.colours, flat.blank], [1, true]);
+  // Two colours only (a tiny object lost in the background) still counts as blank, like the browser's check.
+  assert.equal(pngStats(pngBytes(80, 80, (x) => (x < 2 ? [255, 255, 255] : [0, 0, 0]))).blank, true);
+  // Decoded values are exact: seven rows (each PNG filter at least once) read back byte for byte.
+  const px = (x: number, y: number) => [x, (x * y * 7) & 255, 255 - x, (x + y) & 255];
+  const decoded = pixels(pngBytes(200, 7, px, true));
+  const want = Buffer.from(Array.from({ length: 7 }, (_, y) => Array.from({ length: 200 }, (_, x) => px(x, y))).flat(2));
+  assert.ok(decoded.data.equals(want), 'every pixel decodes to what was encoded');
+  assert.equal(pngStats(pngBytes(200, 7, px, true)).blank, false);
+  assert.throws(() => pngStats(Buffer.from('not a png at all, really not at all')), /not a PNG/);
+});
+
+test('godot export with a stand-in Godot: a missing preset is an error naming the ones there; createPreset writes one and says so', async () => {
+  const fake = await fakeGodot();
+  process.env.HARNESS_GODOT = fake.bin;
+  const h = await harness();
+  const root = await tempDir();
+  const host = new LocalHost(root);
+  const godot = (input: Record<string, unknown>) => h.registry.tools.get('godot')!.run(input, ctxOf(host));
+  try {
+    await fs.mkdir(path.join(root, 'game'));
+    await fs.writeFile(path.join(root, 'game', 'project.godot'), PROJECT);
+    let r = await godot({ action: 'export', project: 'game', preset: 'Linux', output: 'build/g.x86_64' });
+    assert.equal(r.is_error, true);
+    assert.match(r.content, /no preset named "Linux"\. game\/export_presets\.cfg does not exist\..*createPreset: "linux" or "web"/);
+    await assert.rejects(fs.stat(path.join(root, 'game', 'export_presets.cfg')), 'nothing written without being asked');
+    assert.deepEqual(await fake.calls(), [], 'Godot did not run');
+
+    r = await godot({ action: 'export', project: 'game', createPreset: 'linux' });
+    assert.ok(!r.is_error, r.content);
+    assert.match(r.content, /godot export: Linux -> build\/linux\/game\.x86_64 in [\d.]+s\.\nWrote a minimal Linux preset "Linux" to game\/export_presets\.cfg \(it was not there\)\.\nWritten in build\/linux: game\.pck [\d.]+ MB, game\.x86_64 [\d.]+ MB/);
+    let cfg = await fs.readFile(path.join(root, 'game', 'export_presets.cfg'), 'utf8');
+    assert.deepEqual(E.presetsIn(cfg), [{ index: 0, name: 'Linux', platform: 'Linux' }]);
+    assert.match(cfg, /export_path="\.\.\/build\/linux\/game\.x86_64"/);
+    const calls = await fake.calls();
+    assert.match(calls.at(-2)!, /--headless --path game --import$/);
+    assert.match(calls.at(-1)!, /--headless --path game --export-release Linux .*\/build\/linux\/game\.x86_64$/);
+
+    r = await godot({ action: 'export', project: 'game', createPreset: 'web', debug: true });
+    assert.match(r.content, /Web -> build\/web\/index\.html .*\(debug\)\.\nWrote a minimal Web preset "Web"/);
+    cfg = await fs.readFile(path.join(root, 'game', 'export_presets.cfg'), 'utf8');
+    assert.deepEqual(E.presetsIn(cfg).map((p: { name: string }) => p.name), ['Linux', 'Web']);
+    assert.match((await fake.calls()).at(-1)!, /--export-debug Web /);
+
+    // Asked again for a preset that is there: used as it is, the file unchanged.
+    r = await godot({ action: 'export', project: 'game', preset: 'Linux', createPreset: 'linux', output: 'build/again.x86_64' });
+    assert.match(r.content, /Used the preset "Linux" already in game\/export_presets\.cfg \(createPreset changed nothing\)/);
+    assert.equal(await fs.readFile(path.join(root, 'game', 'export_presets.cfg'), 'utf8'), cfg);
+
+    r = await godot({ action: 'export', project: 'game', preset: 'Mac', output: 'build/m.zip' });
+    assert.match(r.content, /no preset named "Mac"\. The presets there: "Linux" \(Linux\), "Web" \(Web\)\./);
+    r = await godot({ action: 'export', project: 'game', createPreset: 'android' });
+    assert.match(r.content, /createPreset must be "linux" or "web"/);
+    await assert.rejects(godot({ action: 'export', project: 'game', preset: 'Linux', output: '../outside.x86_64' }), /outside the workspace/);
+
+    process.env.FAKE_NO_TEMPLATES = '1';
+    r = await godot({ action: 'export', project: 'game', preset: 'Linux', output: 'build/g.x86_64' });
+    assert.equal(r.is_error, true);
+    assert.match(r.content, /export templates are not installed for this Godot version/);
+    const docker = { ...host, kind: 'docker', displayRoot: root, exec: host.exec.bind(host) } as unknown as ToolHost;
+    r = await h.registry.tools.get('godot')!.run({ action: 'export', project: 'game', preset: 'Linux', output: 'build/g.x86_64' }, ctxOf(docker));
+    assert.match(r.content, /not in this sandbox image.*npm run sandbox:image:3d-export/);
+  } finally {
+    delete process.env.HARNESS_GODOT;
+    delete process.env.FAKE_NO_TEMPLATES;
+    await h.close();
+  }
+});
+
+test('godot-selftest gate: passes on SELFTEST PASS, fails on a push_error or on silence, applies only to projects with a --selftest mode', async () => {
+  const fake = await fakeGodot();
+  process.env.HARNESS_GODOT = fake.bin;
+  const h = await harness();
+  const root = await tempDir();
+  const host = new LocalHost(root);
+  const signal = new AbortController().signal;
+  const gate = h.registry.gates.get('godot-selftest')!;
+  try {
+    await fs.mkdir(path.join(root, 'game'));
+    await fs.writeFile(path.join(root, 'game', 'project.godot'), PROJECT);
+    await fs.writeFile(path.join(root, 'game', 'main.gd'), MAIN_GD);
+    assert.equal(await gate.applies!(host, signal), false, 'no --selftest mode: not applicable');
+    let [g] = await runGates(h.registry, host, ['godot-selftest'], signal);
+    assert.equal(g!.pass, false);
+    assert.match(g!.details ?? '', /never printed SELFTEST PASS in 600 frames/);
+    await fs.writeFile(path.join(root, 'game', 'main.gd'), `${MAIN_GD}\nvar selftest := "--selftest" in OS.get_cmdline_user_args()\n# print("SELFTEST PASS")\n`);
+    assert.equal(await gate.applies!(host, signal), true);
+    [g] = await runGates(h.registry, host, ['godot-selftest'], signal);
+    assert.equal(g!.pass, true, g!.details ?? '');
+    assert.match(g!.summary, /1 Godot self-test\(s\) passed: game/);
+    assert.match((await fake.calls()).at(-1)!, /--headless --path game --fixed-fps 60 --quit-after 600 -- --selftest$/);
+    await fs.appendFile(path.join(root, 'game', 'main.gd'), '# FAKE_FAIL\n');
+    [g] = await runGates(h.registry, host, ['godot-selftest'], signal);
+    assert.equal(g!.pass, false);
+    assert.match(g!.details ?? '', /ERROR: selftest: the player did not move \(at: _physics_process \(res:\/\/main\.gd:9\)\)/);
+  } finally {
+    delete process.env.HARNESS_GODOT;
+    await h.close();
+  }
+});
+
+test('model-preview gate: previews must exist, be newer than the model and show something', async () => {
+  const h = await harness();
+  const root = await tempDir();
+  const host = new LocalHost(root);
+  const signal = new AbortController().signal;
+  const check = async () => (await runGates(h.registry, host, ['model-preview'], signal))[0]!;
+  try {
+    let g = await check();
+    assert.equal(g.pass, false);
+    assert.match(g.summary, /no model/);
+    await fs.writeFile(path.join(root, 'model.glb'), glbBytes());
+    assert.equal(await h.registry.gates.get('model-preview')!.applies!(host, signal), false, 'no previews yet: not applicable on its own');
+    g = await check();
+    assert.match(g.summary, /no preview renders in previews\//);
+    await fs.mkdir(path.join(root, 'previews'));
+    await fs.writeFile(path.join(root, 'previews', 'front.png'), testPicture());
+    await fs.writeFile(path.join(root, 'previews', 'top.png'), pngBytes(128, 128, () => [90, 90, 90]));
+    g = await check();
+    assert.equal(g.pass, false);
+    assert.match(g.details ?? '', /previews\/top\.png: blank \(1 colour\(s\)\)/);
+    await fs.writeFile(path.join(root, 'previews', 'top.png'), testPicture(128, 128));
+    g = await check();
+    assert.equal(g.pass, true, g.details ?? '');
+    assert.match(g.summary, /^2 preview\(s\) of 1 model\(s\): previews\/front\.png 96x64, \d+ colours, previews\/top\.png 128x128/);
+    // The model exported again after the renders: the previews are stale.
+    const later = new Date(Date.now() + 60_000);
+    await fs.utimes(path.join(root, 'model.glb'), later, later);
+    g = await check();
+    assert.equal(g.pass, false);
+    assert.match(g.details ?? '', /front\.png: older than the last model export/);
+  } finally { await h.close(); }
+});
+
+test('readIn on a companion asks for the one file (its mirror skips .harness), falling back to the mirror for old companions', async () => {
+  const asked: string[] = [];
+  const comp = { kind: 'companion', root: '', displayRoot: '/home/me/game', readFile: async (rel: string) => { asked.push(rel); return rel.endsWith('a.png') ? Buffer.from('PNG') : null; }, mirror: async () => { throw new Error('mirror used'); } } as unknown as ToolHost;
+  assert.equal((await E.readIn(comp, '.harness/godot/f/a.png')).toString(), 'PNG');
+  await assert.rejects(E.readIn(comp, 'missing.png'), (e: Error & { code?: string }) => e.code === 'ENOENT');
+  assert.equal(await E.readTextIn(comp, 'missing.cfg'), null);
+  assert.deepEqual(asked, ['.harness/godot/f/a.png', 'missing.png', 'missing.cfg']);
+  const mirrored = await tempDir();
+  await fs.writeFile(path.join(mirrored, 'x.txt'), 'from the mirror');
+  const old = { kind: 'companion', root: '', displayRoot: '/home/me/game', mirror: async () => mirrored } as unknown as ToolHost;
+  assert.equal(await E.readTextIn(old, 'x.txt'), 'from the mirror');
+  // Folder commands go to the companion's own shell.
+  const cmds: string[] = [];
+  const ps = { kind: 'companion', shell: 'powershell', exec: async (c: string) => { cmds.push(c); return { code: 0, stdout: 'frame00000001.png\r\nframe00000000.png\r\n', stderr: '', timedOut: false }; } } as unknown as ToolHost;
+  await E.mkdirIn(ps, ".harness/it's");
+  assert.deepEqual(await E.listIn(ps, '.harness/f'), ['frame00000001.png', 'frame00000000.png']);
+  await E.removeIn(ps, '.harness/f');
+  assert.deepEqual(cmds, ["New-Item -ItemType Directory -Force -Path '.harness/it''s' | Out-Null", "if (Test-Path -LiteralPath '.harness/f') { Get-ChildItem -Name -LiteralPath '.harness/f' }", "Remove-Item -Recurse -Force -LiteralPath '.harness/f' -ErrorAction SilentlyContinue"]);
+});
+
 // ---------- Blender on this machine ----------
 
 const CRATE = `import bpy, os, sys
@@ -256,10 +439,6 @@ test('blender on this machine: a crate built procedurally, exported to .glb (val
 
 // ---------- Blender and Godot in the 3D sandbox image ----------
 
-const PROJECT = 'config_version=5\n\n[application]\n\nconfig/name="Demo"\nrun/main_scene="res://main.tscn"\n';
-const MAIN_TSCN = '[gd_scene load_steps=2 format=3]\n\n[ext_resource type="Script" path="res://main.gd" id="1"]\n\n[node name="Main" type="Node2D"]\nscript = ExtResource("1")\n';
-const MAIN_GD = 'extends Node2D\n\nvar frames := 0\n\nfunc _ready() -> void:\n\tprint("ARGS ", OS.get_cmdline_user_args())\n\nfunc _process(_delta: float) -> void:\n\tframes += 1\n\tqueue_redraw()\n\nfunc _draw() -> void:\n\tdraw_rect(Rect2(100, 100, 200, 120), Color(1, 0.6, 0.1))\n';
-
 async function sandbox3d() {
   const root = await tempDir();
   const host = new DockerHost(`test-3d-${Date.now()}`, root, { ...dockerDefaults(), image: IMAGE_3D, network: 'none' });
@@ -321,11 +500,69 @@ test('3D sandbox image: a Godot 4 project is checked, run, screenshotted and gat
     assert.equal(r.is_error, true);
     assert.match(r.content, /SCRIPT ERROR: Invalid access to property or key 'missing'.*res:\/\/rt\.gd:5/);
 
-    // Export without templates says what is missing.
+    // The scripted self-test, with real Godot: silence fails, SELFTEST PASS passes, a push_error fails.
+    await fs.rm(path.join(game, 'rt.gd'));
+    await fs.rm(path.join(game, 'rt.tscn'));
+    [gate] = await runGates(h.registry, host, ['godot-selftest'], signal);
+    assert.equal(gate!.pass, false);
+    assert.match(gate!.details ?? '', /never printed SELFTEST PASS/);
+    const selftest = (check: string) => `${MAIN_GD}\nvar ticks := 0\n\nfunc _physics_process(_delta: float) -> void:\n\tticks += 1\n\tif "--selftest" in OS.get_cmdline_user_args() and ticks == 20:\n\t\t${check}\n\t\tget_tree().quit()\n`;
+    await fs.writeFile(path.join(game, 'main.gd'), selftest('if frames > 0: print("SELFTEST PASS")\n\t\telse: push_error("selftest: nothing was drawn")'));
+    assert.equal(await h.registry.gates.get('godot-selftest')!.applies!(host, signal), true);
+    [gate] = await runGates(h.registry, host, ['godot-selftest'], signal);
+    assert.equal(gate!.pass, true, gate!.details ?? '');
+    await fs.writeFile(path.join(game, 'main.gd'), selftest('push_error("selftest: the score did not go up")'));
+    [gate] = await runGates(h.registry, host, ['godot-selftest'], signal);
+    assert.equal(gate!.pass, false);
+    assert.match(gate!.details ?? '', /ERROR: selftest: the score did not go up \(at: _physics_process \(res:\/\/main\.gd:\d+\)\)/);
+    await fs.writeFile(path.join(game, 'main.gd'), MAIN_GD);
+
+    // Export without templates says what is missing, and where to get them.
     await fs.writeFile(path.join(game, 'export_presets.cfg'), '[preset.0]\n\nname="Linux"\nplatform="Linux"\nrunnable=true\nexport_filter="all_resources"\nexport_path="build/demo.x86_64"\n\n[preset.0.options]\n\nbinary_format/architecture="x86_64"\n');
     r = await godot({ action: 'export', project: 'game', preset: 'Linux', output: 'build/demo.x86_64' });
     assert.equal(r.is_error, true);
-    assert.match(r.content, /export templates are not installed/);
+    assert.match(r.content, /export templates are not in this sandbox image.*npm run sandbox:image:3d-export/);
+  } finally {
+    await host.close();
+    await h.close();
+  }
+});
+
+// ---------- Godot export templates: the export image ----------
+
+test('3D export image: a Godot project exports to Linux (and the build runs) and to the Web, presets written on request', { skip: !hasExportImage && `no Docker or no ${IMAGE_EXPORT} (npm run sandbox:image:3d-export)`, timeout: 900_000 }, async () => {
+  const root = await tempDir();
+  const host = new DockerHost(`test-3d-export-${Date.now()}`, root, { ...dockerDefaults(), image: IMAGE_EXPORT, network: 'none' });
+  const h = await harness();
+  const godot = (input: Record<string, unknown>) => h.registry.tools.get('godot')!.run(input, ctxOf(host));
+  try {
+    const game = path.join(root, 'game');
+    await fs.mkdir(game);
+    await fs.writeFile(path.join(game, 'project.godot'), PROJECT);
+    await fs.writeFile(path.join(game, 'main.tscn'), MAIN_TSCN);
+    await fs.writeFile(path.join(game, 'main.gd'), MAIN_GD);
+
+    let r = await godot({ action: 'export', project: 'game', preset: 'Linux', output: 'build/linux/demo.x86_64' });
+    assert.equal(r.is_error, true);
+    assert.match(r.content, /no preset named "Linux"\. game\/export_presets\.cfg does not exist/);
+
+    r = await godot({ action: 'export', project: 'game', createPreset: 'linux', output: 'build/linux/demo.x86_64', timeoutSec: 600 });
+    assert.ok(!r.is_error, r.content);
+    assert.match(r.content, /godot export: Linux -> build\/linux\/demo\.x86_64 in [\d.]+s\.\nWrote a minimal Linux preset/);
+    assert.match(r.content, /demo\.pck [\d.]+ MB, demo\.x86_64 [\d.]+ MB/);
+    // The exported game runs (headless, on the release template) and gets its arguments.
+    const played = await host.exec('./build/linux/demo.x86_64 --headless --quit-after 30 -- --hello', { timeoutMs: 120_000 });
+    assert.equal(played.code, 0, played.stdout + played.stderr);
+    assert.match(played.stdout, /ARGS \["--hello"\]/);
+
+    r = await godot({ action: 'export', project: 'game', createPreset: 'web', timeoutSec: 600 });
+    assert.ok(!r.is_error, r.content);
+    assert.match(r.content, /godot export: Web -> build\/web\/index\.html .*\nWrote a minimal Web preset "Web"/);
+    const web = await fs.readdir(path.join(root, 'build', 'web'));
+    for (const f of ['index.html', 'index.js', 'index.wasm', 'index.pck']) assert.ok(web.includes(f), `${f} in ${web.join(', ')}`);
+    assert.match(await fs.readFile(path.join(root, 'build', 'web', 'index.html'), 'utf8'), /index\.js/);
+    const presets = E.presetsIn(await fs.readFile(path.join(game, 'export_presets.cfg'), 'utf8')) as { name: string; platform: string }[];
+    assert.deepEqual(presets.map((p) => `${p.name}/${p.platform}`), ['Linux/Linux', 'Web/Web']);
   } finally {
     await host.close();
     await h.close();

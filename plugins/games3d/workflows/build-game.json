@@ -1,13 +1,17 @@
 {
   "name": "build-game",
-  "description": "From an idea to a finished browser game: design document and playtest scenarios, (approval), build, web-console and playtest gates with a fix loop, independent playtest with real input and screenshots, polish, final gates, how-to-play README.",
+  "description": "From an idea to a finished game: design document and playtest scenarios, (approval), build (a browser game by default, a Godot 4 project with engine=godot), gates with a fix loop (web-console and playtest; godot-project and the game's scripted self-test), independent playtest, polish, final gates, how-to-play README.",
   "inputs": {
     "idea": {
       "description": "The game: genre, theme, what the player does, anything that must be in it.",
       "required": true
     },
+    "engine": {
+      "description": "\"browser\" (Canvas 2D or Three.js, played in the headless browser) or \"godot\" (a Godot 4 project, checked headless with its scripted self-test)",
+      "default": "browser"
+    },
     "tech": {
-      "description": "Rendering",
+      "description": "Rendering (browser games)",
       "default": "Canvas 2D unless the idea needs 3D; Three.js (vendored) for 3D"
     },
     "approval": {
@@ -22,7 +26,7 @@
       "type": "agent",
       "title": "Game design",
       "agent": "game-designer",
-      "prompt": "Design this game. Write docs/game-design.md and playtest.json.\n\n<idea>\n{{input.idea}}\n</idea>\n\nTech: {{input.tech}}\nFeedback on an earlier design, if any: {{feedback}}",
+      "prompt": "Design this game. Write docs/game-design.md and playtest.json (for a Godot game: a \"Self-test\" section in docs/game-design.md instead of playtest.json).\n\n<idea>\n{{input.idea}}\n</idea>\n\nEngine: {{input.engine}}\nTech: {{input.tech}}\nFeedback on an earlier design, if any: {{feedback}}",
       "next": "approval-mode"
     },
     "approval-mode": {
@@ -31,7 +35,7 @@
       "value": "{{input.approval}}",
       "next": {
         "on": {
-          "auto": "build"
+          "auto": "engine"
         },
         "default": "approve-design"
       }
@@ -46,9 +50,20 @@
       ],
       "next": {
         "on": {
-          "approve": "build",
+          "approve": "engine",
           "reject": "design"
         }
+      }
+    },
+    "engine": {
+      "type": "branch",
+      "title": "Browser or Godot?",
+      "value": "{{input.engine}}",
+      "next": {
+        "on": {
+          "godot": "build-godot"
+        },
+        "default": "build"
       }
     },
     "build": {
@@ -174,6 +189,92 @@
       "agent": "game-designer",
       "effort": "low",
       "prompt": "Write README.md: what the game is, how to open it (open index.html, or serve the folder: npx http-server .), controls, rules and scoring, URL options (?seed, ?autostart), how to run the playtests, and known limitations from docs/playtest-report.md. Report its first paragraph.",
+      "next": "done"
+    },
+    "build-godot": {
+      "type": "agent",
+      "title": "Build in Godot & play",
+      "agent": "game-engineer",
+      "maxSteps": 150,
+      "prompt": "Build the game in docs/game-design.md as a Godot 4 project in game/ (project.godot there): load godot-essentials and start from its template. Give it a --selftest mode that drives the game through every check in the design's \"Self-test\" section (Input.action_press, wait physics ticks, read the state), push_errors on a failed check and prints SELFTEST PASS once every check held, within 600 frames. Verify after each feature with the godot tool: check, run with args [\"--selftest\"], and screenshot to look at it.",
+      "next": "gates-godot"
+    },
+    "gates-godot": {
+      "type": "gate",
+      "title": "Godot project & self-test",
+      "gates": [
+        "godot-project",
+        "godot-selftest"
+      ],
+      "maxFailures": 4,
+      "next": {
+        "on": {
+          "pass": "playtest-godot",
+          "fail": "fix-godot",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "fix-godot": {
+      "type": "agent",
+      "title": "Fix",
+      "agent": "game-engineer",
+      "prompt": "The checks failed. Fix the game (change a self-test check only if the check itself is wrong, and say why). Re-check with the godot tool.\n\n{{feedback}}",
+      "next": "gates-godot"
+    },
+    "playtest-godot": {
+      "type": "agent",
+      "title": "Independent playtest",
+      "agent": "playtester",
+      "decide": [
+        "APPROVE",
+        "REQUEST_CHANGES"
+      ],
+      "prompt": "Playtest the Godot game in game/ against docs/game-design.md and write docs/playtest-report.md. Use the godot tool: run the self-test (args [\"--selftest\"]), take screenshots at the start and later (frames), and read the scripts to see that the self-test really checks the rules.\n\n<idea>\n{{input.idea}}\n</idea>",
+      "next": {
+        "on": {
+          "REQUEST_CHANGES": "polish-godot"
+        },
+        "default": "docs-godot"
+      }
+    },
+    "polish-godot": {
+      "type": "agent",
+      "title": "Address the playtest",
+      "agent": "game-engineer",
+      "maxSteps": 120,
+      "prompt": "Address every BLOCKING and MAJOR finding in docs/playtest-report.md; add a self-test check for each bug you fix so it stays fixed. Check it again with the godot tool, and add a \"Resolution\" line under each finding.\n\n{{state.playtest-godot}}",
+      "next": "gates-godot-final"
+    },
+    "gates-godot-final": {
+      "type": "gate",
+      "title": "Godot project & self-test",
+      "gates": [
+        "godot-project",
+        "godot-selftest"
+      ],
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "docs-godot",
+          "fail": "fix-godot-final",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "fix-godot-final": {
+      "type": "agent",
+      "title": "Fix",
+      "agent": "game-engineer",
+      "prompt": "The checks failed after the polish round. Fix it.\n\n{{feedback}}",
+      "next": "gates-godot-final"
+    },
+    "docs-godot": {
+      "type": "agent",
+      "title": "How to play",
+      "agent": "game-designer",
+      "effort": "low",
+      "prompt": "Write README.md: what the game is, how to open it (Godot 4.7: open game/project.godot in the editor, or godot --path game), controls, rules and scoring, how to run the self-test (godot --headless --path game -- --selftest prints SELFTEST PASS), how to export it (the godot tool's export, which needs the export templates), and known limitations from docs/playtest-report.md. Report its first paragraph.",
       "next": "done"
     },
     "done": {
