@@ -148,6 +148,14 @@ async function runOne(h: HookSpec, event: HookEvent, payload: Record<string, unk
   result.errors.push(`${event} hook has an unknown type "${type}"`);
 }
 
+/**
+ * A session's secret redaction for the hooks it runs, keyed by its settings object (every
+ * hook run of a session passes that one object): a payload carries tool inputs and
+ * messages, and a hook may be a command, a URL or a model outside the session.
+ */
+const redactors = new WeakMap<Settings, (p: Record<string, unknown>) => Record<string, unknown>>();
+export function setHookRedactor(settings: Settings, redact: (p: Record<string, unknown>) => Record<string, unknown>): void { redactors.set(settings, redact); }
+
 export async function runHooks(
   settings: Settings,
   host: ToolHost,
@@ -159,6 +167,7 @@ export async function runHooks(
   runners?: HookRunners | HookJudge,
 ): Promise<HookResult> {
   const r0: HookRunners = typeof runners === 'function' ? { judge: runners } : runners ?? {};
+  payload = redactors.get(settings)?.(payload) ?? payload;
   const specs: HookSpec[] = settings.hooks[event] ?? [];
   const result: HookResult = { blocked: false, feedback: '', errors: [] };
   for (const h of specs) {

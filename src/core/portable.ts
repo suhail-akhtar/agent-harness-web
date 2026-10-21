@@ -31,6 +31,8 @@ const FILE_MAX = 20 * 1024 * 1024;
 
 /** The bundle for a session; workspace files up to maxBytes in all (the rest is listed as skipped). */
 export async function exportSession(s: Session, maxBytes = Number(process.env.HARNESS_EXPORT_MAX_MB ?? 50) * 1024 * 1024): Promise<SessionBundle> {
+  // Key vault values the session was given never travel: the conversation and every file pass through its redactor.
+  const redactor = await s.loadSecrets();
   const files: SessionBundle['files'] = [];
   const skipped: string[] = [];
   let total = 0;
@@ -57,7 +59,7 @@ export async function exportSession(s: Session, maxBytes = Number(process.env.HA
           if (!named || named.ino !== st.ino || named.dev !== st.dev) continue;
           if (st.size > FILE_MAX || total + st.size > maxBytes) { skipped.push(r); continue; }
           total += st.size;
-          files.push({ path: r, data: (await fh.readFile()).toString('base64') });
+          files.push({ path: r, data: redactor.redactBytes(await fh.readFile()).toString('base64') });
         } finally { await fh.close(); }
       }
     };
@@ -67,7 +69,7 @@ export async function exportSession(s: Session, maxBytes = Number(process.env.HA
   return {
     format: 'harness-session', version: 1, exportedAt: Date.now(),
     source: { id: m.id, title: m.title, model: m.model, effort: m.effort, mode: m.mode, tainted: !!m.tainted, todos: m.todos, contextStart: m.contextStart, compactions: m.compactions, lastPromptTokens: m.lastPromptTokens, cost: m.cost },
-    history: s.history, files, skipped,
+    history: redactor.redactDeep(s.history), files, skipped,
   };
 }
 

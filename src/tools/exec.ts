@@ -39,19 +39,31 @@ export const bashTool: Tool = {
         timeout_ms: { type: 'number' },
         run_in_background: { type: 'boolean', description: 'Start a long-running process (a dev server) and return immediately.' },
         description: { type: 'string', description: 'Five words or fewer on what it does (shown to the user).' },
+        secrets: { type: 'object', description: 'Key vault entries as environment variables for this command only: {"VAR": "vault-entry-name"} (see the vault tool). Refer to them as $VAR in the command; never write a value into the command. Their values show as [vault:name] in the output.' },
       },
       required: ['command'],
     },
   },
-  summarize: (i) => `${i.run_in_background === true ? '[background] ' : ''}${str(i.command)}`,
+  vaultNames: (i) => secretMap(i.secrets).map(([, name]) => name),
+  // A command holding a secret can send it anywhere it can reach: a way out for the untrusted-content guard.
+  sendsOut: (i) => (secretMap(i.secrets).length ? true : undefined),
+  summarize: (i) => `${i.run_in_background === true ? '[background] ' : ''}${str(i.command)}${secretMap(i.secrets).length ? ` [secrets: ${secretMap(i.secrets).map(([k, n]) => `${k}=vault:${n}`).join(', ')}]` : ''}`,
   async run(input, ctx) {
     const command = str(input.command);
     if (!command.trim()) return { content: 'command is empty.', is_error: true };
     const write = shellFileWrite(command);
     if (write) return { content: `Not run: this command writes file contents from the shell (${write}). Use the write tool for new or fully rewritten files and edit for changes - they keep undo checkpoints, diffs and edit permissions. Run the rest of the command separately if needed.`, is_error: true };
-    if (input.run_in_background === true || input.run_in_background === 'true') return background(command, ctx, str(input.description));
+    // Vault entries become this command's environment, resolved here on the server (the model only names them).
+    let secretEnv: Record<string, string> | undefined;
+    const wanted = secretMap(input.secrets);
+    if (input.secrets !== undefined && input.secrets !== null && (typeof input.secrets !== 'object' || Array.isArray(input.secrets) || wanted.length !== Object.keys(input.secrets as object).length)) return { content: 'secrets must be an object of environment variable names to vault entry names, e.g. {"DB_PASSWORD": "prod-db"}.', is_error: true };
+    if (wanted.length) {
+      if (!ctx.services?.vault) return { content: 'The key vault is not available in this session, so secrets cannot be used.', is_error: true };
+      try { secretEnv = await ctx.services.vault.envFor(Object.fromEntries(wanted), `bash: ${str(input.description) || command.slice(0, 160)}`, { tool: 'bash' }); } catch (e) { return { content: `secrets: ${(e as Error).message}`, is_error: true }; }
+    }
+    if (input.run_in_background === true || input.run_in_background === 'true') return background(command, ctx, str(input.description), secretEnv);
     const timeoutMs = Math.min(MAX_TIMEOUT, Math.max(1000, num(input.timeout_ms) ?? DEFAULT_TIMEOUT));
-    const r = await ctx.host.exec(command, { timeoutMs, signal: ctx.signal });
+    const r = await ctx.host.exec(command, { timeoutMs, signal: ctx.signal, ...(secretEnv ? { secretEnv } : {}) });
     const parts: string[] = [];
     if (r.timedOut) parts.push(`Timed out after ${timeoutMs / 1000}s (the command was killed).`);
     parts.push(`exit code: ${r.code ?? 'killed'}`);
@@ -68,13 +80,18 @@ export const bashTool: Tool = {
 
 const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
+/** bash's `secrets` as [VAR, vault name] pairs (string values only). */
+function secretMap(v: unknown): [string, string][] {
+  return v && typeof v === 'object' && !Array.isArray(v) ? Object.entries(v as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === 'string' && !!e[1]) : [];
+}
+
 /**
  * Starts a detached process (own session, all stdio redirected to a log in the
  * workspace) so the tool call returns at once and the process outlives it. Its
  * exit code is written beside the log when it ends; the session's task registry
  * (task_list, task_output, monitor, task_stop) reads both.
  */
-async function background(command: string, ctx: ToolContext, description: string): Promise<ToolOutcome> {
+async function background(command: string, ctx: ToolContext, description: string, secretEnv?: Record<string, string>): Promise<ToolOutcome> {
   if (ctx.host.shell === 'powershell') return { content: 'run_in_background is not supported on Windows hosts; use Start-Process in a normal command.', is_error: true };
   const id = Math.random().toString(36).slice(2, 8);
   const log = `.harness/bg/${id}.log`;
@@ -87,7 +104,7 @@ async function background(command: string, ctx: ToolContext, description: string
   // setsid gives it its own session (and process group) where it exists; Git Bash on Windows has only nohup.
   const detach = `(command -v setsid >/dev/null 2>&1 && exec setsid nohup bash -c ${shq(inner)} || exec nohup bash -c ${shq(inner)})`;
   const script = `mkdir -p .harness/bg && (${detach} > ${log} 2>&1 < /dev/null & echo $!)`;
-  const r = await ctx.host.exec(script, { timeoutMs: 15_000, signal: ctx.signal });
+  const r = await ctx.host.exec(script, { timeoutMs: 15_000, signal: ctx.signal, ...(secretEnv ? { secretEnv } : {}) });
   const pid = r.stdout.trim().split('\n').pop();
   if (r.code !== 0 || !pid) return { content: `could not start: ${r.stderr.trim() || r.stdout.trim()}`, is_error: true };
   const task = ctx.services?.tasks?.addShell({ id, pid, log, exitFile, command, description });

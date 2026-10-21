@@ -32,7 +32,9 @@ import { createWorktree, removeWorktree, type Worktree, WorktreeError, worktreeW
 import type { SearchService } from '../research/search.ts';
 import { Agent, type AgentHooks, type PermissionAnswer, type TraceSpan } from './agent.ts';
 import { type CheckpointFiles, Checkpoints } from './checkpoints.ts';
-import { fireHooks, type HookJudge, type HookRunners, runHooks } from './hooks.ts';
+import { fireHooks, type HookJudge, type HookRunners, runHooks, setHookRedactor } from './hooks.ts';
+import { Redactor } from '../vault/redact.ts';
+import type { VaultService, VaultStore } from '../vault/store.ts';
 import type { Effort, ModelSpec } from './models.ts';
 import { costOf } from './models.ts';
 import { loadInstructions, workspaceReader } from './instructions.ts';
@@ -86,6 +88,8 @@ export interface SessionMeta {
   planReturnMode?: PermissionMode;
   /** How replies are written, fixed at creation (its text is part of this session's system prompt). */
   outputStyle?: { name: string; prompt: string };
+  /** Key vault entries whose values this session was given (names only): hidden again after a restart. */
+  vaultNames?: string[];
 }
 
 export interface StoredEvent { seq: number; at: number; event: HarnessEvent }
@@ -161,6 +165,8 @@ export interface SessionDeps {
   scheduler?: import('./scheduler.ts').Scheduler;
   /** API credentials an allowlist sandbox may use through the egress proxy (the keys stay outside). */
   sandboxCredentials?: import('../runtime/credentials.ts').SandboxCredential[];
+  /** The key vault (absent: off). */
+  vault?: VaultStore;
 }
 
 /** What one session can use, assembled once (the tool list never changes mid-session: it would break the cache). */
@@ -264,6 +270,16 @@ export class Session {
   private monitors = 0;
   /** Background results delivered while a turn ran (unread if it ended first). */
   private lateResults = new Set<string>();
+  /**
+   * Every key vault value this session was given (and every one the model wrote into a
+   * vault call): events, trace, hooks, the history, exports and command output pass
+   * through it, so a value shows only as [vault:name].
+   */
+  readonly redactor = new Redactor((name) => {
+    const names = (this.meta.vaultNames ??= []);
+    if (!names.includes(name)) { names.push(name); this.scheduleSave(); }
+  });
+  private secretsLoaded?: Promise<void>;
 
   constructor(meta: SessionMeta, deps: SessionDeps) {
     this.meta = meta;
@@ -346,7 +362,7 @@ export class Session {
   // ---------- events ----------
 
   emit(event: HarnessEvent): void {
-    const e = { seq: ++this.seq, at: Date.now(), event };
+    const e = { seq: ++this.seq, at: Date.now(), event: this.redactor.redactDeep(event) };
     // Deltas are only useful live; keep the replay buffer for everything else.
     if (event.kind !== 'text_delta' && event.kind !== 'reasoning_delta') {
       this.events.push(e);
@@ -423,7 +439,7 @@ export class Session {
   private traceWrite: Promise<void> = Promise.resolve();
 
   private trace(span: TraceSpan): void {
-    const rec = { at: Date.now(), ...span };
+    const rec = this.redactor.redactDeep({ at: Date.now(), ...span });
     const file = path.join(this.dir, 'trace.jsonl');
     this.traceWrite = this.traceWrite.then(() => fs.appendFile(file, JSON.stringify(rec) + '\n')).catch(() => {});
     this.deps.onSpan?.(this.meta.id, rec);
@@ -614,7 +630,37 @@ export class Session {
     const mine = applyUserSettings(base, await loadUserSettings(this.deps.dataDir, this.meta.owner));
     // Project hooks and allow-rules are repository content: trusted only when
     // commands are sandboxed.
-    return mergeSettings(mine, project, this.projectTrusted(host));
+    const settings = mergeSettings(mine, project, this.projectTrusted(host));
+    // Every hook this session runs gets its payload with vault values hidden.
+    setHookRedactor(settings, (p) => this.redactor.redactDeep(p));
+    return settings;
+  }
+
+  /**
+   * The redactor with every value this session was given, reloaded after a restart
+   * (from the names kept in meta.vaultNames, every kept version of each).
+   */
+  async loadSecrets(): Promise<Redactor> {
+    this.secretsLoaded ??= (async () => {
+      const store = this.deps.vault;
+      if (!store) return;
+      for (const name of [...(this.meta.vaultNames ?? [])]) {
+        for (const v of await store.allValues({ account: this.meta.owner, session: this.meta.id }, name).catch(() => [] as string[])) this.redactor.add(name, v);
+      }
+    })();
+    await this.secretsLoaded;
+    return this.redactor;
+  }
+
+  /** The key vault as this session's tools see it, when its owner may use it. */
+  private vaultService(main: boolean): VaultService | undefined {
+    const store = this.deps.vault;
+    if (!store?.enabledFor(this.meta.owner)) return undefined;
+    return store.service({
+      account: this.meta.owner, session: this.meta.id, main,
+      remember: (name, values) => { for (const v of values) this.redactor.add(name, v); },
+      grantsFor: (plugin) => this.deps.registry.plugins.find((p) => p.name === plugin)?.permissions?.vault ?? [],
+    });
   }
 
   /**
@@ -676,6 +722,7 @@ export class Session {
   private async services(main: boolean, caller = main ? 'main' : 'harness'): Promise<ToolServices> {
     const memory = await this.memoryStore();
     const cfg = this.deps.publish;
+    const vault = this.vaultService(main);
     return {
       memory: main ? memory : memory?.reader(),
       sources: this.sources,
@@ -704,6 +751,7 @@ export class Session {
         start: (name: string, input: Record<string, string>) => this.startWorkflowInBackground(name, input),
       } } : {}),
       tasks: this.taskService(caller, main),
+      ...(vault ? { vault } : {}),
       notify: async (message: string) => {
         this.emit({ kind: 'notice', level: 'info', text: `The agent says: ${message}` });
         fireHooks(this.settings, this.host, 'Notification', { type: 'agent', session: this.meta.id, title: this.meta.title, message }, this.deps.registry.hooks, (m) => this.emit({ kind: 'notice', level: 'warn', text: m }));
@@ -729,7 +777,7 @@ export class Session {
     const reg = this.deps.registry;
     const memory = await this.memoryStore();
     // Tools for services that are off are left out: a tool that can only fail is noise in every request.
-    const listed: Tool[] = [...reg.tools.values()].filter((t) => !(t.spec.name === 'memory' && !memory) && !(t.spec.name === 'web_search' && !this.deps.search) && !(t.spec.name === 'publish_branch' && !this.canPublish()) && !(t.spec.name === 'schedule' && !this.deps.scheduler) && !(t.spec.name === 'workflow' && !reg.workflows.size));
+    const listed: Tool[] = [...reg.tools.values()].filter((t) => !(t.spec.name === 'memory' && !memory) && !(t.spec.name === 'web_search' && !this.deps.search) && !(t.spec.name === 'publish_branch' && !this.canPublish()) && !(t.spec.name === 'schedule' && !this.deps.scheduler) && !(t.spec.name === 'workflow' && !reg.workflows.size) && !(t.spec.name === 'vault' && !this.vaultService(false)));
     // A tool may say where it works (computer: a sandbox image with a desktop).
     const here = await Promise.all(listed.map((t) => (t.availableIn ? Promise.resolve(t.availableIn(host)).catch(() => false) : true)));
     const tools = listed.filter((_t, i) => here[i]);
@@ -846,6 +894,7 @@ export class Session {
   }
 
   private async mainAgent(): Promise<Agent> {
+    await this.loadSecrets();
     const host = await this.getHost();
     const settings = await this.getSettings(host);
     const tb = await this.getToolbox(host);
@@ -864,6 +913,7 @@ export class Session {
       enterPlanMode: (reason: string) => this.enterPlanMode(reason),
       beforeWrite: this.checkpoints ? (p: string) => this.checkpoints!.before(p) : undefined,
       services: await this.services(true),
+      redactor: this.redactor,
       onTaint: () => { if (!this.meta.tainted) { this.meta.tainted = true; this.saveMeta().catch(() => {}); } },
     };
     if (!this.agent) {
@@ -1251,6 +1301,7 @@ export class Session {
       injectionCheck: this.injectionCheck(settings),
       beforeWrite: this.checkpoints ? (p: string) => this.checkpoints!.before(p) : undefined,
       services: await this.services(false, name),
+      redactor: this.redactor,
     }, this.hooksFor(name, (c) => { cost.n += c; }));
     self.agent = sub;
     // A brief from an agent that read outside content may carry some of it: the sub-agent starts as tainted.
@@ -1325,7 +1376,7 @@ export class Session {
 
   /** Saves are queued per run: parallel branches save at the same moment. */
   private saveRun(run: RunRecord): Promise<void> {
-    const body = JSON.stringify(run, null, 1);
+    const body = JSON.stringify(this.redactor.redactDeep(run), null, 1);
     const prev = this.runWrites.get(run.id) ?? Promise.resolve();
     const next = prev.catch(() => {}).then(async () => {
       await fs.mkdir(this.runsDir(), { recursive: true });
@@ -1671,6 +1722,9 @@ export class Session {
       const first = agent.messages.length === 0;
       let body = task;
       if (first) {
+        // Key vault entries past their rotation date: the person hears of it as the session starts.
+        const due = this.vaultService(false) ? this.deps.vault!.overdue({ account: this.meta.owner, session: this.meta.id }) : [];
+        if (due.length) this.emit({ kind: 'notice', level: 'warn', text: `Key vault: ${due.map((e) => `${e.name} (${e.scope})`).join(', ')} ${due.length === 1 ? 'is' : 'are'} past the rotation date. Rotate in the vault (or ask the agent to).` });
         const start = await runHooks(this.settings!, host, 'SessionStart', {}, undefined, signal, hooks, runners);
         body = firstMessageText(await this.preamble(host), start.feedback ? `<session_start_context>\n${start.feedback}\n</session_start_context>` : '', task);
       }

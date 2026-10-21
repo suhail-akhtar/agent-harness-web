@@ -82,6 +82,12 @@ export interface PluginAPI {
   secret(name: string): string | undefined;
   /** fetch, limited to the hosts declared in permissions.network (redirects re-checked; private addresses need an exact entry). */
   fetch(url: string | URL, init?: RequestInit): Promise<Response>;
+  /**
+   * Rotates key vault entries of a kind or name prefix for real (changes the password
+   * where it is used) when an entry is rotated; return the new value, or nothing to
+   * store `generated`. `current()` reads only names declared in permissions.vault.
+   */
+  registerVaultRotation(handler: Omit<import('../vault/store.ts').RotationHandler, 'plugin'>): void;
 }
 
 export interface PluginDefinition {
@@ -151,10 +157,14 @@ export interface PluginManifest {
   workflows?: string;
   /**
    * What the plugin needs. Enforced on the channels the harness hands out:
-   * api.secret, api.fetch, and ${VAR} in its MCP servers' configuration (an
-   * undeclared secret expands to nothing). Plugin code runs in the server
+   * api.secret, api.fetch, ${VAR} in its MCP servers' configuration (an
+   * undeclared secret expands to nothing), and the key vault its tools reach. Plugin code runs in the server
    * process, so this does not contain code that ignores those channels: that is
    * what signing and review are for.
    */
-  permissions?: { network?: string[]; secrets?: string[] };
+  /**
+   * vault: key vault entry names (globs, "prod-*") its tools may read through
+   * ctx.services.vault (reveal, envFor); any other name is refused and audited.
+   */
+  permissions?: { network?: string[]; secrets?: string[]; vault?: string[] };
 }

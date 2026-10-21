@@ -160,7 +160,7 @@ A plugin is a folder with `harness-plugin.json`. See `examples/plugins/acme` for
   "agents": "agents",
   "mcpServers": { "github": { "type": "http", "url": "https://api.example.com/mcp", "headers": { "Authorization": "Bearer ${GITHUB_TOKEN}" } } },
   "hooks": { "PostToolUse": [{ "matcher": "write|edit", "command": "npx prettier --write . >/dev/null 2>&1; true" }] },
-  "permissions": { "network": ["api.example.com"], "secrets": ["GITHUB_TOKEN"] }
+  "permissions": { "network": ["api.example.com"], "secrets": ["GITHUB_TOKEN"], "vault": ["acme-*"] }
 }
 ```
 
@@ -174,7 +174,7 @@ export default {
     api.registerGate({ name: 'acme-no-todo', description: '...', run: async ({ host }) => ({ pass: true, summary: 'ok' }) });
     api.on('PreToolUse', ({ input }) => /--force/.test(String(input?.command)) ? { block: true, feedback: 'no force-push' } : undefined, 'bash');
     // also: registerModel, registerProvider, registerAgent, registerSkills, registerMcpServer,
-    // registerWorkflow, workspacePath(host, p), log; and close() on the plugin for teardown
+    // registerWorkflow, registerVaultRotation, workspacePath(host, p), log; and close() on the plugin for teardown
   },
 };
 ```
@@ -198,7 +198,7 @@ An install from a URL:
 
 The UI's **Plugins** dialog lists what is loaded, how each plugin was admitted, and what it declared it needs.
 
-**Declared permissions are enforced on the channels the harness hands out.** A plugin's `permissions.secrets` are the only secrets `api.secret(name)` returns, and the only `${VAR}`s its MCP servers' configuration expands; an undeclared secret expands to nothing. `api.fetch` reaches only the hosts in `permissions.network`, with redirects re-checked; a private address needs an exact entry. MCP servers never inherit the server's environment. Before this, they received every provider key on the machine. Plugin code still runs in the server process, so code that ignores these channels is not contained: that is what signing and review are for.
+**Declared permissions are enforced on the channels the harness hands out.** A plugin's `permissions.secrets` are the only secrets `api.secret(name)` returns, and the only `${VAR}`s its MCP servers' configuration expands; an undeclared secret expands to nothing. `api.fetch` reaches only the hosts in `permissions.network`, with redirects re-checked; a private address needs an exact entry. Its tools' `ctx.services.vault` reveals only the key vault entries `permissions.vault` names (globs); any other is refused and audited (see [Key Vault](#key-vault)). MCP servers never inherit the server's environment. Before this, they received every provider key on the machine. Plugin code still runs in the server process, so code that ignores these channels is not contained: that is what signing and review are for.
 
 **Trust.** Plugins from `HARNESS_PLUGINS` are the operator's and are trusted. Their code runs in the server, and `${VAR}` in their MCP configuration expands from the server's environment, so secrets never enter a repository or the model. A workspace can contribute only declaratively:
 
@@ -402,6 +402,8 @@ The `computer` tool on a companion's real desktop is in the last column: nothing
 
 In plan mode the agent researches read-only, then presents its plan for approval. "Always allow" in an approval adds a rule for the session. A prefix rule like `bash(npm test:*)` never covers a compound command.
 
+- **A command that gets key vault secrets** (`bash` with `secrets`) is decided twice: the command as any command, and the secrets like an action on another system - asked, even in a sandbox, unless a rule names the entries: `vault(ci-*|npm-token)` or `bash(vault:ci-*)` (globs; `vault(NAME)` also covers the `vault` tool on that entry). A rule for the command (`bash(npm publish:*)`) is not a rule for its secrets, a repository's rules never hand them out, and "always allow" adds a rule for those entries only. In `dontAsk` mode a command with secrets no rule names is refused. See [Key Vault](#key-vault).
+
 - **The agent can enter plan mode itself** (`enter_plan_mode`) when a task should be researched and agreed before anything changes. Entering only takes permissions away, so nobody is asked; leaving is still the user's approval of the plan (`exit_plan_mode`), after which the session returns to the mode it was in (accept-edits stays accept-edits). It is refused in `dontAsk` (nobody could approve the plan) and `bypass` (the user chose no checks), and sub-agents do not have it.
 - **Where rules come from**, in order: the operator's settings file (`HARNESS_SETTINGS`) and plugin manifests; the person's own settings (per account, `GET`/`PUT /api/me/settings`: permission rules and limits only, never hooks); the project's `.harness/settings.json`, then the personal `.harness/settings.local.json` (allow rules and hooks only where project content is trusted: in a sandbox, or with `HARNESS_TRUST_PROJECT=1`); then "always allow" clicks in the session. Rules add up and are decided deny > ask > allow, so a deny at any level wins, and nothing below the operator can loosen an operator's deny or ask. Limits (`maxSteps`, `maxCostUsd`, `maxTurnMinutes`) come from the operator; a person's settings can only lower them. Changing your settings applies to your live sessions at their next call. Companion sessions read the project's settings files on the user's computer, under the same trust rules.
 
@@ -409,8 +411,8 @@ In plan mode the agent researches read-only, then presents its plan for approval
 - **Never ask (`dontAsk`)** is for unattended runs (scheduled tasks use it by default): what would be asked is refused, so a run never hangs waiting; allow rules still let work through.
 
 **Untrusted content changes what is asked.** Once a web page, a search result or a service's answer is in the context (also through a sub-agent, at any depth, or a resumed or imported session):
-- **every way out of the session is confirmed**, whatever the mode, bypass aside: a call to a service (any MCP tool, read-only ones too), a URL, a push, and a command on a machine or sandbox with open network. This is the "lethal trifecta" - private data, untrusted content and a way out in one agent - that Willison and GitHub's MCP exploit showed. A sandbox with no network or only the operator's allowlist is not a way out, unless the allowlist carries credentials (the gateway can write to those services). Allow rules do not skip this check, except the operator's own (`HARNESS_SETTINGS`): a rule from the repository, a person's own settings (`/api/me/settings`), or a click made before the content arrived, is asked again; a repository's hooks can block a call but never allow one. A repository's allow rules never cover a call that leaves the sandbox at all (an MCP service, a URL, the user's real desktop), tainted or not. In auto mode these calls go to a person, not to the checking model;
-- **saving to memory or scheduling a prompt** needs a yes, so a page cannot plant instructions for later;
+- **every way out of the session is confirmed**, whatever the mode, bypass aside: a call to a service (any MCP tool, read-only ones too), a URL, a push, a command on a machine or sandbox with open network, and a command that gets key vault secrets (whatever the network: it holds the secret). This is the "lethal trifecta" - private data, untrusted content and a way out in one agent - that Willison and GitHub's MCP exploit showed. A sandbox with no network or only the operator's allowlist is not a way out, unless the allowlist carries credentials (the gateway can write to those services). Allow rules do not skip this check, except the operator's own (`HARNESS_SETTINGS`): a rule from the repository, a person's own settings (`/api/me/settings`), or a click made before the content arrived, is asked again; a repository's hooks can block a call but never allow one. A repository's allow rules never cover a call that leaves the sandbox at all (an MCP service, a URL, the user's real desktop), tainted or not. In auto mode these calls go to a person, not to the checking model;
+- **saving to memory, scheduling a prompt or changing the key vault** needs a yes, so a page cannot plant instructions (or a value) for later;
 - **hidden text never reaches the model**: Unicode tag characters (ASCII smuggling), zero-width characters, bidi controls and smuggling variation selectors are stripped from outside content, and so are HTML comments (`<!-- ... -->`) in content that is not a fetched page - an MCP result, a Markdown file, an issue body - as GitHub strips them from issues before its agent reads them; a note says how many of each were removed. Elements a person never sees on a page (`hidden`, `display:none`, `visibility:hidden`, zero font size, `aria-hidden`, hidden inputs) are dropped from fetched pages.
 
 `HARNESS_TAINT_GUARD=off` turns the confirmation off (not recommended). With `HARNESS_INJECTION_SCAN=on`, a small model also reads each outside result for text that tries to instruct the agent (to ignore its task, run something, send data out) and adds a warning to it, like the probes Anthropic runs on web content for Claude in Chrome; one cheap call per outside result. Checked live on DeepSeek: an injected HTML comment flagged, ordinary release notes passed.
@@ -518,6 +520,62 @@ Least privilege, each widened only by the operator:
 - **Only its own branches**: a branch that already exists is pushed to only if this session created it (recorded in the session's folder); someone else's branch, even under the prefix, is refused unless `HARNESS_PUBLISH_UPDATE=1`.
 - **Draft pull requests**: every pull request is a draft unless `HARNESS_PUBLISH_READY=1` (then `draft: false` opens a ready one).
 - **Private repositories**: a session's repository is cloned with the same token when the operator lists it (`HARNESS_CLONE_REPOS`: `owner/name`, URLs or `owner/*`; the `HARNESS_PUBLISH_REPOS` count too). The token goes in an HTTP header passed in git's environment for that one clone - not on the command line, not in the clone's `.git/config` - and only to the hosts a push may send it to. Tested against a real git HTTP server (`git http-backend`) that wants the token.
+
+## Key Vault
+
+Named secrets - passwords, tokens, SSH keys, certificates, connection strings - that sessions use without the model ever seeing them (`src/vault/`). The agent names an entry; the harness puts the value where it is needed, on the server, and hides it everywhere else.
+
+**Using one in a command.** `bash` takes `secrets: {"DB_PASSWORD": "prod-db"}`: the harness resolves the entries and passes them as that one command's environment (`docker exec -e NAME`, with the value in the docker CLI's environment, never its arguments; the local environment otherwise), never in the command text. The command refers to `$DB_PASSWORD`. Secrets are never sent to a companion (the user's own computer). Variables that change how commands run (`PATH`, `LD_*`, `BASH_ENV`, `NODE_OPTIONS`, ...) cannot be secrets.
+
+**Hidden everywhere.** Every value a session is given, or that the model writes into a `vault` call, is registered with the session. One function (`Redactor` in `src/vault/redact.ts`) replaces it with `[vault:name]` at each chokepoint: tool results before they enter the context (command output included, so an `echo` or a `cat` of a file the command wrote shows the label), every message appended to the context (and so the stored history), every provider request (a safety net), every event the UI receives (notices, sub-agent reports, permission prompts), trace spans, hook payloads, workflow run records, the workspace file preview and exported bundles (conversation and files). It catches the value itself, its base64 (standard and URL-safe, also inside a longer base64 text such as a `Basic` header of `user:password`), its URL-encoded and JSON-escaped forms, and each line of a PEM key or other multi-line value. A value the model wrote into `vault set` is hidden from the message that carried it before that message is stored, shown or sent again. The names a session was given are kept with it, so after a restart its values are hidden again.
+
+**The `vault` tool** (the agent's view): `list` (names, kinds, scopes, versions, rotation dates; never values), `generate` (a strong random password, token or secret, or an Ed25519 SSH key whose public half is returned: the value never passes through the model), `create`/`set` (a value the model has), `rotate`, `history`, `delete`. There is no `get`. Writes are edits that persist: asked in default mode, refused in plan mode, confirmed after untrusted content; `delete` is asked even when edits are accepted. Sub-agents list and use entries but do not change them.
+
+**Scopes and access.**
+
+| Scope | Who changes it | Who uses it |
+|---|---|---|
+| `operator` | administrators (the operator token or an admin account), through the API | every session (when the tool or plugin is allowed) |
+| `user` | the account and its sessions | that account's sessions only: nobody else sees the names, administrators included |
+| `session` | that session (and its owner, through the API) | that session |
+
+A name is looked up in the session's entries, then the account's, then the operator's. `HARNESS_VAULT=admins` gives the vault only to administrators' sessions (and the single-user server's); `off` turns it off.
+
+**Storage.** Metadata is in clear in `<data>/vault/entries.json` (owner-only): name, kind, description, scope, owner, created and updated times, `rotateBy`, and the current version plus the five before it. Each value is sealed with AES-256-GCM under the server key (`HARNESS_SECRET_KEY`, else `<data>/secret.key`, shared with MCP bundles in `src/util/sealed.ts`), with a random IV per value. A rotation keeps the earlier versions readable, so `POST .../rollback` can make one current again (as a new version: nothing is lost). Another server key gives a clear error: "cannot decrypt: the server key (HARNESS_SECRET_KEY or secret.key) is not the one it was sealed with".
+
+**External backends**, behind one interface (`src/vault/backends.ts`), chosen per entry (`backend`) or by default, configured by the operator in `HARNESS_VAULT_BACKENDS` (JSON; `${VAR}` reads the server's environment):
+
+```json
+{
+  "hcv": { "type": "hashicorp", "address": "https://vault.internal:8200", "mount": "secret", "prefix": "harness" },
+  "akv": { "type": "azure", "vaultUrl": "https://myvault.vault.azure.net", "tenantId": "${AZURE_TENANT_ID}", "clientId": "${AZURE_CLIENT_ID}", "clientSecret": "${AZURE_CLIENT_SECRET}" },
+  "sm":  { "type": "aws", "region": "eu-west-1" },
+  "default": "hcv"
+}
+```
+
+- **HashiCorp Vault**, KV v2 over its HTTP API: a token (`token`, else `VAULT_TOKEN`) or AppRole (`roleId`/`secretId`, else `VAULT_ROLE_ID`/`VAULT_SECRET_ID`; the login is renewed before its lease ends), optional `namespace`. Each harness version is a KV version. Tested for real against `hashicorp/vault` in Docker dev mode: both logins, versions, rollback, delete, and a path outside the AppRole's policy refused.
+- **Azure Key Vault**: client-credentials OAuth against the tenant (`authorityHost` for sovereign clouds), REST API 7.4; names are made Key-Vault-safe with a short hash. Tested against a local stand-in that checks the grant, the bearer token and the API version.
+- **AWS Secrets Manager**: SigV4-signed JSON requests (`src/vault/sigv4.ts`, node:crypto only, no SDK; checked against AWS's published test vectors), keys from `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN` or the config; `endpoint` for a VPC endpoint. Tested against a stand-in that recomputes every signature.
+
+Entries are stored at `<prefix>/<scope>/<owner>/<name>` in the backend. Only an administrator may point an entry at an existing path (`ref`), so a member cannot reach another application's secrets through the server's backend credentials.
+
+**For plugins.** A tool's `ctx.services.vault` has `list()` (metadata only), `reveal(name, purpose)` (for server-side code: signing a request, opening an SSH connection; never put it in a tool result - and if a plugin does, the result is redacted anyway) and `envFor({VAR: name}, purpose)` (for `host.exec`'s environment). Both are refused, and audited as denied, unless the name matches the plugin's manifest: `"permissions": {"vault": ["prod-*", "ci-token"]}`. The plugin loader hands each plugin's tools (and gates) a vault limited to those names. `api.registerVaultRotation({ kind?, prefix?, rotate })` makes `rotate` change the secret for real where it is used (the database password itself); it may read the current value only for names it declared, and returns the new one (or stores the generated one).
+
+**Audit and rotation.** Every reveal, change, rotation, rollback, deletion and refusal is appended to `<data>/vault/audit.jsonl`: time, who (account, operator, or session), session, plugin, tool, action, entry, scope, purpose, result. Never a value. Entries past their `rotateBy` (set directly or with `rotateEveryDays`, which moves on with each rotation) are named in a notice when a session starts and flagged in `list`.
+
+**REST API** (values are write-only: no response ever carries one):
+
+| | |
+|---|---|
+| `GET /api/vault/entries` | names and metadata visible to you (`?session=<id>` adds that session's) and the backends |
+| `POST /api/vault/entries` | `{name, value \| generate: true, kind, description, scope, rotateBy, rotateEveryDays, backend, ref}`; 409 if it exists |
+| `PUT /api/vault/entries/:name` | a new version (or a new entry) |
+| `DELETE /api/vault/entries/:name` | `?scope=` to pick one |
+| `GET /api/vault/entries/:name/history` | versions (metadata) |
+| `POST /api/vault/entries/:name/rotate` | `{value?}`: a plugin's rotation handler, else a generated value |
+| `POST /api/vault/entries/:name/rollback` | `{version}` |
+| `GET /api/vault/audit` | administrators: the audit log (`?limit=`) |
 
 ## Shared servers: accounts and limits
 
@@ -704,7 +762,9 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 | `HARNESS_USER_DAILY_USD` | none | Daily spend cap per account. |
 | `HARNESS_USER_MAX_RUNNING` / `HARNESS_USER_MAX_SANDBOXES` | 4 / 8 | Sessions working at once / sessions with a sandbox container, per account (0 = no limit); over it: 429. |
 | `HARNESS_COMPANION_TOKEN_DAYS` / `HARNESS_COMPANION_TOKEN_GRACE_MIN` | 30 / 60 | How long a companion token lasts (replaced while the companion polls) / how long a replaced one still works. |
-| `HARNESS_SECRET_KEY` | `<data>/secret.key` | The key that encrypts secrets at rest (MCP bundles' sensitive values): at least 32 random characters, e.g. `openssl rand -hex 32`. Without it a key is generated into the data folder (owner-only). |
+| `HARNESS_SECRET_KEY` | `<data>/secret.key` | The key that encrypts secrets at rest (key vault values, MCP bundles' sensitive values): at least 32 random characters, e.g. `openssl rand -hex 32`. Without it a key is generated into the data folder (owner-only). Back it up apart from the data folder: without it, sealed values cannot be read. |
+| `HARNESS_VAULT` | on | The key vault: `admins` (only administrators' sessions get it) or `off`. |
+| `HARNESS_VAULT_BACKENDS` | local only | External backends as JSON: `{"<name>": {"type": "hashicorp" | "azure" | "aws", ...}, "default": "<name>"}` (see Key Vault); their credentials from `VAULT_TOKEN` / `VAULT_ROLE_ID` / `VAULT_SECRET_ID`, `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET`, `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` / `AWS_REGION`, or `${VAR}` in the JSON. |
 | `HARNESS_RATE_LIMIT` / `HARNESS_MESSAGE_RATE_LIMIT` | 600 / 30 | Requests / messages per minute per person (0 = none). |
 | `HARNESS_OIDC_ISSUER` | | Single sign-on: the provider's issuer, exactly as its discovery document gives it (https; http only on loopback). |
 | `HARNESS_OIDC_CLIENT_ID` / `HARNESS_OIDC_CLIENT_SECRET` | | The application registered at the provider. The secret is optional (a public client uses PKCE alone). |
@@ -762,5 +822,6 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
   - Blender and Godot on a companion need `--allow-hooks`; the `model-preview` gate on a companion cannot tell whether the renders are newer than the model (its copy has the copy's file times).
   - The egress proxy does no TLS interception: over HTTPS it decides by host (and port) only. Method limits hold for plain `http://` and for the credential gateway; a host given a method list is refused over an HTTPS tunnel rather than opened unchecked.
   - Secrets at rest are encrypted with a key the server itself can read (`HARNESS_SECRET_KEY` or `<data>/secret.key`): that protects a copied data folder or a backup without the key, not the server's account. A headless server has no OS keychain to hold the key.
+  - Key vault redaction replaces the forms a value is usually printed in (as is, base64, URL-encoded, JSON-escaped, PEM lines). A command that holds a secret can still transform it some other way (reversed, hex, split across lines, encrypted) and print that: the secret is the command's to use, which is why a command with secrets is asked about. Values shorter than 6 characters are refused (they cannot be told apart from ordinary text). Text the model streams is hidden per chunk, so a value split across two chunks can show in the live view until the message is complete (the stored message and the model's next request are hidden). A provider's signed or encrypted reasoning blocks (Claude's thinking signatures) are replayed unchanged, so a value the model wrote itself (`vault set`) can remain inside its own signed reasoning; `generate` avoids the model seeing a value at all.
   - Companion tokens are short-lived and replaced in the background, but a companion that stays offline past expiry needs a new token from the web app.
-- **Not tested here:** Seatbelt on a real Mac and Docker Desktop for macOS (no Mac was available: the Seatbelt profiles, including the allowlist one, are tested as generated text); desktop control on a real Mac or a Linux X11 desktop (tested as generated script text; on Windows a real screenshot and pointer move were run, clicks and typing only against a stand-in); bubblewrap (and its allowlist bridge) ran for real inside a Linux container, not on a Linux desktop; gVisor and Kata (not installed: the runtime option is tested with a missing runtime and with `runc` named explicitly); Godot on Windows or macOS outside the sandbox (only discovery is tested there), and Godot installed on a user's computer behind a companion (screenshots ran with real Godot in a companion whose commands run in the 3D image); prices, which come from the providers' pages on 2026-10-19 and can change.
+- **Not tested here:** Seatbelt on a real Mac and Docker Desktop for macOS (no Mac was available: the Seatbelt profiles, including the allowlist one, are tested as generated text); desktop control on a real Mac or a Linux X11 desktop (tested as generated script text; on Windows a real screenshot and pointer move were run, clicks and typing only against a stand-in); bubblewrap (and its allowlist bridge) ran for real inside a Linux container, not on a Linux desktop; gVisor and Kata (not installed: the runtime option is tested with a missing runtime and with `runc` named explicitly); Godot on Windows or macOS outside the sandbox (only discovery is tested there), and Godot installed on a user's computer behind a companion (screenshots ran with real Godot in a companion whose commands run in the 3D image); Azure Key Vault and AWS Secrets Manager (the key vault backends were tested against local stand-ins that check the sign-in and the SigV4 signatures; HashiCorp Vault ran for real); prices, which come from the providers' pages on 2026-10-19 and can change.

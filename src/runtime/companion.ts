@@ -289,6 +289,8 @@ export class CompanionHub {
       get sandboxed() { return !!l.info.sandbox && l.info.sandbox !== 'off'; },
       get networkPolicy() { return l.info.sandbox && l.info.sandbox !== 'off' && l.info.network === 'none' ? 'none' : 'full'; },
       exec(command: string, opts: ExecOptions): Promise<ExecResult> {
+        // Vault values stay on the server: the user's computer is not where the operator's secrets go.
+        if (opts.secretEnv && Object.keys(opts.secretEnv).length) return Promise.reject(new Error('vault secrets are not sent to a companion (the user\'s own computer)'));
         return hub.dispatch<ExecResult>(id, { kind: 'exec', sessionId, command, timeoutMs: opts.timeoutMs, stdin: opts.stdin }, opts.signal, opts.timeoutMs + 30_000);
       },
       remoteTool(name: string, input: Record<string, unknown>, signal: AbortSignal): Promise<ToolOutcome> {

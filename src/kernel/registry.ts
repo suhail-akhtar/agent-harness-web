@@ -19,7 +19,7 @@ export interface LoadedPlugin {
   /** "shipped with the harness", "signed by <key>", "unsigned", ... */
   signature?: string;
   /** What it declared it needs (harness-plugin.json permissions). */
-  permissions?: { network?: string[]; secrets?: string[] };
+  permissions?: { network?: string[]; secrets?: string[]; vault?: string[] };
 }
 
 export interface InProcessHook { event: HookEvent; matcher?: string; handler: HookHandler; plugin: string }
@@ -40,6 +40,8 @@ export class Registry {
   readonly hooks: InProcessHook[] = [];
   readonly shellHooks: Partial<Record<HookEvent, HookSpec[]>> = {};
   readonly plugins: LoadedPlugin[] = [];
+  /** Key vault rotation handlers from plugins. */
+  readonly vaultRotators: import('../vault/store.ts').RotationHandler[] = [];
   /** Plugin teardown, run by harness.close(). */
   readonly closers: (() => void | Promise<void>)[] = [];
   private instances = new Map<string, Provider>();
@@ -47,7 +49,7 @@ export class Registry {
   /** Saves the registry's contents; the function returned puts them back (a failed plugin load). */
   snapshot(): () => void {
     const maps: Map<string, unknown>[] = [this.models, this.providers, this.tools, this.agents, this.mcpServers, this.gates, this.workflows, this.searchBackends, this.instances];
-    const lists: unknown[][] = [this.skillDirs, this.outputStyleDirs, this.hooks, this.plugins, this.closers];
+    const lists: unknown[][] = [this.skillDirs, this.outputStyleDirs, this.hooks, this.plugins, this.closers, this.vaultRotators];
     const savedMaps = maps.map((m) => new Map(m));
     const savedLists = lists.map((l) => l.slice());
     const savedShell = Object.fromEntries(Object.entries(this.shellHooks).map(([k, v]) => [k, v?.slice()]));
