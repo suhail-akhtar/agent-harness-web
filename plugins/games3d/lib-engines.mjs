@@ -322,10 +322,23 @@ export function withPreset(cfg, kind, name, exportPath) {
   return head + minimalPreset(kind, next, name, exportPath);
 }
 
-/** On Linux without a display, frames are drawn on Xvfb when it is installed. */
+/**
+ * On Linux without a display, frames are drawn on Xvfb when it is installed: through
+ * xvfb-run when xauth is there too (xvfb-run needs it), else on an Xvfb started here
+ * on a free display number and stopped afterwards.
+ */
 export function withDisplay(host) {
   if (host.platform !== 'linux' || host.shell === 'powershell') return undefined;
-  return (cmd) => `if [ -z "\${DISPLAY:-}" ] && command -v xvfb-run >/dev/null 2>&1; then xvfb-run -a -s '-screen 0 1280x720x24' ${cmd}; else ${cmd}; fi`;
+  return (cmd) => [
+    'if [ -n "${DISPLAY:-}" ]; then', `  ${cmd}`,
+    'elif command -v xvfb-run >/dev/null 2>&1 && command -v xauth >/dev/null 2>&1; then', `  xvfb-run -a -s '-screen 0 1280x720x24' ${cmd}`,
+    'elif command -v Xvfb >/dev/null 2>&1; then',
+    '  n=99; while [ -e "/tmp/.X$n-lock" ] && [ $n -lt 199 ]; do n=$((n+1)); done',
+    '  Xvfb ":$n" -screen 0 1280x720x24 -nolisten tcp >/dev/null 2>&1 & xvfb_pid=$!',
+    '  for i in 1 2 3 4 5 6 7 8 9 10; do [ -e "/tmp/.X11-unix/X$n" ] && break; sleep 0.2; done',
+    `  DISPLAY=":$n" ${cmd}; rc=$?; kill $xvfb_pid 2>/dev/null; wait $xvfb_pid 2>/dev/null; (exit $rc)`,
+    'else', `  ${cmd}`, 'fi',
+  ].join('\n');
 }
 
 /** Errors Godot printed (script errors with where they happened); its exit code stays 0 for most of them. */

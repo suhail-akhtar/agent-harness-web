@@ -51,6 +51,7 @@ test('a session moves to another server: its conversation continues there, with 
 
 test('importing: a tainted conversation stays tainted; bad bundles and paths that leave the folder are refused', async () => {
   const h = await createHarness({ dataDir: await tempDir(), search: null, memory: 'off' });
+  h.registry.setProviderInstance('deepseek', new FakeProvider([{ text: 'ok' }])); // no API key needed
   try {
     const base = { format: 'harness-session', version: 1, exportedAt: 0, skipped: [], source: { id: 'x', title: 'T', model: 'deepseek-flash', effort: 'high', mode: 'bypass', tainted: false, todos: [], contextStart: 0, compactions: 0, lastPromptTokens: 0, cost: 0 } };
     const history = [
@@ -72,6 +73,7 @@ test('importing: a tainted conversation stays tainted; bad bundles and paths tha
 test('export and import over the API: owners only; an import lands in a sandbox unless an administrator chose a folder', async () => {
   const data = await tempDir();
   const harness = await createHarness({ dataDir: data, search: null, memory: 'off' });
+  harness.registry.setProviderInstance('deepseek', new FakeProvider([{ text: 'ok' }])); // no API key needed
   const work = await tempDir();
   const { server } = createApp({ harness, token: 'op', loopback: true, localRoots: [work], uiDir: path.join(data, 'ui'), appRoot: data });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));

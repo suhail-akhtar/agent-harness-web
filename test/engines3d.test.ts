@@ -84,7 +84,10 @@ test('blender and godot command lines: argument order, quoting for bash and Powe
   assert.ok(!E.BLEND_CHECK.includes('"'));
 
   const linux = { platform: 'linux', shell: 'bash' } as ToolHost;
-  assert.match(E.withDisplay(linux)('godot --path .'), /xvfb-run -a .* godot --path \.; else godot --path \.; fi$/);
+  const wrapped = E.withDisplay(linux)('godot --path .');
+  assert.match(wrapped, /command -v xvfb-run .* command -v xauth[^\n]*\n  xvfb-run -a .* godot --path \./, 'xvfb-run only with xauth');
+  assert.match(wrapped, /Xvfb ":\$n"[\s\S]*DISPLAY=":\$n" godot --path \./, 'else an Xvfb of its own');
+  assert.match(wrapped, /\nelse\n  godot --path \.\nfi$/);
   assert.equal(E.withDisplay({ platform: 'win32', shell: 'bash' } as ToolHost), undefined);
 });
 

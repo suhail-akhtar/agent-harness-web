@@ -307,6 +307,7 @@ test('the shipped example plugin loads and works', async () => {
 
 test('a workspace workflow runs through the session; its approval shows only files inside the workspace', async () => {
   const h = await createHarness({ dataDir: await tempDir() });
+  h.registry.setProviderInstance('deepseek', new FakeProvider([{ text: 'ok' }])); // no API key needed
   const outside = await tempDir();
   const ws = path.join(outside, 'ws');
   await fs.mkdir(path.join(ws, '.harness', 'workflows'), { recursive: true });
@@ -335,6 +336,7 @@ test('a workspace workflow runs through the session; its approval shows only fil
 
 test('parallel branches saving at the same moment do not break the run record', async () => {
   const h = await createHarness({ dataDir: await tempDir() });
+  h.registry.setProviderInstance('deepseek', new FakeProvider([{ text: 'ok' }])); // no API key needed
   const ws = await tempDir();
   await fs.mkdir(path.join(ws, '.harness', 'workflows'), { recursive: true });
   const branches = Array.from({ length: 6 }, (_, i) => `b${i}`);
@@ -429,6 +431,7 @@ test('checkpoints: staggered parallel saves of mixed sizes never lose a manifest
 
 test('starting a workflow claims the session at once: a second start or a message in the same moment cannot also run', async () => {
   const h = await createHarness({ dataDir: await tempDir() });
+  h.registry.setProviderInstance('deepseek', new FakeProvider([{ text: 'ok' }])); // no API key needed
   const ws = await tempDir();
   await fs.mkdir(path.join(ws, '.harness', 'workflows'), { recursive: true });
   await fs.writeFile(path.join(ws, '.harness', 'workflows', 'wait.json'), JSON.stringify({

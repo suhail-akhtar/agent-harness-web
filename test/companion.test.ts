@@ -78,7 +78,10 @@ test('mirror: a companion that sends paths outside the folder cannot write outsi
     : r));
   try {
     const root = await hub.host(id, 's1').mirror!();
-    assert.deepEqual(await fs.readdir(root), ['ok.txt']);
+    // On Windows, \ and : are refused; elsewhere they are ordinary characters of one file name inside the copy.
+    const expected = process.platform === 'win32' ? ['ok.txt'] : ['..\\..\\escaped.txt', 'C:\\escaped.txt', 'C:escaped.txt', 'a\\..\\..\\..\\escaped.txt', 'ok.txt'];
+    assert.deepEqual((await fs.readdir(root)).sort(), expected.sort());
+    for (const n of await fs.readdir(root)) assert.ok((await fs.lstat(path.join(root, n))).isFile(), `${n} is a plain file in the copy`);
     await assert.rejects(fs.stat(path.join(data, 'escaped.txt')));
     await assert.rejects(fs.stat(path.join(data, 'mirrors', 'escaped.txt')));
   } finally { stop(); }
