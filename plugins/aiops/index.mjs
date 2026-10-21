@@ -110,6 +110,9 @@ export default {
       return h?.readUser && h?.readCredential ? 'reader' : 'operator';
     };
     const hostCredAs = (o, name, role) => (role === 'reader' ? (name && name !== 'local' ? o?.hosts.find((h) => h.name === name)?.readCredential : undefined) : hostCred(o, name));
+    // The operator's own Prometheus (their inventory or HARNESS_OPS_PROMETHEUS_URL): reading it is a read, not a
+    // call to the outside, so the monitoring tools are not asked about. A workspace-chosen endpoint still is.
+    const opProm = () => !!(op()?.monitoring?.prometheus || process.env.HARNESS_OPS_PROMETHEUS_URL?.trim());
     const promCred = () => names(op()?.monitoring?.prometheus_credential);
     const vaultNamesFor = {
       prometheus_query: promCred, slo_status: promCred, capacity_forecast: promCred,
@@ -259,7 +262,7 @@ export default {
         },
         required: ['query'], additionalProperties: false,
       },
-      kind: 'network', parallelSafe: true, untrusted: true, sendsOut: true,
+      kind: 'network', parallelSafe: true, untrusted: true, sendsOut: () => !opProm(), kindsFor: () => [opProm() ? 'read' : 'network'],
       availableIn: configured,
       summarize: (i) => `promql${i.start || i.step || i.mode === 'range' ? ` range ${str(i.start) || 'now-1h'}..${str(i.end) || 'now'}` : ''}: ${str(i.query).slice(0, 120)}`,
       async run(input, ctx) {
@@ -747,7 +750,7 @@ export default {
         },
         additionalProperties: false,
       },
-      kind: 'network', parallelSafe: true, untrusted: true, sendsOut: true,
+      kind: 'network', parallelSafe: true, untrusted: true, sendsOut: () => !opProm(), kindsFor: () => [opProm() ? 'read' : 'network'],
       availableIn: configured,
       summarize: (i) => `ops_check ${str(i.action) || 'run'}${i.service ? ` ${i.service}` : ''}`,
       async run(input, ctx) {
@@ -779,7 +782,7 @@ export default {
       name: 'slo_status',
       description: 'For the inventory\'s SLOs: the error ratio over the SLO window, the error budget left, and the burn rate over 5m, 30m, 1h, 2h, 6h, 1d and 3d with the multi-window alerts (14.4x over 1h and 5m, 6x over 6h and 30m: page; 3x over 1d and 2h, 1x over 3d and 6h: ticket). Each SLO defines errors and total as PromQL rates with [{{window}}].',
       parameters: { type: 'object', properties: { service: { type: 'string' }, slo: { type: 'string' } }, additionalProperties: false },
-      kind: 'network', parallelSafe: true, untrusted: true, sendsOut: true,
+      kind: 'network', parallelSafe: true, untrusted: true, sendsOut: () => !opProm(), kindsFor: () => [opProm() ? 'read' : 'network'],
       availableIn: configured,
       summarize: (i) => `slo status${i.service ? ` ${i.service}` : ''}${i.slo ? `/${i.slo}` : ''}`,
       async run(input, ctx) {
@@ -823,7 +826,7 @@ export default {
         },
         required: ['query'], additionalProperties: false,
       },
-      kind: 'network', parallelSafe: true, untrusted: true, sendsOut: true,
+      kind: 'network', parallelSafe: true, untrusted: true, sendsOut: () => !opProm(), kindsFor: () => [opProm() ? 'read' : 'network'],
       availableIn: configured,
       summarize: (i) => `forecast ${str(i.query).slice(0, 100)}${i.threshold !== undefined ? ` to ${i.threshold}` : ''}`,
       async run(input, ctx) {

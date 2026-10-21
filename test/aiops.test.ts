@@ -849,3 +849,26 @@ test('aiops in an agent loop (FakeProvider): reads run, the model gets redacted 
     assert.equal(audit, '');
   } finally { await h.close(); await p.close(); }
 });
+
+test('reading the operator\'s own Prometheus is a read (not asked in default mode); a workspace-chosen endpoint is still asked', async () => {
+  const dir = await tempDir();
+  const opFile = path.join(dir, 'operator-inventory.yaml');
+  await fs.writeFile(opFile, 'monitoring:\n  prometheus: http://127.0.0.1:9\nhosts: []\n');
+  const before = process.env.HARNESS_OPS_INVENTORY;
+  const rules: Rules = { allow: [], deny: [], ask: [] };
+  const h = await createHarness({ dataDir: await tempDir(), plugins: [PLUGIN], search: null, memory: 'off', scheduler: false });
+  try {
+    const tools = ['prometheus_query', 'ops_check', 'slo_status', 'capacity_forecast'].map((n) => h.registry.tools.get(n)!);
+    const ctx = { mode: 'default' as const, rules, sandboxed: false, network: 'full' as const };
+    delete process.env.HARNESS_OPS_INVENTORY;
+    for (const t of tools) assert.equal(decide(t, { query: 'up' }, ctx).action, 'ask', `${t.spec.name} without the operator's monitoring`);
+    process.env.HARNESS_OPS_INVENTORY = opFile;
+    for (const t of tools) assert.equal(decide(t, { query: 'up' }, ctx).action, 'allow', `${t.spec.name} on the operator's Prometheus`);
+    // Still untrusted content, and still confirmed after it when nothing else is.
+    assert.equal(tools[0]!.untrusted, true);
+    assert.equal(decide(h.registry.tools.get('probe')!, { target: 'http://127.0.0.1:9' }, ctx).action, 'ask', 'probe targets can come from a workspace file: asked');
+  } finally {
+    if (before === undefined) delete process.env.HARNESS_OPS_INVENTORY; else process.env.HARNESS_OPS_INVENTORY = before;
+    await h.close();
+  }
+});
