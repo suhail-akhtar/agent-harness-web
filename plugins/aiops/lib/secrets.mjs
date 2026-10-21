@@ -23,11 +23,16 @@ export async function revealCredential(name, { services, secret, patterns, purpo
   if (!vaultAllowed(name, patterns)) throw new CredentialError(`credential "${name}" is outside what the aiops plugin may read (permissions.vault: ${patterns.join(', ')}). Rename it in the vault and the inventory.`);
   const vault = services?.vault;
   let value;
+  // The vault first; the operator's HARNESS_OPS_SECRETS when the vault has no such entry
+  // (or there is no vault). Any other vault refusal (a permission, a broken key) stands.
   if (vault && typeof vault.reveal === 'function') {
-    try { value = await vault.reveal(name, purpose); } catch (e) { throw new CredentialError(`the Key Vault did not give "${name}": ${e.message}`); }
-  } else {
+    try { value = await vault.reveal(name, purpose); } catch (e) {
+      if (!/no vault entry named/i.test(e.message) || !secret('HARNESS_OPS_SECRETS')) throw new CredentialError(`the Key Vault did not give "${name}": ${e.message}`);
+    }
+  }
+  if (value === undefined) {
     const raw = secret('HARNESS_OPS_SECRETS');
-    if (!raw) throw new CredentialError(`credential "${name}" is not available: this harness has no Key Vault, and the operator has not set HARNESS_OPS_SECRETS (a JSON object of name: value, or @<path to a JSON file>).`);
+    if (!raw) throw new CredentialError(`credential "${name}" is not available: ${vault ? 'it is not in the Key Vault' : 'this harness has no Key Vault'}, and the operator has not set HARNESS_OPS_SECRETS (a JSON object of name: value, or @<path to a JSON file>).`);
     let obj;
     try { obj = JSON.parse(raw.startsWith('@') ? await fs.readFile(raw.slice(1), 'utf8') : raw); } catch (e) { throw new CredentialError(`HARNESS_OPS_SECRETS could not be read as JSON (${e.code ?? 'parse error'})`); }
     value = obj?.[name];
