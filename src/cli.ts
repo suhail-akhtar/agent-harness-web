@@ -1,7 +1,8 @@
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import type { HarnessEvent } from './core/types.ts';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import type { SessionMeta } from './core/session.ts';
+import type { HarnessEvent, Message, TurnEndReason } from './core/types.ts';
 import { firstLine } from './graph/runner.ts';
 import { createHarness } from './kernel/harness.ts';
 
@@ -33,10 +34,44 @@ export function printEvent(e: HarnessEvent, quiet = false): void {
   }
 }
 
+/**
+ * The process's exit code for how the run ended, so a script or CI step can tell
+ * "finished" from "stopped by a limit" without parsing output. 2 is a usage error.
+ */
+export const EXIT_CODES: Record<TurnEndReason, number> = { done: 0, error: 1, max_steps: 3, budget: 4, time: 5, refusal: 6, max_tokens: 7, aborted: 130 };
+
+/** What --output json prints: one object, after the run. */
+export function headlessResult(s: { meta: SessionMeta; history: Message[] }, reason: TurnEndReason, spans: { type: string }[], error?: string) {
+  const u = s.meta.usage;
+  const input = u.input + u.cacheRead + u.cacheWrite;
+  const last = [...s.history].reverse().find((m) => m.role === 'assistant' && m.content.some((b) => b.type === 'text'));
+  return {
+    reason, exitCode: EXIT_CODES[reason] ?? 1,
+    text: last?.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n').trim() ?? '',
+    sessionId: s.meta.id,
+    cost: Number(s.meta.cost.toFixed(6)),
+    tokens: { input, uncached: u.input, cacheRead: u.cacheRead, cacheWrite: u.cacheWrite, output: u.output },
+    cacheHit: input ? Number((u.cacheRead / input).toFixed(4)) : 0,
+    modelCalls: spans.filter((x) => x.type === 'model').length,
+    toolCalls: spans.filter((x) => x.type === 'tool').length,
+    ...(error ? { error } : {}),
+  };
+}
+
 async function main() {
   const prompt = process.argv.slice(2).filter((a, i, all) => !a.startsWith('--') && !all[i - 1]?.startsWith('--')).join(' ');
   const workflow = arg('workflow');
-  if (!prompt && !workflow && !arg('resume')) { console.error('usage: npm run cli -- [--model id] [--runtime docker|local] [--dir path] [--mode default|acceptEdits|auto|dontAsk|plan|bypass] "task"'); process.exit(2); }
+  const json = arg('output') === 'json';
+  if (!prompt && !workflow && !arg('resume')) { console.error('usage: npm run cli -- [--model id] [--runtime docker|local] [--dir path] [--mode default|acceptEdits|auto|dontAsk|plan|bypass] [--max-steps n] [--max-cost usd] [--max-minutes n] [--output text|json] "task"'); process.exit(2); }
+  // Limits from flags, read where every session's settings are (an operator settings file still wins).
+  for (const [flag, env] of [['max-steps', 'HARNESS_MAX_STEPS'], ['max-cost', 'HARNESS_MAX_COST_USD'], ['max-minutes', 'HARNESS_MAX_TURN_MINUTES']] as const) {
+    const v = arg(flag);
+    if (v === undefined) continue;
+    if (!Number.isFinite(Number(v)) || Number(v) < 0) { console.error(`--${flag} needs a number`); process.exit(2); }
+    process.env[env] = v;
+  }
+  // With --output json, stdout carries only the result object; progress goes to stderr.
+  const log = json ? (...a: unknown[]) => console.error(...a) : (...a: unknown[]) => console.log(...a);
   const dataDir = path.resolve(arg('data', path.join(os.tmpdir(), 'harness-cli'))!);
   const runtime = (arg('runtime', 'local') === 'docker' ? 'docker' : 'local') as 'docker' | 'local';
   const dir = arg('dir');
@@ -56,14 +91,18 @@ async function main() {
     runtime: { kind: runtime, network: arg('network') === 'full' ? 'full' : 'none', ...(dir ? { path: path.resolve(dir) } : {}), ...(runtime === 'docker' && arg('image') ? { image: arg('image') } : {}) },
   });
   if (!s) { console.error(`no session ${existing} in ${dataDir}`); process.exit(2); }
-  console.log(`session ${s.meta.id} workspace ${s.workspace}`);
+  log(`session ${s.meta.id} workspace ${s.workspace}`);
+  let reason = 'done' as TurnEndReason;
+  let lastError: string | undefined;
   const done = new Promise<void>((resolve) => {
     s.subscribe(0, ({ event }) => {
-      printEvent(event);
+      if (!json) printEvent(event);
+      if (event.kind === 'notice' && event.level === 'error' && !event.agent) lastError = event.text;
+      if (event.kind === 'turn_end' && !event.agent) reason = event.reason;
       if (event.kind === 'permission_request') s.respond(event.requestId, { decision: 'allow' });
       if (event.kind === 'question') s.respond(event.requestId, { decision: 'answer', answer: 'Use your best judgement.' });
       if (event.kind === 'plan_proposed') s.respond(event.requestId, { decision: 'approve' });
-      if (event.kind === 'approval_request') { console.log(`\n[approval] ${event.title}: auto-approved (headless)`); s.respond(event.requestId, { decision: 'approve' }); }
+      if (event.kind === 'approval_request') { log(`\n[approval] ${event.title}: auto-approved (headless)`); s.respond(event.requestId, { decision: 'approve' }); }
       if (event.kind === 'turn_end' && !event.agent) resolve();
     });
   });
@@ -79,10 +118,16 @@ async function main() {
     await s.send(prompt);
   }
   await done;
+  const spans = await s.readTrace();
+  if (json) {
+    const result = headlessResult(s, reason, spans, reason === 'error' ? lastError : undefined);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    await h.close();
+    process.exit(result.exitCode);
+  }
   const u = s.meta.usage;
   const total = u.input + u.cacheRead + u.cacheWrite;
   console.log(`\ntotal: $${s.meta.cost.toFixed(5)} | input ${total} (cache hit ${total ? Math.round((u.cacheRead / total) * 100) : 0}%) | output ${u.output}`);
-  const spans = await s.readTrace();
   const models = spans.filter((x) => x.type === 'model');
   const tools = spans.filter((x) => x.type === 'tool');
   const byAgent = new Map<string, { calls: number; cost: number }>();
@@ -90,6 +135,14 @@ async function main() {
   if (byAgent.size > 1) console.log(`per agent: ${[...byAgent].map(([a, b]) => `${a} ${b.calls} calls $${b.cost.toFixed(4)}`).join(' | ')}`);
   console.log(`trace: ${models.length} model calls (${Math.round(models.reduce((a, x) => a + x.ms, 0) / 1000)}s), ${tools.length} tool calls (${tools.filter((x) => x.type === 'tool' && x.error).length} errors)`);
   await h.close();
+  process.exitCode = EXIT_CODES[reason] ?? 1;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main().catch((e) => { console.error(e); process.exit(1); });
+// pathToFileURL: on Windows the module URL is file:///C:/..., never file://C:\...
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  main().catch((e) => {
+    if (arg('output') === 'json') process.stdout.write(`${JSON.stringify({ reason: 'error', exitCode: 1, error: (e as Error).message ?? String(e) })}\n`);
+    else console.error(e);
+    process.exit(1);
+  });
+}

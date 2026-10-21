@@ -70,7 +70,12 @@ Headless, for scripts and CI:
 
 ```bash
 npm run cli -- --model deepseek-flash --runtime local --dir ./project "Add input validation to the API and tests for it"
+npm run cli -- --output json --max-steps 60 --max-cost 0.50 --max-minutes 20 --dir ./project "Fix the failing test"
 ```
+
+- `--output json` prints one JSON object on stdout when the run ends (progress goes to stderr): `reason` (`done`, `max_steps`, `budget`, `time`, `refusal`, `max_tokens`, `aborted`, `error`), `exitCode`, `text` (the agent's final reply), `sessionId`, `cost`, `tokens` (`input`, `uncached`, `cacheRead`, `cacheWrite`, `output`), `cacheHit` (0-1), `modelCalls`, `toolCalls`, and `error` when it failed.
+- **Exit codes** say how the run ended, with or without `--output json`: 0 done, 1 error, 2 bad arguments, 3 step limit, 4 spend limit, 5 time limit, 6 the model refused, 7 cut off at the output limit, 130 interrupted.
+- `--max-steps`, `--max-cost` (USD) and `--max-minutes` (per turn) set `HARNESS_MAX_STEPS`, `HARNESS_MAX_COST_USD` and `HARNESS_MAX_TURN_MINUTES` for the run; an operator settings file (`HARNESS_SETTINGS`) still wins.
 
 As a library:
 
@@ -87,7 +92,7 @@ await s.send('Fix the failing tests');
 `src/core/agent.ts` runs one loop that the model drives: call the model, run the tools it asked for, append the results, and repeat until it answers without a tool call.
 
 - **Tool scheduling.** Read-only calls in one turn run in parallel; everything else runs in order.
-- **Limits.** The loop stops at a step limit, a session spend limit, a refusal, or when the user presses Stop.
+- **Limits.** The loop stops at a step limit, a session spend limit, a time limit per turn (`maxTurnMinutes`, `HARNESS_MAX_TURN_MINUTES`; off by default), a refusal, or when the user presses Stop. Each has its own end reason (`max_steps`, `budget`, `time`, `refusal`, `aborted`).
 - **Errors come back as repair instructions, not crashes.** The research found that how failures are returned is a main reason harnesses differ:
   - An invalid JSON argument returns the parse error and the expected schema.
   - An unknown tool returns the list of real tools.
@@ -102,11 +107,11 @@ await s.send('Fix the failing tests');
 
 | Lever | How |
 |---|---|
-| **Prompt caching** | Built in from the start. The system prompt (~560 tokens) is identical for every session. Tools never change mid-session and are sorted by name. History only grows; reminders are appended. Claude gets one explicit breakpoint plus automatic tail caching. OpenAI gets `prompt_cache_key` and replayed encrypted reasoning. DeepSeek's prefix cache is kept byte-identical. Measured: **81–99% of input tokens read from cache** in every validation run. |
+| **Prompt caching** | Built in from the start. The system prompt (~560 tokens) is identical for every session (an output style, chosen when a session is made, appends to it and stays fixed for that session). Tools never change mid-session and are sorted by name. History only grows; reminders are appended. Claude gets one explicit breakpoint plus automatic tail caching. OpenAI gets `prompt_cache_key` and replayed encrypted reasoning. DeepSeek's prefix cache is kept byte-identical. Measured: **81–99% of input tokens read from cache** in every validation run. |
 | **Deferred MCP schemas** | Past 10 MCP tools, the session declares only `tool_search` + `tool_call`. Schemas are fetched on demand and appended, so the cache keeps hitting. With 30 tools, the MCP part of the prompt went from ~1,240 to ~160 tokens; real servers' schemas are far larger. |
-| **Skills** | One line per skill sits in context. The full instructions load only when the task needs them. |
+| **Skills** | One line per skill sits in context. The full instructions load only when the task needs them. They are never cleared (by the harness or by Claude's server-side clearing), and after the harness's own compaction the three most recently loaded skills are re-attached (up to 4K tokens each, 8K in all), as Claude Code does. |
 | **Sub-agents** | Exploration and review run in their own context and return a report, not their transcript. They can run on another model (`HARNESS_SUBAGENT_MODEL`, or a `model:` in the agent definition). |
-| **Context clearing** | Old tool results are cleared in large batches. Claude does it on the server (context editing, so the transcript stays append-only); OpenAI and DeepSeek do it in the harness, only past 60% of the compaction threshold and only if at least 12K tokens are freed. The stored history keeps everything. |
+| **Context clearing** | Old tool results are cleared in large batches (never the todo list, sub-agent reports or loaded skills). Claude does it on the server (context editing, so the transcript stays append-only); OpenAI and DeepSeek do it in the harness, only past 60% of the compaction threshold and only if at least 12K tokens are freed. The stored history keeps everything. |
 | **Compaction** | Thresholds are set per model for cost. Haiku 5.5 compacts before 100K tokens, where its price rises five times. Claude compacts **on the server** (`compact_20260112`): the summary is made inside the request, with no blocking extra call, and the history stays append-only, which Claude 5.5's preserved-thinking check requires. DeepSeek and GPT-6 Luna use the harness's own compaction: one summary request that reuses the cached context, then nothing older is replayed (the shape Anthropic recommends; OpenAI's server compaction was tried and did not shrink what the next request is billed for). Checked against the current API on 2026-10-21: `compact_20260112` and `clear_tool_uses_20250919` are current; the newer on-demand and keep-tail compaction (`compact-2026-09-04`) exists for harnesses that must edit history and still keep thinking blocks valid, which this one never does on Claude (frozen prefix, appended reminders, no client-side clearing; its own compaction restarts from a summary, which the check allows). |
 | **Code mode** | `run_script`: the model writes a short JavaScript program that calls tools and keeps only what it needs; intermediate results never enter the context. On a 40-file aggregation task it gave the same correct answer at about **half the cost** on all three models. |
 | **Small outputs** | `edit` sends only the changed text and echoes the changed lines (no re-read needed). Command output is trimmed to its head and tail. `read` pages large files. |
@@ -200,6 +205,9 @@ The UI's **Plugins** dialog lists what is loaded, how each plugin was admitted, 
 | `.harness/skills/*/SKILL.md` (and `.claude/skills/*/SKILL.md`) | Skills |
 | `.harness/agents/*.md` (and `.claude/agents/*.md`) | Sub-agents |
 | `.harness/settings.json` | Permission rules and hooks |
+| `.harness/settings.local.json` | The same, personal (gitignored); stacked after `settings.json`, trusted alike |
+| `AGENTS.md` / `CLAUDE.md` / `HARNESS.md`, `*.local.md`, the same in subdirectories | Instructions (see [Instructions, settings and output styles](#instructions-settings-and-output-styles)) |
+| `.harness/output-styles/*.md` (and `.claude/output-styles/*.md`) | Output styles a new session can name |
 | `.mcp.json` | MCP servers (Claude Code's format) |
 
 Repository-defined commands (hooks, stdio MCP servers) run only in a sandboxed session, or with `HARNESS_TRUST_PROJECT=1`. Repository HTTP MCP servers must be public addresses.
@@ -392,13 +400,16 @@ The `computer` tool on a companion's real desktop is in the last column: nothing
 
 In plan mode the agent researches read-only, then presents its plan for approval. "Always allow" in an approval adds a rule for the session. A prefix rule like `bash(npm test:*)` never covers a compound command.
 
+- **The agent can enter plan mode itself** (`enter_plan_mode`) when a task should be researched and agreed before anything changes. Entering only takes permissions away, so nobody is asked; leaving is still the user's approval of the plan (`exit_plan_mode`), after which the session returns to the mode it was in (accept-edits stays accept-edits). It is refused in `dontAsk` (nobody could approve the plan) and `bypass` (the user chose no checks), and sub-agents do not have it.
+- **Where rules come from**, in order: the operator's settings file (`HARNESS_SETTINGS`) and plugin manifests; the person's own settings (per account, `GET`/`PUT /api/me/settings`: permission rules and limits only, never hooks); the project's `.harness/settings.json`, then the personal `.harness/settings.local.json` (allow rules and hooks only where project content is trusted: in a sandbox, or with `HARNESS_TRUST_PROJECT=1`); then "always allow" clicks in the session. Rules add up and are decided deny > ask > allow, so a deny at any level wins, and nothing below the operator can loosen an operator's deny or ask. Limits (`maxSteps`, `maxCostUsd`, `maxTurnMinutes`) come from the operator; a person's settings can only lower them. Changing your settings applies to your live sessions at their next call. Companion sessions read the project's settings files on the user's computer, under the same trust rules.
+
 - **Auto mode**, like Claude Code's: a call that would be asked about is first shown to a small model (`HARNESS_AUTO_MODEL`, else the sub-agent model) with the user's request and whether untrusted content was read. A clear yes runs it; anything else is asked, with the checker's reason. Its cost is charged to the session. Checked live on DeepSeek: `npm test` cleared, posting `.env` to a paste site refused.
 - **Never ask (`dontAsk`)** is for unattended runs (scheduled tasks use it by default): what would be asked is refused, so a run never hangs waiting; allow rules still let work through.
 
 **Untrusted content changes what is asked.** Once a web page, a search result or a service's answer is in the context (also through a sub-agent, at any depth, or a resumed or imported session):
 - **every way out of the session is confirmed**, whatever the mode, bypass aside: a call to a service (any MCP tool, read-only ones too), a URL, a push, and a command on a machine or sandbox with open network. This is the "lethal trifecta" - private data, untrusted content and a way out in one agent - that Willison and GitHub's MCP exploit showed. A sandbox with no network or only the operator's allowlist is not a way out, unless the allowlist carries credentials (the gateway can write to those services). Allow rules do not skip this check, except the operator's own (`HARNESS_SETTINGS`): a rule from the repository, or a click made before the content arrived, is asked again; a repository's hooks can block a call but never allow one. In auto mode these calls go to a person, not to the checking model;
 - **saving to memory or scheduling a prompt** needs a yes, so a page cannot plant instructions for later;
-- **hidden text never reaches the model**: Unicode tag characters (ASCII smuggling), zero-width characters, bidi controls and smuggling variation selectors are stripped from outside content, with a note saying how many; elements a person never sees on a page (`hidden`, `display:none`, `visibility:hidden`, zero font size, `aria-hidden`, hidden inputs) are dropped from fetched pages.
+- **hidden text never reaches the model**: Unicode tag characters (ASCII smuggling), zero-width characters, bidi controls and smuggling variation selectors are stripped from outside content, and so are HTML comments (`<!-- ... -->`) in content that is not a fetched page - an MCP result, a Markdown file, an issue body - as GitHub strips them from issues before its agent reads them; a note says how many of each were removed. Elements a person never sees on a page (`hidden`, `display:none`, `visibility:hidden`, zero font size, `aria-hidden`, hidden inputs) are dropped from fetched pages.
 
 `HARNESS_TAINT_GUARD=off` turns the confirmation off (not recommended). With `HARNESS_INJECTION_SCAN=on`, a small model also reads each outside result for text that tries to instruct the agent (to ignore its task, run something, send data out) and adds a warning to it, like the probes Anthropic runs on web content for Claude in Chrome; one cheap call per outside result. Checked live on DeepSeek: an injected HTML comment flagged, ordinary release notes passed.
 
@@ -408,7 +419,27 @@ In plan mode the agent researches read-only, then presents its plan for approval
 
 ## Hooks
 
-Deterministic steps the model cannot skip, at 14 points: `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact`, `Stop`, `StopFailure`. Five kinds, as in Claude Code:
+Deterministic steps the model cannot skip, at 21 points. The matcher, where there is one, is a regular expression over the name shown:
+
+| Event | When | Matcher | Can |
+|---|---|---|---|
+| `SessionStart` | before the first message of a session | | add context |
+| `SessionEnd` | the session is deleted, the server shuts down (`SIGINT`/`SIGTERM`), or an idle session's sandbox is stopped; `reason` says which | | observe |
+| `UserPromptSubmit` | a message arrives | | block it, add context |
+| `PreToolUse` | before a call, before anyone is asked | tool | block, allow |
+| `PermissionRequest` | a call would be asked about | tool | allow, deny |
+| `PostToolUse` / `PostToolUseFailure` | after a call / after one that failed | tool | add feedback |
+| `FileChanged` | after `write` or `edit` changed a file (`path`, `tool`) | file path | add feedback (a formatter's report) |
+| `InstructionsLoaded` | an instruction file entered the context (`file`, `scope`, `reason`: `session_start`, `compact`, `nested_traversal`) | reason | observe |
+| `TaskCreated` / `TaskCompleted` | a todo item was added / marked done (`task`) | | add feedback; `TaskCompleted` can block, which puts the item back in progress |
+| `ConfigChange` | settings changed through the API: the person's settings or instructions (`user_settings`, `user_instructions`), the session's mode, model or effort (`session`), its allowed hosts (`network`) | | observe |
+| `WorktreeCreate` / `WorktreeRemove` | a worktree session's git worktree was made / is about to be removed (`path`, `branch`, `repository`) | | observe |
+| `Notification` | the agent waits for a person (and on `notify_user`) | | observe |
+| `SubagentStart` / `SubagentStop` | a sub-agent starts / ends | agent | add context / send it back |
+| `PreCompact` / `PostCompact` | around a compaction (`trigger`: `auto`, or `server` for Claude's) | | add what the summary must keep / observe |
+| `Stop` / `StopFailure` | the agent is about to end its turn / the turn failed | | send it back / observe |
+
+Claude Code's `CwdChanged` has no counterpart: every command here runs in a fresh shell started in the workspace, so the working directory never changes between calls. Five kinds, as in Claude Code:
 
 | Kind | How | Answers |
 |---|---|---|
@@ -418,9 +449,28 @@ Deterministic steps the model cannot skip, at 14 points: `SessionStart`, `Sessio
 | `mcp_tool` | calls `tool` on a connected MCP `server` with the event (plus `arguments`) | its text, read like a command hook's stdout |
 | `agent` | a verifying agent (`agent`, default the read-only `explore`) checks the event against `prompt`, looking at the workspace as it needs | ok allows, not ok blocks; it runs without hooks of its own |
 
-- `PreToolUse` runs before anyone is asked: it can block a call or allow it without a prompt. `PermissionRequest` can answer a prompt instead of a person (a policy service, a judging model); deny wins over allow. `PreCompact`'s feedback is added to what the summary must keep. `SubagentStart` adds context to a sub-agent's brief; `SubagentStop` can send a sub-agent back, like `Stop` for the main agent. `Notification` fires whenever the agent waits for a person (and on `notify_user`), so an `http` hook can reach a chat channel or a phone.
+- `PreToolUse` runs before anyone is asked: it can block a call or allow it without a prompt. `PermissionRequest` can answer a prompt instead of a person (a policy service, a judging model); deny wins over allow. `PreCompact`'s feedback is added to what the summary must keep; for Claude's server-side compaction, which happens inside a request, PreCompact runs once as the context passes 80% of the compaction point and its feedback goes into the compaction instructions sent with each request until it happens. `SubagentStart` adds context to a sub-agent's brief; `SubagentStop` can send a sub-agent back, like `Stop` for the main agent. `Notification` fires whenever the agent waits for a person (and on `notify_user`), so an `http` hook can reach a chat channel or a phone.
 - **Who may configure what.** The operator's settings file (`HARNESS_SETTINGS`, JSON with `permissions`, `hooks` and limits; a file that cannot be read stops the server rather than dropping its rules) and plugin manifests take every kind; a plugin's `http` hook goes only to its declared hosts and reads only its declared secrets. A repository's `.harness/settings.json` adds only `command` hooks, which run in its sandbox: an `http` hook would run on the server.
 - In-process hooks from code plugins (`api.on(event, handler)`) answer `{ block?, feedback?, decision? }`.
+- A person's own settings (`/api/me/settings`) never carry hooks: a command there would run on the server's host for a server folder, and `http` and `prompt` hooks are the operator's to configure.
+
+## Instructions, settings and output styles
+
+**Instruction files**, in the tiers Claude Code reads, all in the first user message (never the system prompt, which stays the same for every session so it caches), in this order:
+
+| Tier | Where | |
+|---|---|---|
+| managed | `HARNESS_INSTRUCTIONS`: a file the operator names | for every session; a named file that cannot be read stops the turn rather than running without it |
+| user | the person's own, per account (`GET`/`PUT /api/me/instructions`, up to 24,000 characters) | for every session they own |
+| project | `AGENTS.md`, `CLAUDE.md`, `HARNESS.md` at the workspace root | |
+| local | `AGENTS.local.md`, `CLAUDE.local.md`, `HARNESS.local.md` at the root | personal and gitignored; workspace content like the project's |
+| nested | the same files in a subdirectory | loaded the first time the agent reads or edits a file under it, appended as a reminder after that call's results (once per context) |
+
+A workspace instruction file can import others with `@path` (relative to the file, inside the workspace only, up to four levels deep; not inside code blocks or code spans), each shown with the file that imported it. 32,000 characters in all for the opening tiers, the managed file first. The managed and user files do not import.
+
+**Settings** come in levels too (operator, person, project and its local file, session): see [Permissions](#permissions).
+
+**Output styles** set how the agent writes its replies. A session picks one when it is made (`outputStyle` in `POST /api/sessions`, or the new-session form): `default`, `concise`, `explanatory`, a workspace's `.harness/output-styles/<name>.md` (or `.claude/output-styles`), or an operator plugin's (manifest `"outputStyles": "<folder>"`). The style's text is appended to the system prompt and stored with the session when it is made, so the system prompt never changes during the session and the cache keeps hitting; sub-agents keep the shared sub-agent prompt.
 
 ## Where the agent works
 
@@ -615,6 +665,8 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 | `HARNESS_TOKEN` | random, printed | Browser access token. Put the server behind HTTPS before exposing it. |
 | `HARNESS_DATA` | `./.harness-data` | Sessions, workspaces, companions. |
 | `HARNESS_MAX_STEPS` / `HARNESS_MAX_COST_USD` | 150 / 5 | Per turn / per session. |
+| `HARNESS_MAX_TURN_MINUTES` | 0 (off) | Wall-clock minutes a turn may run before it stops with the reason `time`. |
+| `HARNESS_INSTRUCTIONS` | | The operator's instruction file for every session (the managed tier). |
 | `HARNESS_COMPACT_AT` | per model | Prompt tokens before compaction. |
 | `HARNESS_SUBAGENT_MODEL` | session model | E.g. run sub-agents on `deepseek-flash`. |
 | `HARNESS_MCP_INLINE_MAX` | 10 | Above this many MCP tools, schemas load on demand. |
@@ -658,7 +710,7 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 | companion `--allow-desktop` | off | The `computer` tool on the user's real screen, mouse and keyboard through that companion (each action approved; see Computer use). |
 | `HARNESS_TEST_REAL_DESKTOP` | off | `1`: the desktop test takes a real screenshot and moves the pointer on the machine running the tests (never in a normal run). |
 | `HARNESS_PRICING_JSON` | | Override prices per model. |
-| `HARNESS_SETTINGS` | | The operator's settings file (JSON: `permissions`, `hooks` of every kind, `maxSteps`, `maxCostUsd`, `compactAt`, `subagentModel`, `autoModel`, `gatesOnStop`, `maxSubagentDepth`, `maxParallelSubagents`). |
+| `HARNESS_SETTINGS` | | The operator's settings file (JSON: `permissions`, `hooks` of every kind, `maxSteps`, `maxCostUsd`, `maxTurnMinutes`, `compactAt`, `subagentModel`, `autoModel`, `gatesOnStop`, `maxSubagentDepth`, `maxParallelSubagents`). |
 | `HARNESS_AUTO_MODEL` | sub-agent model | The model that checks calls in auto mode. |
 | `HARNESS_TAINT_GUARD` | on | `off` stops confirming ways out after untrusted content (not recommended). |
 | `HARNESS_SANDBOX_CREDENTIALS` | | API credentials allowlist sandboxes use through their proxy: `openai`, `anthropic`, `deepseek`, `github` (`HARNESS_SANDBOX_GITHUB_TOKEN`), and/or the path of a JSON file of `{name, upstream, headers, env}`. |

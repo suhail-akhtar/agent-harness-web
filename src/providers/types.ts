@@ -27,6 +27,8 @@ export interface ProviderRequest {
   cacheKey: string;
   /** Where the context should be compacted (HARNESS_COMPACT_AT, else the model's point); providers that compact themselves use it. */
   compactAt?: number;
+  /** What PreCompact hooks asked a provider-side summary to keep (added to its instructions). */
+  compactKeep?: string;
   signal: AbortSignal;
   onText?: (delta: string) => void;
   onReasoning?: (delta: string) => void;

@@ -34,8 +34,9 @@ import { type CheckpointFiles, Checkpoints } from './checkpoints.ts';
 import { fireHooks, type HookJudge, type HookRunners, runHooks } from './hooks.ts';
 import type { Effort, ModelSpec } from './models.ts';
 import { costOf } from './models.ts';
-import { environmentBlock, firstMessageText, projectInstructions, SUBAGENT_PROMPT, SYSTEM_PROMPT } from './prompt.ts';
-import { loadProjectSettings, mergeSettings, operatorSettings, type Settings } from './settings.ts';
+import { loadInstructions, workspaceReader } from './instructions.ts';
+import { environmentBlock, firstMessageText, resolveOutputStyle, SUBAGENT_PROMPT, systemPrompt } from './prompt.ts';
+import { applyUserSettings, loadProjectSettings, loadUserInstructions, loadUserSettings, mergeSettings, operatorSettings, type Settings } from './settings.ts';
 import type { HarnessEvent, Message, PermissionMode, SessionStatus, Todo, ToolUseBlock, TurnEndReason, Usage, WorkflowRunView } from './types.ts';
 import { addUsage, emptyUsage } from './types.ts';
 
@@ -80,6 +81,10 @@ export interface SessionMeta {
   tainted?: boolean;
   /** Imported from another server or app: where it came from (title and id there). */
   importedFrom?: string;
+  /** The mode to go back to when a plan the agent entered plan mode for (enter_plan_mode) is approved. */
+  planReturnMode?: PermissionMode;
+  /** How replies are written, fixed at creation (its text is part of this session's system prompt). */
+  outputStyle?: { name: string; prompt: string };
 }
 
 export interface StoredEvent { seq: number; at: number; event: HarnessEvent }
@@ -260,7 +265,7 @@ export class Session {
     return r.kind === 'local' && r.path ? r.path : path.join(this.deps.dataDir, 'workspaces', this.meta.id);
   }
 
-  static async create(deps: SessionDeps, opts: { title?: string; model: string; effort?: Effort; mode?: PermissionMode; runtime: SessionMeta['runtime']; gitUrl?: string; owner?: string; allowHosts?: string[]; /** local with a path: work in a new git worktree of it. */ worktree?: boolean }): Promise<Session> {
+  static async create(deps: SessionDeps, opts: { title?: string; model: string; effort?: Effort; mode?: PermissionMode; runtime: SessionMeta['runtime']; gitUrl?: string; owner?: string; allowHosts?: string[]; /** local with a path: work in a new git worktree of it. */ worktree?: boolean; /** default, concise, explanatory, or a workspace's or plugin's style by name. */ outputStyle?: string }): Promise<Session> {
     const model = deps.registry.model(opts.model);
     const id = crypto.randomBytes(8).toString('hex');
     if (opts.worktree) {
@@ -288,8 +293,29 @@ export class Session {
         if (r.code !== 0) throw new Error(`git clone failed: ${r.stderr.trim().slice(0, 500)}`);
       }
     }
+    if (opts.outputStyle) {
+      // Resolved once, now: the text is stored, so the system prompt never changes under the session.
+      const read = opts.runtime.kind === 'companion' ? workspaceReader(await s.getHost()) : (rel: string) => fs.readFile(path.join(s.workspace, rel), 'utf8').catch(() => null);
+      const style = await resolveOutputStyle(opts.outputStyle, { read, dirs: deps.registry.outputStyleDirs });
+      if (style) s.meta.outputStyle = style;
+    }
     await s.saveMeta();
+    if (s.meta.runtime.worktree) await s.worktreeHook('WorktreeCreate');
     return s;
+  }
+
+  /** WorktreeCreate / WorktreeRemove: they observe (a setup step, a notice); the harness itself makes and removes the worktree. */
+  private async worktreeHook(event: 'WorktreeCreate' | 'WorktreeRemove'): Promise<void> {
+    const w = this.meta.runtime.worktree;
+    if (!w) return;
+    try {
+      const host = await this.getHost();
+      const settings = await this.getSettings(host);
+      const r = await runHooks(settings, host, event, { path: w.dir, branch: w.branch, repository: this.meta.runtime.path ?? '' }, undefined, AbortSignal.timeout(120_000), this.deps.registry.hooks);
+      for (const e of r.errors) this.emit({ kind: 'notice', level: 'warn', text: e });
+    } catch (e) {
+      this.emit({ kind: 'notice', level: 'warn', text: `${event} hooks failed: ${(e as Error).message}` });
+    }
   }
 
   static async load(deps: SessionDeps, id: string): Promise<Session> {
@@ -484,6 +510,7 @@ export class Session {
     await fs.writeFile(tmp, JSON.stringify({ hosts: clean }, null, 1));
     await fs.rename(tmp, this.policyFile());
     this.queued.push(`<system-reminder>The user changed the sandbox's allowed hosts. Now allowed: ${clean.join(', ') || 'none'}.</system-reminder>`);
+    this.configChanged('network', { hosts: clean }).catch(() => {});
     this.emit({ kind: 'notice', level: 'info', text: `Allowed hosts: ${clean.join(', ') || 'none'}` });
     return clean;
   }
@@ -497,9 +524,25 @@ export class Session {
   async stopSandbox(): Promise<void> {
     // Background work keeps the sandbox up while it runs.
     if (this.host instanceof DockerHost && this.status === 'idle' && !this.tasks.running().length) {
+      await this.end('idle');
       if (this.toolbox) { (await this.toolbox).closeProject().catch(() => {}); this.toolbox = undefined; this.agent = undefined; }
       await this.host.stop();
     }
+  }
+
+  /** SessionEnd ran for this stretch of activity (a new turn starts another). */
+  private ended = false;
+
+  /**
+   * SessionEnd hooks, while the session's host still exists (a cleanup command, a final
+   * report): when it is deleted, when the server shuts down, and when an idle session's
+   * sandbox is stopped. Only a session that ran in this process has hooks to run.
+   */
+  async end(reason: 'deleted' | 'shutdown' | 'idle'): Promise<void> {
+    if (!this.settings || !this.host || this.ended) return;
+    this.ended = true;
+    const r = await runHooks(this.settings, this.host, 'SessionEnd', { reason, cost: this.meta.cost, turns: this.meta.turns ?? 0 }, undefined, AbortSignal.timeout(60_000), this.deps.registry.hooks).catch(() => undefined);
+    for (const e of r?.errors ?? []) console.error(`session ${this.meta.id}: ${e}`);
   }
 
   async destroy(): Promise<void> {
@@ -507,11 +550,8 @@ export class Session {
     // Background shells end with their session.
     clearInterval(this.shellTimer);
     await Promise.all(this.tasks.running('shell').map((t) => t.stop().catch(() => {})));
-    // SessionEnd hooks run while the session's host still exists (a cleanup command, a final report).
-    if (this.settings && this.host) {
-      const r = await runHooks(this.settings, this.host, 'SessionEnd', { reason: 'deleted', cost: this.meta.cost, turns: this.meta.turns ?? 0 }, undefined, AbortSignal.timeout(60_000), this.deps.registry.hooks).catch(() => undefined);
-      for (const e of r?.errors ?? []) console.error(`session ${this.meta.id}: ${e}`);
-    }
+    await this.end('deleted');
+    if (this.meta.runtime.worktree) await this.worktreeHook('WorktreeRemove');
     if (this.toolbox) await (await this.toolbox).closeProject().catch(() => {});
     if (this.host instanceof DockerHost) await this.host.close();
     // Writes still queued (trace, meta) would land in a folder being removed: wait for them,
@@ -531,18 +571,46 @@ export class Session {
   }
 
   private async getSettings(host: ToolHost): Promise<Settings> {
-    if (this.settings) return this.settings;
-    const project = host.kind === 'companion' ? {} : await loadProjectSettings(host.root);
+    this.settings ??= await this.loadSettings(host);
+    return this.settings;
+  }
+
+  /**
+   * The levels, in order: the operator's (HARNESS_SETTINGS and plugin manifests), the
+   * owner's own (/api/me/settings), the project's (.harness/settings.json, then the
+   * personal .harness/settings.local.json), then "always allow" clicks in the session.
+   * Rules add up and are decided deny > ask > allow, so a deny at any level wins and
+   * nothing below the operator can loosen the operator's deny or ask rules.
+   */
+  private async loadSettings(host: ToolHost): Promise<Settings> {
+    // A companion's project files are on the user's computer: read through it, under the same trust rules.
+    const project = host.kind === 'companion'
+      ? await loadProjectSettings(async (rel) => (host.readFile ? (await host.readFile(rel, AbortSignal.timeout(15_000)).catch(() => null))?.toString('utf8') ?? null : null))
+      : await loadProjectSettings(host.root);
     // The operator's settings file (HARNESS_SETTINGS) first: rules and hooks of any kind.
     const base = await operatorSettings();
     // Operator hooks from plugin manifests apply everywhere.
     for (const [ev, specs] of Object.entries(this.deps.registry.shellHooks)) {
       (base.hooks[ev as keyof Settings['hooks']] ??= []).push(...(specs ?? []));
     }
+    const mine = applyUserSettings(base, await loadUserSettings(this.deps.dataDir, this.meta.owner));
     // Project hooks and allow-rules are repository content: trusted only when
     // commands are sandboxed.
-    this.settings = mergeSettings(base, project, this.projectTrusted(host));
-    return this.settings;
+    return mergeSettings(mine, project, this.projectTrusted(host));
+  }
+
+  /**
+   * Settings changed outside the session (the owner's, through the API): read them
+   * again now, so the next call is decided by the new rules, and tell ConfigChange
+   * hooks. The session's own changes (mode, model, allowed hosts) only tell them.
+   */
+  async configChanged(source: 'user_settings' | 'user_instructions' | 'session' | 'network', detail: Record<string, unknown> = {}): Promise<void> {
+    if (!this.settings || !this.host) return;
+    if (source === 'user_settings') {
+      this.settings = await this.loadSettings(this.host);
+      if (this.agent) this.agent.cfg = { ...this.agent.cfg, settings: this.settings, maxSteps: this.settings.maxSteps };
+    }
+    fireHooks(this.settings, this.host, 'ConfigChange', { source, ...detail }, this.deps.registry.hooks, (m) => this.emit({ kind: 'notice', level: 'warn', text: m }));
   }
 
   private rules(): Settings['permissions'] {
@@ -704,7 +772,7 @@ export class Session {
   }
 
   /** The opening context. The main agent also gets its memory; sub-agents are briefed by it instead. */
-  private async preamble(host: ToolHost, main = true): Promise<string> {
+  private async preamble(host: ToolHost, main = true, reason: 'session_start' | 'compact' = 'session_start'): Promise<string> {
     let branch: string | undefined;
     if (host.kind !== 'companion') {
       const r = await run('git', ['-C', host.root, 'rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: 5000 });
@@ -712,7 +780,14 @@ export class Session {
     }
     const tb = await this.getToolbox(host);
     const memory = main ? await (await this.memoryStore())?.briefing().catch(() => '') : '';
-    return firstMessageText(await environmentBlock(host, { gitBranch: branch }), [await projectInstructions(host), memory, skillsListing(tb.skills)].filter(Boolean).join('\n\n'), '');
+    // Instructions in tiers: the operator's (HARNESS_INSTRUCTIONS), the owner's, the project's, the personal local file.
+    const instructions = await loadInstructions(host, { managedFile: process.env.HARNESS_INSTRUCTIONS?.trim() || undefined, user: await loadUserInstructions(this.deps.dataDir, this.meta.owner) });
+    if (main) {
+      for (const f of instructions.files) {
+        fireHooks(this.settings, host, 'InstructionsLoaded', { file: f.source, scope: f.scope, reason, ...(f.importedBy ? { importedBy: f.importedBy } : {}) }, this.deps.registry.hooks, (m) => this.emit({ kind: 'notice', level: 'warn', text: m }));
+      }
+    }
+    return firstMessageText(await environmentBlock(host, { gitBranch: branch }), [instructions.text, memory, skillsListing(tb.skills)].filter(Boolean).join('\n\n'), '');
   }
 
   private hooksFor(name: string, costSink?: (c: number) => void): AgentHooks {
@@ -747,7 +822,7 @@ export class Session {
       takeQueuedUserText: () => (name === 'main' ? this.queued.splice(0) : this.subs.get(name)?.queue.splice(0) ?? []),
       todos: () => this.meta.todos,
       setTodos: (t) => { this.meta.todos = t; this.scheduleSave(); },
-      preamble: async () => this.preamble(await this.getHost(), name === 'main'),
+      preamble: async () => this.preamble(await this.getHost(), name === 'main', 'compact'),
       latestUserPrompt: () => this.latestPrompt,
     };
   }
@@ -758,7 +833,7 @@ export class Session {
     const tb = await this.getToolbox(host);
     const model = this.deps.registry.model(this.meta.model);
     const cfg = {
-      name: 'main', model, provider: this.deps.registry.provider(model), effort: this.meta.effort, system: SYSTEM_PROMPT, tools: tb.tools, host, settings,
+      name: 'main', model, provider: this.deps.registry.provider(model), effort: this.meta.effort, system: systemPrompt(this.meta.outputStyle?.prompt), tools: tb.tools, host, settings,
       cacheKey: `hw-${this.meta.id}`, maxSteps: settings.maxSteps, readFiles: this.readFiles,
       inProcessHooks: [...this.deps.registry.hooks, ...this.gatesOnStopHook(settings)],
       hookJudge: this.hookJudge(settings),
@@ -768,6 +843,7 @@ export class Session {
       runSubagent: (a: { description: string; prompt: string; type: string }) => this.runSubagent(a, 1, this.agent),
       askUser: (q: string, o: string[]) => this.ask(q, o),
       proposePlan: (p: string) => this.proposePlan(p),
+      enterPlanMode: (reason: string) => this.enterPlanMode(reason),
       beforeWrite: this.checkpoints ? (p: string) => this.checkpoints!.before(p) : undefined,
       services: await this.services(true),
       onTaint: () => { if (!this.meta.tainted) { this.meta.tainted = true; this.saveMeta().catch(() => {}); } },
@@ -1354,6 +1430,7 @@ export class Session {
     const signal = this.abortCtl.signal;
     this.setStatus('running');
     this.meta.turns = (this.meta.turns ?? 0) + 1;
+    this.ended = false;
     try {
       await this.mainAgent();
       this.checkpoints?.begin(this.meta.turns, `workflow ${w.name}`);
@@ -1453,16 +1530,36 @@ export class Session {
   private async proposePlan(plan: string): Promise<{ approved: boolean; feedback?: string }> {
     const r = await this.request('plan', { kind: 'plan_proposed', requestId: crypto.randomUUID(), plan });
     if (r.decision === 'approve' || r.decision === 'approve_accept_edits') {
-      this.setMode(r.decision === 'approve_accept_edits' ? 'acceptEdits' : 'default');
+      // A plan the agent chose to make returns to the mode it left; one the user asked for, to default.
+      this.setMode(r.decision === 'approve_accept_edits' ? 'acceptEdits' : this.meta.planReturnMode ?? 'default');
       return { approved: true };
     }
     return { approved: false, feedback: r.feedback };
+  }
+
+  /**
+   * enter_plan_mode: the agent restricts itself to research and a plan. Entering only
+   * takes permissions away, so nobody is asked; it is refused where nobody could
+   * approve the plan (dontAsk: unattended) or the user chose no checks at all (bypass).
+   */
+  private enterPlanMode(reason: string): { ok: boolean; reason?: string } {
+    const was = this.meta.mode;
+    if (was === 'plan') return { ok: true };
+    if (was === 'dontAsk' || was === 'bypass') return { ok: false, reason: `This session runs in ${was} mode (${was === 'dontAsk' ? 'unattended: nobody could approve a plan' : 'the user chose no checks'}); proceed without plan mode.` };
+    this.meta.mode = 'plan';
+    this.meta.planReturnMode = was;
+    this.emit({ kind: 'mode', mode: 'plan' });
+    this.emit({ kind: 'notice', level: 'info', text: `The agent switched to plan mode${reason ? `: ${reason}` : ''}. It will present a plan for approval before changing anything.` });
+    this.scheduleSave();
+    return { ok: true };
   }
 
   setMode(mode: PermissionMode): void {
     if (this.meta.mode === mode) return;
     const was = this.meta.mode;
     this.meta.mode = mode;
+    // The user (or an approved plan) chose a mode: where the agent's own plan mode would have returned is moot.
+    delete this.meta.planReturnMode;
     this.emit({ kind: 'mode', mode });
     // Tell the model on its next turn, by appending (never by editing the system prompt).
     if (mode === 'plan') this.queued.push('<system-reminder>Plan mode is on: research with read-only tools, then present your plan with exit_plan_mode. Do not edit files or run commands that change anything.</system-reminder>');
@@ -1484,6 +1581,8 @@ export class Session {
     }
     if (patch.mode) this.setMode(patch.mode);
     this.scheduleSave();
+    const changed = Object.fromEntries((['model', 'effort', 'mode'] as const).filter((k) => patch[k] !== undefined).map((k) => [k, this.meta[k]]));
+    if (Object.keys(changed).length) this.configChanged('session', changed).catch(() => {});
   }
 
   // ---------- turns ----------
@@ -1512,6 +1611,7 @@ export class Session {
     this.setStatus('running');
     this.meta.turns = (this.meta.turns ?? 0) + 1;
     this.meta.running = true;
+    this.ended = false;
     await this.saveMeta().catch(() => {});
     let reason: TurnEndReason = 'done';
     try {

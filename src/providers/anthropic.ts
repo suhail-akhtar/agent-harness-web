@@ -118,7 +118,7 @@ export class AnthropicProvider implements Provider {
 }
 
 /** The request body (without betas). Exported for tests: caching depends on its exact shape. */
-export function anthropicBody(req: Pick<ProviderRequest, 'model' | 'system' | 'tools' | 'messages' | 'effort' | 'compactAt'>, contextEditing: boolean, serverCompaction = false): Record<string, unknown> {
+export function anthropicBody(req: Pick<ProviderRequest, 'model' | 'system' | 'tools' | 'messages' | 'effort' | 'compactAt' | 'compactKeep'>, contextEditing: boolean, serverCompaction = false): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: req.model.id,
     max_tokens: req.model.maxOutput,
@@ -141,11 +141,13 @@ export function anthropicBody(req: Pick<ProviderRequest, 'model' | 'system' | 't
         trigger: { type: 'input_tokens', value: Math.round((req.compactAt ?? req.model.compactAt) * 0.6) },
         keep: { type: 'tool_uses', value: 6 },
         clear_at_least: { type: 'input_tokens', value: 12_000 },
-        exclude_tools: ['todo_write', 'agent'],
+        // As the harness's own clearing: the todo list, sub-agent reports and loaded skills stay.
+        exclude_tools: ['todo_write', 'agent', 'skill'],
       }, ...(serverCompaction ? [{
         type: 'compact_20260112',
         trigger: { type: 'input_tokens', value: Math.max(COMPACT_MIN, req.compactAt ?? req.model.compactAt) },
-        instructions: COMPACT_INSTRUCTIONS,
+        // PreCompact hooks' feedback reaches the server's summary too.
+        instructions: req.compactKeep ? `${COMPACT_INSTRUCTIONS}\n\nAlso keep:\n${req.compactKeep}` : COMPACT_INSTRUCTIONS,
       }] : [])],
     };
   }

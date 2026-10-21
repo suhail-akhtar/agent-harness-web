@@ -1,11 +1,14 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { ToolHost } from '../runtime/host.ts';
+import { parseFrontmatter } from '../util/frontmatter.ts';
+import { loadInstructions } from './instructions.ts';
 import type { Todo } from './types.ts';
 
 // The system prompt is short and FROZEN: byte-identical for every session, so
-// one cache entry serves them all. Everything that varies (date, workspace,
-// project instructions) goes in the first user message instead. Most of the
+// one cache entry serves them all (an output style, chosen when a session is
+// made, appends to it and stays fixed for that session). Everything that varies
+// (date, workspace, instructions) goes in the first user message instead. Most of the
 // behaviour comes from well-shaped tools and the loop, not from prose.
 
 export const SYSTEM_PROMPT = `You are an autonomous software agent. You work in the user's workspace through tools and carry each task through to the end: understand, act, verify, report.
@@ -50,34 +53,46 @@ Include, densely:
 4. Important facts discovered: paths, commands, APIs, conventions, gotchas.
 5. What remains, as a concrete list of next steps, starting with the one in progress.</system-reminder>`;
 
-const MEMORY_FILES = ['AGENTS.md', 'CLAUDE.md', 'HARNESS.md'];
-const MEMORY_MAX = 24_000;
-
-async function readMemoryFile(host: ToolHost, f: string): Promise<string> {
-  if (host.remoteTool) {
-    // On a companion the file lives on the user's machine: read it there and drop the line numbers.
-    const r = await host.remoteTool('read', { path: f }, AbortSignal.timeout(15_000));
-    if (r.is_error || /^\S+ (does not exist|is empty|is a binary)/.test(r.content)) return '';
-    return r.content.split('\n').filter((l) => !l.startsWith('[lines ')).map((l) => l.replace(/^ *\d+\t/, '')).join('\n');
-  }
-  return fs.readFile(path.join(host.root, f), 'utf8');
+/** The workspace's own instruction files (root and local); the session adds the managed and user tiers. */
+export async function projectInstructions(host: ToolHost): Promise<string> {
+  return (await loadInstructions(host)).text;
 }
 
-export async function projectInstructions(host: ToolHost): Promise<string> {
-  const parts: string[] = [];
-  let size = 0;
-  for (const f of MEMORY_FILES) {
-    try {
-      const text = (await readMemoryFile(host, f)).trim();
-      if (!text) continue;
-      const room = MEMORY_MAX - size;
-      if (room <= 0) break;
-      const t = text.length > room ? text.slice(0, room) + '\n[truncated]' : text;
-      parts.push(`<project_instructions source="${f}">\n${t}\n</project_instructions>`);
-      size += t.length;
-    } catch { /* absent */ }
+/**
+ * Output styles: a short instruction on how to reply, appended to the system
+ * prompt. It is fixed when the session is created (the text is stored with it),
+ * so the system prompt stays byte-identical for the whole session and caches.
+ */
+export const OUTPUT_STYLES: Record<string, string> = {
+  concise: 'Keep replies short. Lead with the answer or the result; no preamble, no restating the task, no closing summary beyond what the user needs to act. Prefer a sentence to a list and a list to a table.',
+  explanatory: 'Explain as you work, so the user learns from it: when you choose an approach, read unfamiliar code or make a non-obvious change, add a brief note on why - the codebase\'s patterns, the trade-off, what the alternative would cost. Keep each note to a few sentences and specific to this code.',
+};
+const STYLE_MAX = 4000;
+
+export function systemPrompt(style?: string): string {
+  return style ? `${SYSTEM_PROMPT}\n\n# Output style\n${style}` : SYSTEM_PROMPT;
+}
+
+/**
+ * The style named: built in, the workspace's (.harness/output-styles/<name>.md, or
+ * .claude/output-styles), or an operator plugin's. "default" is none. An unknown
+ * name is an error, so a typo is not silently ignored.
+ */
+export async function resolveOutputStyle(name: string, from: { read?: (rel: string) => Promise<string | null>; dirs?: { dir: string; source: string }[] } = {}): Promise<{ name: string; prompt: string } | undefined> {
+  const n = name.trim();
+  if (!n || n === 'default') return undefined;
+  if (!/^[a-z0-9][\w.-]{0,63}$/i.test(n)) throw new Error(`invalid output style name "${n}"`);
+  if (OUTPUT_STYLES[n]) return { name: n, prompt: OUTPUT_STYLES[n] };
+  const candidates: (() => Promise<string | null>)[] = [
+    ...['.harness/output-styles', '.claude/output-styles'].map((d) => () => from.read?.(`${d}/${n}.md`) ?? Promise.resolve(null)),
+    ...(from.dirs ?? []).map((d) => () => fs.readFile(path.join(d.dir, `${n}.md`), 'utf8').catch(() => null)),
+  ];
+  for (const c of candidates) {
+    const text = await c().catch(() => null);
+    const body = text ? parseFrontmatter(text).body.trim() : '';
+    if (body) return { name: n, prompt: body.slice(0, STYLE_MAX) };
   }
-  return parts.join('\n');
+  throw new Error(`Unknown output style "${n}". Built in: default, ${Object.keys(OUTPUT_STYLES).join(', ')}; or add .harness/output-styles/${n}.md to the workspace.`);
 }
 
 export async function environmentBlock(host: ToolHost, extra?: { gitBranch?: string }): Promise<string> {

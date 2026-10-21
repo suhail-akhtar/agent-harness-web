@@ -1,7 +1,7 @@
 import type { ToolSpec } from '../providers/types.ts';
 import { bashTool, todoTool } from './exec.ts';
 import { editTool, globTool, grepTool, readTool, writeTool } from './files.ts';
-import { askUserTool, exitPlanTool } from './meta.ts';
+import { askUserTool, enterPlanTool, exitPlanTool } from './meta.ts';
 import type { Tool } from './types.ts';
 import { memoryTool } from './memory.ts';
 import { publishTool } from './publish.ts';
@@ -10,7 +10,7 @@ import { webFetchTool, webSearchTool } from './web.ts';
 
 /** Built-in tools. The `agent`, `skill` and MCP tools are made per session from what is registered. */
 import { notifyTool, scheduleTool, workflowTool } from './schedule.ts';
-export const BUILTIN_TOOLS: Tool[] = [askUserTool, bashTool, editTool, exitPlanTool, globTool, grepTool, memoryTool, notifyTool, publishTool, readTool, runScriptTool, scheduleTool, todoTool, webFetchTool, webSearchTool, workflowTool, writeTool];
+export const BUILTIN_TOOLS: Tool[] = [askUserTool, bashTool, editTool, enterPlanTool, exitPlanTool, globTool, grepTool, memoryTool, notifyTool, publishTool, readTool, runScriptTool, scheduleTool, todoTool, webFetchTool, webSearchTool, workflowTool, writeTool];
 
 export function toolByName(name: string): Tool | undefined {
   return BUILTIN_TOOLS.find((t) => t.spec.name === name);

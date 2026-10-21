@@ -2,7 +2,7 @@ import type { Tool } from './types.ts';
 import { str } from './types.ts';
 
 // Tools that talk to the harness rather than the workspace: delegation,
-// questions to the user, and leaving plan mode. They are always declared (the
+// questions to the user, and entering and leaving plan mode. They are always declared (the
 // tool list never changes mid-session, which would break the cache); the
 // harness decides whether a call is valid right now.
 
@@ -23,6 +23,28 @@ export const askUserTool: Tool = {
     const options = Array.isArray(input.options) ? input.options.filter((o): o is string => typeof o === 'string').slice(0, 6) : [];
     const answer = await ctx.askUser(str(input.question), options);
     return { content: `The user answered: ${answer}` };
+  },
+};
+
+/**
+ * The agent's own way into plan mode, for work that should be researched and
+ * agreed before anything changes. Entering only restricts what it may do, so it
+ * needs no approval; leaving is still the user's call (exit_plan_mode).
+ */
+export const enterPlanTool: Tool = {
+  kind: 'meta', parallelSafe: false, remoteable: false,
+  spec: {
+    name: 'enter_plan_mode',
+    description: 'Switch to plan mode before a task that should be researched and agreed before anything changes (large, ambiguous or risky work). You then work read-only and present your plan with exit_plan_mode for the user to approve. Not needed for small, clear tasks.',
+    input_schema: { type: 'object', properties: { reason: { type: 'string', description: 'Why planning first helps here, in one line.' } } },
+  },
+  summarize: () => 'enter plan mode',
+  async run(input, ctx) {
+    if (ctx.isPlanMode?.()) return { content: 'Already in plan mode: research with read-only tools, then present your plan with exit_plan_mode.' };
+    if (!ctx.enterPlanMode) return { content: 'Plan mode is not available here; just proceed with the work.', is_error: true };
+    const r = ctx.enterPlanMode(str(input.reason));
+    if (!r.ok) return { content: r.reason ?? 'Plan mode is not available here; just proceed with the work.', is_error: true };
+    return { content: 'Plan mode is on. Research with read-only tools (no edits, no commands that change anything), then present your plan with exit_plan_mode for the user to approve.' };
   },
 };
 

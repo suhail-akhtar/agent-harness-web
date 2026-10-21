@@ -65,6 +65,8 @@ function NewSession({ config, onClose, onCreated, onCompanions }: { config: Conf
   const [setup, setSetup] = useState('');
   const [sandbox, setSandbox] = useState<'auto' | 'bwrap' | 'seatbelt' | 'docker' | 'off'>('auto');
   const [worktree, setWorktree] = useState(false);
+  const styles = config.outputStyles ?? ['default'];
+  const [style, setStyle] = useState('default');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const create = async () => {
@@ -75,6 +77,7 @@ function NewSession({ config, onClose, onCreated, onCompanions }: { config: Conf
         model, effort: effort || undefined, runtime, network, image: runtime === 'docker' && image && image !== config.runtimes.dockerImage ? image : undefined,
         gitUrl: gitUrl.trim() || undefined, path: runtime === 'local' ? path : undefined, companionId: runtime === 'companion' ? companionId : undefined, mode,
         setup: inDocker && setup.trim() ? setup : undefined, sandbox: runtime === 'local' ? sandbox : undefined, worktree: runtime === 'local' && worktree ? true : undefined,
+        outputStyle: style && style !== 'default' ? style : undefined,
       });
       onCreated(s.id);
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
@@ -168,6 +171,13 @@ function NewSession({ config, onClose, onCreated, onCompanions }: { config: Conf
           {(Object.keys(MODE_LABEL) as Mode[]).map((m) => <option key={m} value={m}>{MODE_LABEL[m]}</option>)}
         </select>
       </label>
+      <label class="field"><span>Reply style (fixed for the session)</span>
+        <select class="input" value={styles.includes(style) ? style : '_custom'} onChange={(e) => { const v = (e.target as HTMLSelectElement).value; setStyle(v === '_custom' ? '' : v); }}>
+          {styles.map((x) => <option key={x} value={x}>{x}</option>)}
+          <option value="_custom">From the workspace (.harness/output-styles)…</option>
+        </select>
+      </label>
+      {!styles.includes(style) && <label class="field"><span>Style name</span><input class="input" placeholder="my-style" value={style} onInput={(e) => setStyle((e.target as HTMLInputElement).value.trim())} /></label>}
       {err && <div class="notice notice-error">{err}</div>}
       <label class="field"><span>Or continue a session exported elsewhere</span>
         <input class="input" type="file" accept="application/json,.json" disabled={busy} onChange={async (e) => {

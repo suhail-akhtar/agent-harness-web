@@ -9,6 +9,7 @@ import { type HookJudge, type HookRunners, runHooks } from './hooks.ts';
 import type { Effort, ModelSpec } from './models.ts';
 import { costOf } from './models.ts';
 import { decide, type Rules, suggestRule } from './permissions.ts';
+import { dirsToward, nestedInstructions } from './instructions.ts';
 import { COMPACT_PROMPT, todosText } from './prompt.ts';
 import { sanitizeUntrusted } from './untrusted.ts';
 import type { HookEvent, Settings } from './settings.ts';
@@ -81,6 +82,7 @@ export interface AgentConfig {
   runSubagent?: ToolContext['runSubagent'];
   askUser?: ToolContext['askUser'];
   proposePlan?: ToolContext['proposePlan'];
+  enterPlanMode?: ToolContext['enterPlanMode'];
   beforeWrite?: ToolContext['beforeWrite'];
   services?: ToolContext['services'];
   /** Called once when untrusted content first enters this context (the session records it). */
@@ -96,6 +98,12 @@ const CLEAR_KEEP = 6;
 /** Rough prompt cost of one attached image (a 1000px-wide render is ~1-1.5k tokens). */
 const IMAGE_TOKENS = 1200;
 const CLEARED = '[Old tool output cleared to keep the context lean. Run the tool again if you need it.]';
+/** Tools whose path leads to a subdirectory's instruction files. */
+const FILE_TOOLS = new Set(['read', 'edit', 'write']);
+/** Skills re-attached after a compaction: the most recent few, within a token budget (as Claude Code does). */
+const SKILLS_KEPT = 3;
+const SKILLS_BUDGET_TOKENS = 8000;
+const SKILL_MAX_TOKENS = 4000;
 
 export class Agent {
   cfg: AgentConfig;
@@ -115,6 +123,13 @@ export class Agent {
   }
   private scriptCalls = 0;
   private stepsSinceTodo = 0;
+  /** Harness notes from this step's tool calls (a subdirectory's instructions), appended after the results. */
+  private notes: string[] = [];
+  /** Subdirectories whose instruction files were already looked for in this context. */
+  private instructionDirs = new Set<string>();
+  /** A provider that compacts on its side: whether PreCompact hooks were asked this cycle, and what they want kept. */
+  private serverPreCompact = false;
+  private compactKeep?: string;
 
   constructor(cfg: AgentConfig, hooks: AgentHooks, messages: Message[] = []) {
     this.cfg = cfg;
@@ -148,6 +163,8 @@ export class Agent {
     const agent = this.cfg.name;
     let stopHookBlocks = 0;
     let continuations = 0;
+    const started = Date.now();
+    const limitMin = this.cfg.settings.maxTurnMinutes ?? 0;
     for (let step = 0; step < this.cfg.maxSteps; step++) {
       if (signal.aborted) return 'aborted';
       const over = this.hooks.overBudget();
@@ -155,11 +172,17 @@ export class Agent {
         this.hooks.emit({ kind: 'notice', level: 'warn', text: over, agent });
         return 'budget';
       }
+      // A wall-clock cap per turn (maxTurnMinutes), checked between steps like the step limit.
+      if (limitMin > 0 && Date.now() - started >= limitMin * 60_000) {
+        this.hooks.emit({ kind: 'notice', level: 'warn', text: `Stopped after ${limitMin} minute(s) of work on this turn (the time limit). Send a message to continue.`, agent });
+        return 'time';
+      }
       if (this.lastPromptTokens > this.compactThreshold()) {
         await this.compact(signal);
         if (signal.aborted) return 'aborted';
       } else {
         this.maybeClear();
+        await this.serverPreCompactHooks(signal);
       }
 
       this.hooks.emit({ kind: 'turn_start', turn: step, agent });
@@ -210,7 +233,7 @@ export class Agent {
       for (const r of results) {
         if (r.images?.length && !this.cfg.model.vision) content.push({ type: 'text', text: `<system-reminder>${r.label} produced ${r.images.length} image(s), but this model cannot view images.</system-reminder>` });
       }
-      for (const r of this.reminders(calls)) content.push({ type: 'text', text: `<system-reminder>${r}</system-reminder>` });
+      for (const r of [...this.notes.splice(0), ...this.reminders(calls)]) content.push({ type: 'text', text: `<system-reminder>${r}</system-reminder>` });
       for (const t of this.hooks.takeQueuedUserText()) {
         content.push({ type: 'text', text: t.startsWith('<system-reminder>') ? t : `The user added while you were working:\n${t}` });
       }
@@ -221,10 +244,28 @@ export class Agent {
     return 'max_steps';
   }
 
+  /**
+   * A provider that compacts on its side (Claude) does it inside a request, with no
+   * moment to ask first: PreCompact hooks run once as the context passes 80% of the
+   * compaction point, and their feedback rides on every request until it happens.
+   */
+  private async serverPreCompactHooks(signal: AbortSignal): Promise<void> {
+    if (this.serverPreCompact || !this.cfg.provider.compactsServerSide?.(this.cfg.model, this.compactAt())) return;
+    if (this.lastPromptTokens < this.compactAt() * 0.8) return;
+    this.serverPreCompact = true;
+    const pre = await this.hookRun('PreCompact', { trigger: 'server', contextTokens: this.lastPromptTokens }, undefined, signal);
+    for (const e of pre.errors) this.hooks.emit({ kind: 'notice', level: 'warn', text: e, agent: this.cfg.name });
+    this.compactKeep = pre.feedback || undefined;
+  }
+
   private recordUsage(resp: ProviderResponse): number {
     const cost = costOf(this.cfg.model, resp.usage);
     this.lastPromptTokens = resp.contextTokens ?? promptTokens(resp.usage);
     if (resp.compacted) {
+      // A new cycle: PreCompact is asked again as the next compaction nears.
+      this.serverPreCompact = false;
+      this.compactKeep = undefined;
+      this.instructionDirs.clear();
       this.hooks.emit({ kind: 'compaction', before: resp.compacted.before, after: this.lastPromptTokens, summaryTokens: resp.compacted.summaryTokens });
       // Compacted on the provider's side: PostCompact hooks still hear of it (nothing waits on them).
       void this.hookRun('PostCompact', { trigger: 'server', before: resp.compacted.before, after: this.lastPromptTokens }, undefined, new AbortController().signal).catch(() => {});
@@ -247,6 +288,7 @@ export class Agent {
       effort: this.cfg.effort,
       cacheKey: this.cfg.cacheKey,
       compactAt: this.compactAt(),
+      ...(this.compactKeep && !compaction ? { compactKeep: this.compactKeep } : {}),
       signal,
       onText: (text) => this.hooks.emit({ kind: 'text_delta', text, agent: this.cfg.name }),
       onReasoning: (text) => this.hooks.emit({ kind: 'reasoning_delta', text, agent: this.cfg.name }),
@@ -374,6 +416,7 @@ export class Agent {
     }
 
     let outcome: ToolOutcome;
+    const todosBefore = name === 'todo_write' ? [...this.hooks.todos()] : undefined;
     try {
       const ctx = this.toolContext(signal);
       const remote = !!this.cfg.host.remoteTool && tool.remoteable;
@@ -411,8 +454,68 @@ export class Agent {
       const fail = await this.hookRun('PostToolUseFailure', { tool: name, input, error: outcome.content.slice(0, 4000) }, name, signal);
       for (const e of fail.errors) this.hooks.emit({ kind: 'notice', level: 'warn', text: e, agent });
       if (fail.feedback) content += `\n<hook_feedback>\n${fail.feedback}\n</hook_feedback>`;
+    } else {
+      // FileChanged: a file the agent wrote or edited, matched by its path (PostToolUse matches the tool).
+      const changed = tool.writesPath?.(input);
+      if (changed) {
+        const fc = await this.hookRun('FileChanged', { path: changed, tool: name }, changed, signal);
+        for (const e of fc.errors) this.hooks.emit({ kind: 'notice', level: 'warn', text: e, agent });
+        if (fc.feedback) content += `\n<hook_feedback>\n${fc.feedback}\n</hook_feedback>`;
+      }
+      if (todosBefore) content += await this.taskHooks(todosBefore, signal);
+      await this.subdirInstructions(name, input, signal);
     }
     return finish(content, !!outcome.is_error || post.blocked, outcome.display, outcome.images, name);
+  }
+
+  /**
+   * As Claude Code does: the first time the agent reads or changes a file under a
+   * subdirectory, that directory's AGENTS.md / CLAUDE.md / HARNESS.md (and their
+   * imports) are appended after the results, so a large repository's per-package
+   * instructions cost nothing until the agent works there.
+   */
+  private async subdirInstructions(name: string, input: Record<string, unknown>, signal: AbortSignal): Promise<void> {
+    if (!FILE_TOOLS.has(name) || typeof input.path !== 'string') return;
+    for (const dir of dirsToward(this.cfg.host, input.path)) {
+      if (this.instructionDirs.has(dir)) continue;
+      this.instructionDirs.add(dir);
+      const found = await nestedInstructions(this.cfg.host, dir).catch(() => undefined);
+      if (!found?.text) continue;
+      this.notes.push(`Instructions for files under ${dir}/ (from ${found.files.map((f) => f.source).join(', ')}), in addition to the project's:\n${found.text}`);
+      for (const f of found.files) {
+        void this.hookRun('InstructionsLoaded', { file: f.source, scope: f.scope, reason: 'nested_traversal', ...(f.importedBy ? { importedBy: f.importedBy } : {}) }, 'nested_traversal', signal)
+          .then((r) => { for (const e of r.errors) this.hooks.emit({ kind: 'notice', level: 'warn', text: e, agent: this.cfg.name }); }).catch(() => {});
+      }
+    }
+  }
+
+  /** TaskCreated and TaskCompleted for the todo items a call added or finished. A TaskCompleted hook that blocks reopens its item. */
+  private async taskHooks(before: Todo[], signal: AbortSignal): Promise<string> {
+    const after = this.hooks.todos();
+    let out = '';
+    const reopen: string[] = [];
+    for (const t of after) {
+      const was = before.find((b) => b.content === t.content);
+      if (!was) {
+        const r = await this.hookRun('TaskCreated', { task: t.content, status: t.status }, undefined, signal);
+        for (const e of r.errors) this.hooks.emit({ kind: 'notice', level: 'warn', text: e, agent: this.cfg.name });
+        if (r.feedback) out += `\n<hook_feedback>\n${r.feedback}\n</hook_feedback>`;
+      }
+      if (t.status === 'completed' && was?.status !== 'completed') {
+        const r = await this.hookRun('TaskCompleted', { task: t.content }, undefined, signal);
+        for (const e of r.errors) this.hooks.emit({ kind: 'notice', level: 'warn', text: e, agent: this.cfg.name });
+        if (r.blocked) {
+          reopen.push(t.content);
+          out += `\nA TaskCompleted hook did not let "${t.content}" be marked done, so it is in progress again: ${r.feedback || 'no reason given'}`;
+        } else if (r.feedback) out += `\n<hook_feedback>\n${r.feedback}\n</hook_feedback>`;
+      }
+    }
+    if (reopen.length) {
+      const next = after.map((t) => (reopen.includes(t.content) ? { ...t, status: 'in_progress' as const } : t));
+      this.hooks.setTodos(next);
+      this.hooks.emit({ kind: 'todos', todos: next });
+    }
+    return out;
   }
 
   private toolContext(signal: AbortSignal): ToolContext {
@@ -428,6 +531,7 @@ export class Agent {
       proposePlan: this.cfg.proposePlan,
       beforeWrite: this.cfg.beforeWrite,
       isPlanMode: () => this.hooks.getMode() === 'plan',
+      enterPlanMode: this.cfg.enterPlanMode,
       services: this.cfg.services,
       callTool: async (name, input) => {
         const r = await this.executeOne({ type: 'tool_use', id: `script_${++this.scriptCalls}`, name, input }, signal);
@@ -514,16 +618,19 @@ export class Agent {
       return;
     }
     const lastUserText = this.hooks.latestUserPrompt();
+    const skills = skillsToKeep(this.messages);
     const parts = [
       '<system-reminder>This session was compacted to save context. The summary below replaces the earlier conversation. Files you read before are no longer in context: read them again before editing.</system-reminder>',
       await this.hooks.preamble(),
       `<summary>\n${summary}\n</summary>`,
+      skills ? `<system-reminder>Skills you had loaded, kept across the compaction (load one again with the skill tool for its full text or files):</system-reminder>\n${skills}` : '',
       todosText(this.hooks.todos()),
       lastUserText ? `<latest_user_message>\n${lastUserText.slice(0, 8000)}\n</latest_user_message>` : '',
       'Continue the work from where it stopped.',
     ].filter(Boolean);
     this.messages = [{ role: 'user', content: [{ type: 'text', text: parts.join('\n\n') }], compactionSummary: true }];
     this.cfg.readFiles.clear();
+    this.instructionDirs.clear();
     this.recentCalls = [];
     this.lastPromptTokens = Math.ceil(parts.join('').length / 4);
     this.hooks.onCompact(this.messages);
@@ -531,6 +638,38 @@ export class Agent {
     const post = await this.hookRun('PostCompact', { trigger: 'auto', before, after: this.lastPromptTokens, summary: summary.slice(0, 8000) }, undefined, signal);
     for (const e of post.errors) this.hooks.emit({ kind: 'notice', level: 'warn', text: e, agent: this.cfg.name });
   }
+}
+
+/**
+ * The skills loaded in a context (skill tool results, /skill commands, and those a
+ * previous compaction kept), the most recent SKILLS_KEPT of them, newest first in
+ * the budget: a skill the agent is following must not vanish with the summary.
+ */
+export function skillsToKeep(messages: Message[]): string {
+  const calls = new Set<string>();
+  for (const m of messages) for (const b of m.content) if (b.type === 'tool_use' && b.name === 'skill' && !b.input.file) calls.add(b.id);
+  const found = new Map<string, string>();
+  for (const m of messages) {
+    for (const b of m.content) {
+      const text = b.type === 'tool_result' && calls.has(b.tool_use_id) && !b.is_error ? b.content
+        : b.type === 'text' && m.role === 'user' && (m.compactionSummary || b.text.includes('<command-name>/')) ? b.text : '';
+      for (const x of text.matchAll(/<skill name="([^"]+)">\n([\s\S]*?)\n<\/skill>/g)) {
+        found.delete(x[1]!);
+        found.set(x[1]!, x[2]!);
+      }
+    }
+  }
+  let room = SKILLS_BUDGET_TOKENS * 4;
+  const kept: string[] = [];
+  for (const [name, body] of [...found].slice(-SKILLS_KEPT).reverse()) {
+    if (room < 400) break;
+    // Each skill gets at most half the budget, so one large skill cannot crowd out the others.
+    const cap = Math.min(room, SKILL_MAX_TOKENS * 4) - 200;
+    const text = body.length > cap ? `${body.slice(0, cap)}\n[skill truncated to fit; load it again for the rest]` : body;
+    room -= text.length;
+    kept.unshift(`<skill name="${name}">\n${text}\n</skill>`);
+  }
+  return kept.join('\n');
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {

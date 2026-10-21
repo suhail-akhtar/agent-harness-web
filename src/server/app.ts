@@ -10,6 +10,8 @@ import { MemoryError, MemoryStore } from '../memory/store.ts';
 import { allowedImages, dockerAvailable, dockerDefaults, imageExists, sessionImage } from '../runtime/docker.ts';
 import { COMPANION_RESULT_LIMIT } from '../runtime/companion.ts';
 import { BundleError, exportSession, importSession } from '../core/portable.ts';
+import { OUTPUT_STYLES } from '../core/prompt.ts';
+import { loadUserInstructions, loadUserSettings, saveUserInstructions, saveUserSettings } from '../core/settings.ts';
 import { McpbError } from '../mcp/mcpb.ts';
 import { resolveIn, walk } from '../tools/paths.ts';
 import { view } from '../tools/tasks.ts';
@@ -315,6 +317,25 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
 
     if (p === '/api/me' && method === 'GET') return send(res, 200, { ...me, spentToday: o.spend?.spentToday(me.id) ?? 0, accounts: (o.users?.size ?? 0) > 0 });
 
+    // ---- a person's own instructions and settings, for every session they own ----
+    if (p === '/api/me/instructions' || p === '/api/me/settings') {
+      const dataDir = harness.dataDir;
+      const settingsRoute = p === '/api/me/settings';
+      if (method === 'GET') return send(res, 200, settingsRoute ? await loadUserSettings(dataDir, me.id) : { content: await loadUserInstructions(dataDir, me.id) });
+      if (method !== 'PUT') throw new HttpError(405, 'method not allowed');
+      const b = await readJson(req);
+      let body: unknown;
+      if (settingsRoute) body = await saveUserSettings(dataDir, me.id, b);
+      else {
+        if (typeof b.content !== 'string') throw new HttpError(400, 'content is required');
+        try { await saveUserInstructions(dataDir, me.id, b.content); } catch (e) { throw new HttpError(400, (e as Error).message); }
+        body = { ok: true };
+      }
+      // Live sessions take new rules at once (instructions at their next start or compaction); ConfigChange hooks hear of it.
+      for (const s of sessions.ownedBy(me.id)) await s.configChanged(settingsRoute ? 'user_settings' : 'user_instructions').catch(() => {});
+      return send(res, 200, body);
+    }
+
     // ---- accounts (administrators) ----
     if (p.startsWith('/api/users')) {
       if (!admin) throw new HttpError(403, 'administrators only');
@@ -348,6 +369,8 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         companions: companions.list().filter((c) => mayUse(me, c.owner)),
         plugins: registry.plugins.map((x) => ({ name: x.name, version: x.version, description: x.description, contributes: x.contributes, signature: x.signature, permissions: x.permissions })),
         search: harness.search ?? null,
+        // Built in and from plugins; a workspace's own (.harness/output-styles) are named by hand.
+        outputStyles: ['default', ...Object.keys(OUTPUT_STYLES), ...(await Promise.all(registry.outputStyleDirs.map(async (d) => (await fs.readdir(d.dir).catch(() => [])).filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3))))).flat()],
         me,
       });
     }
@@ -408,7 +431,8 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         allowHosts: Array.isArray(b.allowHosts) ? b.allowHosts.map(String) : undefined,
         // A server folder that is a git repository can get its own worktree and branch (parallel sessions on one repository).
         worktree: kind === 'local' && !!runtime.path && b.worktree === true,
-      }).catch((e: Error) => { throw e.name === 'WorktreeError' || e.constructor.name === 'WorktreeError' ? new HttpError(400, e.message) : e; });
+        outputStyle: typeof b.outputStyle === 'string' && b.outputStyle ? b.outputStyle : undefined,
+      }).catch((e: Error) => { throw e.name === 'WorktreeError' || e.constructor.name === 'WorktreeError' || /output style/.test(e.message) ? new HttpError(400, e.message) : e; });
       return send(res, 201, s.meta);
     }
 

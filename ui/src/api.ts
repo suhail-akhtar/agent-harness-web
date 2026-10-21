@@ -38,6 +38,8 @@ export interface Config {
   companions: CompanionInfo[];
   plugins?: { name: string; version: string; description: string; contributes: string[]; signature?: string; permissions?: { network?: string[]; secrets?: string[] } }[];
   search?: string | null;
+  /** Output styles a new session may pick (built in and from plugins). */
+  outputStyles?: string[];
   me?: { id?: string; name: string; role: 'admin' | 'member'; email?: string };
 }
 export interface Usage { input: number; cacheRead: number; cacheWrite: number; output: number; reasoning: number }

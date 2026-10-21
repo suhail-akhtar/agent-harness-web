@@ -68,6 +68,7 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void): P
   };
 
   if (m.skills) { reg.skillDirs.push({ dir: within(m.skills), source: m.name }); contributes.push('skills'); }
+  if (m.outputStyles) { reg.outputStyleDirs.push({ dir: within(m.outputStyles), source: m.name }); contributes.push('output-styles'); }
   if (m.agents) {
     for (const a of await loadAgentDir(within(m.agents), m.name)) {
       if (!reg.agents.has(a.name)) reg.agents.set(a.name, a);
