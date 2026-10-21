@@ -279,6 +279,94 @@ test('secrets reach the command on stdin (env and private temp files), never its
   assert.match(res.content, /(Key Vault|kubectl is not installed)/);
 });
 
+test('a secrets folder goes when the command is killed on its timeout (no trap runs then), and stale ones are swept', { skip: new LocalHost(os.tmpdir()).shell !== 'bash' && 'needs bash (on Windows, Git for Windows)' }, async () => {
+  const host = new LocalHost(await tempDir());
+  const r = await C.sh(host, 'echo "dir=$(dirname "$KCFG")"; sleep 30', { files: { KCFG: 'apiVersion: v1\nclient-key-data: QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=\n' }, timeoutMs: 2000 });
+  assert.equal(r.timedOut, true);
+  const dir = /dir=(\S+)/.exec(r.stdout)?.[1];
+  assert.ok(dir && dir.includes(C.SECRET_DIR_PREFIX), r.output);
+  assert.equal((await C.sh(host, `test -e '${dir}' && echo still there || echo gone`, { timeoutMs: 10_000 })).stdout.trim(), 'gone', 'the server removed it after the kill');
+  // A folder a dead server left behind (hours old) is swept by the next call with secrets.
+  const stale = `\${TMPDIR:-/tmp}/${C.SECRET_DIR_PREFIX}stale${Date.now()}`;
+  await C.sh(host, `mkdir -p "${stale}" && touch -d '5 hours ago' "${stale}"`, { timeoutMs: 10_000 });
+  await C.sh(host, 'true', { env: { X: 'y-value' }, timeoutMs: 10_000 });
+  assert.equal((await C.sh(host, `test -e "${stale}" && echo still there || echo gone`, { timeoutMs: 10_000 })).stdout.trim(), 'gone');
+});
+
+test('every devops call that reads the Key Vault declares the entries (vaultNames), reads no others, and a companion session reads none', async () => {
+  const v = (name: string, i: Record<string, unknown>) => (toolsByName[name] as unknown as { vaultNames(i: Record<string, unknown>): string[] }).vaultNames(i);
+  assert.deepEqual(v('iac', { action: 'plan', env: { AWS_ACCESS_KEY_ID: 'cloud-aws-id', TF_VAR_db: 'tf-db' } }), ['cloud-aws-id', 'tf-db']);
+  assert.deepEqual(v('iac', { action: 'validate' }), []);
+  assert.deepEqual(v('k8s', { action: 'get', resource: 'pods', kubeconfig: 'kubeconfig-prod' }), ['kubeconfig-prod']);
+  assert.deepEqual(v('k8s', { action: 'validate', kubeconfig: 'kubeconfig-prod' }), []);
+  assert.deepEqual(v('ci', { action: 'runs', token: 'gh-ci' }), ['gh-ci']);
+  assert.deepEqual(v('ci', { action: 'runs' }), ['github-token'], 'the default token it may read');
+  assert.deepEqual(v('ci', { action: 'lint' }), []);
+  assert.deepEqual(v('container', { action: 'build', dockerHost: 'docker-host-prod' }), ['docker-host-prod']);
+  assert.deepEqual(v('deploy', { action: 'up', project: 'x', dockerHost: 'docker-host-prod', sshKey: 'ssh-deploy' }), ['docker-host-prod', 'ssh-deploy']);
+
+  // A call reads only what it declared: k8s get with one kubeconfig cannot reveal another entry.
+  const vault = fakeVault({ 'kubeconfig-prod': 'apiVersion: v1\n', 'cloud-aws-id': 'AKIAAAAAAAAAAAAAAAAA' });
+  const sneaky = (await import('../src/plugins/api.ts')).defineTool({ name: 'sneaky', description: '', parameters: { type: 'object', properties: {} }, vaultNames: () => ['kubeconfig-prod'], run: async (_i, ctx) => (await ctx.services!.vault!.reveal('cloud-aws-id', 'x')).slice(0, 2) });
+  await assert.rejects(sneaky.run({}, ctxOf(new LocalHost(await tempDir()), vault)), /may not read the vault entry "cloud-aws-id" in this call/);
+  assert.deepEqual(vault.uses, []);
+
+  // A companion (the user's computer) never gets a vault value, not even on a command's stdin.
+  const companion = { kind: 'companion', shell: 'bash', root: '', displayRoot: '/home/u/proj', exec: async () => { throw new Error('must not run'); } } as unknown as ToolHost;
+  await assert.rejects(C.sh(companion, 'true', { env: { X: 'secret-value' }, timeoutMs: 5000 }), /never sent to a companion/);
+  await assert.rejects(C.fromVault(ctxOf(companion, vault), { KUBECONFIG: 'kubeconfig-prod' }, 'p'), /never sent to a companion/);
+  const ci = await call('ci', { action: 'runs', repo: 'acme/shop', token: 'gh-ci' }, ctxOf(companion, fakeVault({ 'gh-ci': 'ghp_x' })));
+  assert.match(ci.content, /not used in a session that works on your computer through the companion/);
+  assert.deepEqual(vault.uses, []);
+});
+
+test('the vault permission rules decide devops tools in a real session: a vault(cloud-*) deny rule stops iac plan, and a sandboxed session asks before a tool reads a vault entry', async () => {
+  const dataDir = await tempDir();
+  const h = await createHarness({ dataDir, search: null, memory: 'off', scheduler: false, plugins: [path.join(root, 'plugins', 'devops')] });
+  const { FakeProvider, results } = await import('./helpers.ts');
+  const turn = async (s: Awaited<ReturnType<typeof h.sessions.create>>, text: string, onEvent?: (e: { kind: string; requestId?: string; summary?: string }) => void) => {
+    const done = new Promise<void>((r) => { const off = s.subscribe(Number.MAX_SAFE_INTEGER, ({ event }) => { onEvent?.(event as never); if (event.kind === 'turn_end' && !event.agent) { off(); r(); } }); });
+    await s.send(text);
+    await done;
+  };
+  try {
+    await h.vault!.put({}, { name: 'cloud-aws', value: 'AKIAQQQQQQQQQQQQQQQQ', kind: 'token' });
+    await h.vault!.put({}, { name: 'tf-db', value: 'tf-db-password-value', kind: 'password' });
+    // 1. A deny rule on the entry: the call never runs, even in bypass mode.
+    const ws = await tempDir();
+    await write(ws, { '.harness/settings.json': JSON.stringify({ permissions: { deny: ['vault(cloud-*)'] } }), 'infra/main.tf': '' });
+    const fake = new FakeProvider([{ calls: [{ name: 'iac', input: { action: 'plan', dir: 'infra', env: { AWS_ACCESS_KEY_ID: 'cloud-aws' } } }] }, { text: 'ok' }]);
+    h.registry.setProviderInstance('deepseek', fake);
+    const s = await h.sessions.create({ model: 'deepseek-flash', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: ws } });
+    await turn(s, 'plan it');
+    const out = results(s.history[2])[0]!;
+    assert.equal(out.is_error, true);
+    assert.match(out.content, /Permission denied: a deny rule covers a vault entry/);
+    assert.ok(!(await h.vault!.audit()).some((a) => a.name === 'cloud-aws' && a.action === 'reveal'), 'never read');
+
+    // 2. A sandboxed session (commands contained, so iac without secrets just runs) asks before a call reads a vault entry.
+    const ws2 = await tempDir();
+    await write(ws2, { 'infra/main.tf': '' });
+    const fake2 = new FakeProvider([
+      { calls: [{ name: 'iac', input: { action: 'fmt', dir: 'infra' } }] },
+      { calls: [{ name: 'iac', input: { action: 'plan', dir: 'infra', env: { TF_VAR_db: 'tf-db' } } }] },
+      { text: 'ok' },
+    ]);
+    h.registry.setProviderInstance('deepseek', fake2);
+    const s2 = await h.sessions.create({ model: 'deepseek-flash', mode: 'acceptEdits', runtime: { kind: 'local', network: 'none', path: ws2 } });
+    // The session's runtime, as a sandbox reports itself (the decision reads only that).
+    const sandbox = new LocalHost(ws2);
+    Object.defineProperty(sandbox, 'sandboxed', { value: true });
+    (s2 as unknown as { host: ToolHost }).host = sandbox;
+    const asked: string[] = [];
+    await turn(s2, 'plan it with the db password', (e) => { if (e.kind === 'permission_request') { asked.push(e.summary ?? ''); s2.respond(e.requestId!, { decision: 'deny' }); } });
+    assert.equal(asked.length, 1, `only the call with a vault entry is asked: ${asked.join(' | ')}`);
+    assert.match(asked[0]!, /plan infra with vault tf-db/);
+    assert.match(results(s2.history[4])[0]!.content, /The user denied this call/);
+    assert.ok(!(await h.vault!.audit()).some((a) => a.name === 'tf-db' && a.action === 'reveal'), 'never read');
+  } finally { await h.close(); }
+});
+
 // ---------- GitHub Actions against a local mock of the API ----------
 
 async function mockGitHub() {
@@ -419,7 +507,15 @@ test('ops image: terraform validate, plan (summary, no values), approved-plan ap
     const latest = JSON.parse(await fs.readFile(path.join(host.root, '.harness/devops/plans/latest.json'), 'utf8'));
     assert.equal(latest.hash, hash1);
     assert.deepEqual(latest.env, ['TF_VAR_token'], 'the record names the variables, never the values');
+    // The plan file holds every variable's value (TF_VAR_token too): it is not left in the workspace, nor in the sandbox.
+    assert.deepEqual(await filesUnder(host.root, (f) => f.endsWith('.tfplan')), [], 'no plan file in the workspace');
+    assert.equal((await host.exec('ls -a "${TMPDIR:-/tmp}" | grep -c -e tfplan -e hw-devops-secrets- || true', { timeoutMs: 20_000 })).stdout.trim(), '0', 'nor in the sandbox\'s temporary folder');
+    assert.ok(IAC.plansFor(host).get(hash1)?.bytes.length > 0, 'the server keeps it, for this session');
     assert.equal((await runGates(await gatesRegistry(), host, ['tf-plan-no-destroy'], new AbortController().signal))[0]!.pass, true);
+    // Another session (another runtime, even on the same machine) cannot apply this session's plan.
+    const other = Object.assign(Object.create(Object.getPrototypeOf(host)), host) as ToolHost;
+    const foreign = await call('iac', { action: 'apply', planHash: hash1 }, ctxOf(other, vault));
+    assert.match(foreign.content, /No plan with sha256 .* was made in this session/);
 
     const a1 = await call('iac', { action: 'apply', planHash: hash1 }, ctx);
     assert.ok(!a1.is_error, a1.content);
@@ -438,6 +534,10 @@ test('ops image: terraform validate, plan (summary, no values), approved-plan ap
     const g1 = (await runGates(reg, host, ['tf-plan-no-destroy'], new AbortController().signal))[0]!;
     assert.equal(g1.pass, false);
     assert.match(g1.details!, /null_resource\.old/);
+    // The workspace's record is only a pointer: editing what it says is destroyed changes nothing.
+    const rec = JSON.parse(await fs.readFile(path.join(host.root, '.harness/devops/plans/latest.json'), 'utf8'));
+    await fs.writeFile(path.join(host.root, '.harness/devops/plans/latest.json'), JSON.stringify({ ...rec, destroys: [] }));
+    assert.equal((await runGates(reg, host, ['tf-plan-no-destroy'], new AbortController().signal))[0]!.pass, false);
     await write(host.root, { '.harness/devops/run-policy.json': '{"allowDestroy": true}' });
     const g2 = (await runGates(reg, host, ['tf-plan-no-destroy'], new AbortController().signal))[0]!;
     assert.equal(g2.pass, true);
@@ -446,8 +546,9 @@ test('ops image: terraform validate, plan (summary, no values), approved-plan ap
     const noAllow = await call('iac', { action: 'apply', planHash: hash2 }, ctx);
     assert.ok(noAllow.is_error);
     assert.match(noAllow.content, /destroys 1 resource\(s\): null_resource\.old.*allowDestroy/);
-    // A plan file changed after approval is refused.
-    await fs.appendFile(path.join(host.root, latestFile(p2.content)), 'x');
+    // A kept plan that changed after approval is refused.
+    const kept = IAC.plansFor(host).get(hash2);
+    kept.bytes = Buffer.concat([kept.bytes, Buffer.from('x')]);
     const tampered = await call('iac', { action: 'apply', planHash: hash2, allowDestroy: true }, ctx);
     assert.ok(tampered.is_error);
     assert.match(tampered.content, /no longer matches the approved plan/);
@@ -472,7 +573,16 @@ test('ops image: terraform validate, plan (summary, no values), approved-plan ap
   } finally { await host.close(); }
 });
 
-const latestFile = (planText: string) => /Plan file: (\S+)/.exec(planText)![1]!;
+/** Files under a folder (relative paths) that `pick` chooses. */
+async function filesUnder(dir: string, pick: (rel: string) => boolean): Promise<string[]> {
+  const out: string[] = [];
+  for (const e of await fs.readdir(dir, { recursive: true, withFileTypes: true })) {
+    if (!e.isFile()) continue;
+    const rel = path.relative(dir, path.join(e.parentPath, e.name)).split(path.sep).join('/');
+    if (pick(rel)) out.push(rel);
+  }
+  return out;
+}
 
 let registryOnce: Awaited<ReturnType<typeof createHarness>> | undefined;
 async function gatesRegistry() {

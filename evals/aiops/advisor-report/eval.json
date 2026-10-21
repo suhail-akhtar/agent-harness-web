@@ -1,6 +1,6 @@
 {
   "name": "advisor-report",
-  "description": "The ops-advisor workflow on the test stack. Its report must flag the seeded issues: the shop's expired TLS certificate (127.0.0.1:19443), the shop container running as root, and the missing health checks / monitoring (billing-worker has no health URL or metrics; the shop container has no health check) - each with evidence - and change nothing. Needs Docker; --concurrency 1; HARNESS_OPS_SECRETS as for the pack.",
+  "description": "The ops-advisor workflow on the test stack. Its report must flag the seeded issues: the shop's expired TLS certificate (127.0.0.1:19443), the shop container running as root, and the missing health checks / monitoring (billing-worker has no health URL or metrics; the shop container has no health check) - each with evidence - and change nothing. Needs Docker; --concurrency 1; HARNESS_OPS_SECRETS, HARNESS_OPS_INVENTORY and the local Docker allowlist as for the pack (see incident-slow-endpoint).",
   "workflow": "ops-advisor",
   "input": {},
   "fixtures": "../fixtures",

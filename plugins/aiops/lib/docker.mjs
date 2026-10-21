@@ -14,6 +14,55 @@ const dockerEnv = () => {
 
 export const docker = (args, opts = {}) => runProgram(process.env.HARNESS_OPS_DOCKER || 'docker', args, { timeoutMs: 30_000, env: dockerEnv(), ...opts });
 
+// ---------- the server's own engine: off unless the operator turns it on ----------
+//
+// On a shared server the local engine runs every user's sandbox and the egress
+// proxies: listing it shows other people's work, and stopping a container there
+// is stopping theirs. So the ops tools use it only when the operator says so
+// (HARNESS_OPS_LOCAL_DOCKER=1), only for the containers the operator lists
+// (HARNESS_OPS_LOCAL_DOCKER_ALLOW: names or globs, and label:key=value), and
+// never for the harness's own containers (harness-* names, the harness-web label).
+
+export const LOCAL_DOCKER_OFF = 'The server\'s own Docker engine is off for the ops tools: it runs other sessions\' sandboxes too. The operator turns it on with HARNESS_OPS_LOCAL_DOCKER=1 and lists the containers the ops tools may see and control in HARNESS_OPS_LOCAL_DOCKER_ALLOW (names or globs such as shop-*, or label:key=value). Containers on inventory hosts are reached over ssh (host).';
+
+const globRe = (g) => new RegExp(`^${g.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`);
+
+/** The operator's switch and allowlist; `allows({ name, labels })` decides one container. */
+export function localDockerPolicy(env = process.env) {
+  const enabled = /^(1|on|true|yes)$/i.test(String(env.HARNESS_OPS_LOCAL_DOCKER ?? '').trim());
+  const entries = String(env.HARNESS_OPS_LOCAL_DOCKER_ALLOW ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  const names = entries.filter((e) => !e.startsWith('label:')).map(globRe);
+  const labels = entries.filter((e) => e.startsWith('label:')).map((e) => { const [k, ...v] = e.slice(6).split('='); return [k, v.length ? v.join('=') : undefined]; });
+  const harnessOwn = (name, l) => /^harness-/.test(name) || !!l?.['harness-web'];
+  return {
+    enabled,
+    entries,
+    allows({ name, labels: l = {} }) {
+      const n = String(name ?? '').replace(/^\//, '');
+      if (!enabled || !n || harnessOwn(n, l)) return false;
+      return names.some((re) => re.test(n)) || labels.some(([k, v]) => k in l && (v === undefined || l[k] === v));
+    },
+  };
+}
+
+/**
+ * A container on the local engine by name or id, if the operator allows it:
+ * { id, name }, inspected first so a name prefix or an id cannot reach another
+ * container. Throws with the reason otherwise.
+ */
+export async function localContainer(ref, signal, env = process.env) {
+  const p = localDockerPolicy(env);
+  if (!p.enabled) throw new Error(LOCAL_DOCKER_OFF);
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(String(ref))) throw new Error(`"${ref}" is not a container name`);
+  const r = await docker(['inspect', '--type', 'container', '--format', '{{json .}}', '--', String(ref)], { signal });
+  if (r.code !== 0) throw new Error(/No such (container|object)/i.test(r.stderr) ? `there is no container "${ref}"` : dockerError(r));
+  let info;
+  try { info = JSON.parse(r.stdout.trim().split('\n')[0]); } catch { throw new Error(`docker inspect ${ref} did not answer as expected`); }
+  const name = String(info.Name ?? '').replace(/^\//, '');
+  if (!p.allows({ name, labels: info.Config?.Labels ?? {} })) throw new Error(`The container "${name}" is not one the operator lets the ops tools use (HARNESS_OPS_LOCAL_DOCKER_ALLOW: ${p.entries.join(', ') || 'empty'}; the harness's own containers never are).`);
+  return { id: String(info.Id), name };
+}
+
 export function dockerError(r) {
   if (r.error) return `docker is not available on the server: ${r.error}`;
   const e = (r.stderr || r.stdout).trim();

