@@ -153,7 +153,7 @@ export async function verifyIdToken(jwt: string, o: VerifyOptions): Promise<Clai
 
 // ---- the relying party ----
 
-interface Discovery { issuer: string; authorization_endpoint: string; token_endpoint: string; jwks_uri: string; token_endpoint_auth_methods_supported?: string[] }
+interface Discovery { issuer: string; authorization_endpoint: string; token_endpoint: string; jwks_uri: string; token_endpoint_auth_methods_supported?: string[]; end_session_endpoint?: string }
 interface Pending { nonce: string; verifier: string; binding: string; at: number }
 
 export class OidcClient {
@@ -228,6 +228,22 @@ export class OidcClient {
     const u = new URL(d.authorization_endpoint);
     for (const [k, v] of Object.entries({ response_type: 'code', client_id: this.cfg.clientId, redirect_uri: this.redirectUri, scope: this.cfg.scopes, state, nonce, code_challenge: sha(verifier), code_challenge_method: 'S256' })) u.searchParams.set(k, v);
     return { url: u.toString(), binding };
+  }
+
+  /**
+   * Where to send the browser to sign out at the provider too (RP-initiated logout),
+   * back to this server afterwards; undefined when the provider has no such endpoint
+   * (Google) - then only the harness session ends.
+   */
+  async logoutUrl(): Promise<string | undefined> {
+    const end = (await this.discovery()).end_session_endpoint;
+    if (typeof end !== 'string') return undefined;
+    let u: URL;
+    try { u = new URL(end); } catch { return undefined; }
+    if (u.protocol !== 'https:' && !(u.protocol === 'http:' && isLoopback(u.hostname))) return undefined;
+    u.searchParams.set('client_id', this.cfg.clientId);
+    u.searchParams.set('post_logout_redirect_uri', `${this.cfg.publicUrl}/`);
+    return u.toString();
   }
 
   /** Finishes a sign-in from the callback's query: exchanges the code and verifies the id_token. */

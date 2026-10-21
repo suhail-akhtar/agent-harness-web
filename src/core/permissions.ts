@@ -20,6 +20,8 @@ export interface PermissionContext {
   sandboxed: boolean;
   /** The agent has read untrusted content (web pages, MCP results) in this context. */
   tainted?: boolean;
+  /** Where tools run (a tool's needs can depend on it: run_script runs inside a Docker sandbox). */
+  hostKind?: string;
   /** What commands can reach: 'full' means a command can send data anywhere. */
   network?: 'none' | 'allowlist' | 'full';
 }
@@ -31,9 +33,9 @@ export interface PermissionContext {
  * that tells the agent to send the code somewhere. Sandboxes with no network or an
  * allowlist (the operator's hosts) are not a way out.
  */
-export function sendsOut(tool: Tool, input: Record<string, unknown>, network: PermissionContext['network']): boolean {
+export function sendsOut(tool: Tool, input: Record<string, unknown>, network: PermissionContext['network'], hostKind?: string): boolean {
   if (tool.sendsOut !== undefined) return typeof tool.sendsOut === 'function' ? tool.sendsOut(input) : tool.sendsOut;
-  const kinds = tool.kindsFor?.(input) ?? [tool.kind];
+  const kinds = tool.kindsFor?.(input, { hostKind }) ?? [tool.kind];
   return kinds.some((k) => k === 'network' || k === 'external' || (k === 'exec' && network === 'full' && !isReadOnlyCommand(String(input.command ?? ''))));
 }
 
@@ -93,7 +95,7 @@ export function decide(tool: Tool, input: Record<string, unknown>, ctx: Permissi
   if (ctx.tainted && tool.persists?.(input) && mode !== 'bypass') return dontAsk({ action: 'ask', reason: 'this is saved for future sessions, and the agent has read untrusted content (web pages or service results) in this session' }, mode);
   // After untrusted content, every way out is confirmed, whatever the mode would
   // otherwise allow: the content may be steering the agent to leak what it can read.
-  if (ctx.tainted && mode !== 'bypass' && process.env.HARNESS_TAINT_GUARD !== 'off' && sendsOut(tool, input, ctx.network)) {
+  if (ctx.tainted && mode !== 'bypass' && process.env.HARNESS_TAINT_GUARD !== 'off' && sendsOut(tool, input, ctx.network, ctx.hostKind)) {
     const d = decideKindsOf(tool, input, ctx);
     if (d.action === 'deny') return d;
     return dontAsk({ action: 'ask', reason: 'the agent has read untrusted content (web pages or service results) in this session, and this call can send data out of it' }, mode);
@@ -109,7 +111,7 @@ function dontAsk(d: Decision, mode: PermissionContext['mode']): Decision {
 
 /** A call can need more than its tool's kind (render with export writes a file): every kind it needs is decided, and the strictest answer wins. */
 function decideKindsOf(tool: Tool, input: Record<string, unknown>, ctx: PermissionContext): Decision {
-  const kinds = tool.kindsFor?.(input) ?? [tool.kind];
+  const kinds = tool.kindsFor?.(input, { hostKind: ctx.hostKind }) ?? [tool.kind];
   const order = { deny: 0, ask: 1, allow: 2 } as const;
   return kinds.map((k) => decideKind(k, input, ctx)).sort((a, b) => order[a.action] - order[b.action])[0]!;
 }

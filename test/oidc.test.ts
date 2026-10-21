@@ -37,14 +37,14 @@ function rsaKey(kid: string) {
 interface Knobs { email?: string; sub?: string; claims?: Record<string, unknown>; header?: Record<string, unknown>; signWith?: crypto.KeyObject; badSignature?: boolean; pkceMismatch?: boolean }
 
 async function fakeIdp() {
-  const idp = { issuer: '', next: {} as Knobs, keys: [rsaKey('k1')], jwksHits: 0, discoveryHits: 0, close: async () => {} };
+  const idp = { issuer: '', next: {} as Knobs, keys: [rsaKey('k1')], jwksHits: 0, discoveryHits: 0, endSession: false, close: async () => {} };
   const codes = new Map<string, { challenge: string; nonce: string; redirect: string; knobs: Knobs }>();
   const server = http.createServer(async (req, res) => {
     const u = new URL(req.url ?? '/', idp.issuer);
     const json = (status: number, body: unknown) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
     if (u.pathname === '/.well-known/openid-configuration') {
       idp.discoveryHits++;
-      return json(200, { issuer: idp.issuer, authorization_endpoint: `${idp.issuer}/authorize`, token_endpoint: `${idp.issuer}/token`, jwks_uri: `${idp.issuer}/jwks`, response_types_supported: ['code'], token_endpoint_auth_methods_supported: ['client_secret_basic'] });
+      return json(200, { issuer: idp.issuer, authorization_endpoint: `${idp.issuer}/authorize`, token_endpoint: `${idp.issuer}/token`, jwks_uri: `${idp.issuer}/jwks`, response_types_supported: ['code'], token_endpoint_auth_methods_supported: ['client_secret_basic'], ...(idp.endSession ? { end_session_endpoint: `${idp.issuer}/logout` } : {}) });
     }
     if (u.pathname === '/jwks') { idp.jwksHits++; return json(200, { keys: idp.keys.map((k) => k.jwk) }); }
     if (u.pathname === '/authorize') {
@@ -295,8 +295,26 @@ test('single sign-on: cookie-authenticated writes need the x-harness header and 
   assert.equal((await t.call('POST', '/auth/logout', { cookie, headers: { 'x-harness': '' } })).status, 403);
   const out = await t.call('POST', '/auth/logout', { cookie });
   assert.equal(out.status, 200);
+  assert.equal(out.body.providerLogout, undefined, 'a provider without a sign-out endpoint (like Google): only the harness session ends');
   assert.ok(out.headers.getSetCookie().some((c) => c.startsWith('hw_sid=;') && c.includes('Max-Age=0')));
   assert.equal((await t.call('GET', '/api/me', { cookie })).status, 401);
+  await t.close();
+  await idp.close();
+});
+
+test('signing out at the provider too, where it offers that (RP-initiated logout): back to this server afterwards', async () => {
+  const idp = await fakeIdp();
+  idp.endSession = true;
+  const t = await setup(idp);
+  const { cookie } = await t.signIn();
+  const out = await t.call('POST', '/auth/logout', { cookie });
+  const u = new URL(out.body.providerLogout);
+  assert.equal(u.origin + u.pathname, `${idp.issuer}/logout`);
+  assert.equal(u.searchParams.get('client_id'), CLIENT);
+  assert.equal(u.searchParams.get('post_logout_redirect_uri'), `${PUBLIC}/`);
+  // Without a provider session (a token sign-in), no provider sign-out is offered.
+  const plain = await t.call('POST', '/auth/logout', { token: OPERATOR });
+  assert.equal(plain.body.providerLogout, undefined);
   await t.close();
   await idp.close();
 });

@@ -1,4 +1,5 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +13,8 @@ import { clip, num, str } from './types.ts';
 // Every tool call still goes through the agent's permissions and hooks.
 
 const RUNNER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'code-runner.mjs');
+let runnerText: string | undefined;
+const runnerSource = () => (runnerText ??= readFileSync(RUNNER, 'utf8'));
 const MAX_CALLS = 200;
 /** Tools a script may not call: interactive ones, itself, and delegation. */
 const NOT_FROM_SCRIPTS = new Set(['run_script', 'ask_user', 'exit_plan_mode', 'todo_write', 'agent', 'publish_branch', 'schedule']);
@@ -45,16 +48,27 @@ return \`\${n} of \${files.length} files have TODOs\`;`,
       required: ['code'],
     },
   },
-  // Without network isolation the script process could reach the network itself: ask, like web_fetch.
-  kindsFor: () => [(scriptNetworkIsolated() ? 'read' : 'network') as ToolKind],
+  // In a Docker session the script process runs inside the sandbox, under its network
+  // policy, like any command there. Elsewhere it runs on the server: free where Linux
+  // namespaces cut it off from the network, otherwise asked about, like web_fetch.
+  kindsFor: (_i, where) => [(where?.hostKind === 'docker' ? 'exec' : scriptNetworkIsolated() ? 'read' : 'network') as ToolKind],
   summarize: (i) => `script: ${str(i.code).replace(/\s+/g, ' ').slice(0, 100)}`,
   async run(input, ctx) {
     if (!ctx.callTool) return { content: 'Scripts are not available here.', is_error: true };
     const timeoutMs = Math.min(600, Math.max(1, num(input.timeout_seconds) ?? 120)) * 1000;
     const names = (ctx.toolNames?.() ?? []).filter((n) => !NOT_FROM_SCRIPTS.has(n) && /^[A-Za-z_$][\w$]*$/.test(n));
-    const node = [process.execPath, '--permission', `--allow-fs-read=${RUNNER}`, '--disable-warning=ExperimentalWarning', RUNNER];
-    const [cmd, ...args] = scriptNetworkIsolated() ? ['unshare', ...UNSHARE, ...node] : node;
-    const child = spawn(cmd!, args, { stdio: ['pipe', 'pipe', 'pipe'], env: { PATH: process.env.PATH ?? '' }, windowsHide: true });
+    let child: ChildProcessWithoutNullStreams;
+    if (ctx.host.kind === 'docker' && ctx.host.spawnStream) {
+      // Inside the session's container: its network policy (none, the allowlist) is the
+      // script's too, on every OS. The runner goes in as source; `timeout` ends it there
+      // (killing the docker CLI alone would leave it running).
+      const secs = String(Math.ceil(timeoutMs / 1000) + 5);
+      child = await ctx.host.spawnStream('timeout', ['-k', '5', secs, 'node', '--permission', '--disable-warning=ExperimentalWarning', '--input-type=module', '-e', runnerSource()], {});
+    } else {
+      const node = [process.execPath, '--permission', `--allow-fs-read=${RUNNER}`, '--disable-warning=ExperimentalWarning', RUNNER];
+      const [cmd, ...args] = scriptNetworkIsolated() ? ['unshare', ...UNSHARE, ...node] : node;
+      child = spawn(cmd!, args, { stdio: ['pipe', 'pipe', 'pipe'], env: { PATH: process.env.PATH ?? '' }, windowsHide: true });
+    }
     let stderr = '';
     child.stderr.on('data', (d) => { if (stderr.length < 4000) stderr += d; });
     child.stdin.on('error', () => {});

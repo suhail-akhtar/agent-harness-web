@@ -473,7 +473,7 @@ function App(): VNode {
           <button class="link" onClick={() => setDialog('companions')}>Your computers ({config.companions.filter((c) => c.online).length} online)</button>
           <button class="link" onClick={() => setDialog('plugins')}>Plugins ({(config.plugins ?? []).length})</button>
           <div class="muted small">All sessions: {fmtCost(total)}</div>
-          {config.me && <div class="muted small">Signed in as {config.me.name}{config.me.email && config.me.email !== config.me.name ? ` (${config.me.email})` : ''}{config.me.role === 'admin' && config.me.name !== 'operator' ? ' (admin)' : ''} · <button class="link small" onClick={async () => { await api.post('/auth/logout'); location.reload(); }}>Sign out</button></div>}
+          {config.me && <div class="muted small">Signed in as {config.me.name}{config.me.email && config.me.email !== config.me.name ? ` (${config.me.email})` : ''}{config.me.role === 'admin' && config.me.name !== 'operator' ? ' (admin)' : ''} · <button class="link small" onClick={async () => { const r = await api.post<{ providerLogout?: string }>('/auth/logout'); if (r.providerLogout) location.href = r.providerLogout; else location.reload(); }}>Sign out</button></div>}
         </div>
       </nav>
       <main class="main">

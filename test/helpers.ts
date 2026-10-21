@@ -7,7 +7,7 @@ import { getModel } from '../src/core/models.ts';
 import { defaultSettings, type Settings } from '../src/core/settings.ts';
 import type { Block, HarnessEvent, Message, PermissionMode, Todo, Usage } from '../src/core/types.ts';
 import type { Provider, ProviderRequest, ProviderResponse, StopKind } from '../src/providers/types.ts';
-import { LocalHost } from '../src/runtime/host.ts';
+import { LocalHost, type ToolHost } from '../src/runtime/host.ts';
 import { BUILTIN_TOOLS } from '../src/tools/index.ts';
 import type { FileStamp, Tool } from '../src/tools/types.ts';
 
@@ -59,9 +59,9 @@ export interface Harness {
   todos: Todo[];
 }
 
-export async function makeAgent(steps: Step[], opts: { mode?: PermissionMode; settings?: Partial<Settings>; tools?: Tool[]; root?: string } = {}): Promise<Harness> {
+export async function makeAgent(steps: Step[], opts: { mode?: PermissionMode; settings?: Partial<Settings>; tools?: Tool[]; root?: string; host?: ToolHost } = {}): Promise<Harness> {
   const provider = new FakeProvider(steps);
-  const root = opts.root ?? await tempDir();
+  const root = opts.root ?? opts.host?.root ?? await tempDir();
   const events: HarnessEvent[] = [];
   const persisted: Message[] = [];
   const mode = { value: opts.mode ?? 'bypass' as PermissionMode };
@@ -88,7 +88,7 @@ export async function makeAgent(steps: Step[], opts: { mode?: PermissionMode; se
   };
   const agent = new Agent({
     name: 'main', model: getModel('deepseek-flash'), provider, effort: 'high', system: 'SYSTEM', tools: opts.tools ?? BUILTIN_TOOLS,
-    host: new LocalHost(root), settings, cacheKey: 'test', maxSteps: 20, readFiles: new Map<string, FileStamp>(),
+    host: opts.host ?? new LocalHost(root), settings, cacheKey: 'test', maxSteps: 20, readFiles: new Map<string, FileStamp>(),
   }, hooks);
   return { agent, provider, events, persisted, root, mode, permissionAnswers, get todos() { return todos; } } as Harness;
 }

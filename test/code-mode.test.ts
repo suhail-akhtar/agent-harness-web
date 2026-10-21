@@ -95,3 +95,26 @@ test('a script\'s tool calls get the same permission checks; interactive tools a
   assert.equal(bad.r.is_error, true);
   assert.match(bad.r.content, /ReferenceError: undefinedThing is not defined/);
 });
+
+test('in a Docker session a script runs inside the sandbox, under its network policy, like any command there', async () => {
+  const { decide } = await import('../src/core/permissions.ts');
+  const noRules = { allow: [], deny: [], ask: [] };
+  const where = (hostKind: string, sandboxed: boolean) => decide(runScriptTool, { code: 'return 1' }, { mode: 'default', rules: noRules, sandboxed, hostKind, network: 'none' });
+  assert.equal(where('docker', true).action, 'allow', 'a sandboxed command needs no answer');
+  // A companion's own sandbox does not contain a script: the runner would run on the server.
+  assert.equal(where('companion', true).action, scriptNetworkIsolated() ? 'allow' : 'ask');
+  const { dockerAvailable, imageExists, DockerHost } = await import('../src/runtime/docker.ts');
+  if (!(await dockerAvailable()) || !(await imageExists('harness-sandbox:latest'))) return;
+  const ws = await tempDir();
+  await fs.writeFile(path.join(ws, 'a.txt'), 'inside');
+  const host = new DockerHost(`rs${Date.now().toString(16)}`, ws, { image: 'harness-sandbox:latest', network: 'none', memory: '512m', cpus: '1' });
+  try {
+    const h = await makeAgent([{ calls: [{ name: 'run_script', input: { code: 'const t = await tools.read({ path: "a.txt" }); return { read: t.includes("inside"), node: typeof globalThis.process }', timeout_seconds: 60 } }] }, { text: 'done' }], { mode: 'default', tools, host });
+    h.agent.append({ role: 'user', content: [{ type: 'text', text: 'go' }] });
+    await h.agent.run(new AbortController().signal);
+    const r = results(h.persisted[2])[0]!;
+    assert.equal(r.is_error, undefined, r.content); // asked, it would have been refused (no answers queued)
+    assert.match(r.content, /"read": true/);
+    assert.match(r.content, /"node": "undefined"/, 'still no process object inside the script');
+  } finally { await host.close(); }
+});

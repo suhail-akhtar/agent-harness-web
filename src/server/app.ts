@@ -194,8 +194,11 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
   async function logout(req: http.IncomingMessage, res: http.ServerResponse) {
     // A cross-site page cannot set this header, so it cannot sign people out either.
     if (req.headers['x-harness'] !== '1') throw new HttpError(403, 'missing x-harness header');
-    await sso?.sessions.delete(cookie(req, 'hw_sid'));
-    return send(res, 200, { ok: true }, { 'set-cookie': [`hw_token=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${tokenSecure}`, `hw_sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${ssoSecure}`] });
+    const sid = cookie(req, 'hw_sid');
+    // Signed in through the provider: sign out there too, where it offers that.
+    const providerLogout = sso && sid && sso.sessions.get(sid) ? await sso.client.logoutUrl().catch(() => undefined) : undefined;
+    await sso?.sessions.delete(sid);
+    return send(res, 200, { ok: true, ...(providerLogout ? { providerLogout } : {}) }, { 'set-cookie': [`hw_token=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${tokenSecure}`, `hw_sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${ssoSecure}`] });
   }
 
   /** Members own their sessions; administrators see all of them. */

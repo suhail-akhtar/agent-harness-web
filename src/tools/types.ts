@@ -69,7 +69,7 @@ export interface Tool {
   /** Whether a call can carry data out of the session (default: from its kinds); confirmed after untrusted input. */
   sendsOut?: boolean | ((input: Record<string, unknown>) => boolean);
   /** The permission kinds this call needs, when they depend on the input (default: [kind]). */
-  kindsFor?(input: Record<string, unknown>): ToolKind[];
+  kindsFor?(input: Record<string, unknown>, where?: { hostKind?: string }): ToolKind[];
   /** One line for permission prompts and the UI. */
   summarize(input: Record<string, unknown>): string;
   /**
