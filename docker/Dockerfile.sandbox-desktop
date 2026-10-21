@@ -1,0 +1,34 @@
+# The sandbox plus a desktop, for the computer plugin's `computer` tool: the
+# agent works through screenshots, mouse and keyboard. Build the normal
+# sandbox first, then this one:
+#   npm run sandbox:image && npm run sandbox:image:desktop
+# Sessions use it when the operator allows it (HARNESS_SANDBOX_IMAGES) and the
+# session asks for it, or for every session with HARNESS_SANDBOX_IMAGE.
+ARG BASE=harness-sandbox:latest
+FROM ${BASE}
+
+# Xvfb (a display in memory), a small window manager with a task bar, xdotool
+# for mouse and keyboard, ImageMagick for screenshots (import) and scaling,
+# fonts, a browser and two plain apps (a terminal and a text editor).
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+      xvfb xauth x11-utils fluxbox xdotool imagemagick \
+      fonts-dejavu-core fonts-liberation \
+      firefox-esr xterm mousepad; \
+    rm -rf /var/lib/apt/lists/* /usr/share/doc/* /usr/share/man/*; \
+    mkdir -p /tmp/.X11-unix; chmod 1777 /tmp/.X11-unix
+
+# Firefox without first-run pages, update checks or telemetry. A plain desktop
+# colour instead of the wallpaper (which needs a setter fluxbox cannot find and
+# says so in a dialog over the screen).
+RUN set -eux; \
+    sed -i -e 's|^background:.*|background: flat|' -e 's|^background.pixmap:.*|background.color: #3b4a5a|' \
+      /usr/share/fluxbox/styles/Squared_for_Debian/theme.cfg; \
+    grep -q '^background: flat' /usr/share/fluxbox/styles/Squared_for_Debian/theme.cfg; \
+    mkdir -p /usr/lib/firefox-esr/distribution; \
+    printf '%s\n' '{"policies":{"DisableTelemetry":true,"DisableFirefoxStudies":true,"DisableAppUpdate":true,"DontCheckDefaultBrowser":true,"OverrideFirstRunPage":"","OverridePostUpdatePage":"","NoDefaultBookmarks":true,"UserMessaging":{"WhatsNew":false,"ExtensionRecommendations":false,"FeatureRecommendations":false,"SkipOnboarding":true}}}' \
+      > /usr/lib/firefox-esr/distribution/policies.json
+
+# Apps started from the agent's commands draw on the desktop the tool starts.
+ENV DISPLAY=:99
