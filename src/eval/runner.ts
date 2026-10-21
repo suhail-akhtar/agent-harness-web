@@ -152,6 +152,14 @@ export interface EvalRun {
   status: string; pass: boolean; checks: CheckResult[];
   cost: number; inputTokens: number; cacheHit: number; output: number; modelCalls: number; toolCalls: number; seconds: number;
   workspace: string; error?: string;
+  /** The run stopped on the provider's side (credits, a key, an outage), not the model's or the harness's: not counted. */
+  unscored?: boolean;
+}
+
+/** A provider's own failure (billing, authentication, an outage), as opposed to the agent failing the task. */
+export function providerProblem(texts: (string | undefined)[]): string | undefined {
+  const re = /no credits|insufficient[_ ]quota|exceeded your current quota|billing|credit balance is too low|invalid[_ ]?api[_ ]?key|incorrect api key|authentication|unauthori[sz]ed|\b40[13]\b|overloaded|\b5(02|03|29)\b|service unavailable/i;
+  return texts.find((t) => !!t && re.test(t))?.slice(0, 300);
 }
 
 export async function loadCases(root: string, packs?: string[], only?: string[]): Promise<EvalCase[]> {
@@ -243,8 +251,10 @@ export async function runOne(c: EvalCase, model: string, repeat: number, out: st
   const timer = setTimeout(() => ac.abort(), (c.timeoutMin ?? 90) * 60_000);
   try {
     const s = await h.sessions.create({ model, ...(cfg?.effort ? { effort: cfg.effort } : {}), mode: 'bypass', runtime: { kind: 'local', network: 'none', path: ws } });
+    const errors: string[] = [];
     const done = new Promise<void>((resolve) => {
       s.subscribe(0, ({ event }) => {
+        if (event.kind === 'notice' && event.level === 'error') errors.push(event.text);
         if (event.kind === 'permission_request') s.respond(event.requestId, { decision: 'allow' });
         if (event.kind === 'question') s.respond(event.requestId, { decision: 'answer', answer: 'Use your best judgement.' });
         if (event.kind === 'plan_proposed' || event.kind === 'approval_request') s.respond(event.requestId, { decision: 'approve' });
@@ -266,6 +276,9 @@ export async function runOne(c: EvalCase, model: string, repeat: number, out: st
     const spans = await s.readTrace();
     run.modelCalls = spans.filter((x) => x.type === 'model').length;
     run.toolCalls = spans.filter((x) => x.type === 'tool').length;
+    // A provider failure (no credits, a bad key, an outage) says nothing about the model or the harness.
+    const problem = run.status !== 'succeeded' && run.status !== 'done' ? providerProblem([runs[0]?.error, ...errors]) : undefined;
+    if (problem) { run.status = 'provider-error'; run.error = problem; run.unscored = true; }
     run.checks = await runChecks(h, c, ws, new AbortController().signal, { sources: s.sources });
     run.pass = ['succeeded', 'done'].includes(run.status) && run.checks.every((x) => x.pass);
   } catch (e) {
@@ -275,7 +288,7 @@ export async function runOne(c: EvalCase, model: string, repeat: number, out: st
     run.seconds = Math.round((Date.now() - t0) / 1000);
     await h.close();
   }
-  opts.log?.(`${run.pass ? 'PASS' : 'FAIL'} ${c.pack}/${c.name} ${model}${cfg ? ` [${cfg.name}]` : ''} #${repeat}: ${run.status}, ${run.checks.filter((x) => x.pass).length}/${run.checks.length} checks, $${run.cost.toFixed(4)}, ${run.seconds}s`);
+  opts.log?.(`${run.unscored ? 'NOT SCORED' : run.pass ? 'PASS' : 'FAIL'} ${c.pack}/${c.name} ${model}${cfg ? ` [${cfg.name}]` : ''} #${repeat}: ${run.status}, ${run.checks.filter((x) => x.pass).length}/${run.checks.length} checks, $${run.cost.toFixed(4)}, ${run.seconds}s`);
   await fs.writeFile(path.join(base, 'result.json'), JSON.stringify(run, null, 1));
   return run;
 }
@@ -296,10 +309,15 @@ export async function rejudge(out: string, cases: EvalCase[], opts: { plugins: s
     const h = await createHarness({ dataDir: path.join(base, 'data'), plugins: opts.plugins, shippedPlugins: opts.shipped, scheduler: false });
     try {
       const s = h.sessions.list()[0] ? h.sessions.get(h.sessions.list()[0]!.id) : undefined;
+      // A run recorded before provider errors were told apart: its workflow record says why it stopped.
+      if (!run.unscored && !['succeeded', 'done'].includes(run.status) && s) {
+        const problem = providerProblem([(await s.listRuns())[0]?.error, run.error]);
+        if (problem) { run.status = 'provider-error'; run.error = problem; run.unscored = true; }
+      }
       const before = run.checks.filter((x) => x.pass).length;
       run.checks = await runChecks(h, c, run.workspace, new AbortController().signal, s ? { sources: s.sources } : undefined);
       run.pass = ['succeeded', 'done'].includes(run.status) && run.checks.every((x) => x.pass);
-      opts.log?.(`${run.pass ? 'PASS' : 'FAIL'} ${c.pack}/${c.name} ${run.model}${run.config ? ` [${run.config}]` : ''} #${run.repeat}: ${before} -> ${run.checks.filter((x) => x.pass).length}/${run.checks.length} checks`);
+      opts.log?.(`${run.unscored ? 'NOT SCORED' : run.pass ? 'PASS' : 'FAIL'} ${c.pack}/${c.name} ${run.model}${run.config ? ` [${run.config}]` : ''} #${run.repeat}: ${before} -> ${run.checks.filter((x) => x.pass).length}/${run.checks.length} checks`);
       await fs.writeFile(path.join(base, 'result.json'), JSON.stringify(run, null, 1));
     } finally { await h.close(); }
     runs.push(run);
@@ -412,8 +430,11 @@ function delta(rs: EvalRun[], base: EvalRun[] | undefined): [string, string] {
  * the baseline configuration (the first), and a summary per model and
  * configuration across all cases separates the harness's effect from the model's.
  */
-export function report(runs: EvalRun[], harness?: Record<string, string>, configOrder?: string[]): string {
-  const lines = ['# Evaluation report', '', `${runs.length} run(s), ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC`, ''];
+export function report(all: EvalRun[], harness?: Record<string, string>, configOrder?: string[]): string {
+  // Runs the provider stopped (credits, keys, outages) are listed, never counted.
+  const runs = all.filter((r) => !r.unscored);
+  const unscored = all.filter((r) => r.unscored);
+  const lines = ['# Evaluation report', '', `${runs.length} run(s)${unscored.length ? ` scored, ${unscored.length} not scored (provider errors, listed at the end)` : ''}, ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC`, ''];
   if (harness) lines.push('Harness (a score describes the model and the harness together):', '', ...Object.entries(harness).map(([k, v]) => `- ${k}: ${v}`), '');
   const order = [...new Set([...(configOrder ?? []), ...runs.map((r) => r.config).filter((x): x is string => !!x)])];
   const ablation = order.length > 1;
@@ -461,6 +482,10 @@ export function report(runs: EvalRun[], harness?: Record<string, string>, config
   for (const r of failed) {
     lines.push(`- **${r.pack}/${r.case} ${r.model}${r.config ? ` [${r.config}]` : ''} #${r.repeat}** (${r.status}${r.error ? `: ${r.error}` : ''})`);
     for (const ch of r.checks.filter((x) => !x.pass)) lines.push(`  - ${ch.name}: ${ch.detail.replace(/\n/g, ' | ').slice(0, 400)}`);
+  }
+  if (unscored.length) {
+    lines.push('', '## Not scored', '', 'These runs stopped on the provider\'s side; they say nothing about the model or the harness. Run them again.', '');
+    for (const r of unscored) lines.push(`- ${r.pack}/${r.case} ${r.model}${r.config ? ` [${r.config}]` : ''} #${r.repeat}: ${r.error}`);
   }
   return lines.join('\n') + '\n';
 }

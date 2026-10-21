@@ -151,3 +151,32 @@ test('ablation: the same model under several harness configurations; each is a r
   await rejudge(out, cases, { plugins: [] });
   assert.match(await fs.readFile(path.join(out, 'report.md'), 'utf8'), /\| tight \| 0\/2 \| 0%-66% \|.*\| -100 pp \|/);
 });
+
+test('a run the provider stopped (credits, a key, an outage) is listed as not scored, never counted as the model failing', async () => {
+  const { providerProblem, report } = await import('../src/eval/runner.ts');
+  assert.match(providerProblem(['build failed: You have no credits remaining. Add credits to continue using the API']) ?? '', /no credits/);
+  assert.ok(providerProblem(['Error: 401 invalid api key']));
+  assert.ok(providerProblem(['upstream 529 overloaded']));
+  assert.equal(providerProblem(['build failed: tests did not pass', 'gate python-test failed']), undefined, 'an ordinary failure is the agent\'s');
+  const base = { pack: 'p', case: 'c', model: 'm', checks: [], cost: 0.01, inputTokens: 1, cacheHit: 0, output: 1, modelCalls: 1, toolCalls: 1, seconds: 1, workspace: '/w' };
+  const md = report([
+    { ...base, repeat: 1, status: 'succeeded', pass: true },
+    { ...base, repeat: 2, status: 'provider-error', pass: false, unscored: true, error: 'You have no credits remaining' },
+  ]);
+  assert.match(md, /1 run\(s\) scored, 1 not scored/);
+  assert.match(md, /\| p\/c \| m \| 1\/1 \|/, 'the pass rate counts only scored runs');
+  assert.match(md, /## Not scored[\s\S]*#2: You have no credits remaining/);
+});
+
+test('the web-console gate asked for by name where there is no page fails with a reason instead of crashing', async () => {
+  const { runGates } = await import('../src/gates/gates.ts');
+  const { createHarness } = await import('../src/kernel/harness.ts');
+  const { LocalHost } = await import('../src/runtime/host.ts');
+  const { fileURLToPath } = await import('node:url');
+  const h = await createHarness({ dataDir: await tempDir(), search: null, memory: 'off', scheduler: false, plugins: [fileURLToPath(new URL('../plugins/visual', import.meta.url))] });
+  try {
+    const [g] = await runGates(h.registry, new LocalHost(await tempDir()), ['web-console'], new AbortController().signal);
+    assert.equal(g!.pass, false);
+    assert.match(g!.summary, /no index\.html/);
+  } finally { await h.close(); }
+});

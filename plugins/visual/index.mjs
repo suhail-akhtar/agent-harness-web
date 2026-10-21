@@ -250,6 +250,8 @@ export default {
       async run({ host: h, signal }) {
         const host = (await siteOf(h, signal)).host;
         const page = await entryPage(host.root);
+        // Asked for by name (a workflow or an eval) where there is no page: a failure that says so, not a crash.
+        if (!page) return { pass: false, summary: 'no index.html (or public/index.html) to open', details: 'The gate opens the workspace\'s entry page; there is none.' };
         const r = await runPage({ root: host.root, file: page, waitMs: 2000, signal });
         const problems = [
           ...r.errors.map((e) => `uncaught: ${e}`),
