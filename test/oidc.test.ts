@@ -213,6 +213,8 @@ test('single sign-on refuses: other domains, an unverified e-mail, a wrong nonce
   await refused({ email: 'eve@evil.example', sub: 'sub-eve' }, /eve@evil\.example may not sign in/, 403);
   await refused({ email: 'eve@sub.example.com', sub: 'sub-eve' }, /may not sign in/, 403);
   await refused({ claims: { email_verified: false } }, /not verified this e-mail/);
+  // No claim at all is not a yes: the address decides the allowlist and the administrators.
+  await refused({ claims: { email_verified: undefined } }, /did not say this e-mail address is verified/);
   await refused({ claims: { nonce: 'someone-elses-nonce' } }, /nonce/);
   await refused({ claims: { aud: 'another-client' } }, /another application \(aud\)/);
   await refused({ claims: { aud: [CLIENT, 'another-client'] } }, /azp/);
@@ -426,7 +428,7 @@ test('single sign-on configuration from the environment', () => {
   })!;
   assert.deepEqual(c, {
     issuer: 'https://login.microsoftonline.com/tenant/v2.0', clientId: 'c', clientSecret: undefined, publicUrl: 'https://harness.example.com', scopes: 'openid email profile',
-    allowedDomains: ['example.com', 'partner.example'], allowedEmails: ['guest@else.example'], admins: ['boss@example.com'], only: true,
+    allowedDomains: ['example.com', 'partner.example'], allowedEmails: ['guest@else.example'], admins: ['boss@example.com'], only: true, trustEmail: false,
   });
   assert.equal(new OidcClient(c).redirectUri, 'https://harness.example.com/auth/callback');
   assert.equal(oidcConfigFromEnv({ HARNESS_OIDC_ISSUER: 'http://127.0.0.1:9000/realms/x', HARNESS_OIDC_CLIENT_ID: 'c', HARNESS_PUBLIC_URL: 'http://127.0.0.1:4310', HARNESS_OIDC_SCOPES: 'openid email' })!.scopes, 'openid email');

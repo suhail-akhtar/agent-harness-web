@@ -84,6 +84,9 @@ async function runOne(h: HookSpec, event: HookEvent, payload: Record<string, unk
       result.feedback += (r.stderr || r.stdout).trim().slice(0, 4000) + '\n';
     } else if (r.code === 0) {
       const a = parseAnswer(r.stdout);
+      // A repository's hook may block or deny, never allow: allowing would skip the
+      // prompt (and the untrusted-content guard) on the repository's say-so.
+      if (a && h.fromProject && a.decision === 'allow') delete a.decision;
       if (a) apply(result, event, a);
       else if (r.stdout.trim()) result.feedback += r.stdout.trim().slice(0, 4000) + '\n';
     } else {

@@ -63,6 +63,26 @@ test('the computer plugin registers the tool (an exec, so free in a sandbox) and
   await h.close();
 });
 
+test('the tool is offered only where the sandbox image has a desktop (elsewhere it would only cost prompt tokens)', async () => {
+  const { h, tool } = await setup();
+  try {
+    assert.equal(await tool.availableIn!(new LocalHost(await tempDir())), false, 'a folder session');
+    const asks: string[][] = [];
+    const docker = (has: boolean) => ({ kind: 'docker', hasCommands: async (n: string[]) => { asks.push(n); return has; } }) as unknown as ToolHost;
+    assert.equal(await tool.availableIn!(docker(false)), false, 'a sandbox without Xvfb and xdotool');
+    assert.equal(await tool.availableIn!(docker(true)), true);
+    assert.deepEqual(asks[0], ['Xvfb', 'xdotool']);
+    // Through a session: a folder session's tools leave it out.
+    const s = await h.sessions.create({ model: 'deepseek-flash', mode: 'default', runtime: { kind: 'local', network: 'none', path: await tempDir() } });
+    assert.ok(!(await s.capabilities()).tools.some((t) => t.name === 'computer'));
+    if (hasDesktop) {
+      const { imageHasCommands } = await import('../src/runtime/docker.ts');
+      assert.equal(await imageHasCommands(IMAGE, ['Xvfb', 'xdotool']), true, 'the desktop image has them');
+      assert.equal(await imageHasCommands('harness-sandbox:latest', ['Xvfb', 'xdotool']), false, 'the plain sandbox does not');
+    }
+  } finally { await h.close(); }
+});
+
 test('display size: HARNESS_DESKTOP_SIZE, limits, and scaling of large displays', () => {
   assert.deepEqual(lib.desktopSize({}), SCREEN);
   assert.deepEqual(lib.desktopSize({ HARNESS_DESKTOP_SIZE: '1024x768' }), { w: 1024, h: 768 });

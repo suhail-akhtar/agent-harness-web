@@ -37,6 +37,15 @@ test('bubblewrap: read-only system, credentials hidden, the workspace writable l
   assert.ok(a.indexOf('--bind') > a.lastIndexOf('--tmpfs'), 'the workspace is bound after the masks');
   assert.deepEqual(a.slice(-4), ['--', 'bash', '-c', 'npm test']);
   assert.doesNotMatch(bwrapArgs('x', { root: '/w', network: 'full', home: '/h', exists: () => false }).join(' '), /unshare-net/);
+  // Local ways out are hidden; the workspace's git hooks and config are bound read-only after it.
+  const b = bwrapArgs('x', { root: '/w', network: 'full', home: '/h', exists: (p) => ['/run/user', '/var/run/docker.sock', '/h/.docker/run/docker.sock', '/w/.git/hooks', '/w/.git/config'].includes(p) });
+  const bs = b.join(' ');
+  assert.match(bs, /--tmpfs \/run\/user/);
+  assert.match(bs, /--ro-bind \/dev\/null \/var\/run\/docker\.sock/);
+  assert.match(bs, /--ro-bind \/dev\/null \/h\/\.docker\/run\/docker\.sock/);
+  assert.match(bs, /--cap-drop ALL/);
+  assert.ok(b.indexOf('/w/.git/hooks') > b.indexOf('--bind'), 'git hooks bound read-only after the workspace');
+  assert.match(bs, /--ro-bind \/w\/\.git\/config \/w\/\.git\/config --chdir/);
   // A workspace inside a masked folder stays reachable (the mask is skipped).
   assert.doesNotMatch(bwrapArgs('x', { root: '/home/u/.config/gcloud/proj', network: 'none', home: '/home/u' }).join(' '), /--tmpfs \/home\/u\/\.config\/gcloud /);
 });
@@ -47,7 +56,13 @@ test('Seatbelt: writes only to the workspace and temp folders, credential folder
   assert.match(p, /\(allow file-write\* \(subpath "\/Users\/u\/proj \\"x\\""\)/, 'quotes in the path are escaped');
   assert.match(p, /\(deny file-read\* file-write\* .*\(subpath "\/Users\/u\/\.ssh"\)/);
   assert.match(p, /\(deny network\*\)/);
-  assert.doesNotMatch(seatbeltProfile({ root: '/w', network: 'full', home: '/h' }), /deny network/);
+  assert.doesNotMatch(p, /allow network\* \(local unix-socket\)/, 'no unix sockets either when there is no network');
+  const full = seatbeltProfile({ root: '/w', network: 'full', home: '/h' });
+  assert.doesNotMatch(full, /deny network\*\)/);
+  assert.match(full, /\(deny network-outbound \(remote unix-socket \(path-literal "\/private\/var\/run\/docker\.sock"\)\)/, 'the Docker socket is refused even with network');
+  assert.match(full, /\(deny process-exec \(literal "\/usr\/bin\/open"\)/);
+  assert.match(full, /\(deny mach-lookup \(global-name "com\.apple\.coreservices\.launchservicesd"\)/);
+  assert.match(full, /\(deny file-write\* \(subpath "\/w\/\.git\/hooks"\) \(literal "\/w\/\.git\/config"\)\)/);
   const w = wrapCommand('seatbelt', 'make', { root: '/w', network: 'none', home: '/h' });
   assert.equal(w.file, 'sandbox-exec');
   assert.deepEqual(w.args.slice(-3), ['bash', '-c', 'make']);
@@ -72,6 +87,21 @@ test('bubblewrap for real: what a sandboxed command can and cannot do', { skip: 
   assert.match(r.stdout, /ENETUNREACH|EACCES|ECONNREFUSED/, 'no network');
   r = await host.exec('ps -e --no-headers | wc -l', { timeoutMs: 20_000 });
   assert.ok(Number(r.stdout.trim()) < 6, `its own process tree, saw ${r.stdout.trim()} processes`);
+  // A plain workspace's git hooks and config stay read-only (the next git command a person runs would run them).
+  execFileSync('git', ['init', '-q', ws]);
+  const fresh = new LocalHost(ws, { sandbox: 'bwrap', network: 'none' });
+  r = await fresh.exec('(echo x > .git/hooks/pre-commit && echo HOOK) 2>&1 | tail -1; (git config core.hooksPath /tmp && echo CONFIG) 2>&1 | tail -1; echo ok > tracked.txt && echo WRITE', { timeoutMs: 20_000 });
+  assert.doesNotMatch(r.stdout, /HOOK\b|CONFIG\b/, r.stdout);
+  assert.match(r.stdout, /WRITE/);
+  // A daemon socket on the machine is hidden (made here as a plain file when the test may; masked, it reads as nothing or is refused).
+  if (process.getuid?.() === 0) {
+    await fs.writeFile('/run/docker.sock', 'daemon');
+    try {
+      r = await fresh.exec('cat /run/docker.sock /var/run/docker.sock 2>&1; echo END', { timeoutMs: 20_000 });
+      assert.match(r.stdout, /END/, r.stderr);
+      assert.doesNotMatch(r.stdout, /daemon/, 'the Docker socket is masked inside');
+    } finally { await fs.rm('/run/docker.sock', { force: true }); }
+  }
 });
 
 test('bubblewrap for real: a worktree commits on its branch; the repository\'s hooks and config stay read-only', { skip: !hasBwrap && 'not Linux with a working bubblewrap' }, async () => {

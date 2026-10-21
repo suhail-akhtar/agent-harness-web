@@ -36,6 +36,8 @@ export interface HookSpec {
   /** agent: which agent verifies (default: explore, read-only); `prompt` is its instruction. */
   agent?: string;
   timeoutMs?: number;
+  /** Set by the harness on hooks from the repository's .harness/settings.json: their "allow" answers are ignored. */
+  fromProject?: boolean;
 }
 
 export interface Settings {
@@ -122,6 +124,8 @@ export function mergeSettings(base: Settings, project: Partial<Settings>, trustP
     ...base,
     permissions: {
       allow: [...base.permissions.allow, ...(trustProject && Array.isArray(p?.allow) ? p.allow : [])],
+      // Only the operator's allow rules hold after untrusted content was read (see decide()).
+      operatorAllow: [...base.permissions.allow],
       deny: [...base.permissions.deny, ...(Array.isArray(p?.deny) ? p.deny : [])],
       ask: [...base.permissions.ask, ...(Array.isArray(p?.ask) ? p.ask : [])],
     },
@@ -138,7 +142,7 @@ export function mergeSettings(base: Settings, project: Partial<Settings>, trustP
       if (!Array.isArray(specs) || !(HOOK_EVENTS as readonly string[]).includes(ev)) continue;
       const k = ev as HookEvent;
       const commands = specs.filter((h): h is HookSpec => !!h && typeof h === 'object' && (h.type ?? 'command') === 'command' && typeof h.command === 'string');
-      s.hooks[k] = [...(s.hooks[k] ?? []), ...commands.map((h) => ({ ...h, type: 'command' as const }))];
+      s.hooks[k] = [...(s.hooks[k] ?? []), ...commands.map((h) => ({ ...h, type: 'command' as const, fromProject: true }))];
     }
   }
   return s;

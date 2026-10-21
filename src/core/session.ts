@@ -380,7 +380,8 @@ export class Session {
     const docker = () => new DockerHost(this.meta.id, this.workspace, {
       ...dockerDefaults(), image, network: r.network, policyFile: this.policyFile(), credentials: this.deps.sandboxCredentials,
       ...(r.worktree ? { gitWorktree: { commonDir: r.worktree.commonDir, name: r.worktree.name } } : {}),
-      ...(setupScript ? { setup: { script: setupScript, onLog: (text: string) => this.emit({ kind: 'notice', level: /failed|could not/.test(text) ? 'warn' : 'info', text }) } } : {}),
+      // A snapshot is reused only by the same account working on the same repository.
+      ...(setupScript ? { setup: { script: setupScript, scope: `${this.meta.owner ?? ''}\n${r.worktree?.commonDir ?? r.path ?? this.meta.gitUrl ?? ''}`, onLog: (text: string) => this.emit({ kind: 'notice', level: /failed|could not/.test(text) ? 'warn' : 'info', text }) } } : {}),
       onEgress: (e) => {
         if (e.allowed || blocked.has(e.host)) return;
         blocked.add(e.host);
@@ -535,7 +536,9 @@ export class Session {
         const host = await this.getHost();
         return publish({
           workspace: this.workspace, sessionGitUrl: this.meta.gitUrl, input, cfg, signal,
-          isolate: this.meta.runtime.kind === 'docker',
+          // Wherever processes can outlive a command (a container, an OS sandbox), .git is set aside while fetching.
+          isolate: this.meta.runtime.kind === 'docker' || host.sandboxed,
+          ...(this.meta.runtime.worktree ? { worktree: { commonDir: this.meta.runtime.worktree.commonDir, branch: this.meta.runtime.worktree.branch } } : {}),
           commit: async (message, author) => {
             const r = await host.exec(`git add -A && (git diff --cached --quiet || git -c user.name=${shq(author.name)} -c user.email=${shq(author.email)} -c commit.gpgsign=false commit -q -m ${shq(message)})`, { timeoutMs: 120_000, signal });
             if (r.code !== 0) throw new PublishError(`git commit failed: ${(r.stderr || r.stdout).trim().slice(0, 400)}`);
@@ -576,7 +579,10 @@ export class Session {
     const reg = this.deps.registry;
     const memory = await this.memoryStore();
     // Tools for services that are off are left out: a tool that can only fail is noise in every request.
-    const tools: Tool[] = [...reg.tools.values()].filter((t) => !(t.spec.name === 'memory' && !memory) && !(t.spec.name === 'web_search' && !this.deps.search) && !(t.spec.name === 'publish_branch' && !this.canPublish()) && !(t.spec.name === 'schedule' && !this.deps.scheduler) && !(t.spec.name === 'workflow' && !reg.workflows.size));
+    const listed: Tool[] = [...reg.tools.values()].filter((t) => !(t.spec.name === 'memory' && !memory) && !(t.spec.name === 'web_search' && !this.deps.search) && !(t.spec.name === 'publish_branch' && !this.canPublish()) && !(t.spec.name === 'schedule' && !this.deps.scheduler) && !(t.spec.name === 'workflow' && !reg.workflows.size));
+    // A tool may say where it works (computer: a sandbox image with a desktop).
+    const here = await Promise.all(listed.map((t) => (t.availableIn ? Promise.resolve(t.availableIn(host)).catch(() => false) : true)));
+    const tools = listed.filter((_t, i) => here[i]);
 
     // Skills: operator plugins first, then the workspace's (a name is taken once).
     const skills: Skill[] = [];
@@ -821,31 +827,45 @@ export class Session {
   }
 
   private async runSubagent(a: { description: string; prompt: string; type: string }, depth = 1, parent?: Agent): Promise<string> {
-    const r = await this.runAgent({ agent: a.type, description: a.description, prompt: a.prompt, signal: this.abortCtl?.signal ?? new AbortController().signal, depth, parent });
+    // The brief comes from the delegating agent: if it read untrusted content, so may the brief.
+    const r = await this.runAgent({ agent: a.type, description: a.description, prompt: a.prompt, signal: this.abortCtl?.signal ?? new AbortController().signal, depth, parent, tainted: (parent ?? this.agent)?.tainted });
     return r.report;
   }
 
-  /** Sub-agents running now, and those waiting for a slot (settings.maxParallelSubagents). */
+  /**
+   * Sub-agents running now, and those waiting for a slot (settings.maxParallelSubagents).
+   * Only the main agent's sub-agents and workflow agents take one: a nested sub-agent or
+   * a hook's verifier runs inside the slot of the agent waiting for it (taking another
+   * could wait forever on slots held by the agents waiting for it). A stop ends the wait.
+   */
   private running = 0;
   private waiting: (() => void)[] = [];
-  private async slot(max: number): Promise<() => void> {
-    while (this.running >= max) await new Promise<void>((r) => this.waiting.push(r));
+  private async slot(max: number, signal: AbortSignal): Promise<() => void> {
+    while (this.running >= max) {
+      if (signal.aborted) throw new Error('stopped while waiting for a sub-agent slot');
+      await new Promise<void>((r) => {
+        const go = () => { signal.removeEventListener('abort', go); this.waiting = this.waiting.filter((w) => w !== go); r(); };
+        this.waiting.push(go);
+        signal.addEventListener('abort', go, { once: true });
+      });
+    }
     this.running++;
-    return () => { this.running--; this.waiting.shift()?.(); };
+    let done = false;
+    return () => { if (done) return; done = true; this.running--; this.waiting.shift()?.(); };
   }
 
   /**
    * Runs a named agent in a fresh context: a chat sub-agent, or a workflow's
    * agent node. One cache key per agent kind, so sibling runs share a prefix.
    */
-  async runAgent(a: { agent: string; prompt: string; signal: AbortSignal; label?: string; description?: string; model?: string; effort?: Effort; maxSteps?: number; allowTodos?: boolean; /** A hook's verifier: no hooks of its own (they would start it again). */ noHooks?: boolean; /** 1 for a sub-agent of the main agent, 2 for one of its own, ... */ depth?: number; /** The agent that started it (it is tainted with it). */ parent?: Agent }): Promise<{ report: string; reason: string; cost: number }> {
+  async runAgent(a: { agent: string; prompt: string; signal: AbortSignal; label?: string; description?: string; model?: string; effort?: Effort; maxSteps?: number; allowTodos?: boolean; /** A hook's verifier: no hooks of its own (they would start it again). */ noHooks?: boolean; /** 1 for a sub-agent of the main agent, 2 for one of its own, ... */ depth?: number; /** The agent that started it (it is tainted with it). */ parent?: Agent; /** Starts tainted: its brief came from an agent that read untrusted content. */ tainted?: boolean }): Promise<{ report: string; reason: string; cost: number }> {
     const host = await this.getHost();
     const settings = await this.getSettings(host);
     const tb = await this.getToolbox(host);
     const depth = a.depth ?? 1;
     // Deeper sub-agents only as far as the operator allows; at most maxParallelSubagents at once.
     const nests = depth < settings.maxSubagentDepth;
-    const release = await this.slot(settings.maxParallelSubagents);
+    const release = depth > 1 || a.noHooks ? () => {} : await this.slot(settings.maxParallelSubagents, a.signal);
     try {
     const def = tb.agents.find((x) => x.name === a.agent) ?? tb.agents.find((x) => x.name === 'general')!;
     const n = ++this.subagents;
@@ -871,6 +891,7 @@ export class Session {
       services: await this.services(false),
     }, this.hooksFor(name, (c) => { cost += c; }));
     self.agent = sub;
+    if (a.tainted) sub.tainted = true;
     const env = await this.preamble(host, false);
     // SubagentStart hooks can add context the sub-agent starts with.
     const start = a.noHooks ? { errors: [], feedback: '' } : await runHooks(settings, host, 'SubagentStart', { agent: name, type: def.name, description: a.description ?? '' }, def.name, a.signal, this.deps.registry.hooks, { ...this.hookRunners(), judge: this.hookJudge(settings) });
@@ -945,10 +966,11 @@ export class Session {
     }
   }
 
-  private workflowHost(w: WorkflowDef): WorkflowHost {
+  /** `tainted`: started by an agent that read untrusted content (the workflow tool); its agents start tainted too. */
+  private workflowHost(w: WorkflowDef, tainted = false): WorkflowHost {
     return {
       host: () => this.getHost(),
-      runAgent: (a) => this.runAgent({ ...a, allowTodos: true }),
+      runAgent: (a) => this.runAgent({ ...a, allowTodos: true, tainted }),
       runGates: async (names, signal) => runGates(this.deps.registry, await this.getHost(), names, signal, await this.services(false)),
       approve: async ({ runId, node, title, message, files }) => {
         const host = await this.getHost();
@@ -1017,7 +1039,7 @@ export class Session {
     if (!w) throw new Error(`No workflow named "${name}". Available: ${(await this.workflows()).map((x) => x.name).join(', ') || 'none'}`);
     const run = newRun(w, this.meta.id, input);
     await this.saveRun(run);
-    const done = await new WorkflowRunner(w, this.workflowHost(w), run).execute(signal);
+    const done = await new WorkflowRunner(w, this.workflowHost(w, !!this.agent?.tainted), run).execute(signal);
     const steps = done.history.map((h) => `- ${h.node} (${h.type}): ${h.outcome ?? h.status}${h.summary ? ` - ${h.summary.replace(/\s+/g, ' ').slice(0, 300)}` : ''}`);
     return { status: done.status, cost: done.cost, summary: `${steps.join('\n')}${done.error ? `\nError: ${done.error}` : ''}` };
   }

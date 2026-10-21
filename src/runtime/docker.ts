@@ -54,7 +54,7 @@ export interface DockerOptions {
    * reused for SNAPSHOT_DAYS; the script runs again on top of it (idempotent installs
    * are then quick). The session's own container starts from the result.
    */
-  setup?: { script: string; onLog?: (line: string) => void };
+  setup?: { script: string; /** Who the snapshot belongs to (account and repository): it is never reused beyond them. */ scope?: string; onLog?: (line: string) => void };
   /**
    * The workspace is a git worktree: its git data lives in the repository's .git,
    * outside the mount. That .git is mounted read-only at /repo.git with only what
@@ -77,9 +77,13 @@ export function worktreeMounts(w: { commonDir: string; name: string }): string[]
 const SNAPSHOT_DAYS = Number(process.env.HARNESS_SNAPSHOT_DAYS ?? 7);
 const SETUP_TIMEOUT_MS = Number(process.env.HARNESS_SETUP_TIMEOUT_S ?? 900) * 1000;
 
-/** The snapshot image for a base image and a setup script. */
-export function snapshotTag(image: string, script: string): string {
-  return `harness-env:${crypto.createHash('sha256').update(`${image}\n${script}`).digest('hex').slice(0, 16)}`;
+/**
+ * The snapshot image for a base image, a setup script and its scope. The scope (the
+ * account and repository) is part of the key: setup runs as root over a workspace,
+ * so a snapshot made over one person's repository is never another's starting point.
+ */
+export function snapshotTag(image: string, script: string, scope = ''): string {
+  return `harness-env:${crypto.createHash('sha256').update(`${image}\n${scope}\n${script}`).digest('hex').slice(0, 16)}`;
 }
 
 /** When an image was made (its label), or undefined if it does not exist. */
@@ -99,6 +103,20 @@ export async function pruneSnapshots(now = Date.now()): Promise<string[]> {
     }
   }
   return gone;
+}
+
+/** Which images have which programs (asked once per image and set of names). */
+const imageCommands = new Map<string, Promise<boolean>>();
+export function imageHasCommands(image: string, names: string[]): Promise<boolean> {
+  const safe = names.filter((n) => /^[\w.+-]+$/.test(n));
+  const key = `${image}\n${safe.join(' ')}`;
+  let p = imageCommands.get(key);
+  if (!p) {
+    p = run('docker', ['run', '--rm', '--network', 'none', '--entrypoint', 'sh', image, '-c', safe.map((n) => `command -v ${n} >/dev/null`).join(' && ')], { timeoutMs: 60_000 })
+      .then((r) => r.code === 0, () => false);
+    imageCommands.set(key, p);
+  }
+  return p;
 }
 
 export const dockerDefaults = (): DockerOptions => ({
@@ -251,6 +269,8 @@ export class DockerHost implements ToolHost {
       '--network', allowlist ? this.netName : this.opts.network === 'full' ? 'bridge' : 'none',
       ...proxyEnv, ...credEnv,
       '--memory', this.opts.memory, '--cpus', this.opts.cpus, '--pids-limit', '512',
+      // Browsers in the sandbox (the desktop image, Chromium for render) need more shared memory than Docker's 64 MB.
+      '--shm-size', process.env.HARNESS_SANDBOX_SHM || '512m',
       '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
       '--user', `${uid}:${gid}`,
       '-e', 'HOME=/tmp/home', '-e', 'CI=1',
@@ -272,7 +292,7 @@ export class DockerHost implements ToolHost {
    */
   private async runSetup(uid: number, gid: number): Promise<string> {
     const script = this.opts.setup!.script;
-    const tag = snapshotTag(this.opts.image, script);
+    const tag = snapshotTag(this.opts.image, script, this.opts.setup!.scope);
     const log = (l: string) => this.opts.setup!.onLog?.(l);
     void pruneSnapshots().catch(() => {});
     const made = await imageMadeAt(tag);
@@ -282,8 +302,15 @@ export class DockerHost implements ToolHost {
     const name = `harness-setup-${this.name.replace(/^harness-/, '')}`;
     await run('docker', ['rm', '-f', name], { timeoutMs: 15_000 });
     // As root with the network open, as cloud harnesses run setup; then the workspace
-    // is handed back to the session's user, whatever the script did.
-    const wrapped = `set -o pipefail; (${script}\n) 2>&1; rc=$?; chown -R ${uid}:${gid} /workspace /tmp/home 2>/dev/null; exit $rc`;
+    // is handed back to the session's user, whatever the script did. The log is written
+    // inside the container, so a link planted in the workspace resolves there and never
+    // on the server; whatever .harness/setup.log was is replaced.
+    const logFile = '/workspace/.harness/setup.log';
+    const wrapped = [
+      '[ -L /workspace/.harness ] && rm -f /workspace/.harness', 'mkdir -p /workspace/.harness', `rm -rf ${logFile}`,
+      `(${script}\n) 2>&1 | tee ${logFile}; rc=\${PIPESTATUS[0]}`, `printf '\\nexit %s\\n' "$rc" >> ${logFile}`,
+      `chown -R ${uid}:${gid} /workspace /tmp/home 2>/dev/null; exit $rc`,
+    ].join('; ');
     const r = await run('docker', [
       'run', '--name', name, '--network', 'bridge', '--user', '0:0', '--security-opt', 'no-new-privileges',
       '--memory', this.opts.memory, '--cpus', this.opts.cpus, '--pids-limit', '1024',
@@ -291,9 +318,6 @@ export class DockerHost implements ToolHost {
       '-v', `${this.root}:/workspace`, '-w', '/workspace', '--label', 'harness-web=1',
       from, 'bash', '-lc', `mkdir -p /tmp/home; ${wrapped}`,
     ], { timeoutMs: SETUP_TIMEOUT_MS });
-    const out = (r.stdout + r.stderr).trim();
-    await fs.mkdir(path.join(this.root, '.harness'), { recursive: true }).catch(() => {});
-    await fs.writeFile(path.join(this.root, '.harness', 'setup.log'), `${out}\n\nexit ${r.code}${r.timedOut ? ' (timed out)' : ''}\n`).catch(() => {});
     let image = from;
     if (r.code === 0) {
       const c = await run('docker', ['commit', '--change', `LABEL harness-env.created=${Date.now()}`, '--change', 'USER root', name, tag], { timeoutMs: 300_000 });
@@ -326,6 +350,8 @@ export class DockerHost implements ToolHost {
     const envArgs = Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
     return spawn('docker', ['exec', '-i', ...envArgs, '-w', '/workspace', this.name, command, ...args], { stdio: ['pipe', 'pipe', 'pipe'] });
   }
+
+  hasCommands(names: string[]): Promise<boolean> { return imageHasCommands(this.opts.image, names); }
 
   /** For the agent's environment note: a setup script prepares this sandbox. */
   get hasSetup(): boolean { return !!this.opts.setup?.script.trim(); }

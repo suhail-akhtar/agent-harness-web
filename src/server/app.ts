@@ -105,6 +105,8 @@ const MODES: PermissionMode[] = ['default', 'acceptEdits', 'auto', 'dontAsk', 'p
 
 export function createApp(o: AppOptions): { server: http.Server; handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> } {
   const { harness } = o;
+  // Scheduled work and triggers of a disabled account stop with it.
+  if (o.users && harness.scheduler) harness.scheduler.ownerActive = (id) => { const u = o.users!.get(id); return !!u && !u.disabled; };
   const limiter = new RateLimiter(o.rateLimit ?? 600);
   const messageLimiter = new RateLimiter(o.messageRateLimit ?? 30);
 
@@ -482,7 +484,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       if (!s || !mine(s)) throw new HttpError(404, 'No such schedule.');
       if (!m![2] && method === 'DELETE') return send(res, 200, { ok: await scheduler.remove(s.id) });
       if (m![2] === '/run' && method === 'POST') return send(res, 200, await scheduler.runNow(s.id));
-      if ((m![2] === '/enable' || m![2] === '/disable') && method === 'POST') return send(res, 200, await scheduler.setEnabled(s.id, m![2] === '/enable'));
+      if ((m![2] === '/enable' || m![2] === '/disable') && method === 'POST') return send(res, 200, await scheduler.setEnabled(s.id, m![2] === '/enable').catch((e: Error) => { throw new HttpError(400, e.message); }));
       throw new HttpError(405, 'method not allowed');
     }
 

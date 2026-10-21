@@ -97,6 +97,14 @@ export class Scheduler {
   private ticking = false;
   private runner: ScheduleRunner;
   private log: (m: string) => void;
+  /** Whether an owner's account may still run work (set by the server: disabled accounts may not). */
+  ownerActive?: (owner: string) => boolean;
+
+  /** The runner, unless the schedule's owner can no longer run work. */
+  private async launch(s: Schedule, outside?: string): Promise<{ sessionId?: string; result: string }> {
+    if (s.owner && this.ownerActive && !this.ownerActive(s.owner)) return { result: 'not run: its owner\'s account is disabled' };
+    try { return await this.runner.run(s, outside); } catch (e) { return { result: `failed: ${(e as Error).message}` }; }
+  }
 
   constructor(dataDir: string, runner: ScheduleRunner, log: (m: string) => void = () => {}) {
     this.file = path.join(dataDir, 'schedules.json');
@@ -172,8 +180,7 @@ export class Scheduler {
     const h = hashToken(token);
     const s = [...this.items.values()].find((x) => x.triggerHash && crypto.timingSafeEqual(Buffer.from(x.triggerHash), Buffer.from(h)));
     if (!s || !s.enabled) return undefined;
-    let r: { sessionId?: string; result: string };
-    try { r = await this.runner.run(s, outside.slice(0, 20_000)); } catch (e) { r = { result: `failed: ${(e as Error).message}` }; }
+    const r = await this.launch(s, outside.slice(0, 20_000));
     s.lastRun = now;
     s.lastResult = r.result;
     s.runs++;
@@ -190,8 +197,11 @@ export class Scheduler {
   async setEnabled(id: string, enabled: boolean, now = Date.now()): Promise<Schedule | undefined> {
     const s = this.items.get(id);
     if (!s) return undefined;
+    // A one-time schedule that already ran (or whose time passed) has nothing left to run.
+    if (enabled && !s.cron && !s.triggerHash && (s.at === undefined || s.at <= now)) throw new Error('This one-time schedule has already run or its time has passed; create a new one.');
     s.enabled = enabled;
     if (enabled && s.cron) s.nextRun = nextCron(s.cron, now);
+    if (enabled && !s.cron && s.at !== undefined) s.nextRun = s.at;
     await this.save();
     return s;
   }
@@ -222,8 +232,7 @@ export class Scheduler {
   }
 
   private async fire(s: Schedule, now: number, manual = false): Promise<void> {
-    let r: { sessionId?: string; result: string };
-    try { r = await this.runner.run(s); } catch (e) { r = { result: `failed: ${(e as Error).message}` }; }
+    const r = await this.launch(s);
     s.lastRun = now;
     s.lastResult = r.result;
     s.runs++;

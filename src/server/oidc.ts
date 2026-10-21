@@ -19,6 +19,13 @@ export interface OidcConfig {
   admins: string[];
   /** People sign in only through the provider; personal tokens stop working. */
   only: boolean;
+  /**
+   * Accept an e-mail without email_verified=true (HARNESS_OIDC_TRUST_EMAIL=1), for a
+   * provider that never sends the claim and never lets people set an address it has
+   * not verified. Otherwise a missing claim is refused: the address decides the
+   * allowlist and who is an administrator.
+   */
+  trustEmail?: boolean;
 }
 
 export interface Identity { iss: string; sub: string; email: string; name?: string }
@@ -66,6 +73,7 @@ export function oidcConfigFromEnv(env: NodeJS.ProcessEnv = process.env): OidcCon
     allowedEmails: lower(env.HARNESS_OIDC_ALLOWED_EMAILS),
     admins: lower(env.HARNESS_OIDC_ADMINS),
     only: env.HARNESS_OIDC_ONLY === '1',
+    trustEmail: env.HARNESS_OIDC_TRUST_EMAIL === '1',
   };
 }
 
@@ -269,7 +277,8 @@ export class OidcClient {
     if (!r.ok) throw new OidcError(401, `The identity provider did not accept the sign-in code: ${String(r.body.error ?? `HTTP ${r.status}`)}${r.body.error_description ? ` (${String(r.body.error_description)})` : ''}`);
     if (typeof r.body.id_token !== 'string') throw new OidcError(502, 'The identity provider returned no id_token (is "openid" in HARNESS_OIDC_SCOPES?).');
     const c = await verifyIdToken(r.body.id_token, { keyFor: (kid, alg) => this.keyFor(kid, alg), issuer: this.cfg.issuer, clientId: this.cfg.clientId, nonce: p.nonce });
-    if (c.email_verified === false || c.email_verified === 'false') throw bad('the provider has not verified this e-mail address');
+    const verified = c.email_verified === true || c.email_verified === 'true';
+    if (c.email_verified === false || c.email_verified === 'false' || (!verified && !this.cfg.trustEmail)) throw bad(c.email_verified === undefined ? 'the provider did not say this e-mail address is verified (set HARNESS_OIDC_TRUST_EMAIL=1 only if it never lets people use an address it has not verified)' : 'the provider has not verified this e-mail address');
     if (typeof c.email !== 'string' || !c.email.includes('@')) throw bad('the provider sent no e-mail address (is "email" in HARNESS_OIDC_SCOPES?)');
     return { iss: c.iss, sub: c.sub, email: c.email, name: typeof c.name === 'string' ? c.name : undefined };
   }

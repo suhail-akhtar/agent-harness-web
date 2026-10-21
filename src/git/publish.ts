@@ -161,12 +161,23 @@ export async function publish(o: {
   commit?: (message: string, author: { name: string; email: string }) => Promise<void>;
   /** The workspace is a sandbox's: move .git out of its reach while fetching from it. */
   isolate?: boolean;
+  /**
+   * The workspace is a git worktree of a repository on this machine (its .git is a
+   * gitfile): its commits are fetched from that repository's git data, by the
+   * session's own branch.
+   */
+  worktree?: { commonDir: string; branch: string };
 }): Promise<PublishResult> {
   const { input, cfg } = o;
   if (!validBranch(input.branch)) throw new PublishError(`"${input.branch}" is not a valid branch name (letters, digits, . _ / -).`);
   if (!input.title.trim()) throw new PublishError('a pull request title is required');
   const target = publishTarget(o.sessionGitUrl, o.repo, cfg);
-  let gitDir = await ownGitDir(o.workspace);
+  const own = async () => {
+    if (!o.worktree) return ownGitDir(o.workspace);
+    await checkGitDir(o.worktree.commonDir);
+    return o.worktree.commonDir;
+  };
+  let gitDir = await own();
 
   // 1. Commit, if asked - where the session's commands run. `git add` in an
   // agent's workspace runs whatever filters its .git/config defines, so it never
@@ -174,7 +185,7 @@ export async function publish(o: {
   if (input.commitMessage?.trim()) {
     if (!o.commit) throw new PublishError('Commit your changes with git first (this workspace cannot be committed for you).');
     await o.commit(input.commitMessage.trim(), cfg.author ?? { name: 'Harness Agent', email: 'agent@harness.invalid' });
-    gitDir = await ownGitDir(o.workspace); // the commit ran the agent's code; look again
+    gitDir = await own(); // the commit ran the agent's code; look again
   }
 
   // 2. Copy the commits into a repository the harness owns.
@@ -182,8 +193,9 @@ export async function publish(o: {
   try {
     await git(['init', '-q', '--bare', clean], os.tmpdir(), o.signal);
     // Fetching from a local path runs upload-pack against the workspace; its config cannot add hooks to a fetch.
-    const fetchFrom = (dir: string) => git(['-c', 'protocol.file.allow=always', 'fetch', '-q', '--no-tags', dir, `+HEAD:refs/heads/${input.branch}`], clean, o.signal);
-    if (o.isolate) {
+    const source = o.worktree ? `refs/heads/${o.worktree.branch}` : 'HEAD';
+    const fetchFrom = (dir: string) => git(['-c', 'protocol.file.allow=always', 'fetch', '-q', '--no-tags', dir, `+${source}:refs/heads/${input.branch}`], clean, o.signal);
+    if (o.isolate && !o.worktree) {
       // A sandbox may still be running the agent's processes, which could swap .git
       // between the check and the fetch. Move it out of the sandbox's reach first
       // (a rename takes the entry itself, link or not), check it there, and put it back.

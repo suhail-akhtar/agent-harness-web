@@ -51,3 +51,19 @@ test('a failing setup script does not stop the session: it starts from the base 
     assert.equal(h.setupResult?.ok, false);
   } finally { await h.close(); }
 });
+
+test('the setup log never goes through a link planted in the workspace, and snapshots are kept per account and repository', { skip: !hasDocker && 'no docker or sandbox image' }, async () => {
+  assert.notEqual(snapshotTag('img', 'npm ci', 'alice\n/repo/a'), snapshotTag('img', 'npm ci', 'bob\n/repo/a'), 'another account never starts from this snapshot');
+  assert.notEqual(snapshotTag('img', 'npm ci', 'alice\n/repo/a'), snapshotTag('img', 'npm ci', 'alice\n/repo/b'));
+  const ws = await tempDir();
+  const outside = await tempDir();
+  await fs.writeFile(path.join(outside, 'setup.log'), 'server file');
+  // .harness is a link to a folder outside (a junction on Windows, which needs no privileges).
+  await fs.symlink(outside, path.join(ws, '.harness'), 'junction');
+  const h = new DockerHost(`s4${Date.now().toString(16)}`, ws, { image: 'harness-sandbox:latest', network: 'none', memory: '512m', cpus: '1', setup: { script: 'echo LINK-TEST; exit 3' } });
+  try {
+    await h.exec('true', { timeoutMs: 120_000 });
+    assert.equal(await fs.readFile(path.join(outside, 'setup.log'), 'utf8'), 'server file', 'the file outside is untouched');
+    assert.match(await fs.readFile(path.join(ws, '.harness', 'setup.log'), 'utf8').catch(() => ''), /LINK-TEST[\s\S]*exit 3/, 'the log is in the workspace\'s own .harness');
+  } finally { await h.close(); }
+});

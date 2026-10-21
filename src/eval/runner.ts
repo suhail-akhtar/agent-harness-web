@@ -76,9 +76,12 @@ export async function runChecks(h: Harness, c: EvalCase, ws: string, signal: Abo
     try {
       if (ch.run) {
         // {{port}}: a free port for this check, so runs in parallel never collide.
-        // Paths go into a shell command: forward slashes (bash on Windows eats backslashes) and quoted (spaces).
-        const shellPath = (p: string) => `'${p.split(path.sep).join('/').replace(/'/g, `'\\''`)}'`;
-        const cmd = ch.run.replaceAll('{{case}}', shellPath(c.dir)).replaceAll('{{ws}}', shellPath(ws)).replaceAll('{{port}}', String(await freePort()));
+        // Paths go into a shell command: forward slashes (bash on Windows eats backslashes) and
+        // quoted (spaces) together with what follows them ({{case}}/check.mjs is one word), in
+        // the quoting of the shell that runs it (PowerShell doubles a quote; bash closes and reopens).
+        const quote = (s: string) => host.shell === 'powershell' ? `'${s.replace(/'/g, "''")}'` : `'${s.replace(/'/g, `'\\''`)}'`;
+        const fill = (s: string, token: string, p: string) => s.replace(new RegExp(`\\{\\{${token}\\}\\}([^\\s'"|;&<>()]*)`, 'g'), (_m, rest: string) => quote(p.split(path.sep).join('/') + rest));
+        const cmd = fill(fill(ch.run, 'case', c.dir), 'ws', ws).replaceAll('{{port}}', String(await freePort()));
         const r = await host.exec(cmd, { timeoutMs: (ch.timeoutSec ?? 300) * 1000, signal });
         const out = `${r.stdout}\n${r.stderr}`.trim().split('\n').slice(-6).join('\n');
         results.push({ name: ch.name, pass: r.code === 0 && !r.timedOut, detail: r.timedOut ? 'timed out' : `exit ${r.code}${out ? `: ${out.slice(-600)}` : ''}` });

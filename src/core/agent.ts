@@ -339,7 +339,10 @@ export class Agent {
     }
     const name = tool.spec.name;
 
-    const decision = decide(tool, input, { mode: this.hooks.getMode(), rules: this.hooks.rules(), sandboxed: this.cfg.host.sandboxed, tainted: this.tainted, network: this.cfg.host.networkPolicy, hostKind: this.cfg.host.kind });
+    // An allowlist sandbox with credentials at its proxy can write to those services
+    // (a gist, an issue): for the untrusted-content guard that is a way out like open network.
+    const net = this.cfg.host.networkPolicy === 'allowlist' && this.cfg.host.credentialEnv?.().length ? 'full' : this.cfg.host.networkPolicy;
+    const decision = decide(tool, input, { mode: this.hooks.getMode(), rules: this.hooks.rules(), sandboxed: this.cfg.host.sandboxed, tainted: this.tainted, network: net, hostKind: this.cfg.host.kind });
     if (decision.action === 'deny') return finish(`Permission denied: ${decision.reason}.`, true, undefined, undefined, name);
 
     // PreToolUse runs before anyone is asked: a hook that blocks spares the person a
@@ -349,8 +352,9 @@ export class Agent {
     if (pre.blocked) return finish(`A PreToolUse hook blocked this call: ${pre.feedback}`, true, undefined, undefined, name);
 
     // auto mode: a model checks the call against what the user asked; a clear yes runs it, anything else goes on to be asked.
+    // Not what the untrusted-content guard asks: the model would judge the very content steering the agent.
     let autoNo: string | undefined;
-    if (decision.action === 'ask' && pre.decision !== 'allow' && this.hooks.getMode() === 'auto' && this.cfg.autoCheck) {
+    if (decision.action === 'ask' && !decision.guard && pre.decision !== 'allow' && this.hooks.getMode() === 'auto' && this.cfg.autoCheck) {
       const v = await this.cfg.autoCheck({ tool: name, summary: tool.summarize(input), input, reason: decision.reason, request: this.hooks.latestUserPrompt(), untrustedContentSeen: this.tainted }, signal).catch((e: Error) => ({ ok: false, reason: `the check failed: ${e.message}` }));
       if (v.ok) {
         this.hooks.emit({ kind: 'notice', level: 'info', text: `Auto mode allowed ${tool.summarize(input).slice(0, 120)}`, agent });

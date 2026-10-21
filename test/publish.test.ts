@@ -57,6 +57,19 @@ test('publish: commits, copies out of the workspace and pushes a new branch; nev
   assert.equal(g(remote, 'log', '--format=%s', 'feature/one', '-1'), 'theirs');
 });
 
+test('publish from a worktree session: its branch is fetched from the repository\'s git data', async () => {
+  const { createWorktree } = await import('../src/git/worktree.ts');
+  const { remote, ws } = await repos();
+  const w = await createWorktree(ws, path.join(await tempDir(), 'wt'), 'pubwt');
+  await fs.writeFile(path.join(w.dir, 'wt.txt'), 'from the worktree\n');
+  const r = await publish({ workspace: w.dir, input: { branch: 'from-worktree', title: 'Worktree', commitMessage: 'Worktree work' }, cfg: { repos: [remote] }, commit: commitIn(w.dir), worktree: { commonDir: w.commonDir, branch: w.branch }, isolate: true });
+  assert.equal(g(remote, 'log', '--format=%s', 'from-worktree', '-1'), 'Worktree work');
+  assert.equal(g(remote, 'show', 'from-worktree:wt.txt'), 'from the worktree');
+  assert.equal(r.commit, g(ws, 'rev-parse', w.branch));
+  // Without the worktree's details, its gitfile is refused as before.
+  await assert.rejects(publish({ workspace: w.dir, input: { branch: 'x2', title: 't' }, cfg: { repos: [remote] } }), /not a plain folder/);
+});
+
 test('publish: nothing in the workspace\'s git config runs or redirects the push', async () => {
   const { remote, ws } = await repos();
   const marker = path.join(await tempDir(), 'pwned');

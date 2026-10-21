@@ -75,6 +75,8 @@ export interface Tool {
   sendsOut?: boolean | ((input: Record<string, unknown>) => boolean);
   /** The permission kinds this call needs, when they depend on the input (default: [kind]). */
   kindsFor?(input: Record<string, unknown>, where?: { hostKind?: string }): ToolKind[];
+  /** Whether a session on this host gets the tool at all (default: yes). A tool that can only fail there is left out of every request. */
+  availableIn?(host: import('../runtime/host.ts').ToolHost): boolean | Promise<boolean>;
   /** One line for permission prompts and the UI. */
   summarize(input: Record<string, unknown>): string;
   /**

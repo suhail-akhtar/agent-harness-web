@@ -48,6 +48,16 @@ test('the scheduler: one-time and repeating runs, missed runs fire once, a busy 
   const c = new Scheduler(dir, runner);
   await c.load();
   assert.equal(c.get(daily.id)!.runs, 2);
+  // A finished one-time schedule cannot be switched back on (it would sit enabled, never running).
+  await assert.rejects(c.setEnabled(once.id, true, new Date('2026-10-22T10:00:00').getTime()), /already run or its time has passed/);
+  // A disabled account's schedules stop with it.
+  busy = false;
+  const owned = await c.create({ owner: 'usr_1', prompt: 'owned', inMinutes: 1, sessionId: 's1' }, t0);
+  c.ownerActive = (id) => id !== 'usr_1';
+  ran.length = 0;
+  await c.runNow(owned.id, t0);
+  assert.deepEqual(ran, []);
+  assert.match(c.get(owned.id)!.lastResult!, /account is disabled/);
 });
 
 test('the agent schedules work in its own session; the run arrives as a prompt; notify_user reaches the person', async () => {

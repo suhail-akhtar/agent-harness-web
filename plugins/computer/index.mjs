@@ -42,6 +42,8 @@ export default {
       },
       // It acts inside the sandbox, like a command: free there, under the session's network policy.
       kind: 'exec',
+      // Only sessions whose sandbox image has a desktop see it (elsewhere it could only fail, and costs prompt tokens).
+      availableIn: (host) => host.kind === 'docker' && typeof host.hasCommands === 'function' && host.hasCommands(['Xvfb', 'xdotool']),
       summarize: (i) => {
         const a = String(i.action ?? '');
         const where = Array.isArray(i.coordinate) ? ` [${i.coordinate.join(', ')}]` : '';

@@ -28,6 +28,13 @@ export const MIRROR_SKIP = new Set(['node_modules', '.git', '.harness', '.venv',
 export const MIRROR_SKIP_FILE = /^(\.env(\..*)?|.*\.(pem|key|p12|pfx)|id_(rsa|ed25519|ecdsa)(\.pub)?|\.npmrc|\.netrc)$/i;
 const FILE_MAX = 20 * 1024 * 1024;
 
+/** A project MCP server's largest message, and the most it may say before the server reads it. */
+const MCP_MESSAGE_MAX = 16 * 1024 * 1024;
+const MCP_INBOX_MAX = 32 * 1024 * 1024;
+
+/** A project MCP server running here: what it said and the server has not yet read. */
+interface McpRelay { child: import('node:child_process').ChildProcessWithoutNullStreams; inbox: Record<string, unknown>[]; held: number; waiters: (() => void)[]; closed?: string }
+
 export function createCompanionHandler(dir: string, opts: { allowHooks?: boolean; /** Project MCP servers (.mcp.json) may start here without a sandbox. */ trustProject?: boolean; log?: (m: string) => void; /** Where commands run: a sandboxed host for the folder (default: plain). */ host?: ToolHost } = {}) {
   const host: ToolHost = opts.host ?? new LocalHost(dir);
   const readFiles = new Map<string, Map<string, FileStamp>>();
@@ -63,7 +70,7 @@ export function createCompanionHandler(dir: string, opts: { allowHooks?: boolean
   }
 
   /** Project MCP servers running on this computer, by session and name; what each has said and not yet been relayed. */
-  const servers = new Map<string, { child: import('node:child_process').ChildProcessWithoutNullStreams; inbox: Record<string, unknown>[]; waiters: (() => void)[]; closed?: string }>();
+  const servers = new Map<string, McpRelay>();
 
   async function mcp(job: Extract<CompanionJob, { kind: 'mcp' }>): Promise<unknown> {
     const key = `${job.sessionId}/${job.server}`;
@@ -72,17 +79,23 @@ export function createCompanionHandler(dir: string, opts: { allowHooks?: boolean
       if (!host.spawnStream || !job.command) throw new Error('this companion cannot start processes');
       servers.get(key)?.child.kill();
       const child = await host.spawnStream(job.command, job.args ?? [], job.env ?? {});
-      const s = { child, inbox: [] as Record<string, unknown>[], waiters: [] as (() => void)[], closed: undefined as string | undefined };
+      const s: McpRelay = { child, inbox: [], waiters: [], held: 0 };
       let buf = '';
+      // Held until the server asks for them: bounded, so a server that talks without end
+      // (or never ends a line) is stopped instead of filling this computer's memory.
+      const stop = (why: string) => { s.closed = why; child.kill(); for (const w of s.waiters.splice(0)) w(); };
       child.stdout.setEncoding('utf8');
       child.stdout.on('data', (d: string) => {
+        if (s.closed) return;
         buf += d;
+        if (buf.length > MCP_MESSAGE_MAX) return stop(`sent a message over ${MCP_MESSAGE_MAX / 1024 / 1024} MB`);
         let nl: number;
         while ((nl = buf.indexOf('\n')) >= 0) {
           const line = buf.slice(0, nl).trim();
           buf = buf.slice(nl + 1);
           if (!line) continue;
-          try { s.inbox.push(JSON.parse(line)); } catch { /* not a message */ }
+          try { s.inbox.push(JSON.parse(line)); s.held += line.length; } catch { /* not a message */ }
+          if (s.held > MCP_INBOX_MAX) return stop(`said more than ${MCP_INBOX_MAX / 1024 / 1024} MB that was not read`);
           for (const w of s.waiters.splice(0)) w();
         }
       });
@@ -102,6 +115,7 @@ export function createCompanionHandler(dir: string, opts: { allowHooks?: boolean
     while (id !== undefined && !s.inbox.some((m) => m.id === id && ('result' in m || 'error' in m)) && !s.closed && Date.now() < deadline) {
       await new Promise<void>((r) => { s.waiters.push(r); setTimeout(r, 1000); });
     }
+    s.held = 0;
     return { messages: s.inbox.splice(0), ...(s.closed ? { closed: s.closed } : {}) };
   }
 

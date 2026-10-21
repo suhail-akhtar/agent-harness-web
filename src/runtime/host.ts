@@ -92,6 +92,8 @@ export interface ToolHost {
   removeFile?(rel: string, signal?: AbortSignal): Promise<void>;
   /** Companion: an MCP transport to a project server started on the user's computer. */
   mcpTransport?(server: string, command: string, args: string[], env: Record<string, string>): Promise<{ send(msg: Record<string, unknown>, opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<void>; onMessage(cb: (m: Record<string, unknown>) => void): void; onClose(cb: (r: string) => void): void; close(): Promise<void> }>;
+  /** Docker: whether the sandbox image has these programs (checked once per image, without starting the sandbox). */
+  hasCommands?(names: string[]): Promise<boolean>;
   /** Companion: the user started it trusting the project (its MCP servers may run there unsandboxed). */
   trustProject?: boolean;
   close?(): Promise<void>;

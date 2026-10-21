@@ -1,3 +1,4 @@
+import { constants as fsc } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { MIRROR_SKIP, MIRROR_SKIP_FILE } from '../companion/handler.ts';
@@ -35,15 +36,29 @@ export async function exportSession(s: Session, maxBytes = Number(process.env.HA
   let total = 0;
   if (s.meta.runtime.kind !== 'companion') {
     const root = s.workspace;
+    const rootReal = await fs.realpath(root).catch(() => root);
     const walk = async (rel: string): Promise<void> => {
       for (const e of await fs.readdir(path.join(root, rel), { withFileTypes: true }).catch(() => [])) {
         const r = rel ? `${rel}/${e.name}` : e.name;
         if (e.isDirectory()) { if (!MIRROR_SKIP.has(e.name)) await walk(r); continue; }
         if (!e.isFile() || MIRROR_SKIP_FILE.test(e.name)) continue;
-        const st = await fs.stat(path.join(root, r));
-        if (st.size > FILE_MAX || total + st.size > maxBytes) { skipped.push(r); continue; }
-        total += st.size;
-        files.push({ path: r, data: (await fs.readFile(path.join(root, r))).toString('base64') });
+        // Commands in the sandbox may still be running and could swap a file (or a folder
+        // above it) for a link to a server file: the file is opened without following a
+        // last link, then must be the very file its real path inside the workspace names.
+        const fh = await fs.open(path.join(root, r), fsc.O_RDONLY | (fsc.O_NOFOLLOW ?? 0)).catch(() => null);
+        if (!fh) continue;
+        try {
+          const st = await fh.stat();
+          if (!st.isFile()) continue;
+          const real = await fs.realpath(path.join(root, r)).catch(() => '');
+          const rel2 = path.relative(rootReal, real);
+          if (!real || rel2.startsWith('..') || path.isAbsolute(rel2)) continue;
+          const named = await fs.stat(real).catch(() => null);
+          if (!named || named.ino !== st.ino || named.dev !== st.dev) continue;
+          if (st.size > FILE_MAX || total + st.size > maxBytes) { skipped.push(r); continue; }
+          total += st.size;
+          files.push({ path: r, data: (await fh.readFile()).toString('base64') });
+        } finally { await fh.close(); }
       }
     };
     await walk('');

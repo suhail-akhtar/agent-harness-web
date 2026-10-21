@@ -63,5 +63,14 @@ test('checks run on Windows too: case and workspace paths reach the shell with f
   try {
     const [r] = await runChecks(h, c!, ws, new AbortController().signal);
     assert.equal(r!.pass, true, r!.detail);
+    // The same check under PowerShell (Windows without Git Bash): the path and its suffix stay one argument.
+    if (process.platform === 'win32') {
+      const saved = process.env.HARNESS_SHELL;
+      process.env.HARNESS_SHELL = 'powershell';
+      try {
+        const [p] = await runChecks(h, c!, ws, new AbortController().signal);
+        assert.equal(p!.pass, true, p!.detail);
+      } finally { if (saved === undefined) delete process.env.HARNESS_SHELL; else process.env.HARNESS_SHELL = saved; }
+    }
   } finally { await h.close(); }
 });

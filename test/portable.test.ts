@@ -28,6 +28,14 @@ test('a session moves to another server: its conversation continues there, with 
     const bundle = JSON.parse(JSON.stringify(await exportSession(s)));
     assert.deepEqual(bundle.files.map((f: { path: string }) => f.path), ['src/app.js'], 'no .env, no node_modules');
     assert.ok(!JSON.stringify(bundle).includes('sk-secret'));
+    // Links never carry a server file out: a folder link (a junction on Windows) or a file link.
+    const outside = await tempDir();
+    await fs.writeFile(path.join(outside, 'server-secret.txt'), 'SERVER-ONLY');
+    await fs.symlink(outside, path.join(s.workspace, 'linked'), 'junction');
+    await fs.symlink(path.join(outside, 'server-secret.txt'), path.join(s.workspace, 'leak.txt')).catch(() => {});
+    const linked = JSON.stringify(await exportSession(s));
+    assert.ok(!linked.includes(Buffer.from('SERVER-ONLY').toString('base64')), 'nothing from outside the workspace');
+    assert.match(linked, /src\/app\.js/);
 
     const t = await importSession(b.sessions, bundle, { runtime: { kind: 'local', network: 'none' } });
     assert.equal(t.meta.mode, 'default', 'an import never brings bypass along');

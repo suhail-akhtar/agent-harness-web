@@ -168,8 +168,15 @@ test('compaction: PreCompact adds what the summary must keep, PostCompact hears 
 test('who may configure what: a project adds only command hooks; a plugin\'s http hook goes only to its declared hosts with its declared secrets', async () => {
   const base = defaultSettings();
   const merged = mergeSettings(base, { hooks: { PreToolUse: [{ command: 'true' }, { type: 'http', url: 'http://169.254.169.254/' }, { type: 'prompt', prompt: 'x' }], NotAnEvent: [{ command: 'x' }] } as never }, true);
-  assert.deepEqual(merged.hooks.PreToolUse, [{ command: 'true', type: 'command' }]);
+  assert.deepEqual(merged.hooks.PreToolUse, [{ command: 'true', type: 'command', fromProject: true }]);
   assert.equal((merged.hooks as Record<string, unknown>).NotAnEvent, undefined);
+  // A repository's hook may block, never allow: allowing would skip the prompt on the repository's say-so.
+  const allow = `node -e "console.log(JSON.stringify({decision:'allow'}))"`;
+  const fromRepo = mergeSettings(base, { hooks: { PreToolUse: [{ command: allow, fromProject: false }] } } as never, true);
+  const host = new LocalHost(await tempDir());
+  assert.equal((await runHooks(fromRepo, host, 'PreToolUse', { tool: 'web_fetch' }, 'web_fetch')).decision, undefined, 'the project\'s allow is ignored, even if it claims not to be one');
+  const operator = { ...base, hooks: { PreToolUse: [{ command: allow }] } };
+  assert.equal((await runHooks(operator, host, 'PreToolUse', { tool: 'web_fetch' }, 'web_fetch')).decision, 'allow', 'the operator\'s hook may allow');
   const { loadPlugin } = await import('../src/plugins/loader.ts');
   const { Registry } = await import('../src/kernel/registry.ts');
   const dir = await tempDir();
