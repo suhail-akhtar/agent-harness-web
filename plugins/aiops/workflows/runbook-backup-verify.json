@@ -21,7 +21,7 @@
     },
     "restore-test": {
       "type": "agent", "title": "Restore test", "agent": "sre", "change": true, "maxSteps": 20,
-      "prompt": "A person approved this restore test on {{input.host}}:\n{{state.inspect}}\n\nRun exactly those commands with ssh_exec: restore into the scratch directory, run the integrity checks, record their results, then remove the scratch directory. Nothing outside the scratch directory.\n\nReport: each command, its result, and the integrity check outcome.",
+      "prompt": "A person approved this restore test on {{input.host}}:\n{{state.inspect}}\n\nRun exactly those commands with ssh_exec as: \"operator\" (the read-only account cannot write): restore into the scratch directory, run the integrity checks, record their results, then remove the scratch directory. Nothing outside the scratch directory.\n\nReport: each command, its result, and the integrity check outcome.",
       "next": "verify"
     },
     "verify": {

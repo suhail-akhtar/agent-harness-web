@@ -2,7 +2,8 @@
 # machine, a database host reached over ssh, Prometheus. The host db-1, the
 # monitoring endpoints and their credentials are the operator's
 # (evals/aiops/stack/operator-inventory.yaml, HARNESS_OPS_INVENTORY): a
-# workspace inventory names services, alerts and windows, never credentials.
+# workspace inventory names services, alerts and windows, never credentials (nor
+# a read-only account: db-1's is the operator's too).
 services:
   - name: shop-api
     host: local
@@ -13,6 +14,8 @@ services:
     metrics_job: demoapp
     logs: { docker: hwtest-aiops-demoapp }
     owner: team-shop
+    depends_on: [db-1]
+    notes: "The orders database is files on db-1's /data volume, which this container shares (db-1:/data/app/README.txt says how it is maintained)."
     slos:
       - name: availability
         objective: 99.5
@@ -27,7 +30,7 @@ services:
   - name: billing-worker
     host: db-1
     env: prod
-    unit: billing-worker.service
+    notes: "A plain process on db-1 (/usr/local/bin/billing-worker, run by ops); db-1 has no systemd."
     owner: team-billing
 
 maintenance:

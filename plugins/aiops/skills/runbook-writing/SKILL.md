@@ -20,7 +20,7 @@ A runbook is a markdown file at `.harness/ops/runbooks/<name>.md`. `runbook` (li
 - `## Steps` is a numbered list. Each step starts with one tag in square brackets:
   - `[check]` - read-only: a query, probe, status or read-only command. Captures state; changes nothing.
   - `[approval]` - a human approves what follows. Say exactly what is being approved and the expected impact.
-  - `[change]` - changes a system. Must contain the exact command or tool call in backticks.
+  - `[change]` - changes a system. Must contain the exact command or tool call in backticks. A command on a host names the operator account: `` `ssh_exec(host="db-1", as="operator", command="...")` `` - the default account on a host with a read-only account (`[check]` and `[verify]` steps) cannot change anything.
   - `[verify]` - proves the change worked: `probe`, `ops_check` or a query, with the expected result stated.
 
 ## Rules the runbook-safe gate enforces
@@ -45,7 +45,7 @@ Run `runbook` (action check) or `quality_gates` on the file before handing it ov
 
 ## Sections
 - **When to use** - the symptom or alert that calls for it, and when not to use it.
-- **Preconditions** - access, inventory entries, maintenance window, prerequisites that must be true before starting (each checkable).
+- **Preconditions** - access, inventory entries, maintenance window, prerequisites that must be true before starting - each one checkable with the tools by whoever runs the runbook (name the check). What only a person can decide (a timing, an out-of-window change, a confirmation from the owner) is not a precondition: put it in the `[approval]` step, whose approval is that decision. A precondition nobody running the runbook can satisfy stops it every time.
 - **Steps** - the tagged numbered list.
 - **Rollback** - exact steps to undo each change, in reverse order, also with commands in backticks.
 - **Verify** - the end-state checks that close the runbook and the incident step.

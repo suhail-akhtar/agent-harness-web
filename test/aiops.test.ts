@@ -582,7 +582,8 @@ test('aiops plugin: tools with the right permission class, only in sessions with
     const kinds = Object.fromEntries(['ops_inventory', 'prometheus_query', 'logs_search', 'probe', 'host_stats', 'docker_status', 'ssh_exec', 'service_control', 'ops_check', 'slo_status', 'capacity_forecast', 'incident', 'runbook'].map((n) => [n, tool(n)?.kind]));
     assert.deepEqual(kinds, { ops_inventory: 'read', prometheus_query: 'network', logs_search: 'network', probe: 'network', host_stats: 'network', docker_status: 'read', ssh_exec: 'external', service_control: 'external', ops_check: 'network', slo_status: 'network', capacity_forecast: 'network', incident: 'edit', runbook: 'read' });
     for (const n of ['prometheus_query', 'logs_search', 'probe', 'ssh_exec', 'docker_status', 'host_stats']) assert.equal(tool(n).untrusted, true, `${n} output is untrusted`);
-    assert.equal(tool('ssh_exec').sendsOut, true);
+    const sshOut = tool('ssh_exec').sendsOut as (i: Record<string, unknown>) => boolean;
+    assert.equal(sshOut({ host: 'db-1', command: 'uptime' }), true, 'without a read-only account every ssh_exec can send data out');
     assert.deepEqual(tool('host_stats').kindsFor!({ host: 'local' }), ['read']);
     assert.deepEqual(tool('host_stats').kindsFor!({ host: 'db-1' }), ['network']);
     assert.deepEqual(tool('service_control').kindsFor!({ action: 'status' }), ['network']);
@@ -633,6 +634,77 @@ test('aiops permissions: ssh_exec is asked unless an operator rule names that ho
     assert.equal(decide(t, { host: 'db-1', command: 'uptime', trust_host_key: 'SHA256:abc' }, { mode: 'dontAsk', rules: exact, sandboxed: true }).action, 'deny');
     assert.match(t.summarize({ host: 'db-1', command: 'uptime', trust_host_key: 'SHA256:abc' }), /^RE-PIN the host key of db-1 to SHA256:abc/);
   } finally { await h.close(); }
+});
+
+test('aiops least privilege: a host\'s read-only account investigates unasked (any command); the operator account is asked; only the operator\'s inventory can declare a reader', async () => {
+  const { h, tool } = await harness();
+  const opFile = path.join(await tempDir(), 'ops.json');
+  await fs.writeFile(opFile, JSON.stringify({ hosts: [
+    { name: 'db-1', address: '127.0.0.1', port: 9, user: 'ops', credential: 'ops-db-1-key', readUser: 'reader', readCredential: 'ops-db-1-reader-key', env: 'prod' },
+    { name: 'web-1', address: '127.0.0.1', port: 9, user: 'ops', credential: 'ops-web-1-key' },
+  ] }));
+  process.env.HARNESS_OPS_INVENTORY = opFile;
+  try {
+    const t = tool('ssh_exec') as Tool;
+    const rules = (operatorAllow: string[] = []): Rules => ({ allow: [...operatorAllow], deny: [], ask: [], operatorAllow });
+    const vaultOk = rules(['vault(ops-*)']);
+    const investigate = { host: 'db-1', command: 'for p in /proc/[0-9]*; do ls -l $p/fd 2>/dev/null | grep -c /data; done; command -v dbctl; echo $?' };
+    assert.equal(ssh.isReadOnly(investigate.command), false, 'by its syntax alone it would be asked as a change');
+    assert.deepEqual(t.vaultNames!(investigate), ['ops-db-1-reader-key']);
+    assert.deepEqual(t.kindsFor!(investigate), ['read']);
+    assert.equal(decide(t, investigate, { mode: 'default', rules: vaultOk, sandboxed: true }).action, 'allow');
+    assert.equal(decide(t, investigate, { mode: 'default', rules: vaultOk, sandboxed: true, tainted: true }).action, 'allow', 'after untrusted output too: the host refuses its changes');
+    assert.equal(decide(t, investigate, { mode: 'dontAsk', rules: vaultOk, sandboxed: true }).action, 'allow');
+    assert.equal(decide(t, investigate, { mode: 'plan', rules: vaultOk, sandboxed: true }).action, 'allow');
+    // Its credential is still decided by the vault rules.
+    assert.equal(decide(t, investigate, { mode: 'default', rules: rules(), sandboxed: true }).action, 'ask');
+    assert.equal(decide(t, investigate, { mode: 'default', rules: { ...vaultOk, deny: ['vault(ops-db-1-reader-key)'] }, sandboxed: true }).action, 'deny');
+    // A reader command naming a network client is confirmed after untrusted content (a way out from the host).
+    const out = { host: 'db-1', command: 'curl -s http://example.com/x' };
+    assert.equal(decide(t, out, { mode: 'default', rules: vaultOk, sandboxed: true }).action, 'allow');
+    assert.equal(decide(t, out, { mode: 'default', rules: vaultOk, sandboxed: true, tainted: true }).action, 'ask');
+    // The operator account: its own credential, asked, refused where nobody is asked.
+    const change = { host: 'db-1', as: 'operator', command: 'sh /data/app/bin/dbctl create-index x' };
+    assert.deepEqual(t.vaultNames!(change), ['ops-db-1-key']);
+    assert.deepEqual(t.kindsFor!(change), ['external']);
+    assert.equal(decide(t, change, { mode: 'default', rules: vaultOk, sandboxed: true }).action, 'ask');
+    assert.equal(decide(t, change, { mode: 'dontAsk', rules: vaultOk, sandboxed: true }).action, 'deny');
+    assert.match(t.summarize(change), /^ssh db-1 as operator \[CHANGE\]/);
+    assert.match(t.summarize(investigate), /^ssh db-1 as reader: for p/);
+    // A host key re-pin changes what the harness trusts: asked even as the reader.
+    assert.equal(decide(t, { ...investigate, trust_host_key: 'SHA256:x' }, { mode: 'default', rules: vaultOk, sandboxed: true }).action, 'ask');
+    // A host without a reader: the operator account, asked.
+    const web = { host: 'web-1', command: 'uptime' };
+    assert.deepEqual(t.vaultNames!(web), ['ops-web-1-key']);
+    assert.equal(decide(t, web, { mode: 'default', rules: vaultOk, sandboxed: true }).action, 'ask');
+    const r0 = await t.run({ host: 'web-1', as: 'reader', command: 'uptime' }, ctxFor(await workspace({ services: [] })));
+    assert.match(r0.content, /no read-only account .*nothing ran/);
+    // host_stats (a fixed script) as the reader: a read.
+    assert.deepEqual(tool('host_stats').kindsFor!({ host: 'db-1' }), ['read']);
+    assert.deepEqual(tool('host_stats').vaultNames!({ host: 'db-1' }), ['ops-db-1-reader-key']);
+    assert.deepEqual(tool('host_stats').kindsFor!({ host: 'web-1' }), ['network']);
+
+    // A workspace inventory cannot declare a reader: ignored with a warning, and the call stays an operator call.
+    await fs.writeFile(opFile, JSON.stringify({ hosts: [{ name: 'db-1', address: '127.0.0.1', port: 9, user: 'ops', credential: 'ops-db-1-key', env: 'prod' }] }));
+    const ws = await workspace({ hosts: [{ name: 'db-1', address: '127.0.0.1', user: 'ops', readUser: 'reader', readCredential: 'ops-db-1-key' }], services: [] });
+    const resolve = async (_h: unknown, rel: string) => path.join(ws, rel);
+    const merged = await inventory.loadInventory({ host: new LocalHost(ws), resolve, env: { HARNESS_OPS_INVENTORY: opFile } });
+    assert.equal(merged.hosts[0].readUser, undefined);
+    const alone = await inventory.loadInventory({ host: new LocalHost(ws), resolve, env: {} });
+    assert.equal(alone.hosts[0].readUser, undefined);
+    assert.match(alone.warnings.join('\n'), /read-only account \(readUser, readCredential\) is ignored: only the operator's inventory/);
+    assert.deepEqual(t.kindsFor!(investigate), ['external']);
+    assert.deepEqual(t.vaultNames!(investigate), ['ops-db-1-key']);
+    assert.equal(decide(t, investigate, { mode: 'default', rules: vaultOk, sandboxed: true }).action, 'ask');
+    // The operator's reader fields are checked like the rest.
+    const bad = inventory.validateInventory({ hosts: [{ name: 'a', user: 'ops', credential: 'ops-a', readUser: '-oProxyCommand=x', readCredential: 'ops-a-r' }, { name: 'b', readUser: 'r' }, { name: 'c', user: 'ops', credential: 'ops-c', readUser: 'ops', readCredential: 'ops-c-r' }, { name: 'd', readUser: 'r', readCredential: 'prod-root' }] }, { source: 'operator' });
+    const errs = bad.errors.join('\n');
+    assert.match(errs, /readUser "-oProxyCommand=x" is not a valid user name/);
+    assert.match(errs, /needs both readUser and readCredential/);
+    assert.match(errs, /readCredential "prod-root" is outside/);
+    assert.match(bad.warnings.join('\n'), /readUser "ops" is the operator account itself/);
+    assert.equal(bad.inv.hosts.find((x: { name: string }) => x.name === 'c').readUser, undefined);
+  } finally { delete process.env.HARNESS_OPS_INVENTORY; await h.close(); }
 });
 
 test('aiops tools against a fake Prometheus: inventory, queries, alert evaluation (for, probes, maintenance), SLO burn, forecasts, gates', async () => {

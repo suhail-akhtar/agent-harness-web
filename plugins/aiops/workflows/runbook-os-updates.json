@@ -28,7 +28,7 @@
     },
     "apply": {
       "type": "agent", "title": "Apply updates", "agent": "sre", "change": true, "maxSteps": 15,
-      "prompt": "A person approved the update on {{input.host}}:\n{{state.report}}\n\nRun exactly the planned update command with ssh_exec (timeout_sec up to 600), once. Do not reboot.\n\nReport: the command, its exit status and the packages it upgraded.",
+      "prompt": "A person approved the update on {{input.host}}:\n{{state.report}}\n\nRun exactly the planned update command with ssh_exec as: \"operator\" (timeout_sec up to 600), once. Do not reboot.\n\nReport: the command, its exit status and the packages it upgraded.",
       "next": "verify"
     },
     "verify": {
