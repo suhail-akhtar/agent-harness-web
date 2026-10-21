@@ -10,6 +10,7 @@ import { MemoryError, MemoryStore } from '../memory/store.ts';
 import { dockerAvailable, dockerDefaults, imageExists } from '../runtime/docker.ts';
 import { COMPANION_RESULT_LIMIT } from '../runtime/companion.ts';
 import { resolveIn, walk } from '../tools/paths.ts';
+import { type BrowserSessions, isSsoAdmin, NOBODY_ALLOWED, type OidcClient, OidcError, refusal } from './oidc.ts';
 import { RateLimiter, type Role, type SpendLedger, type UserStore } from './users.ts';
 
 // The HTTP side: JSON API, an SSE stream per session, the built UI, and the
@@ -18,6 +19,8 @@ import { RateLimiter, type Role, type SpendLedger, type UserStore } from './user
 // Who is asking: the operator (HARNESS_TOKEN, or loopback with auth off) is an
 // administrator who owns nothing in particular; an account (users.json) is an
 // administrator or a member. Members see and change only what they own.
+// A person proves who they are with a token (Bearer or the hw_token cookie) or,
+// with single sign-on, a server-side browser session (the hw_sid cookie).
 
 export interface AppOptions {
   harness: Harness;
@@ -36,9 +39,11 @@ export interface AppOptions {
   rateLimit?: number;
   /** Messages and workflow starts per minute per principal. */
   messageRateLimit?: number;
+  /** Single sign-on (OpenID Connect) and the browser sessions it signs in; needs `users`. */
+  sso?: { client: OidcClient; sessions: BrowserSessions };
 }
 
-export interface Principal { id?: string; name: string; role: Role }
+export interface Principal { id?: string; name: string; role: Role; email?: string }
 
 export class HttpError extends Error {
   status: number;
@@ -46,7 +51,7 @@ export class HttpError extends Error {
   constructor(status: number, message: string, headers?: Record<string, string>) { super(message); this.status = status; this.headers = headers; }
 }
 
-export function send(res: http.ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) {
+export function send(res: http.ServerResponse, status: number, body: unknown, headers: Record<string, string | string[]> = {}) {
   const data = typeof body === 'string' ? body : JSON.stringify(body);
   res.writeHead(status, { 'content-type': typeof body === 'string' ? 'text/plain; charset=utf-8' : 'application/json', 'cache-control': 'no-store', ...headers });
   res.end(data);
@@ -106,17 +111,89 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     } catch { return false; }
   }
 
+  if (o.sso && !o.users) throw new Error('single sign-on needs the account store');
+  const sso = o.sso;
+  const ssoOnly = !!sso?.client.cfg.only;
+  const ssoSecure = sso?.client.secure ? '; Secure' : '';
+  const tokenSecure = o.loopback ? '' : '; Secure';
+
   function principalFor(token: string | undefined): Principal | undefined {
     if (!token) return undefined;
+    // The operator's token stays: scripts use it, and it is the way in when the provider is down.
     if (safeEqual(token, o.token)) return { name: 'operator', role: 'admin' };
     const u = o.users?.byToken(token);
+    if (u && ssoOnly) throw new HttpError(401, 'Personal access tokens are turned off on this server: sign in with single sign-on.');
     return u ? { id: u.id, name: u.name, role: u.role } : undefined;
   }
 
-  function who(req: http.IncomingMessage): Principal | undefined {
-    if (o.authOff) return { name: 'operator', role: 'admin' };
+  /** The person behind a browser session cookie; checked on every request, so disabling an account or dropping it from the allowlist ends its sessions. */
+  function ssoPrincipal(req: http.IncomingMessage): Principal | undefined {
+    if (!sso) return undefined;
+    const u = o.users!.get(sso.sessions.get(cookie(req, 'hw_sid')) ?? '');
+    if (!u?.sso || u.disabled || refusal(sso.client.cfg, u.sso.email)) return undefined;
+    return { id: u.id, name: u.name, role: isSsoAdmin(sso.client.cfg, u.sso.email) ? 'admin' : 'member', email: u.sso.email };
+  }
+
+  function who(req: http.IncomingMessage): { p: Principal; viaSession: boolean } | undefined {
+    if (o.authOff) return { p: { name: 'operator', role: 'admin' }, viaSession: false };
     const bearer = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1];
-    return principalFor(bearer) ?? principalFor(cookie(req, 'hw_token'));
+    const byBearer = principalFor(bearer);
+    if (byBearer) return { p: byBearer, viaSession: false };
+    const bySession = ssoPrincipal(req);
+    if (bySession) return { p: bySession, viaSession: true };
+    const byCookie = principalFor(cookie(req, 'hw_token'));
+    return byCookie && { p: byCookie, viaSession: false };
+  }
+
+  /** Text for the browser when a sign-in fails: the person reads it, not the UI. */
+  function signInFailed(res: http.ServerResponse, status: number, message: string) {
+    if (status >= 500 || message === NOBODY_ALLOWED) console.warn(`single sign-on: ${message}`);
+    send(res, status, `Sign-in failed. ${message}\n\nTry again: ${sso ? sso.client.cfg.publicUrl : ''}/auth/login\n`, { 'x-content-type-options': 'nosniff' });
+  }
+
+  async function authRoute(req: http.IncomingMessage, res: http.ServerResponse, url: URL, method: string): Promise<void> {
+    const p = url.pathname;
+    if (p === '/auth/config' && method === 'GET') return send(res, 200, { oidc: !!sso, only: ssoOnly, login: sso ? '/auth/login' : null });
+    if (p === '/auth/logout' && method === 'POST') return logout(req, res);
+    if (!sso || method !== 'GET' || (p !== '/auth/login' && p !== '/auth/callback')) throw new HttpError(404, 'not found');
+    // Anyone may start a sign-in: rate-limit by address.
+    const r = limiter.take(`ip:${req.socket.remoteAddress ?? ''}`);
+    if (!r.ok) throw new HttpError(429, `Too many requests; try again in ${r.retryAfterSec}s.`, { 'retry-after': String(r.retryAfterSec) });
+    if (p === '/auth/login') {
+      let started: { url: string; binding: string };
+      try { started = await sso.client.start(); } catch (e) { return signInFailed(res, e instanceof OidcError ? e.status : 502, (e as Error).message); }
+      res.writeHead(302, { location: started.url, 'cache-control': 'no-store', 'set-cookie': `hw_oidc=${started.binding}; HttpOnly; SameSite=Lax; Path=/auth/callback; Max-Age=600${ssoSecure}` });
+      return void res.end();
+    }
+    const cfg = sso.client.cfg;
+    try {
+      const id = await sso.client.finish(url.searchParams, cookie(req, 'hw_oidc'));
+      const why = refusal(cfg, id.email);
+      if (why) throw new OidcError(403, why);
+      if (o.users!.bySso(id.iss, id.sub)?.disabled) throw new OidcError(403, 'This account is disabled. Ask an administrator.');
+      const u = await o.users!.signInSso({ iss: id.iss, sub: id.sub, email: id.email }, isSsoAdmin(cfg, id.email) ? 'admin' : 'member');
+      const sid = await sso.sessions.create(u.id);
+      res.writeHead(302, {
+        location: `${cfg.publicUrl}/`,
+        'cache-control': 'no-store',
+        'set-cookie': [
+          `hw_sid=${sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(sso.sessions.maxMs / 1000)}${ssoSecure}`,
+          `hw_oidc=; HttpOnly; SameSite=Lax; Path=/auth/callback; Max-Age=0${ssoSecure}`,
+        ],
+      });
+      return void res.end();
+    } catch (e) {
+      if (!(e instanceof OidcError)) throw e;
+      return signInFailed(res, e.status, e.message);
+    }
+  }
+
+  /** Ends the browser's sign-in, whichever kind it was. */
+  async function logout(req: http.IncomingMessage, res: http.ServerResponse) {
+    // A cross-site page cannot set this header, so it cannot sign people out either.
+    if (req.headers['x-harness'] !== '1') throw new HttpError(403, 'missing x-harness header');
+    await sso?.sessions.delete(cookie(req, 'hw_sid'));
+    return send(res, 200, { ok: true }, { 'set-cookie': [`hw_token=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${tokenSecure}`, `hw_sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${ssoSecure}`] });
   }
 
   /** Members own their sessions; administrators see all of them. */
@@ -177,16 +254,22 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       if (!principalFor(token)) throw new HttpError(401, 'wrong access token');
       return send(res, 200, { ok: true }, { 'set-cookie': `hw_token=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000${o.loopback ? '' : '; Secure'}` });
     }
-    if (p === '/api/logout' && method === 'POST') return send(res, 200, { ok: true }, { 'set-cookie': 'hw_token=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' });
+    if (p === '/api/logout' && method === 'POST') return logout(req, res);
+    if (p.startsWith('/auth/')) return authRoute(req, res, url, method);
 
     if (!p.startsWith('/api/')) {
       if (method === 'GET' && (await serveStatic(res, p) || await serveStatic(res, '/'))) return;
       throw new HttpError(404, 'not found');
     }
-    const me = who(req);
-    if (!me) throw new HttpError(401, 'sign in required');
-    // Cookie-authenticated writes must come from our own page (JSON content type is enforced too).
+    const caller = who(req);
+    if (!caller) throw new HttpError(401, 'sign in required');
+    const me = caller.p;
+    // Cookie-authenticated writes must come from our own page: a cross-site form
+    // or fetch cannot set this header without a CORS preflight we never grant
+    // (and the JSON content type is enforced too).
     if (method !== 'GET' && req.headers['x-harness'] !== '1') throw new HttpError(403, 'missing x-harness header');
+    // Belt and braces for single sign-on sessions: a browser's Origin, when sent, must be ours.
+    if (caller.viaSession && method !== 'GET' && req.headers.origin && req.headers.origin !== sso!.client.origin) throw new HttpError(403, 'cross-site request refused');
     limited(limiter, me);
     const admin = me.role === 'admin';
     const { sessions, companions, registry } = harness;

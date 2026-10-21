@@ -11,7 +11,7 @@ try {
   if (cmd === 'list' || !cmd) {
     const all = store.list();
     if (!all.length) console.log('No accounts: the server is single-user (HARNESS_TOKEN).');
-    for (const u of all) console.log(`${u.id}  ${u.role.padEnd(6)}  ${u.name}${u.disabled ? '  (disabled)' : ''}`);
+    for (const u of all) console.log(`${u.id}  ${u.role.padEnd(6)}  ${u.name}${u.sso ? '  (single sign-on)' : ''}${u.disabled ? '  (disabled)' : ''}`);
   } else if (cmd === 'add' && arg) {
     const r = await store.add(arg, process.argv.includes('--admin') ? 'admin' : 'member');
     console.log(`Created ${r.user.role} ${r.user.name} (${r.user.id}).\nToken (shown once): ${r.token}`);

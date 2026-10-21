@@ -49,3 +49,14 @@ test('a workflow run is one card: node events update it and node agents report a
   assert.deepEqual(card.activity.implement, [{ name: 'write', summary: 'src/app.js', done: true, isError: false }]);
   assert.equal(card.run.history[1]!.outcome, 'pass');
 });
+
+test('the sign-in page: a "Sign in" button when the server has single sign-on, the token form otherwise', async () => {
+  const { signInChoices } = await import('../ui/src/auth.ts');
+  assert.deepEqual(signInChoices(null), { sso: null, token: 'none', tokenLabel: '' }, 'nothing until the server answers');
+  const plain = signInChoices({ oidc: false, only: false, login: null });
+  assert.equal(plain.sso, null);
+  assert.equal(plain.token, 'shown');
+  assert.match(plain.tokenLabel, /HARNESS_TOKEN/);
+  assert.deepEqual(signInChoices({ oidc: true, only: false, login: '/auth/login' }), { sso: '/auth/login', token: 'link', tokenLabel: 'Use an access token' });
+  assert.deepEqual(signInChoices({ oidc: true, only: true, login: '/auth/login' }), { sso: '/auth/login', token: 'link', tokenLabel: 'Operator token' });
+});

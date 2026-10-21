@@ -5,6 +5,7 @@ import { ContextMeter, fmtCost, Modal, PendingPrompt, Timeline, TodoPanel, Usage
 import { CapabilitiesPanel, CheckpointsPanel, MemoryPanel, NetworkPanel, SourcesPanel, TraceButton } from './panels.tsx';
 import { apply, fromHistory, type Live } from './timeline.ts';
 import { ApprovalPrompt, RunsPanel, WorkflowDialog } from './workflow.tsx';
+import { type AuthConfig, signInChoices } from './auth.ts';
 
 const MODE_LABEL: Record<Mode, string> = { default: 'Ask before edits', acceptEdits: 'Auto-accept edits', plan: 'Plan mode', bypass: 'Bypass permissions' };
 const RUNTIME_LABEL = { docker: 'Sandbox', local: 'Server folder', companion: 'My computer' } as const;
@@ -20,19 +21,28 @@ function useHash(): [string, (h: string) => void] {
 }
 
 function Login({ onDone }: { onDone: () => void }): VNode {
+  const [auth, setAuth] = useState<AuthConfig | null>(null);
+  const [showToken, setShowToken] = useState(false);
   const [token, setToken] = useState('');
   const [err, setErr] = useState('');
+  useEffect(() => { api.get<AuthConfig>('/auth/config').then(setAuth).catch(() => setAuth({ oidc: false, only: false, login: null })); }, []);
+  const choices = signInChoices(auth);
   const submit = async () => {
     try { await api.post('/api/login', { token: token.trim() }); onDone(); } catch (e) { setErr((e as Error).message); }
   };
+  const tokenForm = choices.token === 'shown' || (choices.token === 'link' && showToken);
   return (
     <div class="login">
       <div class="login-card">
         <div class="brand big"><span class="logo">›_</span> Harness Web</div>
-        <p class="muted">Enter the access token printed by the server (or set as HARNESS_TOKEN).</p>
-        <input class="input" type="password" autoFocus placeholder="Access token" value={token} onInput={(e) => setToken((e.target as HTMLInputElement).value)} onKeyDown={(e) => e.key === 'Enter' && submit()} />
-        {err && <div class="notice notice-error">{err}</div>}
-        <button class="btn primary" onClick={submit}>Sign in</button>
+        {choices.sso && <a class="btn primary" href={choices.sso}>Sign in</a>}
+        {choices.token === 'shown' && <p class="muted">{choices.tokenLabel}</p>}
+        {choices.token === 'link' && !showToken && <button class="link small center" onClick={() => setShowToken(true)}>{choices.tokenLabel}</button>}
+        {tokenForm && <>
+          <input class="input" type="password" autoFocus placeholder="Access token" value={token} onInput={(e) => setToken((e.target as HTMLInputElement).value)} onKeyDown={(e) => e.key === 'Enter' && submit()} />
+          {err && <div class="notice notice-error">{err}</div>}
+          <button class={`btn ${choices.sso ? '' : 'primary'}`} onClick={submit}>{choices.sso ? 'Sign in with the token' : 'Sign in'}</button>
+        </>}
       </div>
     </div>
   );
@@ -405,7 +415,7 @@ function App(): VNode {
           <button class="link" onClick={() => setDialog('companions')}>Your computers ({config.companions.filter((c) => c.online).length} online)</button>
           <button class="link" onClick={() => setDialog('plugins')}>Plugins ({(config.plugins ?? []).length})</button>
           <div class="muted small">All sessions: {fmtCost(total)}</div>
-          {config.me && <div class="muted small">Signed in as {config.me.name}{config.me.role === 'admin' && config.me.name !== 'operator' ? ' (admin)' : ''} · <button class="link small" onClick={async () => { await api.post('/api/logout'); location.reload(); }}>sign out</button></div>}
+          {config.me && <div class="muted small">Signed in as {config.me.name}{config.me.email && config.me.email !== config.me.name ? ` (${config.me.email})` : ''}{config.me.role === 'admin' && config.me.name !== 'operator' ? ' (admin)' : ''} · <button class="link small" onClick={async () => { await api.post('/auth/logout'); location.reload(); }}>Sign out</button></div>}
         </div>
       </nav>
       <main class="main">
