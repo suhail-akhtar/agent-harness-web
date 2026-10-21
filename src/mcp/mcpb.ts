@@ -149,22 +149,82 @@ export async function installMcpb(bundle: Buffer, root: string, userConfig: Reco
  * sensitive values are decrypted here, into memory, with the server's key
  * (HARNESS_SECRET_KEY, else <data>/secret.key; `keyDir` is the data folder).
  */
-export async function installedMcpb(root: string, o: { keyDir?: string; env?: NodeJS.ProcessEnv } = {}): Promise<InstalledMcpb[]> {
+export async function installedMcpb(root: string, o: { keyDir?: string; env?: NodeJS.ProcessEnv; log?: (m: string) => void } = {}): Promise<InstalledMcpb[]> {
   let stored: StoredMcpb[];
   try { stored = JSON.parse(await fs.readFile(path.join(root, 'installed.json'), 'utf8')) as StoredMcpb[]; } catch { return []; }
   let key: Buffer | undefined;
   const out: InstalledMcpb[] = [];
+  let migrated = false;
   for (const { sealed, ...b } of stored) {
-    if (!sealed) { out.push(b); continue; }
+    if (!sealed) {
+      // Installed before secrets were encrypted: their values sit in the config in plain
+      // text. Recovered from the manifest's templates and saved encrypted from now on.
+      const m = await unsealedSecrets(b).catch(() => undefined);
+      if (m === null) o.log?.(`MCP bundle ${b.name}: its secrets are stored in plain text by an older version and could not be moved to encrypted storage; install it again`);
+      if (m) { out.push({ ...b, template: m.template, secrets: m.secrets }); migrated = true; } else out.push(b);
+      continue;
+    }
     try {
       key ??= await serverKey(o.keyDir ?? path.dirname(root), o.env);
       const secrets = JSON.parse(unseal(key, sealed)) as Record<string, string>;
       out.push({ ...b, template: b.config, secrets, config: fillSecrets(b.config, secrets) });
     } catch (e) {
       out.push({ ...b, template: b.config, sealed, problem: `its secrets cannot be read: ${(e as Error).message}. Install it again.` });
+      o.log?.(`MCP bundle ${b.name}: its secrets cannot be read (${(e as Error).message}); it starts without them. Install it again.`);
     }
   }
+  if (migrated) {
+    await saveInstalled(root, out, o);
+    o.log?.('MCP bundles: secrets stored in plain text by an older version are now encrypted');
+  }
   return out;
+}
+
+/**
+ * For a bundle stored before encryption: its sensitive values, read back from the
+ * plain config by matching it against the manifest's templates, and the config with
+ * placeholders in their place. undefined: nothing sensitive; null: it could not be done.
+ */
+async function unsealedSecrets(b: Omit<InstalledMcpb, 'secrets' | 'template'>): Promise<{ template: McpServerConfig; secrets: Record<string, string> } | undefined | null> {
+  const m = JSON.parse(await fs.readFile(path.join(b.dir, 'manifest.json'), 'utf8')) as McpbManifest;
+  const sensitive = new Set(Object.entries(m.user_config ?? {}).filter(([, s]) => s.sensitive).map(([k]) => k));
+  if (!sensitive.size) return undefined;
+  const mc = m.server?.mcp_config ?? {};
+  const secrets: Record<string, string> = {};
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // One stored string against its template: the template with ${__dirname} filled, the
+  // non-sensitive values as they were stored, and the sensitive ones as placeholders.
+  const unfill = (tpl: string | undefined, have: string | undefined): string | undefined | null => {
+    if (tpl === undefined || have === undefined) return have;
+    const keys: string[] = [];
+    const parts = tpl.split(/(\$\{__dirname\}|\$\{user_config\.[\w-]+\})/);
+    const re = new RegExp(`^${parts.map((p) => {
+      if (p === '${__dirname}') return esc(b.dir);
+      const k = /^\$\{user_config\.([\w-]+)\}$/.exec(p)?.[1];
+      if (k) { keys.push(k); return '([\\s\\S]*?)'; }
+      return esc(p);
+    }).join('')}$`);
+    const hit = re.exec(have);
+    if (!hit) return null;
+    let n = 0;
+    return parts.map((p) => {
+      if (p === '${__dirname}') return b.dir;
+      const k = /^\$\{user_config\.([\w-]+)\}$/.exec(p)?.[1];
+      if (!k) return p;
+      const v = hit[++n]!;
+      if (!sensitive.has(k)) return v;
+      if (secrets[k] !== undefined && secrets[k] !== v) throw new Error('the same value differs');
+      secrets[k] = v;
+      return p;
+    }).join('');
+  };
+  const c = b.config as McpServerConfig & { command?: string; args?: string[]; env?: Record<string, string> };
+  const command = mc.command ? unfill(mc.command, c.command) : c.command;
+  const args = mc.args && c.args ? (mc.args.length === c.args.length ? mc.args.map((t, i) => unfill(t, c.args![i])) : null) : c.args;
+  const env = c.env ? Object.fromEntries(Object.entries(c.env).map(([k, v]) => [k, mc.env && k in mc.env ? unfill(String(mc.env[k]), String(v)) : v])) : undefined;
+  if (command === null || args === null || (Array.isArray(args) && args.includes(null as never)) || (env && Object.values(env).includes(null as never))) return null;
+  if (!Object.keys(secrets).length) return undefined;
+  return { template: { ...c, ...(command !== undefined ? { command } : {}), ...(args ? { args: args as string[] } : {}), ...(env ? { env: env as Record<string, string> } : {}) } as McpServerConfig, secrets };
 }
 
 /** Writes the list: sensitive values encrypted (AES-256-GCM, the server's key), never in plain text. */

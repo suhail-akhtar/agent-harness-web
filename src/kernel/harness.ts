@@ -174,7 +174,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   // Installed MCP bundles are the operator's servers too (only administrators install them).
   const mcpbRoot = path.join(opts.dataDir, 'mcpb');
   const registerBundle = (b: InstalledMcpb) => registry.mcpServers.set(b.name, { ...b.config, plugin: 'mcpb', operator: true } as never);
-  for (const b of await installedMcpb(mcpbRoot)) { if (!registry.mcpServers.has(b.name)) registerBundle(b); }
+  for (const b of await installedMcpb(mcpbRoot, { log })) { if (!registry.mcpServers.has(b.name)) registerBundle(b); }
   const companions = new CompanionHub(opts.dataDir);
   await companions.load();
   const mcp = new McpManager();

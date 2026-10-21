@@ -99,10 +99,14 @@ export class Scheduler {
   private log: (m: string) => void;
   /** Whether an owner's account may still run work (set by the server: disabled accounts may not). */
   ownerActive?: (owner: string) => boolean;
+  /** Why its owner may not start one more run now (their concurrency limits), set by the server; the run is skipped and says why. */
+  mayRun?: (owner: string, s: Schedule) => string | undefined;
 
   /** The runner, unless the schedule's owner can no longer run work. */
   private async launch(s: Schedule, outside?: string): Promise<{ sessionId?: string; result: string }> {
     if (s.owner && this.ownerActive && !this.ownerActive(s.owner)) return { result: 'not run: its owner\'s account is disabled' };
+    const busy = s.owner ? this.mayRun?.(s.owner, s) : undefined;
+    if (busy) return { result: `not run: ${busy}` };
     try { return await this.runner.run(s, outside); } catch (e) { return { result: `failed: ${(e as Error).message}` }; }
   }
 

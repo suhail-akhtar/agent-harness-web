@@ -116,12 +116,15 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
   const messageLimiter = new RateLimiter(o.messageRateLimit ?? 30);
   const limits = o.limits ?? concurrencyLimits();
 
+  const sandboxed = (r: SessionMeta['runtime']) => r.kind === 'docker' || (r.kind === 'local' && r.sandbox === 'docker');
+  const counted = () => harness.sessions.list().map((m) => ({ owner: m.owner, busy: harness.sessions.statusOf(m.id) !== 'idle', sandbox: sandboxed(m.runtime) }));
   /** Refuses (429) when the account already has as many running sessions, or sandboxes, as it may. */
   function capped(what: 'running' | 'sandboxes', owner: string | undefined): void {
-    const counted = harness.sessions.list().map((m) => ({ owner: m.owner, busy: harness.sessions.statusOf(m.id) !== 'idle', sandbox: m.runtime.kind === 'docker' || (m.runtime.kind === 'local' && m.runtime.sandbox === 'docker') }));
-    const why = concurrencyRefusal(what, owner, counted, limits);
+    const why = concurrencyRefusal(what, owner, counted(), limits);
     if (why) throw new HttpError(429, why);
   }
+  // Scheduled prompts and triggers count against the same limits as typed messages.
+  if (harness.scheduler) harness.scheduler.mayRun = (owner, sched) => concurrencyRefusal('running', owner, counted(), limits) ?? (sched.newSession && sandboxed(sched.newSession.runtime) ? concurrencyRefusal('sandboxes', owner, counted(), limits) : undefined);
 
   async function serveStatic(res: http.ServerResponse, pathname: string): Promise<boolean> {
     const rel = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');

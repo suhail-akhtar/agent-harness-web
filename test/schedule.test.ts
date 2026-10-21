@@ -58,6 +58,15 @@ test('the scheduler: one-time and repeating runs, missed runs fire once, a busy 
   await c.runNow(owned.id, t0);
   assert.deepEqual(ran, []);
   assert.match(c.get(owned.id)!.lastResult!, /account is disabled/);
+  // An account at its limit of running sessions: the scheduled run is skipped and says why.
+  c.ownerActive = undefined;
+  c.mayRun = (owner) => (owner === 'usr_1' ? 'This account already has 4 sessions working' : undefined);
+  await c.runNow(owned.id, t0);
+  assert.deepEqual(ran, []);
+  assert.match(c.get(owned.id)!.lastResult!, /not run: This account already has 4 sessions working/);
+  c.mayRun = undefined;
+  await c.runNow(owned.id, t0);
+  assert.deepEqual(ran, [owned.id]);
 });
 
 test('the agent schedules work in its own session; the run arrives as a prompt; notify_user reaches the person', async () => {

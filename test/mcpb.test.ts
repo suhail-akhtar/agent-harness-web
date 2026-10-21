@@ -128,3 +128,25 @@ test('bundles that would leave their folder, hold links, or lack a manifest are 
   await assert.rejects(installMcpb(Buffer.from('not a zip'), root), /not a zip/);
   assert.deepEqual(readZip(zip([{ name: 'a/b.txt', data: 'hello' }])).map((f) => [f.name, f.data.toString()]), [['a/b.txt', 'hello']]);
 });
+
+test('a bundle installed before secrets were encrypted is migrated: its secret leaves the file, the server still gets it', async () => {
+  const { installMcpb, installedMcpb } = await import('../src/mcp/mcpb.ts');
+  const data = await tempDir();
+  const root = path.join(data, 'mcpb');
+  const manifest = { name: 'old-ext', server: { type: 'node', entry_point: 'i.mjs', mcp_config: { command: 'node', args: ['${__dirname}/i.mjs', '--region', '${user_config.region}'], env: { API_KEY: 'Bearer ${user_config.api_key}', PLAIN: 'x' } } }, user_config: { api_key: { sensitive: true }, region: {} } };
+  const b = await installMcpb(zip([{ name: 'manifest.json', data: JSON.stringify(manifest) }, { name: 'i.mjs', data: '' }]), root, { api_key: 'sk-old-plain-123', region: 'eu' });
+  // As an older version wrote it: the filled config, no sealed field.
+  await fs.writeFile(path.join(root, 'installed.json'), JSON.stringify([{ name: b.name, dir: b.dir, config: b.config, installedAt: 1 }]));
+  const logs: string[] = [];
+  const [got] = await installedMcpb(root, { keyDir: data, log: (m) => logs.push(m) });
+  assert.equal((got!.config as { env: Record<string, string> }).env.API_KEY, 'Bearer sk-old-plain-123', 'the server still gets its value');
+  assert.deepEqual((got!.config as { args: string[] }).args.slice(1), ['--region', 'eu']);
+  const file = await fs.readFile(path.join(root, 'installed.json'), 'utf8');
+  assert.ok(!file.includes('sk-old-plain-123'), 'no plain-text secret on disk any more');
+  assert.match(file, /"sealed"/);
+  assert.match(file, /\$\{user_config\.api_key\}/);
+  assert.ok(logs.some((l) => /now encrypted/.test(l)), logs.join('\n'));
+  // And after a restart it reads back the same.
+  const [again] = await installedMcpb(root, { keyDir: data });
+  assert.equal((again!.config as { env: Record<string, string> }).env.API_KEY, 'Bearer sk-old-plain-123');
+});
