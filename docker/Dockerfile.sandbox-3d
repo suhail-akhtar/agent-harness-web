@@ -48,3 +48,34 @@ RUN set -eux; \
 
 # Software OpenGL: there is no GPU in the sandbox.
 ENV LIBGL_ALWAYS_SOFTWARE=1
+
+# Godot's export templates, for the godot tool's export action. Off by default
+# (the 3D image stays as it is); `npm run sandbox:image:3d-export` builds
+# harness-sandbox-3d:export with GODOT_EXPORT_TEMPLATES=1. The official .tpz
+# (1.3 GB, every platform) is checked against Godot's SHA512-SUMS.txt and only
+# the files named in GODOT_TEMPLATES are kept: Linux x86_64 and the Web builds
+# (with and without threads), plus the ICU data some exports bundle. Pass
+# --build-arg GODOT_TEMPLATES=all to keep every platform (Windows, macOS,
+# Android, iOS), or a list of names from the .tpz's templates/ folder.
+ARG GODOT_EXPORT_TEMPLATES=0
+ARG GODOT_TEMPLATES_SHA512=ca4d71c4d7b81dfc15d1a98baa07534aa95b03fdda78a0075b06672e1648d2e5f40980c9adc28d23e1b92e732ee7bf3461997aa804af74ec2fcd7a93ccb84079
+ARG GODOT_TEMPLATES="linux_debug.x86_64 linux_release.x86_64 web_debug.zip web_release.zip web_nothreads_debug.zip web_nothreads_release.zip icudt_godot.dat"
+COPY godot-templates.sh /usr/local/lib/harness/godot-templates.sh
+RUN set -eux; \
+    if [ "$GODOT_EXPORT_TEMPLATES" != 1 ]; then exit 0; fi; \
+    cd /tmp; \
+    curl -fsSLo templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"; \
+    echo "${GODOT_TEMPLATES_SHA512}  templates.tpz" | sha512sum -c -; \
+    if [ "$GODOT_TEMPLATES" = all ]; then unzip -q templates.tpz; \
+    else set -f; unzip -q templates.tpz templates/version.txt $(for f in $GODOT_TEMPLATES; do printf 'templates/%s ' "$f"; done); set +f; fi; \
+    rm templates.tpz; \
+    v=$(cat templates/version.txt); \
+    mkdir -p /opt/godot/export_templates; \
+    mv templates "/opt/godot/export_templates/$v"; \
+    chmod -R a+rX /opt/godot; \
+    mv /usr/local/bin/godot /opt/godot/godot; \
+    install -m 755 /usr/local/lib/harness/godot-templates.sh /usr/local/bin/godot; \
+    du -sh "/opt/godot/export_templates/$v"; \
+    HOME=/tmp/godot-home godot --headless --version; \
+    test -L "/tmp/godot-home/.local/share/godot/export_templates/$v"; \
+    rm -rf /tmp/godot-home

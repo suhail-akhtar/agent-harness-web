@@ -6,12 +6,15 @@ import { fileURLToPath } from 'node:url';
 import { createCompanionHandler, type CompanionJob } from '../src/companion/handler.ts';
 import { createHarness } from '../src/kernel/harness.ts';
 import { CompanionHub, mirrorPath } from '../src/runtime/companion.ts';
-import { FakeProvider, tempDir } from './helpers.ts';
+import { DockerHost, dockerAvailable, dockerDefaults, imageExists } from '../src/runtime/docker.ts';
+import { FakeProvider, fakeGodot, tempDir, testPicture } from './helpers.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // @ts-expect-error plain JS module
 const { chromiumPath } = await import('../plugins/visual/lib/browser.mjs');
 const hasChromium = await import('playwright-core').then(() => true, () => false) && !!chromiumPath();
+const IMAGE_3D = 'harness-sandbox-3d:latest';
+const has3d = (await dockerAvailable()) && (await imageExists(IMAGE_3D));
 
 /** A companion running in this process: polls the hub, runs each job with the real handler. */
 function runCompanion(hub: CompanionHub, id: string, dir: string, wrap?: (job: CompanionJob, r: { ok: boolean; value: unknown }) => { ok: boolean; value: unknown }) {
@@ -226,4 +229,73 @@ test('companion project MCP servers: started on the user\'s computer only when t
       await h.sessions.remove(s.meta.id);
     } finally { stop(); await h.close(); }
   }
+});
+
+// ---------- Godot on the companion's computer ----------
+
+const GODOT_PROJECT = 'config_version=5\n\n[application]\n\nconfig/name="Demo"\nrun/main_scene="res://main.tscn"\n';
+const GODOT_SCENE = '[gd_scene load_steps=2 format=3]\n\n[ext_resource type="Script" path="res://main.gd" id="1"]\n\n[node name="Main" type="Node2D"]\nscript = ExtResource("1")\n';
+const GODOT_SCRIPT = 'extends Node2D\n\nfunc _process(_delta: float) -> void:\n\tqueue_redraw()\n\nfunc _draw() -> void:\n\tdraw_rect(Rect2(100, 100, 200, 120), Color(1, 0.6, 0.1))\n';
+
+/** A companion session whose model asks for one godot screenshot; returns what the model was sent back. */
+async function companionScreenshot(dir: string, handler: Parameters<typeof createCompanionHandler>[1], info: Record<string, unknown> = {}) {
+  const h = await createHarness({ dataDir: await tempDir(), plugins: [path.join(here, '..', 'plugins', 'games3d')], search: null, memory: 'off' });
+  const { id } = await h.companions.create('laptop');
+  const stop = runCompanionWith(h.companions, id, dir, handler, info);
+  const fake = new FakeProvider([{ calls: [{ name: 'godot', input: { action: 'screenshot', project: 'game', frames: 3, out: 'shots/start.png' } }] }, { text: 'looks fine' }]);
+  h.registry.setProviderInstance('deepseek', fake);
+  try {
+    await new Promise((r) => setTimeout(r, 300));
+    const s = await h.sessions.create({ model: 'deepseek-flash', mode: 'bypass', runtime: { kind: 'companion', network: 'none', companionId: id } });
+    const done = new Promise<void>((r) => s.subscribe(0, ({ event }) => { if (event.kind === 'turn_end' && !event.agent) r(); }));
+    await s.send('take a screenshot of the game');
+    await done;
+    return fake.snapshots[1]!;
+  } finally { stop(); await h.close(); }
+}
+
+async function godotGame(dir: string) {
+  await fs.mkdir(path.join(dir, 'game'));
+  await fs.writeFile(path.join(dir, 'game', 'project.godot'), GODOT_PROJECT);
+  await fs.writeFile(path.join(dir, 'game', 'main.tscn'), GODOT_SCENE);
+  await fs.writeFile(path.join(dir, 'game', 'main.gd'), GODOT_SCRIPT);
+}
+
+const imageData = (result: string) => /"images":\[\{"media_type":"image\/png","data":"([^"]+)"/.exec(result)?.[1];
+
+test('godot screenshot on a companion session: Godot runs on the user\'s computer and the frame comes back to the model', async () => {
+  const godot = await fakeGodot();
+  process.env.HARNESS_GODOT = godot.bin;
+  try {
+    const dir = await tempDir();
+    await godotGame(dir);
+    const result = await companionScreenshot(dir, { allowHooks: true });
+    assert.match(result, /godot screenshot: frame 3 of 3 saved to shots\/start\.png/);
+    // Saved on the user's computer, where the result says, and the same image the model got; the frames Godot wrote there are gone.
+    const saved = await fs.readFile(path.join(dir, 'shots', 'start.png'));
+    assert.ok(saved.equals(testPicture(32, 24)));
+    assert.equal(imageData(result), saved.toString('base64'));
+    assert.deepEqual((await fs.readdir(path.join(dir, '.harness', 'godot'))).filter((f) => f.startsWith('frames-')), []);
+    // Godot ran on the companion, writing frames into its folder.
+    const movie = (await godot.calls()).find((c) => c.includes('--write-movie'))!;
+    assert.ok(movie.includes(`${dir.split(path.sep).join('/')}/.harness/godot/frames-`), movie);
+
+    // A companion started without --allow-hooks runs no commands for the server's tools, and the error says how to allow them.
+    const refused = await companionScreenshot(await tempDir(), {});
+    assert.match(refused, /run Blender and Godot on the companion's computer, which it allows only when started with --allow-hooks/);
+  } finally { delete process.env.HARNESS_GODOT; }
+});
+
+test('godot screenshot on a companion that runs commands in the 3D sandbox image: a real frame from Godot comes back', { skip: !has3d && `no Docker or no ${IMAGE_3D}`, timeout: 600_000 }, async () => {
+  const dir = await tempDir();
+  await godotGame(dir);
+  const docker = new DockerHost(`test-cmp-3d-${Date.now()}`, dir, { ...dockerDefaults(), image: IMAGE_3D, network: 'none' });
+  try {
+    // As a companion started with --sandbox docker reports it: commands see the folder at /workspace.
+    const result = await companionScreenshot(dir, { allowHooks: true, host: docker }, { platform: 'linux', shell: 'bash', root: '/workspace' });
+    assert.match(result, /godot screenshot: frame \d+ of 3 saved to shots\/start\.png .*No errors while running/);
+    const png = await fs.readFile(path.join(dir, 'shots', 'start.png'));
+    assert.equal(png.subarray(1, 4).toString(), 'PNG');
+    assert.equal(imageData(result), png.toString('base64'), 'the model saw the frame');
+  } finally { await docker.close(); }
 });

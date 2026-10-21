@@ -168,9 +168,10 @@ Only the selected objects: `use_selection=True` (glTF/FBX) or `export_selected_o
 - **Eevee** needs a GPU: do not use it headless.
 - Light it: a sun at 40-60 degrees plus a light world colour; a black world and a sun straight down give a black picture. Metals look black without something to reflect: a light world fixes that.
 - Render front, side and three-quarter views for a review: move the camera, change `scene.render.filepath`, render again.
+- Put review renders in `previews/` (e.g. `previews/front.png`, `side.png`, `top.png`, `three-quarter.png`, at least 64x64). The `model-preview` gate (run by the `model-3d` workflow with `engine=blender`) checks that they exist, were rendered after the last export of the .glb, and are not one flat colour (an empty frame or a black picture). Render them again after every export.
 
 ## Checks before you finish
 - `SIZE` printed and `model_info` agree with the plan (metres).
 - No stray objects: start from `read_factory_settings(use_empty=True)`; the default cube is not part of the model.
 - Normals point out (`bmesh.ops.recalc_face_normals(bm, faces=bm.faces)` after building faces by hand).
-- The preview looks right from more than one view; the .glb passes `gltf-valid`; a .blend you deliver passes `blender-file`.
+- The preview looks right from more than one view; the .glb passes `gltf-valid`; the renders in `previews/` pass `model-preview`; a .blend you deliver passes `blender-file`.

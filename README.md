@@ -24,6 +24,7 @@ npm install
 npm run build                 # browser UI + companion script
 npm run sandbox:image         # the Docker sandbox image (once)
 npm run sandbox:image:3d      # optional: the same plus Blender 4.2 LTS and Godot 4.7 (games3d)
+npm run sandbox:image:3d-export   # optional: the 3D image plus Godot's export templates (Linux, Web)
 export DEEPSEEK_API_KEY=... OPENAI_API_KEY=... ANTHROPIC_API_KEY=...   # or GW_ANTHROPIC_API_KEY
 npm start                     # http://127.0.0.1:4310, prints an access token
 ```
@@ -39,6 +40,8 @@ npm run cli -- --runtime docker --image harness-sandbox-3d:latest "Make a stool 
 ```
 
 Or make it every session's image with `HARNESS_SANDBOX_IMAGE=harness-sandbox-3d:latest`. A session can only name an image on that list; the browser and the agent cannot pick any other.
+
+**Godot exports** need Godot's export templates, which the 3D image leaves out. `npm run sandbox:image:3d-export` builds `harness-sandbox-3d:export` from the same Dockerfile with `--build-arg GODOT_EXPORT_TEMPLATES=1`: it downloads the official `Godot_v4.7.2-stable_export_templates.tpz` (1.3 GB, checked against Godot's SHA512-SUMS.txt) and keeps only the Linux x86_64 and Web templates and the ICU data (185 MB; the image is 3.8 GB). For every platform (Windows, macOS, Android, iOS) add `--build-arg GODOT_TEMPLATES=all`, or name the files to keep from the .tpz's `templates/` folder, e.g. `--build-arg "GODOT_TEMPLATES=windows_release_x86_64.exe windows_debug_x86_64.exe"`. Allow it like the 3D image: `HARNESS_SANDBOX_IMAGES=harness-sandbox-3d:latest,harness-sandbox-3d:export`.
 
 **On Windows, natively.** The npm scripts are plain `node` launchers (`scripts/run.mjs`, `scripts/test.mjs`), so they work in PowerShell and cmd as they do in bash. What to install:
 
@@ -296,15 +299,25 @@ LibreOffice runs without network (`unshare -rn`) where the kernel allows, so a d
 
 `build-game`: design document and `playtest.json`, build (Canvas 2D or Three.js), `web-console` + `playtest` gates with a fix loop, an independent `playtester` that plays with real input and screenshots, a polish round with a scenario for every bug fixed, and a how-to-play README. `model-3d`: plan with real dimensions, the model as code (`model.js`) with a viewer that shows fixed views, look-and-fix, export `model.glb`, the `gltf-valid` gate and `model_info` (container checks, triangles per placed instance, size from composed node transforms), an independent `art-director`, revisions. The skills hold a complete template game and a Three.js viewer that were run in the headless browser before they shipped.
 
-Blender and Godot run where the session's commands run: in the 3D sandbox image (above), or on the machine of a server folder or companion. They are looked for there - inside the container through the session's own shell, on the server with the same finder as LibreOffice (the PATH, `godot4` and `Godot_v4.x` download names, the usual Windows, macOS and Linux install folders, `HARNESS_BLENDER` / `HARNESS_GODOT`) - and a missing one is reported with how to get it.
+Both workflows take an `engine` input; the browser path stays the default:
+
+- `model-3d` with `engine=blender`: the `3d-artist` builds the model with a bpy script (`tools/model.py`, exporting `model.glb` and `model.blend`) and renders previews into `previews/` with Blender; the gates are `gltf-valid`, `model-preview` and `blender-file`; the `art-director` reviews the renders and `model_info`.
+- `build-game` with `engine=godot`: the designer writes a "Self-test" section instead of `playtest.json`; the `game-engineer` builds a Godot 4 project in `game/` with a `--selftest` mode; the gates are `godot-project` and `godot-selftest`; the `playtester` runs the self-test, takes screenshots with the `godot` tool and reads the scripts; then a polish round and a README.
+
+```bash
+npm run cli -- --runtime docker --image harness-sandbox-3d:latest --workflow build-game \
+  --input "idea=Dodge the falling rocks" --input engine=godot --input approval=auto
+```
+
+Blender and Godot run where the session's commands run: in the 3D sandbox image (above), or on the machine of a server folder or companion. They are looked for there - inside the container through the session's own shell, on the server with the same finder as LibreOffice (the PATH, `godot4` and `Godot_v4.x` download names, the usual Windows, macOS and Linux install folders, `HARNESS_BLENDER` / `HARNESS_GODOT`) - and a missing one is reported with how to get it. On a companion they run on the user's computer, which the companion allows only when started with `--allow-hooks` (as for the quality gates); files they write (frames, renders) come back one at a time, not through the mirror.
 
 | Tool / gate | What it does |
 |---|---|
 | `blender {script \| code, file?, args?, show?}` | `blender -b [file.blend] --factory-startup --python script -- args`, headless, paths inside the workspace only. A Python error fails the call (`--python-exit-code`). `show` returns images the script wrote, e.g. a Cycles-on-CPU or Workbench preview (Eevee needs a GPU). For procedural models exported to .glb, and for opening a .blend and exporting glb/fbx/obj. |
-| `godot {action, project?, scene?, frames?, args?, out?, preset?, output?}` | `check`: import, then load every script and scene (parse errors, missing resources). `run`: N frames headless at a fixed 60 per second, every script error and `push_error` reported with its `res://` line; `args` reach the game (`--selftest`). `screenshot`: frames drawn with OpenGL (on Xvfb and llvmpipe in the sandbox) and the last saved as a PNG the agent sees. `export`: with a preset; without export templates it says they are missing. |
-| gates | `blender-file` (every .blend opens headless), `godot-project` (each project.godot imports, loads and runs 30 frames with no script errors). When the program is not installed in that runtime they report `not checked` as a warning, never a failure. |
+| `godot {action, project?, scene?, frames?, args?, out?, preset?, output?, createPreset?}` | `check`: import, then load every script and scene (parse errors, missing resources). `run`: N frames headless at a fixed 60 per second, every script error and `push_error` reported with its `res://` line; `args` reach the game (`--selftest`). `screenshot`: frames drawn with OpenGL (on Xvfb and llvmpipe in the sandbox) where Godot runs - the sandbox, the server, or the companion's computer - and the last saved as a PNG the agent sees. `export`: with a preset from `export_presets.cfg`; a missing preset is an error that lists the ones there, and only `createPreset: "linux"` or `"web"` makes the tool write a minimal one (and say so). It reports the files written; without export templates it says where to get them. |
+| gates | `blender-file` (every .blend opens headless), `godot-project` (each project.godot imports, loads and runs 30 frames with no script errors), `godot-selftest` (each project with a `--selftest` mode runs it for up to 600 frames and must print `SELFTEST PASS` with no errors), `model-preview` (renders in `previews/` exist, were made after the last export of the model, and are not one flat colour; read on the server without a browser). When the program is not installed in that runtime they report `not checked` as a warning, never a failure. |
 
-Skills: `blender-scripting` (bpy: bmesh and modifiers, materials, units and axes for glTF, FBX/OBJ export, previews without a GPU) and `godot-essentials` (a Godot 4 project as text files, a scene built in code, input actions, a self-test the `run` action drives). Their recipes were run in the 3D image: the Blender stool exported to .glb, imported by the Godot template and drawn in a screenshot. `3d-artist` uses Blender when asked for it, `game-engineer` builds a Godot project when asked for one; the `build-game` and `model-3d` workflows stay browser-based.
+Skills: `blender-scripting` (bpy: bmesh and modifiers, materials, units and axes for glTF, FBX/OBJ export, previews without a GPU) and `godot-essentials` (a Godot 4 project as text files, a scene built in code, input actions, a self-test the `run` action drives). Their recipes were run in the 3D image: the Blender stool exported to .glb, imported by the Godot template and drawn in a screenshot. `3d-artist` uses Blender when asked for it, `game-engineer` builds a Godot project when asked for one, and the workflows do either with `engine` (above). In the export image a tiny project was exported to Linux (the build then ran headless in the container) and to the Web (`index.html`, `.js`, `.wasm`, `.pck`).
 
 ## Permissions
 
@@ -511,8 +524,9 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 | `HARNESS_SHELL` | auto | Windows: `powershell`, or the path of a `bash.exe` (default: Git Bash, else PowerShell). |
 | `HARNESS_SHELL_WRITE_GUARD` | on | `off` allows shell file writes. |
 | `HARNESS_SANDBOX_IMAGE`, `_MEMORY`, `_CPUS`, `_IDLE_MS` | `harness-sandbox:latest`, `4g`, `2`, 30 min | |
-| `HARNESS_SANDBOX_IMAGES` | | Other images a sandbox session may choose (comma-separated), e.g. `harness-sandbox-3d:latest`. |
-| `HARNESS_BLENDER`, `HARNESS_GODOT` | auto | Blender and Godot for server-folder sessions (searched on the PATH and in the usual install folders). |
+| `HARNESS_SANDBOX_IMAGES` | | Other images a sandbox session may choose (comma-separated), e.g. `harness-sandbox-3d:latest,harness-sandbox-3d:export` (the second has Godot's export templates). |
+| `HARNESS_BLENDER`, `HARNESS_GODOT` | auto | Blender and Godot for server-folder sessions (searched on the PATH and in the usual install folders); on a companion, the same variables on the user's computer. |
+| build args of `docker/Dockerfile.sandbox-3d` | `GODOT_EXPORT_TEMPLATES=0` | `1` adds Godot's export templates (`npm run sandbox:image:3d-export`); `GODOT_TEMPLATES` lists the template files kept (default Linux x86_64, Web, ICU data; `all` for every platform). |
 | `HARNESS_PRICING_JSON` | | Override prices per model. |
 
 ## Honest limits
@@ -522,8 +536,6 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 - **Not built yet:**
   - checkpoints and project MCP servers on companion sessions;
   - credential injection at the sandbox's network proxy (it allows or blocks hosts; it does not add secrets to requests);
-  - Godot export templates in the 3D image (about 1 GB for every platform), so `godot export` works only where they are installed; Godot screenshots on companion sessions (the frames are read on the server);
-  - workflows for Blender or Godot (`build-game` and `model-3d` build for the browser; Blender and Godot are used from a session or by the `3d-artist` and `game-engineer` agents);
   - signing out at the identity provider (single sign-on's sign-out ends the harness session only).
 - **Limits of what was built:**
   - Plugin code runs in the server process. Declared permissions are enforced on the channels the harness hands out, not on code that ignores them; signing is the control for that.
@@ -531,8 +543,11 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
   - A plugin's `api.fetch` and `web_fetch` check a host's addresses before connecting, then connect by name; a DNS server that changes its answer in between (rebinding) is not stopped. Pinning the checked address needs an HTTP client with a custom lookup, which Node's built-in fetch does not take.
   - Companion mirrors (the server's copy for render and browser) leave out `.env`, key files, names with `\` or `:`, and files over 20 MB.
   - The allowlist network was tested on Linux and, since 2026-10-21, on Docker Desktop for Windows (where the host is `host.docker.internal`); not on Docker Desktop for macOS.
+  - Godot exports: the export image has the Linux x86_64 and Web templates only (rebuild with `GODOT_TEMPLATES=all` for the rest); a Web export was checked for its files, not played in a browser. Outside a sandbox the templates must be installed by hand.
+  - The `godot-selftest` gate proves only what the game's own `--selftest` checks; the playtester reads the scripts to judge that, but cannot play a Godot game with input.
+  - Blender and Godot on a companion need `--allow-hooks`; the `model-preview` gate on a companion cannot tell whether the renders are newer than the model (its copy has the copy's file times).
 - **Not tested here:**
   - the full sandbox image on Linux (it was first built on 2026-10-21, on Docker Desktop for Windows, together with the 3D image; earlier tests used a plain Node image because that environment's proxy blocked Debian packages);
-  - Godot on Windows or macOS outside the sandbox (only discovery is tested there, with simulated paths); Blender ran natively on Windows 11 and in the 3D image;
+  - Godot on Windows or macOS outside the sandbox (only discovery is tested there, with simulated paths); Blender ran natively on Windows 11 and in the 3D image. Godot screenshots on a companion ran in-process with a stand-in Godot and with real Godot in a companion whose commands run in the 3D image (`--sandbox docker`), not with Godot installed on a user's computer;
   - a real Windows machine (the Windows choices are tested with simulated paths, and the Docker setup ran 80/80 on Windows before the review fixes);
   - prices, which come from the providers' pages on 2026-10-19 and can change.

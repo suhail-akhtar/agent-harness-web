@@ -43,6 +43,18 @@ export function probeScript(name, shell) {
   return [...lines, 'exit 1'].join('\n');
 }
 
+/**
+ * A command in the runtime. A companion runs commands for the server's tools
+ * (these, like the quality gates) only when it was started with --allow-hooks;
+ * its refusal is said in those terms.
+ */
+export async function execIn(host, cmd, opts) {
+  try { return await host.exec(cmd, opts); } catch (e) {
+    if (host.kind === 'companion' && /--allow-hooks/.test(e.message)) throw new Error('The blender and godot tools run Blender and Godot on the companion\'s computer, which it allows only when started with --allow-hooks (as for the quality gates). Ask the user to restart the companion with --allow-hooks.');
+    throw e;
+  }
+}
+
 const found = new WeakMap();
 
 /**
@@ -58,7 +70,7 @@ export async function locate(host, name, signal, find = findBinary) {
   let bin = null;
   if (host.kind === 'local') bin = find(name);
   else {
-    const r = await host.exec(probeScript(name, host.shell), { timeoutMs: 30_000, signal });
+    const r = await execIn(host, probeScript(name, host.shell), { timeoutMs: 30_000, signal });
     bin = r.code === 0 ? r.stdout.trim().split(/\r?\n/).pop()?.trim() || null : null;
   }
   if (bin) m.set(name, bin);
@@ -105,11 +117,52 @@ export async function writeIn(host, rel, data, signal) {
   await fsp.writeFile(file, data);
 }
 
-/** Reads a workspace file the runtime wrote (a companion's through the server's mirror of the folder). */
+/**
+ * Reads a workspace file the runtime wrote. A companion sends that one file
+ * (its mirror skips .harness, where frames and temporary files go); an older
+ * companion without file reads falls back to the mirror.
+ */
 export async function readIn(host, rel, signal) {
+  if (host.kind === 'companion' && host.readFile) {
+    const data = await host.readFile(rel, signal);
+    if (!data) throw Object.assign(new Error(`${rel} not found`), { code: 'ENOENT' });
+    return data;
+  }
   const root = host.kind === 'companion' ? await host.mirror?.(signal) : host.root;
   if (!root) throw new Error('this companion cannot send files to the server');
   return fsp.readFile(path.join(root, rel));
+}
+
+/** A workspace file's text, or null when it is not there. */
+export async function readTextIn(host, rel, signal) {
+  try { return (await readIn(host, rel, signal)).toString('utf8'); } catch (e) { if (e.code === 'ENOENT') return null; throw e; }
+}
+
+/** Runs a small file command on a companion in its own shell; throws with its output on failure. */
+async function companionShell(host, bash, powershell, signal) {
+  const r = await execIn(host, host.shell === 'powershell' ? powershell : bash, { timeoutMs: 60_000, signal });
+  if (r.code !== 0) throw new Error((r.stderr || r.stdout).trim() || `exit ${r.code}`);
+  return r.stdout;
+}
+
+/** Makes a folder in the workspace (with the companion's shell when the folder is on the user's computer). */
+export async function mkdirIn(host, rel, signal) {
+  if (rel === '.' || !rel) return;
+  if (host.kind !== 'companion') { await fsp.mkdir(path.join(host.root, rel), { recursive: true }); return; }
+  await companionShell(host, `mkdir -p ${quote(rel, 'bash')}`, `New-Item -ItemType Directory -Force -Path ${quote(rel, 'powershell')} | Out-Null`, signal);
+}
+
+/** The names in a workspace folder ([] when it is not there). */
+export async function listIn(host, rel, signal) {
+  if (host.kind !== 'companion') return fsp.readdir(path.join(host.root, rel)).catch(() => []);
+  const out = await companionShell(host, `ls -1A ${quote(rel, 'bash')} 2>/dev/null || true`, `if (Test-Path -LiteralPath ${quote(rel, 'powershell')}) { Get-ChildItem -Name -LiteralPath ${quote(rel, 'powershell')} }`, signal);
+  return out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+}
+
+/** Removes a workspace folder and what is in it. */
+export async function removeIn(host, rel, signal) {
+  if (host.kind !== 'companion') { await fsp.rm(path.join(host.root, rel), { recursive: true, force: true }); return; }
+  await companionShell(host, `rm -rf ${quote(rel, 'bash')}`, `Remove-Item -Recurse -Force -LiteralPath ${quote(rel, 'powershell')} -ErrorAction SilentlyContinue`, signal);
 }
 
 /** Files under the workspace with one of these names or extensions, skipping dependencies and build output. */
@@ -151,7 +204,7 @@ const millis = (t0) => `${((Date.now() - t0) / 1000).toFixed(1)}s`;
 export async function runIn(host, bin, args, { timeoutMs, signal, prefix }) {
   const t0 = Date.now();
   const cmd = prefix ? prefix(commandLine(bin, args, host.shell)) : commandLine(bin, args, host.shell);
-  const r = await host.exec(cmd, { timeoutMs, signal });
+  const r = await execIn(host, cmd, { timeoutMs, signal });
   return { ...r, output: stripAnsi(`${r.stdout}${r.stderr ? `\n${r.stderr}` : ''}`), took: millis(t0) };
 }
 
@@ -219,6 +272,56 @@ export function godotArgs(step, o) {
   }
 }
 
+// ---------- export presets ----------
+
+/** The presets the tool can write when asked (createPreset): the name, Godot's platform, a default output. */
+export const PRESET_KINDS = {
+  linux: { name: 'Linux', platform: 'Linux', output: 'build/linux/game.x86_64' },
+  web: { name: 'Web', platform: 'Web', output: 'build/web/index.html' },
+};
+
+/** The presets in an export_presets.cfg: index, name and platform. */
+export function presetsIn(cfg) {
+  const out = [];
+  let cur;
+  for (const line of String(cfg ?? '').replace(/\r/g, '').split('\n')) {
+    const sec = /^\s*\[preset\.(\d+)\]\s*$/.exec(line);
+    if (sec) { cur = { index: Number(sec[1]), name: '', platform: '' }; out.push(cur); continue; }
+    if (/^\s*\[/.test(line)) { cur = undefined; continue; }
+    const kv = /^\s*(name|platform)\s*=\s*"((?:[^"\\]|\\.)*)"\s*$/.exec(line);
+    if (cur && kv) cur[kv[1]] = kv[2].replace(/\\(.)/g, '$1');
+  }
+  return out;
+}
+
+const cfgString = (s) => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+
+/**
+ * A minimal preset section for Linux (x86_64, the .pck beside the binary) or
+ * the Web (no threads, so it runs from any static server without
+ * cross-origin isolation headers). Options left out take Godot's defaults.
+ */
+export function minimalPreset(kind, index, name, exportPath) {
+  const k = PRESET_KINDS[kind];
+  if (!k) throw new Error(`unknown preset kind ${kind}`);
+  const options = kind === 'linux'
+    ? ['binary_format/embed_pck=false', 'binary_format/architecture="x86_64"']
+    : ['variant/extensions_support=false', 'variant/thread_support=false', 'vram_texture_compression/for_desktop=true', 'vram_texture_compression/for_mobile=false'];
+  return [
+    `[preset.${index}]`, '',
+    `name=${cfgString(name)}`, `platform=${cfgString(k.platform)}`, 'runnable=true', 'dedicated_server=false', 'custom_features=""',
+    'export_filter="all_resources"', 'include_filter=""', 'exclude_filter=""', `export_path=${cfgString(exportPath)}`, '',
+    `[preset.${index}.options]`, '', ...options, '',
+  ].join('\n');
+}
+
+/** export_presets.cfg with a minimal preset added (a new file when there is none). */
+export function withPreset(cfg, kind, name, exportPath) {
+  const next = Math.max(-1, ...presetsIn(cfg).map((p) => p.index)) + 1;
+  const head = cfg && cfg.trim() ? `${cfg.replace(/\s*$/, '')}\n\n` : '';
+  return head + minimalPreset(kind, next, name, exportPath);
+}
+
 /** On Linux without a display, frames are drawn on Xvfb when it is installed. */
 export function withDisplay(host) {
   if (host.platform !== 'linux' || host.shell === 'powershell') return undefined;
@@ -256,6 +359,25 @@ export async function checkGodot(host, bin, project, signal) {
   if (chk.timedOut) problems.push('the script check timed out');
   else if (Number.isNaN(checked) && !problems.length) problems.push(`the script check did not finish (exit ${chk.code})`);
   return { problems, checked, output: `${imp.output}\n${chk.output}` };
+}
+
+/** Frames a self-test may take (ten seconds of game time); it may quit sooner. */
+export const SELFTEST_FRAMES = 600;
+
+/**
+ * Runs a project's scripted self-test (the game's --selftest mode, see
+ * godot-essentials): it passes when the game printed SELFTEST PASS and
+ * reported no errors. Imports first, so a fresh project's resources load.
+ */
+export async function selftestGodot(host, bin, project, signal, frames = SELFTEST_FRAMES) {
+  const imp = await runIn(host, bin, godotArgs('import', { project }), { timeoutMs: 300_000, signal });
+  if (imp.timedOut) return { problems: ['the import timed out after 5 minutes'], output: imp.output };
+  const r = await runIn(host, bin, godotArgs('run', { project, frames, args: ['--selftest'] }), { timeoutMs: 300_000, signal });
+  const problems = godotProblems(r.output);
+  const passed = /SELFTEST PASS/.test(r.output);
+  if (r.timedOut) problems.push(`the self-test did not finish in 5 minutes (${frames} frames)`);
+  else if (!passed && !problems.length) problems.push(`the self-test never printed SELFTEST PASS in ${frames} frames (exit ${r.code}): give the game a --selftest mode that drives it and prints SELFTEST PASS when every check holds (godot-essentials)`);
+  return { problems, passed: passed && !problems.length, output: r.output, took: r.took };
 }
 
 export const newId = () => crypto.randomUUID().slice(0, 8);

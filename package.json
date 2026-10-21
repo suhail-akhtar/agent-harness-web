@@ -17,6 +17,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p ui/tsconfig.json --noEmit",
     "sandbox:image": "docker build -t harness-sandbox:latest -f docker/Dockerfile.sandbox docker",
     "sandbox:image:3d": "docker build -t harness-sandbox-3d:latest -f docker/Dockerfile.sandbox-3d docker",
+    "sandbox:image:3d-export": "docker build -t harness-sandbox-3d:export --build-arg=GODOT_EXPORT_TEMPLATES=1 -f docker/Dockerfile.sandbox-3d docker",
     "eval": "node scripts/run.mjs src/eval/cli.ts",
     "plugin": "node scripts/run.mjs src/plugins/cli.ts",
     "users": "node scripts/run.mjs src/server/users-cli.ts"

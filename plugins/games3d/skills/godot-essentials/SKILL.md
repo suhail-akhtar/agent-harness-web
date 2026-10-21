@@ -11,9 +11,10 @@ The `godot` tool runs Godot where the session's commands run (in a sandbox, the 
 | `{"action": "check", "project": "game"}` | Imports the project, then loads every script and scene: parse errors, type errors, missing resources. Run after every change. |
 | `{"action": "run", "project": "game", "frames": 120, "args": ["--selftest"]}` | Plays 120 frames headless at a fixed 60 per second (deterministic physics, faster than real time). Reports every `SCRIPT ERROR` and `push_error`. |
 | `{"action": "screenshot", "project": "game", "frames": 60, "out": "shots/start.png"}` | Draws the frames with OpenGL (on the CPU in the sandbox) and saves the last one. You see it. |
-| `{"action": "export", "project": "game", "preset": "Linux", "output": "build/game.x86_64"}` | Needs export templates; without them it says so. Check, run and screenshot do not. |
+| `{"action": "export", "project": "game", "preset": "Linux", "output": "build/linux/game.x86_64"}` | Builds with a preset from `export_presets.cfg`. Needs Godot's export templates (in a sandbox: the `harness-sandbox-3d:export` image, Linux and Web); without them it says so. Check, run and screenshot do not. |
+| `{"action": "export", "project": "game", "createPreset": "web"}` | When `export_presets.cfg` has no such preset, writes a minimal one first (`"linux"`: x86_64, the .pck beside the binary, default output `build/linux/game.x86_64`; `"web"`: no threads, so any static server can host it, default `build/web/index.html`). Without `createPreset` a missing preset is an error that lists the ones there. |
 
-The `godot-project` gate runs check plus 30 frames on every project.godot in the workspace.
+The `godot-project` gate runs check plus 30 frames on every project.godot in the workspace. The `godot-selftest` gate runs each project with `-- --selftest` for up to 600 frames: it passes only when the game prints `SELFTEST PASS` and reports no errors (the `build-game` workflow with `engine=godot` runs both).
 
 ## Layout
 ```
@@ -163,8 +164,26 @@ For 2D: `extends Node2D`, `Camera2D`, `Sprite2D` / `_draw()` with `draw_rect`, `
 - Godot's forward is -Z. A glTF model's front (+Z) faces a camera placed in front of it at +Z; for a character that walks forward (-Z), turn it with `rotation_degrees.y = 180`.
 - Metals look black in a plain environment (nothing to reflect): add a sky (`Environment.BG_SKY` with a `ProceduralSkyMaterial`) or lower metallic.
 
+## Export
+`export_presets.cfg` sits beside project.godot. A minimal Linux preset (what `createPreset: "linux"` writes; for the Web: `platform="Web"` with `variant/thread_support=false` under its options):
+```ini
+[preset.0]
+
+name="Linux"
+platform="Linux"
+runnable=true
+export_filter="all_resources"
+export_path="../build/linux/game.x86_64"
+
+[preset.0.options]
+
+binary_format/embed_pck=false
+binary_format/architecture="x86_64"
+```
+The Linux build is the binary plus `game.pck` beside it (`./game.x86_64 --headless --quit-after 60` runs it without a display); the Web build is `index.html` with its `.js`, `.wasm` and `.pck`, served by any static server.
+
 ## Verify before you finish
 1. `check` until it reports no problems.
-2. `run` with `args: ["--selftest"]`: the game drives itself (hold keys with `Input.action_press`, wait N physics ticks) and checks its own state with `push_error` on failure. Cover the core loop: move, score, lose, restart.
+2. `run` with `args: ["--selftest"]`: the game drives itself (hold keys with `Input.action_press`, wait N physics ticks) and checks its own state with `push_error` on failure. Cover the core loop: move, score, lose, restart. Print `SELFTEST PASS` only after the last check held, within 600 frames (it may `get_tree().quit()` then); that line is what the `godot-selftest` gate waits for.
 3. `screenshot` at the start and after a self-test (`args` work here too) and look: is the player visible, is the camera framing right, is the UI readable?
-4. Run the `quality_gates` tool: `godot-project` must pass.
+4. Run the `quality_gates` tool: `godot-project` must pass, and `godot-selftest` when the game has a `--selftest` mode.

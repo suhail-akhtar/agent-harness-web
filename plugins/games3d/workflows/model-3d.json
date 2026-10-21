@@ -1,6 +1,6 @@
 {
   "name": "model-3d",
-  "description": "From a description to a production-ready 3D model: plan with real proportions, build as code (Three.js), look from every view and fix, export .glb, validate, independent art review, revisions.",
+  "description": "From a description to a production-ready 3D model: plan with real proportions, build as code (Three.js in the browser, or a Blender script with engine=blender), look from every view and fix, export .glb, validate, independent art review, revisions.",
   "inputs": {
     "subject": {
       "description": "What to model, its style and any details that must be there.",
@@ -9,6 +9,10 @@
     "detail": {
       "description": "Detail level",
       "default": "a clean, realistic product model, under 50k triangles"
+    },
+    "engine": {
+      "description": "\"three\" (Three.js in the browser, with a viewer page) or \"blender\" (a bpy script run in Blender, previews rendered by Blender)",
+      "default": "three"
     },
     "approval": {
       "description": "\"manual\" to approve the plan first, \"auto\" to go straight on",
@@ -23,7 +27,7 @@
       "title": "Model plan",
       "agent": "3d-artist",
       "effort": "medium",
-      "prompt": "Plan the model (do not build yet): load procedural-3d-modeling and write docs/model-plan.md with real dimensions in metres, the parts with primitives, sizes and positions, mirrored/repeated parts, materials, and what makes the silhouette recognisable.\n\n<subject>\n{{input.subject}}\n</subject>\nDetail: {{input.detail}}\nFeedback, if any: {{feedback}}",
+      "prompt": "Plan the model (do not build yet): load procedural-3d-modeling and write docs/model-plan.md with real dimensions in metres, the parts with primitives, sizes and positions, mirrored/repeated parts, materials, and what makes the silhouette recognisable.\n\n<subject>\n{{input.subject}}\n</subject>\nDetail: {{input.detail}}\nEngine: {{input.engine}}\nFeedback, if any: {{feedback}}",
       "next": "approval-mode"
     },
     "approval-mode": {
@@ -32,7 +36,7 @@
       "value": "{{input.approval}}",
       "next": {
         "on": {
-          "auto": "build"
+          "auto": "engine"
         },
         "default": "approve-plan"
       }
@@ -46,9 +50,20 @@
       ],
       "next": {
         "on": {
-          "approve": "build",
+          "approve": "engine",
           "reject": "plan"
         }
+      }
+    },
+    "engine": {
+      "type": "branch",
+      "title": "Three.js or Blender?",
+      "value": "{{input.engine}}",
+      "next": {
+        "on": {
+          "blender": "build-blender"
+        },
+        "default": "build"
       }
     },
     "build": {
@@ -150,6 +165,109 @@
       "agent": "3d-artist",
       "effort": "low",
       "prompt": "Write docs/delivery.md: the files (model.glb, model.js, index.html), size in metres, triangles, materials, how to view it (open index.html; ?view=front|side|back|top), what the reviews found and how it was resolved, and anything still open (including any Round 2 findings not fixed). Report its first paragraph.",
+      "next": "done"
+    },
+    "build-blender": {
+      "type": "agent",
+      "title": "Model in Blender & look",
+      "agent": "3d-artist",
+      "maxSteps": 150,
+      "prompt": "Build the model from docs/model-plan.md in Blender (load blender-scripting; no viewer page is needed): tools/model.py builds it to the plan's real sizes and exports model.glb (and saves model.blend); tools/preview.py renders it into previews/front.png, previews/side.png, previews/top.png and previews/three-quarter.png (Workbench or Cycles on the CPU with few samples, the model framed and lit). Run both with the blender tool, look at every preview (show), fix what you see, run them again. Render the previews again after every export. Confirm with model_info.\n\n<subject>\n{{input.subject}}\n</subject>\nDetail: {{input.detail}}",
+      "next": "checks-blender"
+    },
+    "checks-blender": {
+      "type": "gate",
+      "title": "Model & preview checks",
+      "gates": [
+        "gltf-valid",
+        "model-preview",
+        "blender-file"
+      ],
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "review-blender",
+          "fail": "fix-blender",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "fix-blender": {
+      "type": "agent",
+      "title": "Fix",
+      "agent": "3d-artist",
+      "prompt": "The checks failed. Fix the Blender script (tools/model.py) or the previews (tools/preview.py), export model.glb again, render the previews again and look at them, confirm with model_info.\n\n{{feedback}}",
+      "next": "checks-blender"
+    },
+    "review-blender": {
+      "type": "agent",
+      "title": "Art review",
+      "agent": "art-director",
+      "decide": [
+        "APPROVE",
+        "REQUEST_CHANGES"
+      ],
+      "prompt": "Review the model against the subject and docs/model-plan.md. It was built in Blender: look at every render in previews/ (read shows images), check model.glb with model_info, and read tools/model.py for how it is built. Write docs/model-review.md.\n\n<subject>\n{{input.subject}}\n</subject>",
+      "next": {
+        "on": {
+          "REQUEST_CHANGES": "revise-blender"
+        },
+        "default": "deliver-blender"
+      }
+    },
+    "revise-blender": {
+      "type": "agent",
+      "title": "Revise",
+      "agent": "3d-artist",
+      "prompt": "Address every BLOCKING and MAJOR finding in docs/model-review.md in the Blender script; export model.glb again, render the previews again and look at the affected views. Add a \"Resolution\" line under each finding.\n\n{{state.review-blender}}",
+      "next": "recheck-blender"
+    },
+    "recheck-blender": {
+      "type": "gate",
+      "title": "Model & preview checks",
+      "gates": [
+        "gltf-valid",
+        "model-preview",
+        "blender-file"
+      ],
+      "maxFailures": 2,
+      "next": {
+        "on": {
+          "pass": "final-review-blender",
+          "fail": "fix-blender-2",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "fix-blender-2": {
+      "type": "agent",
+      "title": "Fix",
+      "agent": "3d-artist",
+      "prompt": "The checks failed after the revision. Fix it, export and render the previews again.\n\n{{feedback}}",
+      "next": "recheck-blender"
+    },
+    "final-review-blender": {
+      "type": "agent",
+      "title": "Second review",
+      "agent": "art-director",
+      "decide": [
+        "APPROVE",
+        "REQUEST_CHANGES"
+      ],
+      "prompt": "Second review: look at the renders in previews/ again and confirm each BLOCKING and MAJOR finding in docs/model-review.md is resolved and nothing new broke. Append a \"Round 2\" section.",
+      "next": {
+        "on": {
+          "REQUEST_CHANGES": "deliver-blender"
+        },
+        "default": "deliver-blender"
+      }
+    },
+    "deliver-blender": {
+      "type": "agent",
+      "title": "Delivery note",
+      "agent": "3d-artist",
+      "effort": "low",
+      "prompt": "Write docs/delivery.md: the files (model.glb, model.blend, tools/model.py, tools/preview.py, previews/*.png), size in metres, triangles, materials, how to rebuild it (blender -b --python tools/model.py) and how to view it (the previews, or model.glb in any glTF viewer), what the reviews found and how it was resolved, and anything still open (including any Round 2 findings not fixed). Report its first paragraph.",
       "next": "done"
     },
     "done": {
