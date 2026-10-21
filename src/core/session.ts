@@ -8,6 +8,7 @@ import { describeWatch, TASK_TOOLS, type TaskEntry, TaskRegistry, type TaskServi
 import { formatGates, makeGatesTool, runGates } from '../gates/gates.ts';
 import { newRun, WorkflowRunner } from '../graph/runner.ts';
 import type { RunRecord, WorkflowDef, WorkflowHost } from '../graph/types.ts';
+import { usesNodeType } from '../graph/validate.ts';
 import type { InProcessHook } from '../kernel/registry.ts';
 import { loadWorkflowDir } from '../plugins/loader.ts';
 import type { Registry } from '../kernel/registry.ts';
@@ -670,7 +671,7 @@ export class Session {
     const workflows = new Map<string, WorkflowDef>(reg.workflows);
     if (host.kind !== 'companion') {
       for (const w of await loadWorkflowDir(path.join(host.root, '.harness', 'workflows'), 'project')) {
-        if (!this.projectTrusted(host) && Object.values(w.nodes).some((n) => n.type === 'shell')) continue;
+        if (!this.projectTrusted(host) && usesNodeType(w, 'shell')) continue;
         workflows.set(w.name, w);
       }
     }

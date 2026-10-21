@@ -219,16 +219,43 @@ A workflow is a graph of steps that the harness drives, not the model. Each step
 
 | Node | What it does | Outcomes it routes on |
 |---|---|---|
-| `agent` | Runs a sub-agent (`agent`, `prompt`, optional `model`, `effort`) in a fresh context. Its report is kept as `{{state.<node>}}`. | the first `decide` word found in the report, e.g. `APPROVE` / `REQUEST_CHANGES` |
+| `agent` | Runs a sub-agent (`agent`, `prompt`, optional `model`, `effort`) in a fresh context. Its report is kept as `{{state.<node>}}`; with `outputs`, it also reports declared state fields in a JSON block. | the first `decide` word found in the report, e.g. `APPROVE` / `REQUEST_CHANGES`; `invalid-output` when its JSON block is missing or mistyped and `next` names it |
 | `gate` | Runs quality gates (`gates: "applicable"` or names). On failure the evidence becomes `{{feedback}}` for the next step. | `pass`, `fail`, `exhausted` (after `maxFailures`) |
 | `approval` | Shows a person a message and files; they approve, or send it back with what to change. | `approve`, `reject` |
 | `parallel` | Runs its `branches` at once. | the first negative branch outcome (`REQUEST_CHANGES`, `REJECT`, `FAIL`…), else `all` |
-| `branch` | Routes on a rendered value, e.g. `{{input.approval}}`. | the value |
+| `branch` | Routes on a rendered `value`, e.g. `{{input.approval}}`, or on a condition `when`, e.g. `state.failures > 2`. | the value; `true` / `false` for `when` |
+| `map` | Runs its `node` (an agent, shell or code step) once per item of `over`, at most `concurrency` at once (default 4); `{{item}}`, `{{item.x}}` and `{{index}}` are filled in. Results go to the list field named by `collect`, in item order. | `all`, the first negative item outcome, or `fail` when an item failed and `next` names it (otherwise the run fails) |
 | `shell` | Runs a command. A workspace workflow with a shell node loads only where project commands are trusted. | `ok`, `fail`, or `exit-N` for exit code N when `next` names it |
 | `code` | Runs a function. Plugins only, never from a workspace. | what it returns |
 | `end` | Finishes as `success` or `failed`. | |
 
-`next` is a node id, or `{ "on": { "<outcome>": "<node>" }, "default": "<node>" }`. Templates: `{{input.x}}`, `{{state.<node>}}`, `{{feedback}}`. A graph is checked before it runs (missing nodes, unreachable nodes, branch rules). Loops are bounded by `maxAgentRuns` and 200 steps.
+`next` is a node id, or `{ "on": { "<outcome>": "<node>" }, "default": "<node>" }`. Templates: `{{input.x}}`, `{{state.<node>}}`, `{{state.<field>}}` (dotted paths reach inside: `{{state.plan.title}}`; lists and objects render as JSON), `{{feedback}}`. A graph is checked before it runs (missing nodes, unreachable nodes, branch rules, state declarations, writes and conditions). Loops are bounded by `maxAgentRuns` and 200 steps; every map item counts as a step and every agent item as an agent run, and a map that would pass either cap fails before it starts anything.
+
+**Typed state.** A workflow can declare fields under `state`, each with a `type` (`string`, `number`, `boolean`, `list`, `object`), an optional `initial` value and a `reducer` that says how a write combines with what is there: `replace` (the default), `append` (lists: a list adds its items, anything else is one item), `merge` (objects, shallow), `sum` (numbers). Reducers keep parallel branches and map items from overwriting each other. Nodes write with `writes: { "<field>": "<template>" }`, where `{{output}}` is the node's own output (an agent's report, a command's stdout, a map's result list); a write of the wrong type fails the node and changes nothing. An agent node with `outputs: ["<field>", ...]` is asked to end its report with a fenced `json` block holding those fields. The values are saved in the run record after every step (`values` in `runs/<id>.json`), so they survive a resume.
+
+**Conditions** (`when`) are a small language, parsed and never evaluated as code: `state.x` / `input.x` / `item` / `index` references with dotted paths, numbers, quoted strings, `true` / `false` / `null`, `== != > >= < <=`, `&&` / `and`, `||` / `or`, `!` / `not`, parentheses, `len(x)` and `contains(list or text, value)`.
+
+**Fan-out.** A `map` node saves each finished item's result as it goes; a stopped or failed run resumes with only the unfinished (or failed) items. Each item shows in the history as `<map>[<index>]`.
+
+```json
+{
+  "name": "review-files", "description": "Review each changed file, then fix if there is much to fix", "start": "list",
+  "state": {
+    "files":    { "type": "list" },
+    "findings": { "type": "number", "reducer": "sum" },
+    "reviews":  { "type": "list" }
+  },
+  "nodes": {
+    "list":   { "type": "agent", "prompt": "List the files changed on this branch.", "outputs": ["files"], "next": "review" },
+    "review": { "type": "map", "over": "{{state.files}}", "concurrency": 3, "collect": "reviews",
+                "node": { "type": "agent", "agent": "code-reviewer", "prompt": "Review {{item}} only.", "outputs": ["findings"] },
+                "next": "triage" },
+    "triage": { "type": "branch", "when": "state.findings > 2", "next": { "on": { "true": "fix", "false": "done" } } },
+    "fix":    { "type": "agent", "prompt": "Fix the {{state.findings}} findings: {{state.reviews}}", "next": "done" },
+    "done":   { "type": "end" }
+  }
+}
+```
 
 Workflows come from plugins (`registerWorkflow`, or a `workflows` folder in the manifest) or from the workspace (`.harness/workflows/*.json`). Run one from the UI (**Workflow…** beside Send), from the CLI, or from code:
 
@@ -500,7 +527,14 @@ The server prints the redirect URI to register when it starts. How it works:
 
 ## Evaluations
 
-`npm run eval -- [--packs sdlc,documents,games,3d] [--models a,b] [--repeat 2] [--concurrency 3]` runs each case in `evals/<pack>/<case>/eval.json` on every model and repeat, in fresh workspaces, and judges it with **hidden checks** the agent never sees: shell commands (the URL shortener's 25 HTTP acceptance checks), gates, required files, and hidden playtests in the headless browser. It writes `report.md` (pass rate, checks passed, median cost, time, cache hit, calls, every failed check) and `results.json`. The checks were calibrated against results verified by hand before they were trusted.
+`npm run eval -- [--packs sdlc,documents,games,3d] [--models a,b] [--repeat 2] [--concurrency 3]` runs each case in `evals/<pack>/<case>/eval.json` on every model and repeat, in fresh workspaces, and judges it with **hidden checks** the agent never sees: shell commands (the URL shortener's 25 HTTP acceptance checks), gates, required files, and hidden playtests in the headless browser. It writes `report.md` (pass rate with its 95% Wilson confidence interval, checks passed, cost, time, cache hit and calls as "median (min-max)" over the repeats, every failed check) and `results.json`. The checks were calibrated against results verified by hand before they were trusted.
+
+**Harness configurations (ablations).** `--configs <file>` (and/or `--config <name>` / `--config '<name>={...}'`, repeatable) runs every case and model under each named harness configuration, so the same model is measured under several harnesses and the harness's effect can be told apart from the model's. A configuration can change operator settings (`maxSteps`, `maxCostUsd`, `compactAt`, `subagentModel`, `autoModel`, `maxSubagentDepth`, `maxParallelSubagents`, `gatesOnStop`), turn code mode off (`"codeMode": false` removes `run_script`), load only some plugins (`"plugins": ["sdlc"]`), set the `effort`, the `injectionScan`, `memory` (`on`/`read`/`off`), take tools out (`disableTools`), or set other `HARNESS_*` variables (`env`). Each is applied the way an operator would (an operator settings file, the `HARNESS_*` switches), so configurations run one after another while each one's runs stay parallel. The first configuration is the baseline: the report gives each configuration its own row with `Δ pass` (percentage points) and `Δ cost` against the baseline on the same case and model, adds a per-model summary across all cases, and the disclosure block names every configuration. `evals/ablations.json` is an example:
+
+```bash
+npm run eval -- --packs sdlc --models deepseek-flash --repeat 3 --configs evals/ablations.json
+npm run eval -- --cases url-shortener --repeat 5 --config baseline --config 'compact-early={"settings":{"compactAt":60000}}'
+```
 
 Every report names the harness that produced it - version, commit (and whether it had local changes), the loop's settings, plugins and platform - because a score describes a model and a harness together: a controlled study found the same two models swapping places by up to ~38 points across harnesses.
 

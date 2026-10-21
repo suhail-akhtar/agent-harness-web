@@ -354,6 +354,35 @@ test('parallel branches saving at the same moment do not break the run record', 
   await h.close();
 });
 
+test('a workspace workflow with typed state and a map runs through the session; its state is saved with the run', async () => {
+  const h = await createHarness({ dataDir: await tempDir() });
+  const ws = await tempDir();
+  await fs.mkdir(path.join(ws, '.harness', 'workflows'), { recursive: true });
+  await fs.writeFile(path.join(ws, '.harness', 'workflows', 'triage.json'), JSON.stringify({
+    name: 'triage', description: 'd', start: 'list',
+    state: { files: { type: 'list' }, sizes: { type: 'list' }, total: { type: 'number', reducer: 'sum' } },
+    nodes: {
+      list: { type: 'agent', prompt: 'List the files', outputs: ['files'], next: 'each' },
+      each: { type: 'map', over: '{{state.files}}', concurrency: 1, collect: 'sizes', node: { type: 'agent', prompt: 'Measure {{item}}', outputs: ['total'] }, next: 'big' },
+      big: { type: 'branch', when: 'state.total > 10', next: { on: { true: 'large', false: 'small' } } },
+      large: { type: 'end' }, small: { type: 'end', status: 'failed' },
+    },
+  }));
+  const block = (o: unknown) => ({ text: `ok\n\`\`\`json\n${JSON.stringify(o)}\n\`\`\`` });
+  const provider = new FakeProvider([block({ files: ['a.ts', 'b.ts'] }), block({ total: 4 }), block({ total: 9 })]);
+  h.registry.setProviderInstance('deepseek', provider);
+  const s = await h.sessions.create({ model: 'deepseek-flash', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: ws } });
+  const ended = new Promise<void>((r) => s.subscribe(0, ({ event }) => { if (event.kind === 'turn_end' && !event.agent) r(); }));
+  const started = await s.startWorkflow('triage', {});
+  await ended;
+  const run = await s.readRun(started.id);
+  assert.equal(run.status, 'succeeded', run.error ?? '');
+  assert.deepEqual(run.values, { files: ['a.ts', 'b.ts'], sizes: [{ total: 4 }, { total: 9 }], total: 13 });
+  assert.deepEqual(run.history.map((x) => `${x.node}:${x.outcome ?? ''}`), ['list:', 'each:all', 'each[0]:', 'each[1]:', 'big:true', 'large:']);
+  assert.match(JSON.stringify(provider.requests[2]!.messages), /Measure b\.ts/);
+  await h.close();
+});
+
 test('tool images ride on their result, and clearing old results drops their images', async () => {
   const { makeAgent } = await import('./helpers.ts');
   const root = await tempDir();

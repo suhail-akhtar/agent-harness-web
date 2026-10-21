@@ -6,7 +6,7 @@ import { loadAgentDir } from '../agents/agents.ts';
 import type { Registry } from '../kernel/registry.ts';
 import { HOOK_EVENTS } from '../core/settings.ts';
 import type { WorkflowDef } from '../graph/types.ts';
-import { validateWorkflow } from '../graph/validate.ts';
+import { usesNodeType, validateWorkflow } from '../graph/validate.ts';
 import { assertPublicUrl, publicFetch } from '../tools/web.ts';
 import { resolveIn } from '../tools/paths.ts';
 import { defineTool, type PluginAPI, type PluginDefinition, type PluginManifest } from './api.ts';
@@ -154,7 +154,7 @@ export async function loadWorkflowDir(dir: string, source: string, log: (m: stri
     if (!n.endsWith('.json')) continue;
     try {
       const w = JSON.parse(await fs.readFile(path.join(dir, n), 'utf8')) as WorkflowDef;
-      if (Object.values(w.nodes ?? {}).some((x) => x.type === 'code')) throw new Error('code nodes are only allowed in TypeScript workflows');
+      if (usesNodeType(w, 'code')) throw new Error('code nodes are only allowed in TypeScript workflows');
       const errors = validateWorkflow(w);
       if (errors.length) throw new Error(errors.join('; '));
       out.push({ ...w, source });
