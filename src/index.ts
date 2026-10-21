@@ -22,3 +22,6 @@ export type { ExecResult, ToolHost } from './runtime/host.ts';
 export { LocalHost } from './runtime/host.ts';
 export { DockerHost } from './runtime/docker.ts';
 export { McpClient, HttpTransport, StdioTransport } from './mcp/client.ts';
+export { VaultStore, VaultError, type VaultService, type VaultEntryInfo, type VaultKind, type VaultScope, type RotationHandler } from './vault/store.ts';
+export { Redactor } from './vault/redact.ts';
+export type { Backend } from './vault/backends.ts';

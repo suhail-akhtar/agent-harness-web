@@ -38,6 +38,15 @@ export interface ToolServices {
   };
   /** This session's background tasks (shells, sub-agents, workflows, monitors). */
   tasks?: import('./tasks.ts').TaskService;
+  /**
+   * The key vault, present when the session's owner may use it. list() gives names and
+   * metadata only; reveal() and envFor() give values to server-side code (to sign a
+   * request, open a connection, set a command's environment), audited with the purpose,
+   * and only names a plugin declared (permissions.vault). Every value handed out is
+   * hidden as [vault:name] in everything the session shows or stores; never put one in
+   * a tool result.
+   */
+  vault?: import('../vault/store.ts').VaultService;
 }
 
 export interface ToolContext {
@@ -83,6 +92,10 @@ export interface Tool {
   kindsFor?(input: Record<string, unknown>, where?: { hostKind?: string }): ToolKind[];
   /** Whether a session on this host gets the tool at all (default: yes). A tool that can only fail there is left out of every request. */
   availableIn?(host: import('../runtime/host.ts').ToolHost): boolean | Promise<boolean>;
+  /** Vault entries a call puts into a command (bash's secrets): asked about like an external action unless a rule allows them. */
+  vaultNames?(input: Record<string, unknown>): string[];
+  /** Secret values a call carries in its own input (vault set): hidden before the call is shown, stored or sent anywhere. */
+  secretInputs?(input: Record<string, unknown>): { name: string; value: string }[];
   /** One line for permission prompts and the UI. */
   summarize(input: Record<string, unknown>): string;
   /**

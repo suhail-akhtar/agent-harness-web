@@ -26,7 +26,11 @@ export interface LocalNetOptions {
 //               dispatched to it and it runs the same tool code locally.
 
 export interface ExecResult { stdout: string; stderr: string; code: number | null; timedOut: boolean; orphansKilled?: boolean }
-export interface ExecOptions { timeoutMs: number; signal?: AbortSignal; stdin?: string; cwd?: string; env?: NodeJS.ProcessEnv }
+export interface ExecOptions {
+  timeoutMs: number; signal?: AbortSignal; stdin?: string; cwd?: string; env?: NodeJS.ProcessEnv;
+  /** Vault values for this one command's environment (never in its text; Docker gets them as `-e NAME` from the CLI's environment, not its arguments). */
+  secretEnv?: Record<string, string>;
+}
 
 /**
  * The server's environment minus anything that looks like a credential. A
@@ -257,7 +261,7 @@ export class LocalHost implements ToolHost {
   }
 
   async exec(cmd: string, opts: ExecOptions): Promise<ExecResult> {
-    const o = { ...opts, cwd: opts.cwd ?? this.root, env: opts.env ?? scrubbedEnv() };
+    const o = { ...opts, cwd: opts.cwd ?? this.root, env: { ...(opts.env ?? scrubbedEnv()), ...opts.secretEnv } };
     if (this.osSandbox) {
       const s = await this.sandboxing();
       const w = wrapCommand(this.osSandbox, cmd, s.wrap);

@@ -9,6 +9,8 @@ import type { WorkflowDef } from '../graph/types.ts';
 import { usesNodeType, validateWorkflow } from '../graph/validate.ts';
 import { assertPublicUrl, publicFetch } from '../tools/web.ts';
 import { resolveIn } from '../tools/paths.ts';
+import type { Tool, ToolServices } from '../tools/types.ts';
+import type { VaultService } from '../vault/store.ts';
 import { defineTool, type PluginAPI, type PluginDefinition, type PluginManifest } from './api.ts';
 
 // Plugins are folders with a harness-plugin.json. The operator lists plugin
@@ -78,7 +80,7 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void): P
   if (m.workflows) {
     for (const w of await loadWorkflowDir(within(m.workflows), m.name)) { reg.workflows.set(w.name, w); contributes.push(`workflow:${w.name}`); }
   }
-  const declared = { network: (m.permissions?.network ?? []).map(String), secrets: (m.permissions?.secrets ?? []).map(String) };
+  const declared = { network: (m.permissions?.network ?? []).map(String), secrets: (m.permissions?.secrets ?? []).map(String), vault: (m.permissions?.vault ?? []).map(String).filter((g) => g.trim()) };
   for (const [name, cfg] of Object.entries(m.mcpServers ?? {})) {
     reg.mcpServers.set(name, { ...cfg, plugin: m.name, secrets: declared.secrets, operator: false } as never);
     contributes.push(`mcp:${name}`);
@@ -107,7 +109,7 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void): P
       pluginName: m.name,
       pluginDir: dir,
       registerTool: (t) => {
-        const tool = 'spec' in t ? t : defineTool(t);
+        const tool = limitVault('spec' in t ? t : defineTool(t), m.name, declared.vault);
         // A plugin that may reach the network (declared hosts) can send what its tools are given there.
         if (declared.network.length && tool.sendsOut === undefined) tool.sendsOut = true;
         reg.addTool(tool, m.name);
@@ -124,7 +126,12 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void): P
         return process.env[name];
       },
       fetch: (url, init) => pluginFetch(m.name, declared.network, url, init),
-      registerGate: (g) => { reg.gates.set(g.name, { ...g, plugin: m.name }); contributes.push(`gate:${g.name}`); },
+      registerGate: (g) => { reg.gates.set(g.name, { ...g, run: (ctx) => g.run({ ...ctx, services: vaultFor(ctx.services, m.name, declared.vault) }), plugin: m.name }); contributes.push(`gate:${g.name}`); },
+      registerVaultRotation: (h) => {
+        if (typeof h?.rotate !== 'function') throw new Error(`${m.name}: a vault rotation handler needs rotate()`);
+        reg.vaultRotators.push({ ...h, plugin: m.name });
+        contributes.push(`vault-rotation:${h.kind ?? ''}${h.prefix ? `${h.prefix}*` : ''}`);
+      },
       registerSearchBackend: (b) => { reg.searchBackends.set(b.name, b); contributes.push(`search:${b.name}`); },
       registerWorkflow: (w) => {
         const errors = validateWorkflow(w);
@@ -143,7 +150,31 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void): P
     }
     if (typeof def.close === 'function') reg.closers.push(() => def.close!());
   }
-  reg.plugins.push({ name: m.name, version: m.version ?? '0.0.0', description: m.description ?? '', dir, trusted: true, contributes: [...new Set(contributes)], ...(declared.network.length || declared.secrets.length ? { permissions: declared } : {}) });
+  const { vault, ...rest } = declared;
+  reg.plugins.push({ name: m.name, version: m.version ?? '0.0.0', description: m.description ?? '', dir, trusted: true, contributes: [...new Set(contributes)], ...(declared.network.length || declared.secrets.length || vault.length ? { permissions: { ...rest, ...(vault.length ? { vault } : {}) } } : {}) });
+}
+
+/**
+ * A plugin's tools reach the key vault only for the names its manifest declared
+ * (permissions.vault): the session's vault is handed to them wrapped, so every
+ * reveal and envFor carries the plugin's name and grants (checked and audited by
+ * the vault) and the vault tool's own operations are not there at all.
+ */
+function vaultFor(services: ToolServices | undefined, plugin: string, grants: string[]): ToolServices | undefined {
+  const v = services?.vault;
+  if (!v) return services;
+  const vault: VaultService = {
+    list: () => v.list(),
+    reveal: (name, purpose) => v.reveal(name, purpose, { plugin, grants }),
+    envFor: (map, purpose) => v.envFor(map, purpose, { plugin, grants }),
+  };
+  return { ...services, vault };
+}
+
+function limitVault(tool: Tool, plugin: string, grants: string[]): Tool {
+  const run = tool.run.bind(tool);
+  tool.run = (input, ctx) => run(input, ctx.services?.vault ? { ...ctx, services: vaultFor(ctx.services, plugin, grants) } : ctx);
+  return tool;
 }
 
 /** JSON workflows from a directory. Declarative only: a JSON workflow cannot hold code nodes. */

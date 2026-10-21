@@ -404,7 +404,11 @@ export class DockerHost implements ToolHost {
     const workdir = opts.cwd ?? '/workspace';
     // `timeout` inside the container kills the command itself; killing the
     // docker CLI alone would leave it running.
-    const r = await run('docker', ['exec', '-i', '-w', workdir, this.name, 'timeout', '-k', '5', String(secs), 'bash', '-lc', cmd], { ...opts, timeoutMs: opts.timeoutMs + 15_000 });
+    // Vault values: `-e NAME` with no value makes the docker CLI copy it from its own environment,
+    // so a value is never in a process's arguments (ps on the server shows those).
+    const secretArgs = Object.keys(opts.secretEnv ?? {}).flatMap((k) => ['-e', k]);
+    const env = opts.secretEnv && Object.keys(opts.secretEnv).length ? { ...(opts.env ?? process.env), ...opts.secretEnv } : opts.env;
+    const r = await run('docker', ['exec', '-i', ...secretArgs, '-w', workdir, this.name, 'timeout', '-k', '5', String(secs), 'bash', '-lc', cmd], { ...opts, env, timeoutMs: opts.timeoutMs + 15_000 });
     if (r.code === 124) r.timedOut = true;
     return r;
   }

@@ -20,6 +20,7 @@ import { sandboxCredentials as sandboxCredentials_ } from '../runtime/credential
 import { BUILTIN_TOOLS } from '../tools/index.ts';
 import { BUILTIN_SEARCH, makeSearchService, type SearchService } from '../research/search.ts';
 import { Registry, type LoadedPlugin } from './registry.ts';
+import { VaultStore } from '../vault/store.ts';
 
 // The harness as a library: one call assembles the registry (built-ins, then
 // plugins), the MCP manager, the companion hub and the session manager.
@@ -76,6 +77,11 @@ export interface HarnessOptions {
   scheduler?: boolean;
   /** API credentials allowlist sandboxes use through the egress proxy. Default: HARNESS_SANDBOX_CREDENTIALS. */
   sandboxCredentials?: SessionDeps['sandboxCredentials'];
+  /**
+   * The key vault. Default on (HARNESS_VAULT=off turns it off), with the backends of
+   * HARNESS_VAULT_BACKENDS; `mayUse` decides whose sessions get it (HARNESS_VAULT=admins). null: off.
+   */
+  vault?: { backends?: string | Record<string, unknown>; env?: NodeJS.ProcessEnv; mayUse?: (account: string | undefined) => boolean } | null;
   log?: (message: string) => void;
 }
 
@@ -102,6 +108,8 @@ export interface Harness {
   mcp: McpManager;
   /** Scheduled prompts (absent when turned off). */
   scheduler?: Scheduler;
+  /** The key vault (absent when turned off). */
+  vault?: VaultStore;
   /** MCP bundles (.mcpb, Desktop Extensions) installed on this server; new sessions get their tools. */
   mcpb: {
     list(): Promise<InstalledMcpb[]>;
@@ -194,6 +202,11 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   }
   // A scheduled prompt goes to its session, or to a new one made for the run. A new session runs
   // unattended, so by default it never waits on a question nobody is there to answer (dontAsk).
+  const vaultMode = (process.env.HARNESS_VAULT ?? 'on').trim();
+  if (!['on', 'off', 'admins'].includes(vaultMode)) throw new Error(`HARNESS_VAULT must be on, off or admins (got "${vaultMode}")`);
+  const vault = opts.vault === null || vaultMode === 'off' ? undefined
+    : await new VaultStore({ dataDir: opts.dataDir, env: opts.vault?.env, backends: opts.vault?.backends, rotators: () => registry.vaultRotators, mayUse: opts.vault?.mayUse }).load();
+  if (vault && vault.backends.size > 1) log(`key vault backends: ${[...vault.backends.keys()].join(', ')} (new entries: ${vault.defaultBackend})`);
   let sessionsRef: SessionManager | undefined;
   const scheduler = opts.scheduler === false ? undefined : new Scheduler(opts.dataDir, {
     async run(s, outside) {
@@ -215,7 +228,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     dataDir: opts.dataDir, companions, registry, mcp, onSpan: otel ? (sid, span) => otel.record(sid, span) : undefined,
     memory: { root: path.resolve(opts.memoryDir ?? path.join(opts.dataDir, 'memory')), mode: memoryMode }, search, spend: opts.spend,
     publish: opts.publish === null ? undefined : opts.publish ?? publishFromEnv(),
-    sandboxCredentials, scheduler,
+    sandboxCredentials, scheduler, vault,
   });
   sessionsRef = sessions;
   await sessions.load();
@@ -253,7 +266,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   }
 
   return {
-    registry, sessions, companions, mcp, scheduler, dataDir: opts.dataDir, search: search?.backend,
+    registry, sessions, companions, mcp, scheduler, vault, dataDir: opts.dataDir, search: search?.backend,
     mcpb: {
       list: () => installedMcpb(mcpbRoot),
       async install(bundle, userConfig) {

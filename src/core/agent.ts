@@ -5,7 +5,8 @@ import type { ImageData, ToolHost } from '../runtime/host.ts';
 import { validateInput } from '../tools/index.ts';
 import { PathError } from '../tools/paths.ts';
 import type { FileStamp, Tool, ToolContext, ToolOutcome } from '../tools/types.ts';
-import { type HookJudge, type HookRunners, runHooks } from './hooks.ts';
+import type { Redactor } from '../vault/redact.ts';
+import { type HookJudge, type HookRunners, runHooks, setHookRedactor } from './hooks.ts';
 import type { Effort, ModelSpec } from './models.ts';
 import { costOf } from './models.ts';
 import { decide, type Rules, suggestRule } from './permissions.ts';
@@ -87,6 +88,11 @@ export interface AgentConfig {
   services?: ToolContext['services'];
   /** Called once when untrusted content first enters this context (the session records it). */
   onTaint?: () => void;
+  /**
+   * The session's key vault values: everything that enters the context (and so the
+   * history, the UI and the provider) passes through it, as do hook payloads.
+   */
+  redactor?: Redactor;
 }
 
 const MAX_RETRIES = 6;
@@ -137,12 +143,19 @@ export class Agent {
     this.hooks = hooks;
     this.messages = messages;
     this.specs = cfg.tools.map((t) => t.spec).sort((a, b) => (a.name < b.name ? -1 : 1));
+    const r = cfg.redactor;
+    if (r) setHookRedactor(cfg.settings, (p) => r.redactDeep(p));
   }
 
-  append(m: Message): void {
-    this.messages.push(m);
-    this.hooks.onAppend(m);
+  /** Appends a message with any vault value in it replaced (the copy kept is the one returned). */
+  append(m: Message): Message {
+    const clean = this.redact(m);
+    this.messages.push(clean);
+    this.hooks.onAppend(clean);
+    return clean;
   }
+
+  private redact<T>(v: T): T { return this.cfg.redactor ? this.cfg.redactor.redactDeep(v) : v; }
 
   /** Where this agent's context should be compacted: HARNESS_COMPACT_AT, else the model's point. */
   compactAt(): number {
@@ -188,8 +201,14 @@ export class Agent {
 
       this.hooks.emit({ kind: 'turn_start', turn: step, agent });
       const resp = await this.callModel(this.messages, signal);
-      this.append(resp.message);
-      this.hooks.emit({ kind: 'assistant_message', message: resp.message, agent });
+      // A secret the model put in a call's input (vault set) is hidden before the message is kept or
+      // shown anywhere; the call itself still runs with the input as the model wrote it.
+      for (const b of resp.message.content) {
+        if (b.type !== 'tool_use') continue;
+        for (const x of this.findTool(b.name)?.secretInputs?.(b.input) ?? []) this.cfg.redactor?.add(x.name, x.value);
+      }
+      const kept = this.append(resp.message);
+      this.hooks.emit({ kind: 'assistant_message', message: kept, agent });
       this.recordUsage(resp);
 
       if (resp.stop === 'refusal') {
@@ -285,7 +304,8 @@ export class Agent {
       model: this.cfg.model,
       system: this.cfg.system,
       tools: this.specs,
-      messages,
+      // Already clean when appended; this catches a value registered after its message was (it is hidden from then on).
+      messages: this.redact(messages),
       effort: this.cfg.effort,
       cacheKey: this.cfg.cacheKey,
       compactAt: this.compactAt(),
@@ -345,8 +365,10 @@ export class Agent {
   private async executeOne(call: ToolUseBlock, signal: AbortSignal): Promise<{ block: ToolResultBlock; images?: ImageData[]; label?: string }> {
     const agent = this.cfg.name;
     const started = Date.now();
-    this.hooks.emit({ kind: 'tool_call', id: call.id, name: call.name, input: call.input, agent });
+    this.hooks.emit({ kind: 'tool_call', id: call.id, name: call.name, input: this.redact(call.input), agent });
     const finish = (content: string, is_error: boolean, display?: ToolDisplay, images?: ImageData[], label?: string) => {
+      content = this.redact(content);
+      display = this.redact(display);
       const uiImages = images?.filter((im) => im.data.length <= UI_IMAGE_MAX);
       this.hooks.emit({ kind: 'tool_result', id: call.id, name: call.name, content: content.length > RESULT_PREVIEW ? content.slice(0, RESULT_PREVIEW) + '\n…' : content, is_error, display, ms: Date.now() - started, agent, ...(uiImages?.length ? { images: uiImages } : {}) });
       this.hooks.onTrace?.({ type: 'tool', agent, tool: label ?? call.name, ms: Date.now() - started, error: is_error, chars: content.length, images: images?.length ?? 0 });
@@ -398,7 +420,7 @@ export class Agent {
     // Not what the untrusted-content guard asks: the model would judge the very content steering the agent.
     let autoNo: string | undefined;
     if (decision.action === 'ask' && !decision.guard && pre.decision !== 'allow' && this.hooks.getMode() === 'auto' && this.cfg.autoCheck) {
-      const v = await this.cfg.autoCheck({ tool: name, summary: tool.summarize(input), input, reason: decision.reason, request: this.hooks.latestUserPrompt(), untrustedContentSeen: this.tainted }, signal).catch((e: Error) => ({ ok: false, reason: `the check failed: ${e.message}` }));
+      const v = await this.cfg.autoCheck({ tool: name, summary: tool.summarize(input), input: this.redact(input), reason: decision.reason, request: this.hooks.latestUserPrompt(), untrustedContentSeen: this.tainted }, signal).catch((e: Error) => ({ ok: false, reason: `the check failed: ${e.message}` }));
       if (v.ok) {
         this.hooks.emit({ kind: 'notice', level: 'info', text: `Auto mode allowed ${tool.summarize(input).slice(0, 120)}`, agent });
         decision.action = 'allow';
@@ -416,6 +438,10 @@ export class Agent {
       }
     }
 
+    // Vault values stay on the server: a companion runs the whole call on the user's computer.
+    if ((tool.vaultNames?.(input).length ?? 0) > 0 && this.cfg.host.remoteTool && tool.remoteable) {
+      return finish('Not run: key vault secrets are not sent to a companion (the user\'s own computer). Run it in a sandbox or server-folder session, or without secrets.', true, undefined, undefined, name);
+    }
     let outcome: ToolOutcome;
     const todosBefore = name === 'todo_write' ? [...this.hooks.todos()] : undefined;
     try {
@@ -435,6 +461,8 @@ export class Agent {
       return finish(fail.feedback ? `${msg}\n<hook_feedback>\n${fail.feedback}\n</hook_feedback>` : msg, true, undefined, undefined, name);
     }
     if (name === 'todo_write') this.stepsSinceTodo = 0;
+    // A command may print a secret it was given: hidden before any check, hook or model sees the output.
+    outcome = { ...outcome, content: this.redact(outcome.content) };
     const untrusted = tool.kind === 'network' || tool.kind === 'external' || tool.untrusted || outcome.untrusted;
     if (untrusted) this.markTainted();
 
@@ -632,7 +660,7 @@ export class Agent {
     // compaction, never the model's summary (which could repeat a skill-shaped text it read).
     const content: Message['content'] = [{ type: 'text', text: parts.join('\n\n') }];
     if (skills) content.push({ type: 'text', text: `${KEPT_SKILLS}\n${skills}` });
-    this.messages = [{ role: 'user', content, compactionSummary: true }];
+    this.messages = [this.redact({ role: 'user', content, compactionSummary: true } as Message)];
     this.cfg.readFiles.clear();
     this.instructionDirs.clear();
     this.recentCalls = [];

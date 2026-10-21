@@ -1,6 +1,7 @@
 import type { PermissionMode } from './types.ts';
 import type { Tool } from '../tools/types.ts';
 import { globMatcher } from '../tools/paths.ts';
+import { vaultGlob } from '../vault/store.ts';
 
 // Permissions are enforced here, in code, on every call - never by the prompt.
 // Order: deny rules > ask rules > allow rules > the mode's default.
@@ -10,6 +11,10 @@ import { globMatcher } from '../tools/paths.ts';
 //                               edit/write/read: a glob over the path
 //                               web_fetch: "domain:example.com"
 //                               computer: actions, e.g. "screenshot|zoom"
+//               bash(vault:NAME) / vault(NAME)
+//                               a command may get these key vault entries
+//                               (globs, "|"-separated: "vault(ci-*|npm-token)");
+//                               vault(NAME) also covers the vault tool on them
 
 export interface Rules {
   allow: string[]; deny: string[]; ask: string[];
@@ -76,6 +81,7 @@ export function ruleMatches(rule: string, tool: Tool, input: Record<string, unkn
     } catch { return false; }
   }
   if (name === 'computer') return spec.split('|').map((s) => s.trim()).includes(String(input.action ?? ''));
+  if (name === 'vault') return vaultSpecCovers(spec, String(input.name ?? ''));
   const p = String(input.path ?? '').replace(/\\/g, '/').replace(/^\/workspace\//, '').replace(/^\.\//, '');
   return globMatcher(spec)(p);
 }
@@ -94,8 +100,46 @@ export function isReadOnlyCommand(cmd: string): boolean {
   return READ_ONLY_COMMANDS.test(c);
 }
 
+/** Whether a vault spec ("ci-*|npm-token") names an entry. */
+function vaultSpecCovers(spec: string | undefined, entry: string): boolean {
+  if (spec === undefined || spec === '' || spec === '*') return true;
+  return spec.split(/[|,]/).some((p) => p.trim() && vaultGlob(p)(entry));
+}
+
+/** A rule that speaks for a vault entry put into a command: vault(NAME), or bash(vault:NAME). */
+function vaultRuleCovers(rule: string, entry: string): boolean {
+  const { tool, spec } = parseRule(rule);
+  if (tool === 'vault') return vaultSpecCovers(spec, entry);
+  return tool === 'bash' && !!spec?.startsWith('vault:') && vaultSpecCovers(spec.slice(6), entry);
+}
+
+/**
+ * A command that gets key vault entries (bash's `secrets`) is decided twice: the
+ * command as any command, and the secrets like an action on another system - asked
+ * unless a rule names them (deny > ask > allow), refused in dontAsk without one, and
+ * after untrusted content only the operator's rules hold. A repository's rules never
+ * hand out secrets.
+ */
+function decideSecrets(tool: Tool, input: Record<string, unknown>, names: string[], ctx: PermissionContext): Decision {
+  const { rules, mode } = ctx;
+  const any = (list: string[]) => list.some((r) => names.some((n) => vaultRuleCovers(r, n)));
+  if (any(rules.deny)) return { action: 'deny', reason: 'a deny rule covers a vault entry this command would get' };
+  const base = decide(tool, { ...input, secrets: undefined }, ctx);
+  if (base.action === 'deny' || mode === 'bypass') return base;
+  if (any(rules.ask)) return dontAsk({ action: 'ask', reason: 'an ask rule covers a vault entry this command would get' }, mode);
+  const trusted = ctx.tainted ? (rules.operatorAllow ?? []) : rules.allow.filter((r) => !rules.projectAllow?.includes(r));
+  if (!names.every((n) => trusted.some((r) => vaultRuleCovers(r, n)))) {
+    return ctx.tainted
+      ? dontAsk({ action: 'ask', reason: `the agent has read untrusted content in this session, and this command gets vault secrets (${names.join(', ')}) it could send out`, guard: true }, mode)
+      : dontAsk({ action: 'ask', reason: `this command gets vault secrets (${names.join(', ')})` }, mode);
+  }
+  return base;
+}
+
 export function decide(tool: Tool, input: Record<string, unknown>, ctx: PermissionContext): Decision {
   const { rules, mode } = ctx;
+  const names = tool.vaultNames?.(input) ?? [];
+  if (names.length) return decideSecrets(tool, input, names, ctx);
   if (rules.deny.some((r) => ruleMatches(r, tool, input))) return { action: 'deny', reason: 'blocked by a deny rule' };
   if (rules.ask.some((r) => ruleMatches(r, tool, input))) return mode === 'bypass' ? { action: 'allow', reason: 'bypass mode' } : dontAsk({ action: 'ask', reason: 'matches an ask rule' }, mode);
   // After untrusted content, a call that sends data out or outlives the session is
@@ -167,6 +211,9 @@ function decideKind(kind: Tool['kind'], input: Record<string, unknown>, ctx: Per
 /** The rule the UI offers for "always allow this in this session". */
 export function suggestRule(tool: Tool, input: Record<string, unknown>): string {
   const name = tool.spec.name;
+  // A command with secrets: "always allow" is for those entries (the command itself is decided as usual).
+  const names = tool.vaultNames?.(input) ?? [];
+  if (names.length) return `bash(vault:${[...new Set(names)].join('|')})`;
   if (name === 'bash') {
     const cmd = String(input.command ?? '').trim();
     if (hasShellControl(cmd)) return `bash(${cmd})`;

@@ -13,6 +13,7 @@ import { BundleError, exportSession, importSession } from '../core/portable.ts';
 import { OUTPUT_STYLES } from '../core/prompt.ts';
 import { loadUserInstructions, loadUserSettings, saveUserInstructions, saveUserSettings } from '../core/settings.ts';
 import { McpbError } from '../mcp/mcpb.ts';
+import { VAULT_KINDS, type VaultActor, VaultError, type VaultKind, type VaultScope } from '../vault/store.ts';
 import { resolveIn, walk } from '../tools/paths.ts';
 import { view } from '../tools/tasks.ts';
 import { type BrowserSessions, isSsoAdmin, NOBODY_ALLOWED, type OidcClient, OidcError, refusal } from './oidc.ts';
@@ -459,6 +460,61 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       return send(res, 201, s.meta);
     }
 
+    // ---- the key vault: names and metadata out, values only in (never returned) ----
+    if (p === '/api/vault/audit' || p.startsWith('/api/vault/entries')) {
+      const vault = harness.vault;
+      if (!vault) throw new HttpError(404, 'The key vault is turned off on this server (HARNESS_VAULT).');
+      if (p === '/api/vault/audit') {
+        if (!admin) throw new HttpError(403, 'administrators only');
+        if (method !== 'GET') throw new HttpError(405, 'method not allowed');
+        return send(res, 200, await vault.audit(Number(url.searchParams.get('limit')) || 500));
+      }
+      // ?session=<id>: that session's own entries too (and, writing, a session-scope entry in it).
+      const sid = url.searchParams.get('session');
+      if (sid) { const s = sessions.get(sid); if (!s || !mayUse(me, s.meta.owner)) throw new HttpError(404, 'No such session.'); }
+      const actor: VaultActor = { account: me.id, admin, ...(sid ? { session: sid } : {}), label: me.id ? `account:${me.id}` : 'operator' };
+      const scopeQ = (url.searchParams.get('scope') ?? undefined) as VaultScope | undefined;
+      const spec = (b: Record<string, unknown>) => ({
+        kind: (VAULT_KINDS as readonly string[]).includes(String(b.kind)) ? b.kind as VaultKind : undefined,
+        description: typeof b.description === 'string' ? b.description : undefined,
+        scope: (['operator', 'user', 'session'].includes(String(b.scope)) ? b.scope : undefined) as VaultScope | undefined,
+        rotateBy: typeof b.rotateBy === 'number' ? b.rotateBy : typeof b.rotateBy === 'string' && b.rotateBy ? Date.parse(b.rotateBy) || undefined : undefined,
+        rotateEveryDays: typeof b.rotateEveryDays === 'number' ? b.rotateEveryDays : undefined,
+        backend: typeof b.backend === 'string' && b.backend ? b.backend : undefined,
+        ref: typeof b.ref === 'string' && b.ref ? b.ref : undefined,
+      });
+      try {
+        if (p === '/api/vault/entries' && method === 'GET') return send(res, 200, { entries: vault.list(actor), backends: [...vault.backends.keys()], defaultBackend: vault.defaultBackend });
+        const em = /^\/api\/vault\/entries(?:\/([^/]+)(?:\/(rotate|rollback|history))?)?$/.exec(p);
+        if (!em) throw new HttpError(404, 'not found');
+        const b = method === 'GET' || method === 'DELETE' ? {} : await readJson(req, 200_000);
+        const name = em[1] ? decodeURIComponent(em[1]) : String(b.name ?? '');
+        if ((method === 'POST' && !em[1]) || (method === 'PUT' && em[1] && !em[2])) {
+          const s0 = { ...spec(b), name, create: method === 'POST' };
+          if (b.generate === true) {
+            const g = await vault.generate(actor, { ...s0, length: typeof b.length === 'number' ? b.length : undefined });
+            return send(res, method === 'POST' ? 201 : 200, { ...g.info, ...(g.publicKey ? { publicKey: g.publicKey } : {}) });
+          }
+          if (typeof b.value !== 'string') throw new HttpError(400, 'value (or generate: true) is required');
+          return send(res, method === 'POST' ? 201 : 200, await vault.put(actor, { ...s0, value: b.value }));
+        }
+        if (em[1] && !em[2] && method === 'DELETE') return send(res, 200, { ok: await vault.remove(actor, name, scopeQ) });
+        if (em[2] === 'history' && method === 'GET') return send(res, 200, vault.history(actor, name, scopeQ));
+        if (em[2] === 'rotate' && method === 'POST') {
+          const grantsFor = (plugin: string) => registry.plugins.find((x) => x.name === plugin)?.permissions?.vault ?? [];
+          return send(res, 200, await vault.rotate(actor, name, { scope: spec(b).scope ?? scopeQ, ...(typeof b.value === 'string' ? { value: b.value } : {}), grantsFor }));
+        }
+        if (em[2] === 'rollback' && method === 'POST') {
+          if (typeof b.version !== 'number') throw new HttpError(400, 'version (a number from the history) is required');
+          return send(res, 200, await vault.rollback(actor, name, b.version, spec(b).scope ?? scopeQ));
+        }
+        throw new HttpError(405, 'method not allowed');
+      } catch (e) {
+        if (e instanceof VaultError) throw new HttpError(e.status, e.message);
+        throw e;
+      }
+    }
+
     // ---- MCP bundles (.mcpb, Desktop Extensions): servers the operator installs for everyone ----
     if (p === '/api/mcpb' || p.startsWith('/api/mcpb/')) {
       if (!admin) throw new HttpError(403, 'Installing MCP servers is for administrators: they run on the server.');
@@ -672,7 +728,8 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         if (st.size > 2_000_000) return send(res, 200, { type: 'file', path: rel, size: st.size, content: null, note: 'file too large to preview' });
         const buf = await fs.readFile(target);
         const binary = buf.subarray(0, 8000).includes(0);
-        return send(res, 200, { type: 'file', path: rel, size: st.size, content: binary ? null : buf.toString('utf8'), note: binary ? 'binary file' : undefined });
+        // A command may have written a vault value into a file: shown as [vault:name] here too.
+        return send(res, 200, { type: 'file', path: rel, size: st.size, content: binary ? null : (await s.loadSecrets()).redact(buf.toString('utf8')), note: binary ? 'binary file' : undefined });
       }
     }
 

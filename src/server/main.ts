@@ -37,6 +37,8 @@ async function main() {
     shippedPlugins: [path.join(appRoot, 'plugins')],
     mcp: process.env.HARNESS_MCP_CONFIG || undefined,
     spend,
+    // HARNESS_VAULT=admins: only sessions of administrators (and the single-user server's) get the key vault.
+    ...(process.env.HARNESS_VAULT?.trim() === 'admins' ? { vault: { mayUse: (owner: string | undefined) => !owner || users.get(owner)?.role === 'admin' } } : {}),
     log: (m) => console.log(m),
   });
   const { server } = createApp({
