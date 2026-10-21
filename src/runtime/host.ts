@@ -5,7 +5,18 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import type { ToolDisplay } from '../core/types.ts';
-import { type OsSandboxKind, wrapCommand } from './os-sandbox.ts';
+import { credentialSummary, gatewayEnv, type SandboxCredential } from './credentials.ts';
+import { type LocalEgress, type OsSandboxKind, proxyEnv, sandboxProxyOrigin, startLocalEgress, type WrapOptions, wrapCommand } from './os-sandbox.ts';
+
+/** An OS-sandboxed folder on an allowlist network: the policy the local proxy reads, and what it adds. */
+export interface LocalNetOptions {
+  /** The JSON policy ({ hosts: [...] }) the proxy re-reads on change. */
+  policyFile?: string;
+  /** API credentials the proxy adds (the sandbox sees only base URLs and placeholders). */
+  credentials?: SandboxCredential[];
+  /** Every connection the proxy decides. */
+  onEgress?: (e: { host: string; port: number; allowed: boolean; why?: string }) => void;
+}
 
 // A ToolHost is where tools touch a filesystem and run commands.
 //   docker    - a per-session container; files live in a host directory
@@ -76,8 +87,11 @@ export interface ToolHost {
   networkPolicy: 'none' | 'full' | 'allowlist';
   /** allowlist: the hosts currently allowed. */
   allowedHosts?(): Promise<string[]>;
-  /** API credentials commands can use through the proxy, and the variables that point at them. */
-  credentialEnv?(): { name: string; vars: string[] }[];
+  /**
+   * API credentials commands can use through the proxy, and the variables that point at them.
+   * `writes`: the credential can change something others may read (a way data leaves the session).
+   */
+  credentialEnv?(): { name: string; vars: string[]; writes: boolean }[];
   exec(cmd: string, opts: ExecOptions): Promise<ExecResult>;
   /** Starts a long-lived process with piped stdio where tools run (MCP servers). */
   spawnStream?(command: string, args: string[], env: Record<string, string>): Promise<ChildProcessWithoutNullStreams>;
@@ -173,13 +187,15 @@ export class LocalHost implements ToolHost {
   shell: string;
   private shellPath: string;
   sandboxed = false;
-  networkPolicy: 'none' | 'full' = 'full';
+  networkPolicy: 'none' | 'full' | 'allowlist' = 'full';
   /** The OS sandbox commands run in (bubblewrap, Seatbelt), if any. */
   readonly osSandbox?: OsSandboxKind;
   /** More folders sandboxed commands may write (a worktree's git data). */
   private writable: string[] = [];
   private readable: string[] = [];
-  constructor(root: string, opts: { sandbox?: OsSandboxKind; network?: 'none' | 'full'; writable?: string[]; readable?: string[] } = {}) {
+  private net: LocalNetOptions;
+  private egress?: Promise<LocalEgress>;
+  constructor(root: string, opts: { sandbox?: OsSandboxKind; network?: 'none' | 'full' | 'allowlist'; writable?: string[]; readable?: string[] } & LocalNetOptions = {}) {
     this.writable = opts.writable ?? [];
     this.readable = opts.readable ?? [];
     this.root = root;
@@ -187,24 +203,65 @@ export class LocalHost implements ToolHost {
     const sh = resolveShell();
     this.shell = sh.kind;
     this.shellPath = sh.path;
+    this.net = { policyFile: opts.policyFile, credentials: opts.credentials, onEgress: opts.onEgress };
     if (opts.sandbox) {
       this.osSandbox = opts.sandbox;
       this.sandboxed = true;
       this.networkPolicy = opts.network ?? 'none';
+      if (this.networkPolicy === 'allowlist' && !opts.policyFile) throw new Error('an allowlist network needs a policy file');
     }
   }
+
+  /** allowlist: the session's egress proxy, started on first use. */
+  private proxy(): Promise<LocalEgress> {
+    this.egress ??= startLocalEgress({
+      policyFile: this.net.policyFile!, credentials: this.net.credentials, socket: this.osSandbox === 'bwrap', upstream: process.env.HARNESS_SANDBOX_UPSTREAM_PROXY || undefined,
+      onEvent: (e) => { if (e.kind === 'connect' || e.kind === 'http') this.net.onEgress?.({ host: e.host ?? '', port: e.port ?? 0, allowed: !!e.allowed, why: e.why }); },
+    }).catch((e) => { this.egress = undefined; throw e; });
+    return this.egress;
+  }
+
+  /** How a sandboxed command is wrapped, and what its environment adds (the proxy, the credential gateway). */
+  private async sandboxing(): Promise<{ wrap: WrapOptions; env: Record<string, string> }> {
+    const wrap: WrapOptions = { root: this.root, network: this.networkPolicy, writable: this.writable, readable: this.readable };
+    if (this.networkPolicy !== 'allowlist') return { wrap, env: {} };
+    const p = await this.proxy();
+    const origin = sandboxProxyOrigin(this.osSandbox!, p);
+    const creds = Object.assign({}, ...(this.net.credentials ?? []).map((c) => gatewayEnv(c, origin))) as Record<string, string>;
+    return { wrap: { ...wrap, proxy: p }, env: { ...proxyEnv(origin), ...creds } };
+  }
+
   async spawnStream(command: string, args: string[], env: Record<string, string>): Promise<ChildProcessWithoutNullStreams> {
     if (this.osSandbox) {
-      const w = wrapCommand(this.osSandbox, [command, ...args].map(shq).join(' '), { root: this.root, network: this.networkPolicy, writable: this.writable, readable: this.readable });
-      return spawn(w.file, w.args, { cwd: this.root, env: scrubbedEnv(env), stdio: ['pipe', 'pipe', 'pipe'] });
+      const s = await this.sandboxing();
+      const w = wrapCommand(this.osSandbox, [command, ...args].map(shq).join(' '), s.wrap);
+      return spawn(w.file, w.args, { cwd: this.root, env: scrubbedEnv({ ...env, ...s.env }), stdio: ['pipe', 'pipe', 'pipe'] });
     }
     return spawn(command, args, { cwd: this.root, env: scrubbedEnv(env), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
   }
-  exec(cmd: string, opts: ExecOptions): Promise<ExecResult> {
+
+  credentialEnv(): { name: string; vars: string[]; writes: boolean }[] {
+    return this.osSandbox && this.networkPolicy === 'allowlist' ? credentialSummary(this.net.credentials ?? []) : [];
+  }
+
+  async allowedHosts(): Promise<string[]> {
+    if (!this.net.policyFile) return [];
+    try { return (JSON.parse(await fs.readFile(this.net.policyFile, 'utf8')) as { hosts?: string[] }).hosts ?? []; } catch { return []; }
+  }
+
+  /** Stops the session's egress proxy (it starts again on next use). */
+  async close(): Promise<void> {
+    const e = this.egress;
+    this.egress = undefined;
+    if (e) await (await e.catch(() => undefined))?.close();
+  }
+
+  async exec(cmd: string, opts: ExecOptions): Promise<ExecResult> {
     const o = { ...opts, cwd: opts.cwd ?? this.root, env: opts.env ?? scrubbedEnv() };
     if (this.osSandbox) {
-      const w = wrapCommand(this.osSandbox, cmd, { root: this.root, network: this.networkPolicy, writable: this.writable, readable: this.readable });
-      return run(w.file, w.args, o);
+      const s = await this.sandboxing();
+      const w = wrapCommand(this.osSandbox, cmd, s.wrap);
+      return run(w.file, w.args, { ...o, env: { ...o.env, ...s.env } });
     }
     if (this.shell === 'powershell') return run(this.shellPath, ['-NoProfile', '-NonInteractive', '-Command', cmd], o);
     // Git Bash cuts a `-c` argument off at about 8K characters, so a long

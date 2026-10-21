@@ -381,9 +381,9 @@ export class Agent {
     }
     const name = tool.spec.name;
 
-    // An allowlist sandbox with credentials at its proxy can write to those services
-    // (a gist, an issue): for the untrusted-content guard that is a way out like open network.
-    const net = this.cfg.host.networkPolicy === 'allowlist' && this.cfg.host.credentialEnv?.().length ? 'full' : this.cfg.host.networkPolicy;
+    // An allowlist sandbox whose proxy holds credentials that can write (a gist, an issue) is,
+    // for the untrusted-content guard, a way out like open network; read-only ones are not.
+    const net = this.cfg.host.networkPolicy === 'allowlist' && this.cfg.host.credentialEnv?.().some((c) => c.writes) ? 'full' : this.cfg.host.networkPolicy;
     const decision = decide(tool, input, { mode: this.hooks.getMode(), rules: this.hooks.rules(), sandboxed: this.cfg.host.sandboxed, tainted: this.tainted, network: net, hostKind: this.cfg.host.kind });
     if (decision.action === 'deny') return finish(`Permission denied: ${decision.reason}.`, true, undefined, undefined, name);
 

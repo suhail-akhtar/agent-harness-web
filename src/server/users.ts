@@ -148,6 +148,35 @@ export class RateLimiter {
   }
 }
 
+/**
+ * What one account may have going at once (0 = no limit): turns and workflow runs
+ * running (HARNESS_USER_MAX_RUNNING, default 4) and sessions with a sandbox
+ * container on this server (HARNESS_USER_MAX_SANDBOXES, default 8). So one person
+ * cannot take every CPU, container or provider slot of a shared server. The
+ * operator's own token (no account) is not limited.
+ */
+export interface ConcurrencyLimits { running: number; sandboxes: number }
+
+export function concurrencyLimits(env: NodeJS.ProcessEnv = process.env): ConcurrencyLimits {
+  const n = (v: string | undefined, d: number) => (v !== undefined && v.trim() !== '' && Number.isFinite(Number(v)) && Number(v) >= 0 ? Math.floor(Number(v)) : d);
+  return { running: n(env.HARNESS_USER_MAX_RUNNING, 4), sandboxes: n(env.HARNESS_USER_MAX_SANDBOXES, 8) };
+}
+
+/** A session as the limits count it. */
+export interface CountedSession { owner?: string; busy: boolean; sandbox: boolean }
+
+/** Why the account cannot start one more (a running turn, or a sandbox session), or undefined when it can. */
+export function concurrencyRefusal(what: 'running' | 'sandboxes', owner: string | undefined, sessions: CountedSession[], limits: ConcurrencyLimits = concurrencyLimits()): string | undefined {
+  if (!owner) return undefined;
+  const max = limits[what];
+  if (!max) return undefined;
+  const mine = sessions.filter((s) => s.owner === owner && (what === 'running' ? s.busy : s.sandbox)).length;
+  if (mine < max) return undefined;
+  return what === 'running'
+    ? `This account already has ${mine} session${mine === 1 ? '' : 's'} working, the most it may run at once (${max}, HARNESS_USER_MAX_RUNNING). Wait for one to finish or stop one, then try again.`
+    : `This account already has ${mine} sandbox session${mine === 1 ? '' : 's'}, the most it may keep (${max}, HARNESS_USER_MAX_SANDBOXES). Delete one it no longer needs, then try again.`;
+}
+
 /** Spend per account per day (UTC), kept on disk; a daily cap stops new and running turns. */
 export class SpendLedger {
   private file: string;

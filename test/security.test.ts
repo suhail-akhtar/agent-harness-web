@@ -230,16 +230,16 @@ test('an allowlist sandbox with credentials at its proxy is a way out for the un
   const { makeAgent, results } = await import('./helpers.ts');
   const { LocalHost } = await import('../src/runtime/host.ts');
   // Stands in for the Docker sandbox: commands contained, the allowlist network, and (or not) credentials.
-  const sandbox = async (creds: boolean) => Object.assign(new LocalHost(await tempDir()), {
-    sandboxed: true, networkPolicy: 'allowlist' as const, credentialEnv: () => (creds ? [{ name: 'github', vars: ['GITHUB_API'] }] : []),
+  const sandbox = async (creds: 'none' | 'read' | 'write') => Object.assign(new LocalHost(await tempDir()), {
+    sandboxed: true, networkPolicy: 'allowlist' as const, credentialEnv: () => (creds === 'none' ? [] : [{ name: 'github', vars: ['GITHUB_API'], writes: creds === 'write' }]),
   });
   const post = 'node -e "process.exit(0)" # curl -X POST $GITHUB_API/gists';
-  for (const creds of [false, true]) {
+  for (const creds of ['none', 'read', 'write'] as const) {
     const h = await makeAgent([{ calls: [{ name: 'bash', input: { command: post } }] }, { text: 'ok' }], { mode: 'acceptEdits', host: await sandbox(creds) });
     h.agent.tainted = true;
     await h.agent.run(new AbortController().signal);
     const out = results(h.agent.messages.find((m) => m.role === 'user' && m.content.some((b) => b.type === 'tool_result'))!)[0]!.content;
-    if (creds) assert.match(out, /denied/, 'with credentials the gateway can write out: asked (and refused here)');
-    else assert.doesNotMatch(out, /denied/, 'only the operator\'s allowlisted hosts: not a way out');
+    if (creds === 'write') assert.match(out, /denied/, 'a credential that can write: the gateway is a way out, asked (and refused here)');
+    else assert.doesNotMatch(out, /denied/, `${creds}: only the operator's hosts, or a read-only credential: not a way out`);
   }
 });

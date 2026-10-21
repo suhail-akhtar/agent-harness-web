@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { test } from 'node:test';
-import { githubRepo, publish, publishTarget, tokenMayGoTo, validBranch } from '../src/git/publish.ts';
+import { cloneRepository, githubRepo, mayCloneWithToken, prefixedBranch, publish, publishPolicy, publishTarget, tokenMayGoTo, validBranch } from '../src/git/publish.ts';
 import { createHarness } from '../src/kernel/harness.ts';
 import { publishTool } from '../src/tools/publish.ts';
 import type { ToolContext } from '../src/tools/types.ts';
@@ -41,20 +41,146 @@ test('GitHub remotes in every form; branch names; publishing only where the sess
 test('publish: commits, copies out of the workspace and pushes a new branch; never the base branch, never force', async () => {
   const { remote, ws } = await repos();
   await fs.writeFile(path.join(ws, 'app.js'), 'console.log(1)\n');
-  const r = await publish({ workspace: ws, input: { branch: 'feature/one', title: 'One', commitMessage: 'Add app' }, cfg: { repos: [remote] }, commit: commitIn(ws) });
-  assert.equal(r.branch, 'feature/one');
+  const ledger = path.join(await tempDir(), 'published-branches.json');
+  const r = await publish({ workspace: ws, input: { branch: 'agent/feature-one', title: 'One', commitMessage: 'Add app' }, cfg: { repos: [remote] }, commit: commitIn(ws), ledger });
+  assert.equal(r.branch, 'agent/feature-one');
   assert.equal(r.pullRequest, undefined, 'not a GitHub repository: pushed, no pull request');
-  assert.equal(g(remote, 'log', '--format=%s', 'feature/one', '-1'), 'Add app');
-  assert.equal(g(remote, 'rev-parse', 'feature/one'), r.commit);
-  await assert.rejects(publish({ workspace: ws, input: { branch: 'main', title: 'x' }, cfg: { repos: [remote] } }), /it is the base branch/);
-  // Someone else moved the branch: no overwrite.
+  assert.equal(g(remote, 'log', '--format=%s', 'agent/feature-one', '-1'), 'Add app');
+  assert.equal(g(remote, 'rev-parse', 'agent/feature-one'), r.commit);
+  // (With no prefix, which the operator can choose, the base branch is still refused.)
+  await assert.rejects(publish({ workspace: ws, input: { branch: 'main', title: 'x' }, cfg: { repos: [remote], branchPrefix: '' } }), /it is the base branch/);
+  // Someone else moved the branch (this session's own): no overwrite.
   const other = path.join(await tempDir(), 'other');
-  g(path.dirname(other), 'clone', '-q', '-b', 'feature/one', remote, other);
+  g(path.dirname(other), 'clone', '-q', '-b', 'agent/feature-one', remote, other);
   await fs.writeFile(path.join(other, 'b.txt'), 'b');
-  g(other, 'add', '-A'); g(other, 'commit', '-q', '-m', 'theirs'); g(other, 'push', '-q', 'origin', 'feature/one');
+  g(other, 'add', '-A'); g(other, 'commit', '-q', '-m', 'theirs'); g(other, 'push', '-q', 'origin', 'agent/feature-one');
   await fs.writeFile(path.join(ws, 'c.txt'), 'c');
-  await assert.rejects(publish({ workspace: ws, input: { branch: 'feature/one', title: 'x', commitMessage: 'mine' }, cfg: { repos: [remote] }, commit: commitIn(ws) }), /never overwritten. Publish to a new branch name/);
-  assert.equal(g(remote, 'log', '--format=%s', 'feature/one', '-1'), 'theirs');
+  await assert.rejects(publish({ workspace: ws, input: { branch: 'agent/feature-one', title: 'x', commitMessage: 'mine' }, cfg: { repos: [remote] }, commit: commitIn(ws), ledger }), /never overwritten. Publish to a new branch name/);
+  assert.equal(g(remote, 'log', '--format=%s', 'agent/feature-one', '-1'), 'theirs');
+});
+
+test('least-privilege publish: only under the prefix, never a branch this session did not make, drafts unless the operator allows ready ones', async () => {
+  assert.equal(prefixedBranch('fix/login', 'agent/'), 'agent/fix/login');
+  assert.equal(prefixedBranch('agent/fix', 'agent/'), 'agent/fix');
+  assert.equal(prefixedBranch('main', ''), 'main');
+  assert.deepEqual(publishPolicy({}, {}), { prefix: 'agent/', allowUpdate: false, allowReady: false, cloneRepos: [] });
+  assert.deepEqual(publishPolicy({ repos: ['acme/a'] }, { HARNESS_PUBLISH_PREFIX: 'bot/', HARNESS_PUBLISH_UPDATE: '1', HARNESS_PUBLISH_READY: '1', HARNESS_CLONE_REPOS: 'acme/private, acme/*' }), { prefix: 'bot/', allowUpdate: true, allowReady: true, cloneRepos: ['acme/private', 'acme/*', 'acme/a'] });
+
+  const { remote, ws } = await repos();
+  const ledger = path.join(await tempDir(), 'published-branches.json');
+  // "main" asked for: the agent gets agent/main, and the base branch is untouched.
+  await fs.writeFile(path.join(ws, 'a.txt'), 'a');
+  const r = await publish({ workspace: ws, input: { branch: 'main', title: 't', commitMessage: 'a' }, cfg: { repos: [remote] }, commit: commitIn(ws), ledger });
+  assert.equal(r.branch, 'agent/main');
+  assert.match(r.note ?? '', /published under agent\//);
+  assert.equal(g(remote, 'log', '--format=%s', 'main', '-1'), 'init', 'main is untouched');
+  // A branch someone else made (even under the prefix) is not pushed to...
+  g(remote, 'branch', 'agent/theirs', 'main');
+  await fs.writeFile(path.join(ws, 'b.txt'), 'b');
+  g(ws, 'add', '-A'); g(ws, 'commit', '-q', '-m', 'b');
+  await assert.rejects(publish({ workspace: ws, input: { branch: 'agent/theirs', title: 't' }, cfg: { repos: [remote] }, ledger }), /already exists and this session did not create it.*HARNESS_PUBLISH_UPDATE=1/);
+  assert.equal(g(remote, 'log', '--format=%s', 'agent/theirs', '-1'), 'init');
+  // ...unless the operator allows updates; and this session's own branch is updated.
+  await publish({ workspace: ws, input: { branch: 'agent/theirs', title: 't' }, cfg: { repos: [remote], allowUpdate: true }, ledger });
+  assert.equal(g(remote, 'log', '--format=%s', 'agent/theirs', '-1'), 'b');
+  await publish({ workspace: ws, input: { branch: 'main', title: 't' }, cfg: { repos: [remote] }, ledger });
+  assert.equal(g(remote, 'log', '--format=%s', 'agent/main', '-1'), 'b', 'its own branch, pushed again');
+  // Another session (another ledger) may not push to it.
+  await fs.writeFile(path.join(ws, 'c.txt'), 'c');
+  g(ws, 'add', '-A'); g(ws, 'commit', '-q', '-m', 'c');
+  await assert.rejects(publish({ workspace: ws, input: { branch: 'agent/main', title: 't' }, cfg: { repos: [remote] }, ledger: path.join(await tempDir(), 'other.json') }), /did not create it/);
+});
+
+test('least-privilege publish: pull requests are drafts unless the operator allows ready ones', async () => {
+  const bodies: Record<string, unknown>[] = [];
+  const api = http.createServer((req, res) => {
+    let b = '';
+    req.on('data', (c) => (b += c));
+    req.on('end', () => { bodies.push(JSON.parse(b)); res.writeHead(201); res.end(JSON.stringify({ number: bodies.length, html_url: `https://github.com/acme/shop/pull/${bodies.length}` })); });
+  });
+  await new Promise<void>((r) => api.listen(0, '127.0.0.1', r));
+  const prev = process.env.NO_PROXY;
+  process.env.NO_PROXY = '127.0.0.1';
+  try {
+    const { remote, ws } = await repos();
+    const cfg = { token: 'ghs_test', apiBase: `http://127.0.0.1:${(api.address() as { port: number }).port}`, rewrite: { 'https://github.com/acme/shop.git': remote } };
+    const go = async (branch: string, draft: boolean | undefined, extra: Record<string, unknown> = {}) => {
+      await fs.writeFile(path.join(ws, `${branch}.txt`), branch);
+      return publish({ workspace: ws, sessionGitUrl: 'https://github.com/acme/shop', input: { branch, title: 'T', commitMessage: branch, ...(draft === undefined ? {} : { draft }) }, cfg: { ...cfg, ...extra }, commit: commitIn(ws) });
+    };
+    await go('one', undefined);
+    const asked = await go('two', false);
+    assert.match(asked.note ?? '', /is a draft: this server opens only drafts.*HARNESS_PUBLISH_READY=1/);
+    await go('three', false, { allowReady: true });
+    await go('four', undefined, { allowReady: true });
+    assert.deepEqual(bodies.map((b) => [b.head, b.draft]), [['agent/one', true], ['agent/two', true], ['agent/three', false], ['agent/four', true]]);
+  } finally {
+    api.close();
+    if (prev === undefined) delete process.env.NO_PROXY; else process.env.NO_PROXY = prev;
+  }
+});
+
+/** A git smart-HTTP server (git http-backend) that wants the token as GitHub does: Basic x-access-token. */
+async function gitHttpServer(root: string, token: string) {
+  const seen: (string | undefined)[] = [];
+  const server = http.createServer((req, res) => {
+    seen.push(req.headers.authorization);
+    if (req.headers.authorization !== `Basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`) {
+      res.writeHead(401, { 'www-authenticate': 'Basic realm="git"' });
+      return res.end();
+    }
+    const u = new URL(req.url!, 'http://x');
+    const cgi = spawn('git', ['http-backend'], { env: { ...process.env, GIT_PROJECT_ROOT: root, GIT_HTTP_EXPORT_ALL: '1', PATH_INFO: u.pathname, QUERY_STRING: u.search.slice(1), REQUEST_METHOD: req.method!, CONTENT_TYPE: req.headers['content-type'] ?? '', HTTP_CONTENT_ENCODING: req.headers['content-encoding'] ?? '', REMOTE_ADDR: '127.0.0.1', REMOTE_USER: 'x-access-token' } });
+    req.pipe(cgi.stdin);
+    const out: Buffer[] = [];
+    cgi.stdout.on('data', (d: Buffer) => out.push(d));
+    cgi.on('close', () => {
+      const all = Buffer.concat(out);
+      const sep = all.indexOf('\r\n\r\n');
+      const head = all.subarray(0, sep).toString().split('\r\n');
+      const headers: Record<string, string> = {};
+      let status = 200;
+      for (const line of head) { const i = line.indexOf(':'); const k = line.slice(0, i).trim(); const v = line.slice(i + 1).trim(); if (/^status$/i.test(k)) status = Number(v.split(' ')[0]); else headers[k] = v; }
+      res.writeHead(status, headers);
+      res.end(all.subarray(sep + 4));
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  return { url: `http://127.0.0.1:${(server.address() as { port: number }).port}`, seen, close: () => server.close() };
+}
+
+test('cloning a private repository: the publish token goes in a header for that one command, only for repositories the operator lists, and is never stored', async () => {
+  const { remote } = await repos();
+  const root = path.dirname(remote);
+  const srv = await gitHttpServer(root, 'ghs_clone_token');
+  const prev = process.env.NO_PROXY;
+  process.env.NO_PROXY = '127.0.0.1';
+  try {
+    const url = `${srv.url}/remote.git`;
+    const cfg = { token: 'ghs_clone_token', tokenHosts: ['127.0.0.1'] };
+    assert.ok(mayCloneWithToken('https://github.com/acme/shop', { cloneRepos: ['acme/*'] }, {}));
+    assert.ok(!mayCloneWithToken('https://github.com/acme2/shop', { cloneRepos: ['acme/*'] }, {}));
+    assert.ok(mayCloneWithToken('https://github.com/acme/shop.git', {}, { HARNESS_CLONE_REPOS: 'acme/shop' }));
+    assert.ok(mayCloneWithToken('https://github.com/acme/shop', { repos: ['https://github.com/acme/shop'] }, {}), 'a publish repository may be cloned too');
+    // Not listed: cloned without the token, so a private repository fails, with a hint.
+    await assert.rejects(cloneRepository(url, path.join(await tempDir(), 'a'), cfg, { env: {} }), /git clone failed.*HARNESS_CLONE_REPOS/s);
+    assert.deepEqual(srv.seen.filter(Boolean), [], 'the token was not sent');
+    // Listed: cloned with it.
+    const dest = path.join(await tempDir(), 'b');
+    const r = await cloneRepository(url, dest, { ...cfg, cloneRepos: [url] }, { env: {} });
+    assert.equal(r.withToken, true);
+    assert.equal(await fs.readFile(path.join(dest, 'README.md'), 'utf8'), '# shop\n');
+    const config = await fs.readFile(path.join(dest, '.git', 'config'), 'utf8');
+    assert.doesNotMatch(config, /ghs_clone_token|extraHeader|eC1hY2Nlc3MtdG9rZW46/i, 'the token is nowhere in the clone');
+    assert.match(config, new RegExp(`url = ${url.replace(/[.:/]/g, '\\$&')}`), 'the remote is the plain URL');
+    // Listed, but the host is not one the token may go to: not sent.
+    srv.seen.length = 0;
+    await assert.rejects(cloneRepository(url, path.join(await tempDir(), 'c'), { token: 'ghs_clone_token', cloneRepos: [url] }, { env: {} }), /git clone failed/);
+    assert.deepEqual(srv.seen.filter(Boolean), []);
+  } finally {
+    srv.close();
+    if (prev === undefined) delete process.env.NO_PROXY; else process.env.NO_PROXY = prev;
+  }
 });
 
 test('publish from a worktree session: its branch is fetched from the repository\'s git data', async () => {
@@ -62,12 +188,12 @@ test('publish from a worktree session: its branch is fetched from the repository
   const { remote, ws } = await repos();
   const w = await createWorktree(ws, path.join(await tempDir(), 'wt'), 'pubwt');
   await fs.writeFile(path.join(w.dir, 'wt.txt'), 'from the worktree\n');
-  const r = await publish({ workspace: w.dir, input: { branch: 'from-worktree', title: 'Worktree', commitMessage: 'Worktree work' }, cfg: { repos: [remote] }, commit: commitIn(w.dir), worktree: { commonDir: w.commonDir, branch: w.branch }, isolate: true });
-  assert.equal(g(remote, 'log', '--format=%s', 'from-worktree', '-1'), 'Worktree work');
-  assert.equal(g(remote, 'show', 'from-worktree:wt.txt'), 'from the worktree');
+  const r = await publish({ workspace: w.dir, input: { branch: 'agent/from-worktree', title: 'Worktree', commitMessage: 'Worktree work' }, cfg: { repos: [remote] }, commit: commitIn(w.dir), ledger: path.join(await tempDir(), 'ledger.json'), worktree: { commonDir: w.commonDir, branch: w.branch }, isolate: true });
+  assert.equal(g(remote, 'log', '--format=%s', 'agent/from-worktree', '-1'), 'Worktree work');
+  assert.equal(g(remote, 'show', 'agent/from-worktree:wt.txt'), 'from the worktree');
   assert.equal(r.commit, g(ws, 'rev-parse', w.branch));
   // Without the worktree's details, its gitfile is refused as before.
-  await assert.rejects(publish({ workspace: w.dir, input: { branch: 'x2', title: 't' }, cfg: { repos: [remote] } }), /not a plain folder/);
+  await assert.rejects(publish({ workspace: w.dir, input: { branch: 'agent/x2', title: 't' }, cfg: { repos: [remote] } }), /not a plain folder/);
 });
 
 test('publish: nothing in the workspace\'s git config runs or redirects the push', async () => {
@@ -87,7 +213,7 @@ test('publish: nothing in the workspace\'s git config runs or redirects the push
   g(ws, '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=', 'commit', '-q', '-m', 'x');
   await publish({ workspace: ws, input: { branch: 'safe', title: 't' }, cfg: { repos: [remote] } });
   assert.deepEqual((await fs.readdir(path.dirname(marker))).filter((f) => f.startsWith('pwned')), []);
-  assert.equal(g(remote, 'log', '--format=%s', 'safe', '-1'), 'x', 'pushed to the real target');
+  assert.equal(g(remote, 'log', '--format=%s', 'agent/safe', '-1'), 'x', 'pushed to the real target');
   assert.equal(execFileSync('git', ['-C', evil, 'branch', '--list']).toString().trim(), '', 'not to the planted one');
 });
 
@@ -111,17 +237,18 @@ test('publish: the pull request through the GitHub API, with the token only in h
   try {
     const cfg = { token: 'ghs_test_token', apiBase: `http://127.0.0.1:${(api.address() as { port: number }).port}`, rewrite: { 'https://github.com/acme/shop.git': remote } };
     await fs.writeFile(path.join(ws, 'f.txt'), 'f');
-    const r = await publish({ workspace: ws, sessionGitUrl: 'https://github.com/acme/shop', input: { branch: 'feat', title: 'Feature', body: 'Tested.', draft: true, commitMessage: 'feat' }, cfg, commit: commitIn(ws) });
+    const ledger = path.join(await tempDir(), 'published-branches.json');
+    const r = await publish({ workspace: ws, sessionGitUrl: 'https://github.com/acme/shop', input: { branch: 'agent/feat', title: 'Feature', body: 'Tested.', draft: true, commitMessage: 'feat' }, cfg, commit: commitIn(ws), ledger });
     assert.deepEqual(r.pullRequest, { number: 7, url: 'https://github.com/acme/shop/pull/7' });
     assert.equal(r.pushedTo, 'acme/shop');
     assert.equal(calls[0]!.url, '/repos/acme/shop/pulls');
-    assert.deepEqual(calls[0]!.body, { title: 'Feature', head: 'feat', base: 'main', body: 'Tested.', draft: true });
+    assert.deepEqual(calls[0]!.body, { title: 'Feature', head: 'agent/feat', base: 'main', body: 'Tested.', draft: true });
     assert.equal(calls[0]!.auth, 'Bearer ghs_test_token');
     assert.doesNotMatch(await fs.readFile(path.join(ws, '.git', 'config'), 'utf8'), /ghs_test_token|extraHeader/i, 'the token never lands in the workspace');
     // A second publish of the same branch finds the open pull request.
     existing = true;
     await fs.writeFile(path.join(ws, 'g.txt'), 'g');
-    const again = await publish({ workspace: ws, sessionGitUrl: 'https://github.com/acme/shop', input: { branch: 'feat', title: 'Feature', commitMessage: 'more' }, cfg, commit: commitIn(ws) });
+    const again = await publish({ workspace: ws, sessionGitUrl: 'https://github.com/acme/shop', input: { branch: 'agent/feat', title: 'Feature', commitMessage: 'more' }, cfg, commit: commitIn(ws), ledger });
     assert.match(again.note ?? '', /already had an open pull request/);
   } finally {
     api.close();
@@ -214,8 +341,8 @@ test('publish: links inside .git (objects, refs, HEAD) that could reach another 
 test('publish from a sandbox: .git is moved out of reach for the fetch and always put back', async () => {
   const { remote, ws } = await repos();
   await fs.writeFile(path.join(ws, 'a.txt'), 'a');
-  const r = await publish({ workspace: ws, input: { branch: 'sandboxed', title: 't', commitMessage: 'Add a' }, cfg: { repos: [remote] }, commit: commitIn(ws), isolate: true });
-  assert.equal(g(remote, 'rev-parse', 'sandboxed'), r.commit);
+  const r = await publish({ workspace: ws, input: { branch: 'agent/sandboxed', title: 't', commitMessage: 'Add a' }, cfg: { repos: [remote] }, commit: commitIn(ws), isolate: true });
+  assert.equal(g(remote, 'rev-parse', 'agent/sandboxed'), r.commit);
   assert.equal(g(ws, 'log', '--format=%s', '-1'), 'Add a', '.git is back where it was');
   assert.deepEqual((await fs.readdir(path.dirname(ws))).filter((f) => f.startsWith('.publish-')), [], 'nothing left beside the workspace');
   // A failing fetch (HEAD names no commit) puts it back too.
