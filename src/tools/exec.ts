@@ -31,7 +31,7 @@ export const bashTool: Tool = {
   kind: 'exec', parallelSafe: false, remoteable: true,
   spec: {
     name: 'bash',
-    description: 'Run a shell command in the workspace and return its exit code and output. For builds, tests, git, package managers and scripts. Use the file tools rather than cat/sed/grep/find to read, edit or search; writing file contents from the shell (cat > file, heredocs, sed -i, tee, echo > file.js) is refused - use write or edit, which record undo checkpoints and show diffs. Each call is a fresh shell (cd does not persist; use `cd dir && cmd`). Default timeout 120s, max 600s. Long output is trimmed to its head and tail, so filter it (| tail -50, | grep) when you can. For servers and watchers set run_in_background: it returns at once with the PID and a log file; check the log with tail and stop it with kill.',
+    description: 'Run a shell command in the workspace and return its exit code and output. For builds, tests, git, package managers and scripts. Use the file tools rather than cat/sed/grep/find to read, edit or search; writing file contents from the shell (cat > file, heredocs, sed -i, tee, echo > file.js) is refused - use write or edit, which record undo checkpoints and show diffs. Each call is a fresh shell (cd does not persist; use `cd dir && cmd`). Default timeout 120s, max 600s. Long output is trimmed to its head and tail, so filter it (| tail -50, | grep) when you can. For servers, watchers and long jobs set run_in_background: it returns at once with a task id; read its output with task_output, wait for a line or its end with monitor, stop it with task_stop.',
     input_schema: {
       type: 'object',
       properties: {
@@ -49,7 +49,7 @@ export const bashTool: Tool = {
     if (!command.trim()) return { content: 'command is empty.', is_error: true };
     const write = shellFileWrite(command);
     if (write) return { content: `Not run: this command writes file contents from the shell (${write}). Use the write tool for new or fully rewritten files and edit for changes - they keep undo checkpoints, diffs and edit permissions. Run the rest of the command separately if needed.`, is_error: true };
-    if (input.run_in_background === true || input.run_in_background === 'true') return background(command, ctx);
+    if (input.run_in_background === true || input.run_in_background === 'true') return background(command, ctx, str(input.description));
     const timeoutMs = Math.min(MAX_TIMEOUT, Math.max(1000, num(input.timeout_ms) ?? DEFAULT_TIMEOUT));
     const r = await ctx.host.exec(command, { timeoutMs, signal: ctx.signal });
     const parts: string[] = [];
@@ -70,21 +70,36 @@ const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 /**
  * Starts a detached process (own session, all stdio redirected to a log in the
- * workspace) so the tool call returns at once and the process outlives it.
+ * workspace) so the tool call returns at once and the process outlives it. Its
+ * exit code is written beside the log when it ends; the session's task registry
+ * (task_list, task_output, monitor, task_stop) reads both.
  */
-async function background(command: string, ctx: ToolContext): Promise<ToolOutcome> {
+async function background(command: string, ctx: ToolContext, description: string): Promise<ToolOutcome> {
   if (ctx.host.shell === 'powershell') return { content: 'run_in_background is not supported on Windows hosts; use Start-Process in a normal command.', is_error: true };
   const id = Math.random().toString(36).slice(2, 8);
   const log = `.harness/bg/${id}.log`;
-  // setsid gives it its own session where it exists; Git Bash on Windows has only nohup.
-  const detach = `(command -v setsid >/dev/null 2>&1 && exec setsid nohup bash -c ${shq(command)} || exec nohup bash -c ${shq(command)})`;
+  const exitFile = `.harness/bg/${id}.exit`;
+  // The command runs in a child shell, so its exit code is recorded whatever it does (exit, exec, cd).
+  const inner = `bash -c ${shq(command)}; echo $? > ${exitFile}`;
+  // setsid gives it its own session (and process group) where it exists; Git Bash on Windows has only nohup.
+  const detach = `(command -v setsid >/dev/null 2>&1 && exec setsid nohup bash -c ${shq(inner)} || exec nohup bash -c ${shq(inner)})`;
   const script = `mkdir -p .harness/bg && (${detach} > ${log} 2>&1 < /dev/null & echo $!)`;
   const r = await ctx.host.exec(script, { timeoutMs: 15_000, signal: ctx.signal });
   const pid = r.stdout.trim().split('\n').pop();
   if (r.code !== 0 || !pid) return { content: `could not start: ${r.stderr.trim() || r.stdout.trim()}`, is_error: true };
+  const task = ctx.services?.tasks?.addShell({ id, pid, log, exitFile, command, description });
   await new Promise((res) => setTimeout(res, 2500));
-  const peek = await ctx.host.exec(`tail -n 20 ${log}; kill -0 ${pid} 2>/dev/null && echo "[running]" || echo "[exited]"`, { timeoutMs: 10_000, signal: ctx.signal });
-  return { content: `Started in the background: pid ${pid}, output in ${log}.\nFirst output:\n${clip(peek.stdout.trim(), 4000)}\nCheck later with \`tail -n 50 ${log}\`; stop with \`kill ${pid}\`.` };
+  const peek = await ctx.host.exec(`tail -n 20 ${log}; test -e ${exitFile} && echo "[exited $(cat ${exitFile})]" || echo "[running]"`, { timeoutMs: 10_000, signal: ctx.signal });
+  const how = task
+    ? `Read its output with task_output, wait for a line or its end with monitor, stop it with task_stop ${task}.`
+    : `Check later with \`tail -n 50 ${log}\`; stop it with \`${stopShellScript(pid)}\`.`;
+  return { content: `Started in the background: ${task ? `task ${task}, ` : ''}pid ${pid}, output in ${log}.\nFirst output:\n${clip(peek.stdout.trim(), 4000)}\n${how}` };
+}
+
+/** Stops a background shell and everything it started: its process group where setsid made one, else its children by parent id. */
+export function stopShellScript(pid: string): string {
+  if (!/^\d+$/.test(pid)) throw new Error(`bad pid ${pid}`);
+  return `kill -TERM -- -${pid} 2>/dev/null; k() { for c in $( (ps -e -o pid=,ppid= 2>/dev/null || ps 2>/dev/null) | awk -v p="$1" '$2==p{print $1}'); do k "$c"; done; kill -TERM "$1" 2>/dev/null; }; k ${pid}; true`;
 }
 
 export const todoTool: Tool = {

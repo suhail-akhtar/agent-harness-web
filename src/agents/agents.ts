@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { Effort } from '../core/models.ts';
 import type { AgentDef } from '../plugins/api.ts';
 import type { Tool } from '../tools/types.ts';
-import { str } from '../tools/types.ts';
+import { bool, str } from '../tools/types.ts';
 import { asList, parseFrontmatter } from '../util/frontmatter.ts';
 
 // Sub-agents are named specialists: a prompt, a tool subset, and optionally a
@@ -12,7 +12,9 @@ import { asList, parseFrontmatter } from '../util/frontmatter.ts';
 
 export const READ_ONLY_TOOLS = ['glob', 'grep', 'read', 'skill', 'tool_search', 'web_fetch'];
 /** Tools a sub-agent never gets: they talk to the user or spawn more agents. */
-export const INTERACTIVE_TOOLS = ['agent', 'ask_user', 'exit_plan_mode', 'todo_write'];
+export const INTERACTIVE_TOOLS = ['agent', 'ask_user', 'exit_plan_mode', 'send_message', 'todo_write'];
+/** The ones a sub-agent does get when it may start its own (settings.maxSubagentDepth). */
+export const NESTING_TOOLS = ['agent', 'send_message'];
 
 export const BUILTIN_AGENTS: AgentDef[] = [
   {
@@ -40,8 +42,9 @@ const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
  */
 const CLAUDE_CODE_TOOLS: Record<string, string> = {
   Read: 'read', Write: 'write', Edit: 'edit', MultiEdit: 'edit', NotebookEdit: 'edit', NotebookRead: 'read',
-  Bash: 'bash', BashOutput: 'bash', Glob: 'glob', Grep: 'grep', LS: 'glob', WebFetch: 'web_fetch',
-  TodoWrite: 'todo_write', Task: 'agent', ExitPlanMode: 'exit_plan_mode', AskUserQuestion: 'ask_user', Skill: 'skill',
+  Bash: 'bash', BashOutput: 'task_output', Glob: 'glob', Grep: 'grep', LS: 'glob', WebFetch: 'web_fetch',
+  TodoWrite: 'todo_write', Task: 'agent', Agent: 'agent', ExitPlanMode: 'exit_plan_mode', AskUserQuestion: 'ask_user', Skill: 'skill',
+  SendMessage: 'send_message', TaskOutput: 'task_output', TaskList: 'task_list', TaskStop: 'task_stop', KillShell: 'task_stop', KillBash: 'task_stop', Monitor: 'monitor',
 };
 
 /** A tools list in either vocabulary, without duplicates; MCP and plugin tool names pass through. */
@@ -83,23 +86,31 @@ export function makeAgentTool(agents: AgentDef[]): Tool {
     kind: 'meta', parallelSafe: true, remoteable: false,
     spec: {
       name: 'agent',
-      description: `Delegate a self-contained task to a sub-agent with its own fresh context; it returns only its final report. Write the prompt as a complete brief: the goal, what you already know, and what to report back. Several agent calls in one turn run in parallel. Agents:\n${list}`,
+      description: `Delegate a self-contained task to a sub-agent with its own fresh context; it returns only its final report, with its id (send_message continues it later with its context). Write the prompt as a complete brief: the goal, what you already know, and what to report back. Several agent calls in one turn run in parallel. With run_in_background it starts and you get its id at once; keep working, and its report reaches you as a reminder when it finishes. Agents:\n${list}`,
       input_schema: {
         type: 'object',
         properties: {
           description: { type: 'string', description: 'Three to five words, shown to the user.' },
           prompt: { type: 'string' },
           type: { type: 'string', enum: names, description: 'Which agent; default explore.' },
+          run_in_background: { type: 'boolean', description: 'Start it and return at once; its report arrives later.' },
         },
         required: ['description', 'prompt'],
       },
     },
-    summarize: (i) => `${str(i.type) || 'explore'}: ${str(i.description)}`,
+    summarize: (i) => `${bool(i.run_in_background) ? '[background] ' : ''}${str(i.type) || 'explore'}: ${str(i.description)}`,
     async run(input, ctx) {
       if (!ctx.runSubagent) return { content: 'Sub-agents cannot start other sub-agents. Do the work directly.', is_error: true };
       const type = names.includes(str(input.type)) ? str(input.type) : 'explore';
-      const report = await ctx.runSubagent({ description: str(input.description), prompt: str(input.prompt), type });
-      return { content: report };
+      const args = { description: str(input.description), prompt: str(input.prompt), type };
+      const start = ctx.services?.tasks?.startAgent;
+      if (bool(input.run_in_background) && start) {
+        const id = await start(args);
+        return { content: `Started ${id} in the background. Keep working; its report reaches you as a reminder when it finishes. task_output ${id} shows its progress, task_stop ${id} stops it.` };
+      }
+      const report = await ctx.runSubagent(args);
+      // Background work is the main agent's: a sub-agent's background request runs here and now.
+      return { content: bool(input.run_in_background) ? `${report}\n(Run in the foreground: only the main agent starts background agents.)` : report };
     },
   };
 }

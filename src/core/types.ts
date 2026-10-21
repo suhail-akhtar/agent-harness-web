@@ -72,6 +72,7 @@ export type HarnessEvent =
   | { kind: 'plan_proposed'; requestId: string; plan: string }
   | { kind: 'approval_request'; requestId: string; runId: string; node: string; title: string; message: string; files: { path: string; content: string }[] }
   | { kind: 'workflow'; phase: 'started' | 'node_started' | 'node_finished' | 'finished'; node?: string; run: WorkflowRunView }
+  | { kind: 'task'; phase: 'started' | 'finished'; task: TaskView }
   | { kind: 'request_resolved'; requestId: string; decision: string }
   | { kind: 'usage'; model: string; usage: Usage; cost: number; contextTokens: number; contextWindow: number; agent?: string }
   | { kind: 'todos'; todos: Todo[] }
@@ -84,6 +85,19 @@ export type HarnessEvent =
 
 export type TurnEndReason = 'done' | 'aborted' | 'max_steps' | 'budget' | 'refusal' | 'error' | 'max_tokens';
 export type SessionStatus = 'idle' | 'running' | 'waiting';
+
+/** Background work in a session (a shell, a sub-agent, a workflow run, a monitor) as task_list and the UI see it. */
+export interface TaskView {
+  id: string;
+  kind: 'shell' | 'agent' | 'workflow' | 'monitor';
+  description: string;
+  status: 'running' | 'completed' | 'failed' | 'stopped';
+  startedAt: number;
+  endedAt?: number;
+  /** Who started it: 'main' or a sub-agent's name. */
+  owner: string;
+  cost?: number;
+}
 
 /** What the UI renders for a tool result (never sent to the model). */
 export type ToolDisplay =

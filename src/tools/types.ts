@@ -33,7 +33,11 @@ export interface ToolServices {
   workflows?: {
     list(): Promise<{ name: string; description: string; inputs: string[] }[]>;
     run(name: string, input: Record<string, string>, signal: AbortSignal): Promise<{ status: string; summary: string; cost: number }>;
+    /** Starts a run detached and returns its id; the outcome reaches the agent later as a reminder. */
+    start?(name: string, input: Record<string, string>): Promise<string>;
   };
+  /** This session's background tasks (shells, sub-agents, workflows, monitors). */
+  tasks?: import('./tasks.ts').TaskService;
 }
 
 export interface ToolContext {
