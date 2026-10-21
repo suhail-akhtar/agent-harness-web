@@ -173,6 +173,24 @@ export class WorkflowRunner {
     return out;
   }
 
+  /**
+   * The structured result of an agent step. A report that did the work but forgot the
+   * fenced JSON block gets one short call that writes the block from the report (no new
+   * work), before the step counts as failed: a format slip should not undo a correct job.
+   */
+  private async outputsOf(id: string, report: string, outputs: string[], signal: AbortSignal): Promise<ReturnType<typeof parseOutputs>> {
+    const p = parseOutputs(report, outputs, this.fields);
+    if (!p.error || signal.aborted) return p;
+    const r = await this.host.runAgent({
+      agent: 'general', label: `${id}-result`, maxSteps: 2, signal,
+      prompt: `Below is the final report of the workflow step "${id}". The work is done: do not use any tools or do any work. Reply with only the step's result, read from the report.${outputInstruction(outputs, this.fields)}\n\n<report>\n${report.slice(-20_000)}\n</report>`,
+    }).catch(() => undefined);
+    if (!r) return p;
+    this.run.cost += r.cost;
+    const again = parseOutputs(r.report, outputs, this.fields);
+    return again.error ? p : again;
+  }
+
   /** Writes values into declared fields, all or none: one bad value leaves state as it was. */
   private commit(values: Record<string, unknown>): void {
     const trial: RunRecord = { ...this.run, values: structuredClone(this.run.values ?? {}) };
@@ -213,7 +231,7 @@ export class WorkflowRunner {
         if (r.reason !== 'done' && r.reason !== 'max_tokens') return { failed: true, summary: `agent stopped: ${r.reason}`, cost: r.cost };
         let output: unknown = r.report;
         if (node.outputs?.length) {
-          const p = parseOutputs(r.report, node.outputs, this.fields);
+          const p = await this.outputsOf(id, r.report, node.outputs, signal);
           if (p.error) {
             run.feedback = `The "${id}" step's report could not be read: ${p.error}.`;
             if (typeof node.next === 'object' && 'invalid-output' in node.next.on) return { outcome: 'invalid-output', summary: `${r.report}\n\n(${p.error}.)`, cost: r.cost, output };
@@ -395,7 +413,7 @@ export class WorkflowRunner {
         if (r.reason !== 'done' && r.reason !== 'max_tokens') return { failed: true, summary: r.reason === 'max_steps' ? `ran out of steps: ${r.report.slice(-500)}` : `agent stopped: ${r.reason}`, cost: r.cost };
         let output: unknown = r.report;
         if (t.outputs?.length) {
-          const p = parseOutputs(r.report, t.outputs, this.fields);
+          const p = await this.outputsOf(label, r.report, t.outputs, signal);
           if (p.error) return { failed: true, summary: p.error, cost: r.cost };
           this.commit(p.values!);
           output = p.values;

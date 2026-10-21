@@ -280,13 +280,15 @@ export async function runOne(c: EvalCase, model: string, repeat: number, out: st
   try {
     const s = await h.sessions.create({ model, ...(cfg?.effort ? { effort: cfg.effort } : {}), mode: 'bypass', runtime: { kind: 'local', network: 'none', path: ws } });
     const errors: string[] = [];
+    // A prompt case ends with its turn: an error there (a provider refusing) is not "done".
+    let endReason: string | undefined;
     const done = new Promise<void>((resolve) => {
       s.subscribe(0, ({ event }) => {
         if (event.kind === 'notice' && event.level === 'error') errors.push(event.text);
         if (event.kind === 'permission_request') s.respond(event.requestId, { decision: 'allow' });
         if (event.kind === 'question') s.respond(event.requestId, { decision: 'answer', answer: 'Use your best judgement.' });
         if (event.kind === 'plan_proposed' || event.kind === 'approval_request') s.respond(event.requestId, { decision: 'approve' });
-        if (event.kind === 'turn_end' && !event.agent) resolve();
+        if (event.kind === 'turn_end' && !event.agent) { endReason = event.reason; resolve(); }
       });
     });
     ac.signal.addEventListener('abort', () => s.abort(), { once: true });
@@ -294,7 +296,7 @@ export async function runOne(c: EvalCase, model: string, repeat: number, out: st
     else await s.send(c.prompt!);
     await done;
     const runs = await s.listRuns();
-    run.status = c.workflow ? (runs[0]?.status ?? 'unknown') : (ac.signal.aborted ? 'timeout' : 'done');
+    run.status = c.workflow ? (runs[0]?.status ?? 'unknown') : (ac.signal.aborted ? 'timeout' : endReason === 'error' ? 'error' : 'done');
     if (ac.signal.aborted) run.status = 'timeout';
     const u = s.meta.usage;
     run.inputTokens = u.input + u.cacheRead + u.cacheWrite;

@@ -168,7 +168,8 @@ test('an agent reports declared fields in a JSON block; a missing block fails or
   ({ host, prompts } = stubHost(() => 'I made a plan.'));
   run = await go(w, host);
   assert.deepEqual(run.history.map((h) => `${h.node}:${h.outcome ?? ''}`), ['plan:invalid-output', 'retry:', 'end:']);
-  assert.match(prompts[1]!.prompt, /did not end with a JSON block holding items, title, risk/);
+  assert.deepEqual(prompts.map((p) => p.label), ['plan', 'plan-result', 'retry'], 'one short call to write the block came first');
+  assert.match(prompts.find((p) => p.label === 'retry')!.prompt, /did not end with a JSON block holding items, title, risk/);
   // A wrong type, with no invalid-output route: the node fails, naming the field.
   const strict: WorkflowDef = { ...w, nodes: { plan: { ...w.nodes.plan!, next: 'end' } as never, end: w.nodes.end! } };
   ({ host } = stubHost(() => json({ items: 'a.ts', title: 'x', risk: 1 })));
@@ -332,4 +333,22 @@ test('a step that runs out of time is unfinished work, like one out of steps: th
   assert.equal(run.status, 'succeeded', run.error ?? '');
   assert.deepEqual(run.history.map((h) => [h.node, h.outcome]), [['build', 'incomplete'], ['review', 'changes'], ['end', undefined]]);
   assert.match(run.feedback ?? '', /ran out of time/);
+});
+
+test('an agent step that did the work but forgot its JSON block gets one short call to write it, instead of failing the run', async () => {
+  const w = {
+    name: 'fix', description: 'd', start: 'fix', state: { fixed: { type: 'boolean' } },
+    nodes: { fix: { type: 'agent', prompt: 'fix it', outputs: ['fixed'], next: 'end' }, end: { type: 'end' } },
+  } as unknown as WorkflowDef;
+  assert.deepEqual(validateWorkflow(w), []);
+  const { host, prompts } = stubHost((label) => (label === 'fix' ? 'Fixed the workflow and the code; all steps pass.' : '```json\n{"fixed": true}\n```'));
+  const run = await new WorkflowRunner(w, host, newRun(w, 's', {})).execute(new AbortController().signal);
+  assert.equal(run.status, 'succeeded', run.error ?? '');
+  assert.equal((run.values as Record<string, unknown>).fixed, true);
+  assert.deepEqual(prompts.map((p) => p.label), ['fix', 'fix-result']);
+  assert.match(prompts[1]!.prompt, /do not use any tools[\s\S]*Fixed the workflow and the code/);
+  // A step whose report cannot be read even then still fails, as before.
+  const bad = stubHost(() => 'no json here');
+  const run2 = await new WorkflowRunner(w, bad.host, newRun(w, 's', {})).execute(new AbortController().signal);
+  assert.equal(run2.status, 'failed');
 });
