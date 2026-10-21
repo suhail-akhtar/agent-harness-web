@@ -241,7 +241,8 @@ export function callScript(p, screen) {
     const log = `${STATE}/launch-$(date +%s%N).log`;
     lines.push(
       `log=${log}`,
-      `(cd /workspace && setsid nohup bash -lc ${q(p.launch)} >"$log" 2>&1 </dev/null &)`,
+      // Only the app goes to the background (the braces), so no subshell lingers holding the output.
+      `(cd /workspace && { setsid nohup bash -lc ${q(p.launch)} >"$log" 2>&1 </dev/null & })`,
       `sleep ${(p.settleMs / 1000).toFixed(1)}`,
       'echo "@@LOG $log"',
       `echo "@@LAUNCHTAIL $(tail -c 600 "$log" | tr '\\n' ' ')"`,
