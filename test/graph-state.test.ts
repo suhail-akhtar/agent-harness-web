@@ -316,3 +316,20 @@ test('JSON workflows cannot hide a code node in a map; the shell trust check see
   assert.equal(usesNodeType(w, 'shell'), true);
   assert.equal(usesNodeType(w, 'code'), false);
 });
+
+test('a step that runs out of time is unfinished work, like one out of steps: the next step judges it, a reviewer has not approved', async () => {
+  const w = {
+    name: 't', description: 'd', start: 'build',
+    nodes: {
+      build: { type: 'agent', prompt: 'build it', next: { on: { done: 'review', incomplete: 'review' } } },
+      review: { type: 'agent', prompt: 'review it', decide: ['approve', 'changes'], next: { on: { approve: 'end', changes: 'end' } } },
+      end: { type: 'end' },
+    },
+  } as unknown as WorkflowDef;
+  assert.deepEqual(validateWorkflow(w), []);
+  const { host } = stubHost((label) => ({ report: `${label} partial`, reason: 'time' }));
+  const run = await new WorkflowRunner(w, host, newRun(w, 's', {})).execute(new AbortController().signal);
+  assert.equal(run.status, 'succeeded', run.error ?? '');
+  assert.deepEqual(run.history.map((h) => [h.node, h.outcome]), [['build', 'incomplete'], ['review', 'changes'], ['end', undefined]]);
+  assert.match(run.feedback ?? '', /ran out of time/);
+});

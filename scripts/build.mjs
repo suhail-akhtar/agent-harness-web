@@ -31,6 +31,7 @@ await build({
   platform: 'node',
   format: 'esm',
   target: 'node18',
-  banner: { js: '#!/usr/bin/env node' },
+  // Bundled CommonJS (undici) calls require() for Node's own modules; an ES module has none of its own.
+  banner: { js: "#!/usr/bin/env node\nimport { createRequire as __harnessRequire } from 'node:module';\nconst require = __harnessRequire(import.meta.url);" },
 });
 console.log('built ui/dist and dist/companion.mjs');

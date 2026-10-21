@@ -402,7 +402,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         if (!await dockerAvailable()) throw new HttpError(400, 'Docker is not available on the server. Choose a companion or local workspace.');
         let image: string;
         try { image = sessionImage(typeof b.image === 'string' && b.image ? b.image : undefined); } catch (e) { throw new HttpError(400, (e as Error).message); }
-        if (!await imageExists(image)) throw new HttpError(400, `Sandbox image ${image} is missing. Build it with: ${/3d/.test(image) ? 'npm run sandbox:image:3d' : 'npm run sandbox:image'}`);
+        if (!await imageExists(image)) throw new HttpError(400, `Sandbox image ${image} is missing. Build it with: npm run ${/desktop/.test(image) ? 'sandbox:image:desktop' : /3d.*export/.test(image) ? 'sandbox:image:3d-export' : /3d/.test(image) ? 'sandbox:image:3d' : 'sandbox:image'}`);
         if (image !== dockerDefaults().image) runtime.image = image;
       }
       if (kind === 'local') {

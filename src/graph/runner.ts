@@ -201,12 +201,12 @@ export class WorkflowRunner {
         const r = await this.host.runAgent({ agent: node.agent ?? 'general', label: id, prompt: this.brief(node), model: node.model, effort: node.effort, maxSteps: node.maxSteps, signal });
         run.cost += r.cost;
         run.state[id] = r.report.slice(0, SUMMARY_MAX);
-        // Out of steps is unfinished work, not a failure: the next step (a gate) judges it.
-        if (r.reason === 'max_steps') {
-          run.feedback = `The "${id}" step ran out of steps before it finished. Its last report:\n${r.report.slice(-3000)}`;
+        // Out of steps (or of time, HARNESS_MAX_TURN_MINUTES) is unfinished work, not a failure: the next step (a gate) judges it.
+        if (r.reason === 'max_steps' || r.reason === 'time') {
+          run.feedback = `The "${id}" step ran out of ${r.reason === 'time' ? 'time' : 'steps'} before it finished. Its last report:\n${r.report.slice(-3000)}`;
           // A reviewer that did not finish has not approved.
           const no = conservative(node.decide);
-          if (no) return { outcome: no, summary: `${r.report}\n\n(Ran out of steps before a verdict: treated as ${no}.)`, cost: r.cost, output: r.report };
+          if (no) return { outcome: no, summary: `${r.report}\n\n(Ran out of ${r.reason === 'time' ? 'time' : 'steps'} before a verdict: treated as ${no}.)`, cost: r.cost, output: r.report };
           run.state[INCOMPLETE] = run.feedback;
           return { outcome: 'incomplete', summary: r.report, cost: r.cost, output: r.report };
         }
