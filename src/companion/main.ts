@@ -1,3 +1,6 @@
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { resolveShell } from '../runtime/host.ts';
 import { sandboxedFolderHost } from '../runtime/local-sandbox.ts';
@@ -14,7 +17,11 @@ function arg(name: string): string | undefined {
 }
 
 const server = (arg('server') ?? process.env.HARNESS_SERVER ?? '').replace(/\/$/, '');
-const token = arg('token') ?? process.env.HARNESS_COMPANION_TOKEN ?? '';
+// Tokens are short-lived: the server sends a fresh one before this one expires, and it
+// is kept in a file (owner-only) that later starts use. --token-file names that file.
+const tokenFile = path.resolve(arg('token-file') ?? path.join(os.homedir(), '.harness-companion', `${crypto.createHash('sha256').update(server).digest('hex').slice(0, 16)}.token`));
+const stored = (): string => { try { return fs.readFileSync(tokenFile, 'utf8').trim(); } catch { return ''; } };
+let token = arg('token') ?? process.env.HARNESS_COMPANION_TOKEN ?? stored();
 const dir = path.resolve(arg('dir') ?? process.cwd());
 const allowHooks = process.argv.includes('--allow-hooks');
 // The project's own MCP servers (.mcp.json) start on this computer only with this, or inside a sandbox.
@@ -24,7 +31,7 @@ const sandboxWant = (arg('sandbox') ?? process.env.HARNESS_COMPANION_SANDBOX ?? 
 const network = (arg('network') ?? 'full') as 'none' | 'full';
 
 if (!server || !token || !['auto', 'bwrap', 'seatbelt', 'docker', 'off'].includes(sandboxWant) || !['none', 'full'].includes(network)) {
-  console.error('usage: node harness-companion.mjs --server <url> --token <hwc_...> [--dir <folder>] [--sandbox auto|bwrap|seatbelt|docker|off] [--network full|none] [--allow-hooks] [--trust-project]');
+  console.error('usage: node harness-companion.mjs --server <url> --token <hwc_...> [--token-file <path>] [--dir <folder>] [--sandbox auto|bwrap|seatbelt|docker|off] [--network full|none] [--allow-hooks] [--trust-project]');
   process.exit(2);
 }
 
@@ -34,6 +41,18 @@ const handle = createCompanionHandler(dir, { allowHooks, trustProject, host: san
 
 async function post(p: string, body: unknown, signal?: AbortSignal): Promise<Response> {
   return fetch(`${server}${p}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body), signal });
+}
+
+/** A fresh token from the server: used from now on, and kept for the next start. */
+function adopt(fresh: string | null): void {
+  if (!fresh || !/^hwc_[A-Za-z0-9_-]{20,64}$/.test(fresh) || fresh === token) return;
+  token = fresh;
+  try {
+    fs.mkdirSync(path.dirname(tokenFile), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(`${tokenFile}.tmp`, `${fresh}\n`, { mode: 0o600 });
+    fs.renameSync(`${tokenFile}.tmp`, tokenFile);
+    console.log(`received a fresh token from the server (kept in ${tokenFile})`);
+  } catch (e) { console.error(`could not keep the fresh token in ${tokenFile}: ${(e as Error).message}; pass --token-file to put it elsewhere`); }
 }
 
 async function run(job: CompanionJob): Promise<void> {
@@ -56,7 +75,14 @@ async function loop(): Promise<void> {
       const h = sandbox.host;
       const info = { platform: h.platform, shell: h.kind === 'docker' ? 'bash' : resolveShell().kind, root: h.displayRoot, version: '0.4.0', sandbox: sandbox.kind, network: h.sandboxed ? h.networkPolicy : 'full', trustProject };
       const res = await post('/api/companion/poll', { info }, AbortSignal.timeout(60_000));
-      if (res.status === 401) { console.error('The server rejected this token. Create a new companion in the web app.'); process.exit(1); }
+      if (res.status === 401) {
+        // Started with an old token, but a fresher one was kept from an earlier run.
+        const kept = stored();
+        if (kept && kept !== token) { token = kept; continue; }
+        console.error('The server rejected this token (unknown, revoked, or expired). Create a new token for this companion in the web app.');
+        process.exit(1);
+      }
+      adopt(res.headers.get('x-harness-companion-token'));
       if (res.status === 200) run(await res.json() as CompanionJob).catch((e) => console.error(e));
       else if (res.status !== 204) throw new Error(`poll failed: ${res.status}`);
       backoff = 1000;

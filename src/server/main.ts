@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHarness } from '../kernel/harness.ts';
+import { checkSandboxRuntime, sandboxRuntime } from '../runtime/docker.ts';
 import { createApp } from './app.ts';
 import { BrowserSessions, NOBODY_ALLOWED, OidcClient, oidcConfigFromEnv, refusal } from './oidc.ts';
 import { SpendLedger, UserStore } from './users.ts';
@@ -22,6 +23,10 @@ const PLUGIN_DIRS = [...(process.env.HARNESS_BUNDLED_PLUGINS === 'off' ? [] : [p
 const num = (v: string | undefined) => (v !== undefined && v !== '' && Number.isFinite(Number(v)) ? Number(v) : undefined);
 
 async function main() {
+  // A stronger sandbox runtime the operator asked for (gVisor, Kata) must be there: refuse to start rather than run sandboxes without it.
+  if (process.env.HARNESS_SANDBOX_RUNTIME?.trim()) {
+    try { await checkSandboxRuntime(sandboxRuntime()!); } catch (e) { console.error(`sandbox runtime: ${(e as Error).message}`); process.exit(1); }
+  }
   const oidc = oidcConfigFromEnv(process.env);
   const users = await new UserStore(DATA_DIR).load();
   const sso = oidc ? { client: new OidcClient(oidc), sessions: await new BrowserSessions(DATA_DIR).load() } : undefined;

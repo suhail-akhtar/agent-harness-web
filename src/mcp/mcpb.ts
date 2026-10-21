@@ -1,13 +1,17 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import type { McpServerConfig } from '../plugins/api.ts';
+import { seal, serverKey, unseal } from '../util/sealed.ts';
 
 // MCP bundles (.mcpb, formerly .dxt): a zip with a manifest.json and the server's
 // code, the format Claude Desktop installs as "Desktop Extensions" with one click.
 // Installing one unpacks it into the data folder and registers its server as an
 // operator MCP server; the person installing it fills in the values the bundle
-// asks for (user_config) - an API key, a folder.
+// asks for (user_config) - an API key, a folder. Values the manifest marks
+// "sensitive" are kept on disk only encrypted (AES-256-GCM under the server's key,
+// see util/sealed.ts) and decrypted into memory when the server loads them.
 
 export class McpbError extends Error {}
 
@@ -59,11 +63,39 @@ export interface McpbManifest {
   user_config?: Record<string, { type?: string; title?: string; description?: string; required?: boolean; sensitive?: boolean; default?: unknown }>;
 }
 
-export interface InstalledMcpb { name: string; version?: string; description?: string; dir: string; config: McpServerConfig; installedAt: number }
+export interface InstalledMcpb {
+  name: string; version?: string; description?: string; dir: string;
+  /** How to start the server, with every value filled in (in memory only when some are sensitive). */
+  config: McpServerConfig;
+  installedAt: number;
+  /** The config with the sensitive values left as ${user_config.key}: what is written to disk. */
+  template?: McpServerConfig;
+  /** The sensitive values (user_config marked "sensitive"): on disk only encrypted. */
+  secrets?: Record<string, string>;
+  /** Why its secrets could not be decrypted (the server key changed); it starts without them. */
+  problem?: string;
+  /** Its sealed secrets as they were, kept when they could not be decrypted (a later save keeps them). */
+  sealed?: string;
+}
 
-/** ${__dirname} -> the install folder; ${user_config.key} -> the value given at install. */
-function fill(v: string, dir: string, values: Record<string, string>): string {
-  return v.replace(/\$\{__dirname\}/g, dir).replace(/\$\{user_config\.([\w-]+)\}/g, (_m, k: string) => values[k] ?? '');
+/** On disk: the template, and the secrets sealed with the server's key. */
+type StoredMcpb = Omit<InstalledMcpb, 'secrets' | 'template' | 'problem'>;
+
+/** ${__dirname} -> the install folder; ${user_config.key} -> the value given at install (a key not in `values` stays as it is). */
+function fill(v: string, dir: string, values: Record<string, string>, keep: Set<string> = new Set()): string {
+  return v.replace(/\$\{__dirname\}/g, dir).replace(/\$\{user_config\.([\w-]+)\}/g, (m, k: string) => (keep.has(k) ? m : values[k] ?? ''));
+}
+
+/** Fills only ${user_config.key} of the given values, everywhere in a config. */
+function fillSecrets(c: McpServerConfig, secrets: Record<string, string>): McpServerConfig {
+  const f = (v: string) => v.replace(/\$\{user_config\.([\w-]+)\}/g, (m, k: string) => secrets[k] ?? m);
+  const x = c as McpServerConfig & { command?: string; args?: string[]; env?: Record<string, string>; cwd?: string };
+  return {
+    ...x,
+    ...(x.command !== undefined ? { command: f(x.command) } : {}),
+    ...(x.args ? { args: x.args.map(f) } : {}),
+    ...(x.env ? { env: Object.fromEntries(Object.entries(x.env).map(([k, v]) => [k, f(String(v))])) } : {}),
+  } as McpServerConfig;
 }
 
 /** Unpacks a bundle into `root/<name>` and returns how to start its server. */
@@ -77,10 +109,12 @@ export async function installMcpb(bundle: Buffer, root: string, userConfig: Reco
   if (!m.server || typeof m.server.entry_point !== 'string') throw new McpbError('the manifest needs server.entry_point');
   if (!['node', 'python', 'binary', 'uv'].includes(m.server.type)) throw new McpbError(`server.type "${m.server.type}" is not supported`);
   const values: Record<string, string> = {};
+  const sensitive = new Set<string>();
   for (const [k, spec] of Object.entries(m.user_config ?? {})) {
     const v = userConfig[k] ?? spec.default;
     if ((v === undefined || v === '') && spec.required) throw new McpbError(`the bundle needs "${spec.title ?? k}" (user_config.${k})`);
     if (v !== undefined) values[k] = Array.isArray(v) ? v.join(path.delimiter) : String(v);
+    if (spec.sensitive && values[k]) sensitive.add(k);
   }
   const dir = path.join(root, m.name);
   await fs.rm(dir, { recursive: true, force: true });
@@ -92,22 +126,60 @@ export async function installMcpb(bundle: Buffer, root: string, userConfig: Reco
   }
   const mc = m.server.mcp_config ?? {};
   const entry = path.join(dir, ...m.server.entry_point.split('/'));
-  const command = mc.command ? fill(mc.command, dir, values)
-    : m.server.type === 'node' ? process.execPath
-    : m.server.type === 'python' ? (process.platform === 'win32' ? 'python' : 'python3')
-    : m.server.type === 'uv' ? 'uv' : entry;
-  const args = mc.args ? mc.args.map((a) => fill(a, dir, values))
-    : m.server.type === 'binary' ? [] : m.server.type === 'uv' ? ['run', entry] : [entry];
-  const env = Object.fromEntries(Object.entries(mc.env ?? {}).map(([k, v]) => [k, fill(String(v), dir, values)]));
-  return { name: m.name, version: m.version, description: m.description ?? m.display_name, dir, config: { command, args, env, cwd: dir } as McpServerConfig, installedAt: Date.now() };
+  // `keep`: the sensitive values stay placeholders (the template written to disk).
+  const build = (keep: Set<string>): McpServerConfig => {
+    const command = mc.command ? fill(mc.command, dir, values, keep)
+      : m.server.type === 'node' ? process.execPath
+      : m.server.type === 'python' ? (process.platform === 'win32' ? 'python' : 'python3')
+      : m.server.type === 'uv' ? 'uv' : entry;
+    const args = mc.args ? mc.args.map((a) => fill(a, dir, values, keep))
+      : m.server.type === 'binary' ? [] : m.server.type === 'uv' ? ['run', entry] : [entry];
+    const env = Object.fromEntries(Object.entries(mc.env ?? {}).map(([k, v]) => [k, fill(String(v), dir, values, keep)]));
+    return { command, args, env, cwd: dir } as McpServerConfig;
+  };
+  const secrets = Object.fromEntries([...sensitive].map((k) => [k, values[k]!]));
+  return {
+    name: m.name, version: m.version, description: m.description ?? m.display_name, dir, config: build(new Set()), installedAt: Date.now(),
+    ...(sensitive.size ? { template: build(sensitive), secrets } : {}),
+  };
 }
 
-/** The bundles installed under `root` (installed.json), to register at start. */
-export async function installedMcpb(root: string): Promise<InstalledMcpb[]> {
-  try { return JSON.parse(await fs.readFile(path.join(root, 'installed.json'), 'utf8')) as InstalledMcpb[]; } catch { return []; }
+/**
+ * The bundles installed under `root` (installed.json), to register at start. Their
+ * sensitive values are decrypted here, into memory, with the server's key
+ * (HARNESS_SECRET_KEY, else <data>/secret.key; `keyDir` is the data folder).
+ */
+export async function installedMcpb(root: string, o: { keyDir?: string; env?: NodeJS.ProcessEnv } = {}): Promise<InstalledMcpb[]> {
+  let stored: StoredMcpb[];
+  try { stored = JSON.parse(await fs.readFile(path.join(root, 'installed.json'), 'utf8')) as StoredMcpb[]; } catch { return []; }
+  let key: Buffer | undefined;
+  const out: InstalledMcpb[] = [];
+  for (const { sealed, ...b } of stored) {
+    if (!sealed) { out.push(b); continue; }
+    try {
+      key ??= await serverKey(o.keyDir ?? path.dirname(root), o.env);
+      const secrets = JSON.parse(unseal(key, sealed)) as Record<string, string>;
+      out.push({ ...b, template: b.config, secrets, config: fillSecrets(b.config, secrets) });
+    } catch (e) {
+      out.push({ ...b, template: b.config, sealed, problem: `its secrets cannot be read: ${(e as Error).message}. Install it again.` });
+    }
+  }
+  return out;
 }
 
-export async function saveInstalled(root: string, list: InstalledMcpb[]): Promise<void> {
+/** Writes the list: sensitive values encrypted (AES-256-GCM, the server's key), never in plain text. */
+export async function saveInstalled(root: string, list: InstalledMcpb[], o: { keyDir?: string; env?: NodeJS.ProcessEnv } = {}): Promise<void> {
   await fs.mkdir(root, { recursive: true });
-  await fs.writeFile(path.join(root, 'installed.json'), JSON.stringify(list, null, 1), { mode: 0o600 });
+  let key: Buffer | undefined;
+  const stored: StoredMcpb[] = [];
+  for (const { secrets, template, problem: _p, sealed, ...b } of list) {
+    if (template && secrets && Object.keys(secrets).length) {
+      key ??= await serverKey(o.keyDir ?? path.dirname(root), o.env);
+      stored.push({ ...b, config: template, sealed: seal(key, JSON.stringify(secrets)) });
+    } else stored.push({ ...b, ...(template ? { config: template } : {}), ...(sealed ? { sealed } : {}) });
+  }
+  const file = path.join(root, 'installed.json');
+  const tmp = `${file}.${crypto.randomUUID().slice(0, 8)}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(stored, null, 1), { mode: 0o600 });
+  await fs.rename(tmp, file);
 }

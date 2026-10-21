@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { dockerAvailable, imageExists } from '../src/runtime/docker.ts';
 import { LocalHost } from '../src/runtime/host.ts';
-import { bwrapArgs, chooseSandbox, detectOsSandbox, seatbeltProfile, wrapCommand } from '../src/runtime/os-sandbox.ts';
+import { BWRAP_PROXY_PORT, bwrapArgs, chooseSandbox, detectOsSandbox, proxyEnv, sandboxProxyOrigin, seatbeltProfile, wrapCommand } from '../src/runtime/os-sandbox.ts';
 import { tempDir } from './helpers.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -53,6 +53,97 @@ test('Seatbelt: writes only to the workspace and temp folders, credential folder
   assert.deepEqual(w.args.slice(-3), ['bash', '-c', 'make']);
 });
 
+test('an allowlist in the OS sandboxes: bubblewrap keeps no network but a bridge to the proxy\'s socket; Seatbelt allows one connection, to the proxy', () => {
+  const a = bwrapArgs('npm ci', { root: '/w', network: 'allowlist', home: '/h', exists: () => false, proxy: { port: 41234, socket: '/tmp/hw-egress-abc/proxy.sock' }, node: '/usr/bin/node' });
+  const s = a.join(' ');
+  assert.match(s, /--unshare-net/, 'still no network of its own');
+  assert.match(s, /--bind \/tmp\/hw-egress-abc \/tmp\/\.harness-egress/, 'the socket folder bound in');
+  assert.ok(a.indexOf('/tmp/hw-egress-abc') > a.indexOf('/tmp'), 'after the /tmp mount, so it is not hidden by it');
+  const tail = a.slice(a.indexOf('--') + 1);
+  assert.equal(tail[0], '/usr/bin/node');
+  assert.match(tail[1]!, /egress-bridge\.mjs$/);
+  assert.deepEqual(tail.slice(2), ['/tmp/.harness-egress/proxy.sock', String(BWRAP_PROXY_PORT), 'bash', '-c', 'npm ci']);
+  assert.throws(() => bwrapArgs('x', { root: '/w', network: 'allowlist', home: '/h', exists: () => false }), /needs the egress proxy's socket/);
+
+  const p = seatbeltProfile({ root: '/w', network: 'allowlist', home: '/h', proxy: { port: 41234 } });
+  assert.match(p, /\(deny network\*\)/);
+  assert.match(p, /\(allow network-outbound \(remote ip "localhost:41234"\)\)/);
+  assert.doesNotMatch(p, /remote ip "localhost:\*"|remote ip "\*/, 'nothing else on localhost (the harness itself) or beyond');
+  assert.ok(p.indexOf('(deny network*)') < p.indexOf('localhost:41234'), 'the one exception comes after the deny');
+  assert.throws(() => seatbeltProfile({ root: '/w', network: 'allowlist', home: '/h' }), /needs the egress proxy's port/);
+
+  assert.equal(sandboxProxyOrigin('bwrap', { port: 41234 }), `http://127.0.0.1:${BWRAP_PROXY_PORT}`);
+  assert.equal(sandboxProxyOrigin('seatbelt', { port: 41234 }), 'http://127.0.0.1:41234');
+  const env = proxyEnv('http://127.0.0.1:41234');
+  assert.equal(env.HTTPS_PROXY, 'http://127.0.0.1:41234');
+  assert.equal(env.https_proxy, 'http://127.0.0.1:41234');
+  assert.equal(env.NODE_USE_ENV_PROXY, '1');
+});
+
+test('an allowlist OS sandbox points the credential variables at its local gateway', async () => {
+  const { gatewayEnv, sandboxCredentials } = await import('../src/runtime/credentials.ts');
+  const c = sandboxCredentials({ HARNESS_SANDBOX_CREDENTIALS: 'openai', OPENAI_API_KEY: 'k' }).credentials[0]!;
+  assert.deepEqual(gatewayEnv(c, 'http://127.0.0.1:3128'), { OPENAI_BASE_URL: 'http://127.0.0.1:3128/__cred/openai/v1', OPENAI_API_KEY: c.env.OPENAI_API_KEY });
+  // A local host without the OS sandbox has no proxy, and claims no credentials.
+  const ws = await tempDir();
+  assert.deepEqual(new LocalHost(ws).credentialEnv(), []);
+  assert.throws(() => new LocalHost(ws, { sandbox: 'bwrap', network: 'allowlist' }), /needs a policy file/);
+});
+
+test('bubblewrap for real: an allowlist reaches only allowed hosts, through the local proxy, and the gateway adds keys outside', { skip: !hasBwrap && 'not Linux with a working bubblewrap' }, async () => {
+  const http = await import('node:http');
+  const target = http.createServer((req, res) => res.end(`${req.method} ${req.url} ${req.headers.authorization ?? '-'}`));
+  await new Promise<void>((r) => target.listen(0, '0.0.0.0', r));
+  const tport = (target.address() as { port: number }).port;
+  // This machine's own address (not loopback: inside the sandbox 127.0.0.1 is its own, and NO_PROXY keeps it direct).
+  const ip = Object.values(os.networkInterfaces()).flat().find((i) => i && i.family === 'IPv4' && !i.internal)?.address;
+  assert.ok(ip, 'a network address to serve on');
+  const ws = await tempDir();
+  const policyFile = path.join(await tempDir(), 'allow.json');
+  await fs.writeFile(policyFile, JSON.stringify({ hosts: [] }));
+  const events: { host: string; allowed: boolean }[] = [];
+  const host = new LocalHost(ws, {
+    sandbox: 'bwrap', network: 'allowlist', policyFile, onEgress: (e) => events.push(e),
+    credentials: [{ name: 'svc', upstream: `http://127.0.0.1:${tport}/api`, headers: { authorization: 'Bearer real-bwrap-key' }, env: { SVC_URL: 'http://egress:3128/__cred/svc', SVC_KEY: 'placeholder' }, allow: [{ methods: ['GET'] }], writes: false }],
+  });
+  const f = (url: string, extra = '', method = 'GET') => `${extra} node -e "fetch('${url}',{method:'${method}'}).then(async r=>console.log('STATUS',r.status,(await r.text()).slice(0,200))).catch(e=>console.log('ERR',e.cause?.code||e.cause?.message||e.message))"`;
+  try {
+    assert.equal(host.networkPolicy, 'allowlist');
+    // What a client sees when it asks for a host that is not allowed (Node's env proxy tunnels even http://, so ask as it does).
+    const probe = `node -e "const s=require('net').connect(3128,'127.0.0.1',()=>s.write('CONNECT ${ip}:${tport} HTTP/1.1\\r\\nHost: x\\r\\n\\r\\n'));s.once('data',d=>{console.log('PROXY',d.toString().split('\\r\\n')[0]);s.destroy()})"`;
+    let r = await host.exec(probe, { timeoutMs: 30_000 });
+    assert.match(r.stdout, /PROXY HTTP\/1\.1 403 Forbidden/, r.stdout + r.stderr);
+    r = await host.exec(f(`http://${ip}:${tport}/x`), { timeoutMs: 30_000 });
+    assert.match(r.stdout, /ERR /, 'fetch through the proxy fails for a blocked host');
+    await new Promise((res) => setTimeout(res, 20));
+    await fs.writeFile(policyFile, JSON.stringify({ hosts: [`${ip}:${tport}`] }));
+    r = await host.exec(f(`http://${ip}:${tport}/x`), { timeoutMs: 30_000 });
+    assert.match(r.stdout, /STATUS 200 GET \/x -/, r.stdout + r.stderr);
+    // Around the proxy there is nothing: no route to the same address, and the sandbox's loopback is its own.
+    r = await host.exec(f(`http://${ip}:${tport}/x`, 'NODE_USE_ENV_PROXY=0'), { timeoutMs: 30_000 });
+    assert.match(r.stdout, /ERR (ENETUNREACH|EHOSTUNREACH|ECONNREFUSED)/, r.stdout + r.stderr);
+    r = await host.exec(f(`http://127.0.0.1:${tport}/x`), { timeoutMs: 30_000 });
+    assert.match(r.stdout, /ERR ECONNREFUSED/, r.stdout + r.stderr);
+    r = await host.exec('node -e "require(\'net\').connect(53,\'1.1.1.1\').on(\'error\',e=>console.log(e.code)).on(\'connect\',()=>console.log(\'OPEN\'))"', { timeoutMs: 30_000 });
+    assert.match(r.stdout, /ENETUNREACH|EACCES|ECONNREFUSED/, r.stdout);
+    // The credential gateway at the sandbox's proxy address: the key is added outside; its rules hold.
+    r = await host.exec(f("'+process.env.SVC_URL+'/v1/thing"), { timeoutMs: 30_000 });
+    assert.match(r.stdout, /STATUS 200 GET \/api\/v1\/thing Bearer real-bwrap-key/, r.stdout + r.stderr);
+    r = await host.exec(f("'+process.env.SVC_URL+'/v1/thing", '', 'POST'), { timeoutMs: 30_000 });
+    assert.match(r.stdout, /STATUS 403 Blocked by the harness: the svc credential does not allow POST/, r.stdout + r.stderr);
+    r = await host.exec('env; ls -A /tmp/.harness-egress', { timeoutMs: 30_000 });
+    assert.ok(!r.stdout.includes('real-bwrap-key'), 'the key is not in the sandbox');
+    assert.match(r.stdout, /SVC_URL=http:\/\/127\.0\.0\.1:3128\/__cred\/svc/);
+    assert.match(r.stdout, /HTTPS_PROXY=http:\/\/127\.0\.0\.1:3128/);
+    assert.match(r.stdout, /^proxy\.sock$/m);
+    assert.ok(events.some((e) => !e.allowed) && events.some((e) => e.allowed), JSON.stringify(events));
+    assert.deepEqual(host.credentialEnv(), [{ name: 'svc', vars: ['SVC_URL', 'SVC_KEY'], writes: false }]);
+  } finally {
+    await host.close();
+    target.close();
+  }
+});
+
 test('bubblewrap for real: what a sandboxed command can and cannot do', { skip: !hasBwrap && 'not Linux with a working bubblewrap' }, async () => {
   const ws = await tempDir();
   const home = os.homedir();
@@ -93,10 +184,13 @@ test('bubblewrap for real: a worktree commits on its branch; the repository\'s h
 test('bubblewrap verified inside a Linux container (from any host with Docker)', { skip: (process.platform === 'linux' || !hasDocker) && 'runs directly on Linux, or no Docker' }, () => {
   // The real-bubblewrap test above, run where bubblewrap exists. --privileged lets it make namespaces inside the container.
   const repo = path.resolve(here, '..');
-  const r = spawnSync('docker', ['run', '--rm', '--privileged', '-v', `${repo}:/repo:ro`, '-w', '/repo', 'harness-sandbox:latest', 'bash', '-c',
+  // A git worktree finds its packages in the main checkout's node_modules: mount that where Node looks last.
+  const modules = path.resolve(fileURLToPath(import.meta.resolve('undici')), '..', '..');
+  const extra = modules.startsWith(repo + path.sep) ? [] : ['-v', `${modules}:/node_modules:ro`];
+  const r = spawnSync('docker', ['run', '--rm', '--privileged', '-v', `${repo}:/repo:ro`, ...extra, '-w', '/repo', 'harness-sandbox:latest', 'bash', '-c',
     'apt-get update -qq >/dev/null && apt-get install -y -qq bubblewrap >/dev/null && node --test --disable-warning=ExperimentalWarning --test-name-pattern="for real" test/os-sandbox.test.ts'], { encoding: 'utf8', timeout: 300_000 });
   const out = r.stdout + r.stderr;
-  assert.match(out, /# pass 2\b/, out.slice(-3000));
+  assert.match(out, /# pass 3\b/, out.slice(-3000));
   assert.match(out, /# fail 0\b/, out.slice(-3000));
   assert.match(out, /# skipped 0\b/, 'it really ran there, not skipped');
 });

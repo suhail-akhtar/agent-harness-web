@@ -13,7 +13,7 @@ import type { McpManager, McpStatus } from '../mcp/manager.ts';
 import { deferredTools, MCP_INLINE_MAX, type McpEntry, mcpTool, qualifiedName } from '../mcp/tools.ts';
 import type { AgentDef } from '../plugins/api.ts';
 import type { CompanionHub } from '../runtime/companion.ts';
-import { defaultAllowHosts, DockerHost, dockerAvailable, dockerDefaults, imageExists, sessionImage } from '../runtime/docker.ts';
+import { cleanAllowEntry, defaultAllowHosts, DockerHost, dockerAvailable, dockerDefaults, imageExists, sessionImage } from '../runtime/docker.ts';
 import { chooseSandbox, detectOsSandbox, type LocalSandbox } from '../runtime/os-sandbox.ts';
 import type { ToolHost } from '../runtime/host.ts';
 import { LocalHost, run } from '../runtime/host.ts';
@@ -23,7 +23,7 @@ import type { FileStamp, Tool, ToolServices } from '../tools/types.ts';
 import { MemoryStore, projectKey } from '../memory/store.ts';
 import { stripInvisible } from './untrusted.ts';
 import { SourceStore } from '../research/sources.ts';
-import { publish, PublishError, shq } from '../git/publish.ts';
+import { cloneRepository, publish, PublishError, shq } from '../git/publish.ts';
 import { createWorktree, removeWorktree, type Worktree, WorktreeError, worktreeWritable } from '../git/worktree.ts';
 import type { SearchService } from '../research/search.ts';
 import { Agent, type AgentHooks, type PermissionAnswer, type TraceSpan } from './agent.ts';
@@ -226,8 +226,8 @@ export class Session {
       await fs.mkdir(s.workspace, { recursive: true });
       if (opts.gitUrl) {
         if (!/^https:\/\/[\w.-]+\/[\w./-]+$/.test(opts.gitUrl)) throw new Error('Only https git URLs are supported.');
-        const r = await run('git', ['clone', '--depth', '50', '--', opts.gitUrl, s.workspace], { timeoutMs: 300_000 });
-        if (r.code !== 0) throw new Error(`git clone failed: ${r.stderr.trim().slice(0, 500)}`);
+        // A private repository the operator allows is cloned with the publish token (in a header, never stored).
+        await cloneRepository(opts.gitUrl, s.workspace, deps.publish);
       }
     }
     await s.saveMeta();
@@ -396,9 +396,12 @@ export class Session {
       if (choice.kind === 'docker') this.host = docker();
       else if (choice.kind === 'off') this.host = new LocalHost(this.workspace);
       else {
-        // The OS sandboxes have no proxy: an allowlist is enforced as no network.
-        this.host = new LocalHost(this.workspace, { sandbox: choice.kind, network: r.network === 'full' ? 'full' : 'none', ...(r.worktree ? { writable: worktreeWritable(r.worktree), readable: [r.worktree.commonDir] } : {}) });
-        if (r.network === 'allowlist') this.emit({ kind: 'notice', level: 'warn', text: `${choice.kind} cannot enforce a host allowlist: commands have no network. Use the Docker sandbox for an allowlist.` });
+        // An allowlist: the egress proxy runs as a local process, the sandbox's only way out.
+        this.host = new LocalHost(this.workspace, {
+          sandbox: choice.kind, network: r.network, policyFile: this.policyFile(), credentials: this.deps.sandboxCredentials,
+          onEgress: (e) => { if (!e.allowed && !blocked.has(e.host)) { blocked.add(e.host); this.emit({ kind: 'notice', level: 'warn', text: `The sandbox tried to reach ${e.host}:${e.port}, which is not allowed (${e.why}). Allow it in the session's network settings if it should be.` }); } },
+          ...(r.worktree ? { writable: worktreeWritable(r.worktree), readable: [r.worktree.commonDir] } : {}),
+        });
       }
       if (want !== 'off') this.emit({ kind: 'notice', level: choice.kind === 'off' ? 'warn' : 'info', text: `Commands run in: ${choice.why}.` });
     }
@@ -419,7 +422,7 @@ export class Session {
   /** Changes the allowlist; the proxy applies it to the next connection, and the agent is told. */
   async setAllowHosts(hosts: string[]): Promise<string[]> {
     if (this.meta.runtime.network !== 'allowlist') throw new Error('This session\'s network is not an allowlist.');
-    const clean = [...new Set(hosts.map((h) => h.trim().toLowerCase()).filter((h) => /^(\*\.)?[a-z0-9.-]+(:\d{1,5})?$/.test(h)))].slice(0, 200);
+    const clean = [...new Set(hosts.map((h) => cleanAllowEntry(h)).filter((h): h is string => !!h))].slice(0, 200);
     await fs.mkdir(path.dirname(this.policyFile()), { recursive: true });
     const tmp = `${this.policyFile()}.${crypto.randomUUID().slice(0, 8)}.tmp`;
     await fs.writeFile(tmp, JSON.stringify({ hosts: clean }, null, 1));
@@ -450,7 +453,7 @@ export class Session {
       for (const e of r?.errors ?? []) console.error(`session ${this.meta.id}: ${e}`);
     }
     if (this.toolbox) await (await this.toolbox).closeProject().catch(() => {});
-    if (this.host instanceof DockerHost) await this.host.close();
+    if (this.host instanceof DockerHost || this.host instanceof LocalHost) await this.host.close();
     // Writes still queued (trace, meta) would land in a folder being removed: wait for them,
     // and retry (Windows refuses to remove a folder a file was just written into).
     clearTimeout(this.saveTimer);
@@ -535,7 +538,7 @@ export class Session {
         const host = await this.getHost();
         return publish({
           workspace: this.workspace, sessionGitUrl: this.meta.gitUrl, input, cfg, signal,
-          isolate: this.meta.runtime.kind === 'docker',
+          isolate: this.meta.runtime.kind === 'docker', ledger: path.join(this.dir, 'published-branches.json'),
           commit: async (message, author) => {
             const r = await host.exec(`git add -A && (git diff --cached --quiet || git -c user.name=${shq(author.name)} -c user.email=${shq(author.email)} -c commit.gpgsign=false commit -q -m ${shq(message)})`, { timeoutMs: 120_000, signal });
             if (r.code !== 0) throw new PublishError(`git commit failed: ${(r.stderr || r.stdout).trim().slice(0, 400)}`);

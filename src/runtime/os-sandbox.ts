@@ -1,7 +1,11 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import readline from 'node:readline';
+import { fileURLToPath } from 'node:url';
+import { proxyCredentialFile, type SandboxCredential } from './credentials.ts';
 
 // Commands that run on a real machine (a server folder, or the companion on
 // someone's computer) are contained by the operating system where it can:
@@ -14,6 +18,13 @@ import path from 'node:path';
 //            on Windows, which has no built-in sandbox for a command).
 // The sandbox is the boundary, so permission prompts for its commands go away -
 // as Claude Code's own sandbox does.
+//
+// A host allowlist for the OS sandboxes: the egress proxy the Docker sandboxes use
+// runs as a local process (one per session) on a loopback port and a unix socket.
+// bubblewrap still unshares the network, binds the socket's folder in and runs a
+// small bridge from the sandbox's own loopback to it; Seatbelt denies the network
+// except one connection, to the proxy's port. Commands get HTTP(S)_PROXY. A
+// command that ignores the variables has nowhere else to go.
 
 export type OsSandboxKind = 'bwrap' | 'seatbelt';
 export type LocalSandbox = OsSandboxKind | 'docker' | 'off';
@@ -58,9 +69,40 @@ export function chooseSandbox(want: LocalSandbox | 'auto' | undefined, have: { o
   return { kind: w, why: w };
 }
 
+/** Where an allowlist sandbox's proxy is: bubblewrap reaches it through a unix socket, Seatbelt on a loopback port. */
+export interface SandboxProxy {
+  /** The local egress proxy's loopback port (Seatbelt allows this one connection out). */
+  port: number;
+  /** Its unix socket on this machine (bubblewrap binds the folder in and bridges to it). */
+  socket?: string;
+}
+
+/** The port the bubblewrap bridge listens on, on the sandbox's own loopback. */
+export const BWRAP_PROXY_PORT = 3128;
+/** Where the proxy's socket folder appears inside a bubblewrap sandbox. */
+const BWRAP_SOCKET_DIR = '/tmp/.harness-egress';
+const BRIDGE_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'egress-bridge.mjs');
+const PROXY_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'egress-proxy.mjs');
+
+/** The proxy origin as a sandboxed command sees it. */
+export function sandboxProxyOrigin(kind: OsSandboxKind, proxy: SandboxProxy): string {
+  return `http://127.0.0.1:${kind === 'bwrap' ? BWRAP_PROXY_PORT : proxy.port}`;
+}
+
+/** Proxy variables for a command on an allowlist network (most tools read one of these). */
+export function proxyEnv(origin: string): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const k of ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']) env[k] = origin;
+  return { ...env, NO_PROXY: 'localhost,127.0.0.1', no_proxy: 'localhost,127.0.0.1', NODE_USE_ENV_PROXY: '1' };
+}
+
 export interface WrapOptions {
   root: string;
-  network: 'none' | 'full';
+  /** allowlist: no network but the egress proxy (`proxy`), which admits only the session's hosts. */
+  network: 'none' | 'full' | 'allowlist';
+  proxy?: SandboxProxy;
+  /** The Node that runs the bubblewrap bridge (default: this one). */
+  node?: string;
   home?: string;
   shell?: string;
   /** For tests: which of the secret paths exist (only existing ones can be masked). */
@@ -77,9 +119,11 @@ export function bwrapArgs(cmd: string, o: WrapOptions): string[] {
   // Only what exists can be masked: bubblewrap cannot create a mount point on the read-only root.
   const exists = o.exists ?? existsSync;
   const root = path.posix.resolve(o.root);
+  if (o.network === 'allowlist' && !o.proxy?.socket) throw new Error('an allowlist sandbox needs the egress proxy\'s socket');
   const args = [
     '--die-with-parent', '--new-session', '--unshare-pid', '--unshare-ipc', '--unshare-uts', '--unshare-cgroup-try',
-    ...(o.network === 'none' ? ['--unshare-net'] : []),
+    // An allowlist has no network of its own either: its one way out is the proxy's socket, bound in below.
+    ...(o.network !== 'full' ? ['--unshare-net'] : []),
     '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp',
   ];
   // Credentials in the home folder: an empty folder over each, /dev/null over each file.
@@ -88,7 +132,15 @@ export function bwrapArgs(cmd: string, o: WrapOptions): string[] {
   // The workspace last, so it is writable even under a masked or read-only parent.
   for (const r of o.readable ?? []) { const p = path.posix.resolve(r); args.push('--ro-bind', p, p); }
   for (const w of o.writable ?? []) { const p = path.posix.resolve(w); args.push('--bind', p, p); }
-  args.push('--bind', root, root, '--chdir', root, '--setenv', 'TMPDIR', '/tmp', '--', o.shell ?? 'bash', '-c', cmd);
+  args.push('--bind', root, root, '--chdir', root, '--setenv', 'TMPDIR', '/tmp');
+  if (o.network === 'allowlist') {
+    // The socket's folder (only the socket is in it) inside, and a bridge from the
+    // sandbox's loopback to it that then runs the command.
+    const sock = path.posix.join(BWRAP_SOCKET_DIR, path.posix.basename(o.proxy!.socket!));
+    args.push('--bind', path.posix.dirname(o.proxy!.socket!), BWRAP_SOCKET_DIR, '--', o.node ?? process.execPath, BRIDGE_SCRIPT, sock, String(BWRAP_PROXY_PORT), o.shell ?? 'bash', '-c', cmd);
+    return args;
+  }
+  args.push('--', o.shell ?? 'bash', '-c', cmd);
   return args;
 }
 
@@ -110,6 +162,14 @@ export function seatbeltProfile(o: WrapOptions): string {
   // The workspace itself stays readable even if it sits under one of those.
   lines.push(`(allow file-read* file-write* (subpath ${sbString(root)}))`);
   if (o.network === 'none') lines.push('(deny network*)', '(allow network* (local unix-socket))');
+  if (o.network === 'allowlist') {
+    // No network but one connection: to the egress proxy on this machine's loopback.
+    // (Seatbelt names loopback addresses only as "localhost".) Nothing else on
+    // localhost is reachable either, so the harness's own server is not.
+    const port = o.proxy?.port;
+    if (!port || !Number.isInteger(port)) throw new Error('an allowlist sandbox needs the egress proxy\'s port');
+    lines.push('(deny network*)', '(allow network* (local unix-socket))', `(allow network-outbound (remote ip "localhost:${port}"))`);
+  }
   return lines.join('\n');
 }
 
@@ -117,4 +177,51 @@ export function seatbeltProfile(o: WrapOptions): string {
 export function wrapCommand(kind: OsSandboxKind, cmd: string, o: WrapOptions): { file: string; args: string[] } {
   if (kind === 'bwrap') return { file: 'bwrap', args: bwrapArgs(cmd, o) };
   return { file: 'sandbox-exec', args: ['-p', seatbeltProfile(o), o.shell ?? 'bash', '-c', cmd] };
+}
+
+export interface LocalEgress extends SandboxProxy { close(): Promise<void> }
+
+/**
+ * Starts the egress proxy as a local process for one sandbox: on a loopback port
+ * and (for bubblewrap) a unix socket, reading `policyFile` live. The keys reach it
+ * on stdin, never a file a sandboxed command could read (the OS sandboxes see
+ * this machine's disk, read-only); its environment is only what it needs. It
+ * exits when this process does (it watches its stdin).
+ */
+export async function startLocalEgress(o: { policyFile: string; credentials?: SandboxCredential[]; socket?: boolean; onEvent?: (e: { kind: string; host?: string; port?: number; allowed?: boolean; why?: string; name?: string }) => void; upstream?: string }): Promise<LocalEgress> {
+  // A short path: a unix socket's is limited to about 100 bytes.
+  const dir = o.socket ? await fs.mkdtemp(path.join(process.platform === 'win32' ? os.tmpdir() : '/tmp', 'hw-egress-')) : undefined;
+  const socket = dir ? path.join(dir, 'proxy.sock') : undefined;
+  const env: NodeJS.ProcessEnv = {
+    PATH: process.env.PATH, ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+    ALLOW_FILE: o.policyFile, PORT: '0', HOST: '127.0.0.1', PARENT_WATCH: '1', CREDENTIALS_STDIN: '1',
+    // The bubblewrap bridge's address is the proxy too (a client may tunnel to it).
+    SELF: `127.0.0.1:${BWRAP_PROXY_PORT},localhost:${BWRAP_PROXY_PORT}`,
+    ...(socket ? { SOCKET: socket } : {}), ...(o.upstream ? { UPSTREAM_PROXY: o.upstream } : {}),
+  };
+  const child = spawn(process.execPath, [PROXY_SCRIPT], { env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  child.stdin.on('error', () => {});
+  child.stdin.write(`${proxyCredentialFile(o.credentials ?? [])}\n`);
+  let stderr = '';
+  child.stderr.on('data', (b: Buffer) => { stderr = (stderr + b.toString()).slice(-2000); });
+  const close = async () => {
+    child.stdin.end();
+    child.kill();
+    if (dir) await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+  };
+  const ready = await new Promise<{ port: number } | Error>((resolve) => {
+    const t = setTimeout(() => resolve(new Error(`the network proxy did not start: ${stderr.trim().slice(-300)}`)), 15_000);
+    child.on('exit', (code) => { clearTimeout(t); resolve(new Error(`the network proxy exited (${code}): ${stderr.trim().slice(-300)}`)); });
+    readline.createInterface({ input: child.stdout }).on('line', (line) => {
+      let e: { kind?: string; port?: number; host?: string; allowed?: boolean; why?: string; name?: string };
+      try { e = JSON.parse(line); } catch { return; }
+      if (e.kind === 'ready') { clearTimeout(t); resolve({ port: Number(e.port) }); return; }
+      if (e.kind) o.onEvent?.(e as { kind: string });
+    });
+  });
+  if (ready instanceof Error) { await close(); throw ready; }
+  // Not something that keeps the server running.
+  child.unref();
+  for (const s of [child.stdin, child.stdout, child.stderr] as unknown as { unref?: () => void }[]) s.unref?.();
+  return { port: ready.port, ...(socket ? { socket } : {}), close };
 }

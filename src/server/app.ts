@@ -13,7 +13,7 @@ import { BundleError, exportSession, importSession } from '../core/portable.ts';
 import { McpbError } from '../mcp/mcpb.ts';
 import { resolveIn, walk } from '../tools/paths.ts';
 import { type BrowserSessions, isSsoAdmin, NOBODY_ALLOWED, type OidcClient, OidcError, refusal } from './oidc.ts';
-import { RateLimiter, type Role, type SpendLedger, type UserStore } from './users.ts';
+import { type ConcurrencyLimits, concurrencyLimits, concurrencyRefusal, RateLimiter, type Role, type SpendLedger, type UserStore } from './users.ts';
 
 // The HTTP side: JSON API, an SSE stream per session, the built UI, and the
 // companion endpoints. Provider keys stay in this process.
@@ -43,6 +43,8 @@ export interface AppOptions {
   messageRateLimit?: number;
   /** Single sign-on (OpenID Connect) and the browser sessions it signs in; needs `users`. */
   sso?: { client: OidcClient; sessions: BrowserSessions };
+  /** Per-account limits on running turns and sandbox sessions (default: from the environment). */
+  limits?: ConcurrencyLimits;
 }
 
 export interface Principal { id?: string; name: string; role: Role; email?: string }
@@ -107,6 +109,14 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
   const { harness } = o;
   const limiter = new RateLimiter(o.rateLimit ?? 600);
   const messageLimiter = new RateLimiter(o.messageRateLimit ?? 30);
+  const limits = o.limits ?? concurrencyLimits();
+
+  /** Refuses (429) when the account already has as many running sessions, or sandboxes, as it may. */
+  function capped(what: 'running' | 'sandboxes', owner: string | undefined): void {
+    const counted = harness.sessions.list().map((m) => ({ owner: m.owner, busy: harness.sessions.statusOf(m.id) !== 'idle', sandbox: m.runtime.kind === 'docker' || (m.runtime.kind === 'local' && m.runtime.sandbox === 'docker') }));
+    const why = concurrencyRefusal(what, owner, counted, limits);
+    if (why) throw new HttpError(429, why);
+  }
 
   async function serveStatic(res: http.ServerResponse, pathname: string): Promise<boolean> {
     const rel = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
@@ -246,14 +256,21 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     if (p === '/api/companion/poll' || p === '/api/companion/result') {
       const token = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1] ?? '';
       const companions = harness.companions;
-      const id = token ? companions.authenticate(token) : undefined;
-      if (!id) throw new HttpError(401, 'unknown companion token');
+      const auth = token ? companions.authenticateToken(token) : undefined;
+      if (!auth) throw new HttpError(401, 'unknown or expired companion token');
+      const id = auth.id;
       const body = await readJson(req, p === '/api/companion/result' ? COMPANION_RESULT_LIMIT : 1_000_000);
       if (p === '/api/companion/poll') {
         const info = (body.info ?? {}) as { platform?: string; shell?: string; root?: string; version?: string; sandbox?: string; network?: string; trustProject?: boolean };
         const sandbox = ['bwrap', 'seatbelt', 'docker'].includes(String(info.sandbox)) ? String(info.sandbox) : 'off';
-        const job = await companions.poll(id, { platform: String(info.platform ?? 'unknown'), shell: String(info.shell ?? 'bash'), root: String(info.root ?? ''), version: info.version, sandbox, network: info.network === 'none' ? 'none' : 'full', trustProject: info.trustProject === true });
-        return job ? send(res, 200, job) : send(res, 204, '');
+        // Short-lived tokens: a fresh one rides on a poll's reply when it is due, and the companion
+        // keeps it. Due now: reply at once rather than after the long poll. Else it may fall due
+        // while the poll waits - unless the token was revoked meanwhile (checked again).
+        let fresh = await companions.renew(id, auth.previous);
+        const job = await companions.poll(id, { platform: String(info.platform ?? 'unknown'), shell: String(info.shell ?? 'bash'), root: String(info.root ?? ''), version: info.version, sandbox, network: info.network === 'none' ? 'none' : 'full', trustProject: info.trustProject === true }, fresh ? 0 : undefined);
+        if (!fresh) { const still = companions.authenticateToken(token); if (still?.id === id) fresh = await companions.renew(id, still.previous); }
+        const h: Record<string, string> = fresh ? { 'x-harness-companion-token': fresh } : {};
+        return job ? send(res, 200, job, h) : send(res, 204, '', h);
       }
       const ok = companions.complete(id, String(body.jobId), body.ok === true, body.value);
       return send(res, ok ? 200 : 404, { ok });
@@ -364,9 +381,12 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       const model = String(b.model ?? registry.listModels().find((m) => m.available)?.id ?? '');
       const kind = b.runtime === 'local' || b.runtime === 'companion' ? b.runtime : 'docker';
       const sandbox = kind === 'local' && ['auto', 'bwrap', 'seatbelt', 'docker', 'off'].includes(String(b.sandbox)) ? b.sandbox as SessionMeta['runtime']['sandbox'] : undefined;
-      // An allowlist needs the egress proxy: a Docker sandbox (including a server folder mounted into one).
+      // An allowlist needs the egress proxy: a Docker sandbox (including a server folder mounted into one), or a
+      // server folder in an OS sandbox (bubblewrap, Seatbelt), where the proxy runs as a local process.
       const proxied = kind === 'docker' || sandbox === 'docker';
-      const runtime: SessionMeta['runtime'] = { kind, network: b.network === 'full' ? 'full' : b.network === 'allowlist' && proxied ? 'allowlist' : 'none', ...(sandbox ? { sandbox } : {}) };
+      const fenced = proxied || (kind === 'local' && (sandbox ?? process.env.HARNESS_LOCAL_SANDBOX ?? 'off') !== 'off');
+      const runtime: SessionMeta['runtime'] = { kind, network: b.network === 'full' ? 'full' : b.network === 'allowlist' && fenced ? 'allowlist' : 'none', ...(sandbox ? { sandbox } : {}) };
+      if (proxied) capped('sandboxes', me.id);
       if (typeof b.setup === 'string' && b.setup.trim()) {
         if (!proxied) throw new HttpError(400, 'A setup script runs in a Docker sandbox: choose the Docker runtime (or the Docker sandbox for a server folder).');
         if (b.setup.length > 20_000) throw new HttpError(400, 'The setup script is limited to 20,000 characters.');
@@ -432,6 +452,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       // Into a sandbox by default; a server folder only for administrators, as for a new session.
       const kind = b.runtime === 'local' ? 'local' : 'docker';
       if (kind === 'local' && !admin) throw new HttpError(403, 'Server folders are for administrators.');
+      if (kind === 'docker') capped('sandboxes', me.id);
       if (kind === 'docker' && (!await dockerAvailable() || !await imageExists(dockerDefaults().image))) throw new HttpError(400, 'Docker (with the sandbox image) is not available on this server; an administrator can import into a server folder.');
       try {
         const s = await importSession(sessions, b.bundle, { owner: me.id, runtime: { kind, network: 'none' } });
@@ -523,6 +544,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       if (!rm[3] && method === 'GET') { try { return send(res, 200, await s.readRun(rm[2]!)); } catch { throw new HttpError(404, 'no such run'); } }
       if (rm[3] === 'resume' && method === 'POST') {
         limited(messageLimiter, me);
+        if (s.status === 'idle') capped('running', s.meta.owner);
         try { return send(res, 202, await s.resumeRun(rm[2]!)); } catch (e) { throw new HttpError(409, (e as Error).message); }
       }
     }
@@ -548,6 +570,8 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         if (typeof b.text !== 'string' || !b.text.trim()) throw new HttpError(400, 'text is required');
         const over = o.spend?.over(s.meta.owner);
         if (over) throw new HttpError(429, over);
+        // A message to a working session joins its turn; one to an idle session starts a turn.
+        if (s.status === 'idle') capped('running', s.meta.owner);
         return send(res, 202, { state: await s.send(b.text.slice(0, 200_000)) });
       }
       if (action === 'abort' && method === 'POST') { s.abort(); return send(res, 200, { ok: true }); }
@@ -584,8 +608,9 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         limited(messageLimiter, me);
         const over = o.spend?.over(s.meta.owner);
         if (over) throw new HttpError(429, over);
+        if (s.status === 'idle') capped('running', s.meta.owner);
         const b = await readJson(req);
-        const input = (b.input && typeof b.input === 'object' ? b.input : {}) as Record<string, unknown>;
+        const input =(b.input && typeof b.input === 'object' ? b.input : {}) as Record<string, unknown>;
         try {
           return send(res, 202, await s.startWorkflow(String(b.name ?? ''), Object.fromEntries(Object.entries(input).map(([k, v]) => [k, String(v)]))));
         } catch (e) { throw new HttpError(409, (e as Error).message); }
@@ -627,9 +652,11 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       const c = await companions.create(String(b.name ?? 'My computer'), me.id);
       return send(res, 201, c);
     }
-    const cm = /^\/api\/companions\/(cmp_[a-f0-9]+)$/.exec(p);
-    if (cm && method === 'DELETE') {
+    const cm = /^\/api\/companions\/(cmp_[a-f0-9]+)(\/token)?$/.exec(p);
+    if (cm && ((method === 'DELETE' && !cm[2]) || (method === 'POST' && cm[2]))) {
       if (!companions.list().some((c) => c.id === cm[1] && mayUse(me, c.owner))) throw new HttpError(404, 'no such companion');
+      // Removing revokes its token at once; POST .../token replaces it (the old one stops working now).
+      if (cm[2]) return send(res, 200, { id: cm[1], token: await companions.rotate(cm[1]!) });
       await companions.remove(cm[1]!);
       return send(res, 200, { ok: true });
     }

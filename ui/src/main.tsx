@@ -150,7 +150,7 @@ function NewSession({ config, onClose, onCreated, onCompanions }: { config: Conf
             <label class="field"><span>Network for commands</span>
               <select class="input" value={network} onChange={(e) => setNetwork((e.target as HTMLSelectElement).value as 'none' | 'allowlist' | 'full')}>
                 <option value="none">None</option>
-                {sandbox === 'docker' && <option value="allowlist">Package registries and GitHub only (editable)</option>}
+                <option value="allowlist">Package registries and GitHub only (editable)</option>
                 <option value="full">Full internet</option>
               </select>
             </label>

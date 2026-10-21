@@ -44,7 +44,21 @@ interface CompanionRecord {
   createdAt: number;
   /** The account that added it (absent: the single-user server). */
   owner?: string;
+  /** When the token stops working (it is replaced well before, while the companion polls). */
+  expiresAt?: number;
+  /** The token it replaced, still accepted until prevValidUntil (a reply with the new one may have been lost). */
+  prevTokenHash?: string;
+  prevValidUntil?: number;
 }
+
+// Companion tokens are short-lived: each lasts HARNESS_COMPANION_TOKEN_DAYS (30).
+// Once half of that has passed, a poll's reply carries a fresh token (the
+// x-harness-companion-token header) that the companion keeps and uses from then
+// on; the old one keeps working for a grace period (HARNESS_COMPANION_TOKEN_GRACE_MIN,
+// 60), in case the reply never arrived. A companion that stays offline past expiry
+// needs a new token from the web app; removing a companion revokes it at once.
+const DAY = 86_400_000;
+const envNum = (v: string | undefined, d: number) => (v !== undefined && v !== '' && Number(v) > 0 ? Number(v) : d);
 
 interface Live {
   lastSeen: number;
@@ -65,11 +79,17 @@ export class CompanionHub {
   private live = new Map<string, Live>();
 
   private chunkBytes: number;
+  private lifetimeMs: number;
+  private graceMs: number;
+  private now: () => number;
 
-  constructor(dataDir: string, opts: { mirrorChunkBytes?: number } = {}) {
+  constructor(dataDir: string, opts: { mirrorChunkBytes?: number; tokenDays?: number; graceMs?: number; now?: () => number } = {}) {
     this.file = path.join(dataDir, 'companions.json');
     this.dataDir = dataDir;
     this.chunkBytes = opts.mirrorChunkBytes ?? MIRROR_CHUNK;
+    this.lifetimeMs = (opts.tokenDays ?? envNum(process.env.HARNESS_COMPANION_TOKEN_DAYS, 30)) * DAY;
+    this.graceMs = opts.graceMs ?? envNum(process.env.HARNESS_COMPANION_TOKEN_GRACE_MIN, 60) * 60_000;
+    this.now = opts.now ?? Date.now;
   }
 
   /**
@@ -126,7 +146,8 @@ export class CompanionHub {
   async load(): Promise<void> {
     try {
       const list = JSON.parse(await fs.readFile(this.file, 'utf8')) as CompanionRecord[];
-      for (const r of list) this.records.set(r.id, r);
+      // Tokens from before expiry existed get a full lifetime from now (then rotate as usual).
+      for (const r of list) this.records.set(r.id, { ...r, expiresAt: r.expiresAt ?? this.now() + this.lifetimeMs });
     } catch { /* first run */ }
   }
 
@@ -138,9 +159,43 @@ export class CompanionHub {
   async create(name: string, owner?: string): Promise<{ id: string; token: string }> {
     const id = `cmp_${crypto.randomBytes(6).toString('hex')}`;
     const token = `hwc_${crypto.randomBytes(24).toString('base64url')}`;
-    this.records.set(id, { id, name: name.slice(0, 60) || 'My computer', tokenHash: hash(token), createdAt: Date.now(), ...(owner ? { owner } : {}) });
+    this.records.set(id, { id, name: name.slice(0, 60) || 'My computer', tokenHash: hash(token), createdAt: this.now(), expiresAt: this.now() + this.lifetimeMs, ...(owner ? { owner } : {}) });
     await this.save();
     return { id, token };
+  }
+
+  private static newToken(): string { return `hwc_${crypto.randomBytes(24).toString('base64url')}`; }
+
+  /**
+   * A fresh token for a companion that is polling, when one is due: half its
+   * token's lifetime has passed, or it still uses the token that was replaced
+   * (the reply with the new one was lost). The token it holds keeps working for
+   * the grace period. Undefined when none is due.
+   */
+  async renew(id: string, usedPrevious = false): Promise<string | undefined> {
+    const r = this.records.get(id);
+    if (!r) return undefined;
+    const now = this.now();
+    if (!usedPrevious && (r.expiresAt ?? 0) - now > this.lifetimeMs / 2) return undefined;
+    const token = CompanionHub.newToken();
+    // A companion still on the previous token never had the current one: that one is dropped, the previous keeps its grace.
+    if (!usedPrevious) { r.prevTokenHash = r.tokenHash; r.prevValidUntil = now + this.graceMs; }
+    r.tokenHash = hash(token);
+    r.expiresAt = now + this.lifetimeMs;
+    await this.save();
+    return token;
+  }
+
+  /** A new token now (the old one, and any previous one, stop working at once). */
+  async rotate(id: string): Promise<string> {
+    const r = this.records.get(id);
+    if (!r) throw new Error('no such companion');
+    const token = CompanionHub.newToken();
+    r.tokenHash = hash(token);
+    r.expiresAt = this.now() + this.lifetimeMs;
+    delete r.prevTokenHash; delete r.prevValidUntil;
+    await this.save();
+    return token;
   }
 
   async remove(id: string): Promise<void> {
@@ -154,14 +209,21 @@ export class CompanionHub {
   list() {
     return [...this.records.values()].map((r) => {
       const l = this.live.get(r.id);
-      return { id: r.id, name: r.name, owner: r.owner, online: !!l && Date.now() - l.lastSeen < 60_000, info: l?.info ?? null };
+      return { id: r.id, name: r.name, owner: r.owner, online: !!l && Date.now() - l.lastSeen < 60_000, info: l?.info ?? null, expiresAt: r.expiresAt };
     });
   }
 
   authenticate(token: string): string | undefined {
-    const h = hash(token);
+    return this.authenticateToken(token)?.id;
+  }
+
+  /** The companion a token belongs to, unexpired; `previous`: it is the replaced token, inside its grace period. */
+  authenticateToken(token: string): { id: string; previous: boolean } | undefined {
+    const h = Buffer.from(hash(token));
+    const now = this.now();
     for (const r of this.records.values()) {
-      if (crypto.timingSafeEqual(Buffer.from(r.tokenHash), Buffer.from(h))) return r.id;
+      if (crypto.timingSafeEqual(Buffer.from(r.tokenHash), h)) return (r.expiresAt ?? Infinity) > now ? { id: r.id, previous: false } : undefined;
+      if (r.prevTokenHash && crypto.timingSafeEqual(Buffer.from(r.prevTokenHash), h)) return (r.prevValidUntil ?? 0) > now ? { id: r.id, previous: true } : undefined;
     }
     return undefined;
   }

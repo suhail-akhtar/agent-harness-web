@@ -339,7 +339,7 @@ export class Agent {
     }
     const name = tool.spec.name;
 
-    const decision = decide(tool, input, { mode: this.hooks.getMode(), rules: this.hooks.rules(), sandboxed: this.cfg.host.sandboxed, tainted: this.tainted, network: this.cfg.host.networkPolicy, hostKind: this.cfg.host.kind });
+    const decision = decide(tool, input, { mode: this.hooks.getMode(), rules: this.hooks.rules(), sandboxed: this.cfg.host.sandboxed, tainted: this.tainted, network: this.cfg.host.networkPolicy === 'allowlist' && this.cfg.host.credentialEnv?.().some((c) => c.writes) ? 'full' : this.cfg.host.networkPolicy, hostKind: this.cfg.host.kind });
     if (decision.action === 'deny') return finish(`Permission denied: ${decision.reason}.`, true, undefined, undefined, name);
 
     // PreToolUse runs before anyone is asked: a hook that blocks spares the person a

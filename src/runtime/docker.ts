@@ -5,7 +5,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { worktreeWritable } from '../git/worktree.ts';
-import { proxyCredentialFile, type SandboxCredential } from './credentials.ts';
+import { credentialSummary, proxyCredentialFile, type SandboxCredential } from './credentials.ts';
 import type { ExecOptions, ExecResult, ToolHost } from './host.ts';
 import { run } from './host.ts';
 
@@ -27,6 +27,57 @@ export function defaultAllowHosts(): string[] {
   return env !== undefined ? env.split(',').map((h) => h.trim()).filter(Boolean) : DEFAULT_ALLOW_HOSTS;
 }
 
+/**
+ * One allowlist entry, normalized, or undefined if it is not one: "host",
+ * "host:port", "*.domain", optionally followed by the methods it allows
+ * ("example.com GET,HEAD", or "example.com read-only"). Methods hold only for
+ * plain http:// and credential routes; over HTTPS such a host is refused (see egress-proxy.mjs).
+ */
+export function cleanAllowEntry(entry: string): string | undefined {
+  const [host = '', methods, extra] = entry.trim().split(/\s+/);
+  const h = host.toLowerCase();
+  if (extra !== undefined || !/^(\*\.)?[a-z0-9.-]+(:\d{1,5})?$/.test(h)) return undefined;
+  if (methods === undefined) return h;
+  if (/^read-?only$/i.test(methods)) return `${h} GET,HEAD,OPTIONS`;
+  const m = methods.toUpperCase().split(',');
+  return m.every((x) => HTTP_METHODS.has(x)) ? `${h} ${[...new Set(m)].join(',')}` : undefined;
+}
+
+const HTTP_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE', 'TRACE']);
+
+/**
+ * A stronger isolation runtime for sandbox containers (HARNESS_SANDBOX_RUNTIME):
+ * gVisor's runsc, Kata Containers, any OCI runtime registered with Docker. The
+ * name is checked to be a runtime name before it reaches docker's command line.
+ */
+export function sandboxRuntime(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const r = env.HARNESS_SANDBOX_RUNTIME?.trim();
+  if (!r) return undefined;
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(r)) throw new Error(`HARNESS_SANDBOX_RUNTIME "${r}" is not a runtime name (letters, digits, . _ -), e.g. runsc for gVisor or kata-runtime for Kata Containers.`);
+  return r;
+}
+
+const runtimeChecks = new Map<string, Promise<void>>();
+/**
+ * Fails with a clear message when Docker does not have the runtime (asked once per
+ * name; a failure is asked again next time, after the operator has installed it).
+ */
+export function checkSandboxRuntime(name: string): Promise<void> {
+  let p = runtimeChecks.get(name);
+  if (!p) {
+    p = (async () => {
+      const r = await run('docker', ['info', '--format', '{{json .Runtimes}}'], { timeoutMs: 15_000 });
+      if (r.code !== 0) throw new Error(`cannot ask Docker which runtimes it has: ${(r.stderr || r.stdout).trim().slice(0, 300)}`);
+      let have: string[];
+      try { have = Object.keys(JSON.parse(r.stdout.trim()) ?? {}); } catch { throw new Error(`Docker did not list its runtimes: ${r.stdout.trim().slice(0, 200)}`); }
+      if (!have.includes(name)) throw new Error(`The sandbox runtime "${name}" (HARNESS_SANDBOX_RUNTIME) is not installed in Docker; it has: ${have.join(', ') || 'none'}. Install it (gVisor: runsc install, then restart Docker) or unset HARNESS_SANDBOX_RUNTIME.`);
+    })();
+    p.catch(() => runtimeChecks.delete(name));
+    runtimeChecks.set(name, p);
+  }
+  return p;
+}
+
 export interface EgressEvent { host: string; port: number; allowed: boolean; why?: string }
 
 // One container per session. The workspace is a host directory mounted at
@@ -41,6 +92,8 @@ export interface DockerOptions {
   network: 'none' | 'full' | 'allowlist';
   memory: string;
   cpus: string;
+  /** An OCI runtime for the sandbox (and setup) containers: runsc (gVisor), kata-runtime... Default: Docker's (runc). */
+  runtime?: string;
   /** allowlist: the JSON policy file ({ hosts: [...] }) the proxy reads; edit it to change the list live. */
   policyFile?: string;
   /** allowlist: called for every connection the proxy decides (blocked ones are worth telling the user). */
@@ -106,7 +159,16 @@ export const dockerDefaults = (): DockerOptions => ({
   network: 'none',
   memory: process.env.HARNESS_SANDBOX_MEMORY || '4g',
   cpus: process.env.HARNESS_SANDBOX_CPUS || '2',
+  ...(process.env.HARNESS_SANDBOX_RUNTIME?.trim() ? { runtime: process.env.HARNESS_SANDBOX_RUNTIME.trim() } : {}),
 });
+
+/** `--runtime <name>` for docker run, after checking the name and that Docker has it. */
+export async function runtimeArgs(runtime: string | undefined): Promise<string[]> {
+  if (!runtime) return [];
+  const name = sandboxRuntime({ HARNESS_SANDBOX_RUNTIME: runtime })!;
+  await checkSandboxRuntime(name);
+  return ['--runtime', name];
+}
 
 /**
  * The images a session may ask for: the default and the operator's
@@ -229,6 +291,8 @@ export class DockerHost implements ToolHost {
   }
 
   private async start(): Promise<void> {
+    // Before anything runs: a runtime the operator asked for that is not there is an error, never runc instead.
+    const rt = await runtimeArgs(this.opts.runtime);
     if (this.opts.network === 'allowlist') await this.startEgress();
     const state = await run('docker', ['inspect', '-f', '{{.State.Running}}', this.name], { timeoutMs: 15_000 });
     if (state.code === 0 && state.stdout.trim() === 'true') return;
@@ -239,7 +303,7 @@ export class DockerHost implements ToolHost {
     }
     const uid = process.getuid?.() ?? 1000;
     const gid = process.getgid?.() ?? 1000;
-    const image = this.opts.setup?.script.trim() ? await this.runSetup(uid, gid) : this.opts.image;
+    const image = this.opts.setup?.script.trim() ? await this.runSetup(uid, gid, rt) : this.opts.image;
     const allowlist = this.opts.network === 'allowlist';
     const proxyEnv = allowlist
       ? ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy'].flatMap((k) => ['-e', `${k}=http://egress:3128`]).concat(['-e', 'NO_PROXY=localhost,127.0.0.1,egress', '-e', 'no_proxy=localhost,127.0.0.1,egress', '-e', 'NODE_USE_ENV_PROXY=1'])
@@ -247,7 +311,7 @@ export class DockerHost implements ToolHost {
     // Base URLs to the credential gateway and placeholder keys; the real ones never enter.
     const credEnv = allowlist ? (this.opts.credentials ?? []).flatMap((c) => Object.entries(c.env).flatMap(([k, v]) => ['-e', `${k}=${v}`])) : [];
     const args = [
-      'run', '-d', '--init', '--name', this.name,
+      'run', '-d', '--init', '--name', this.name, ...rt,
       '--network', allowlist ? this.netName : this.opts.network === 'full' ? 'bridge' : 'none',
       ...proxyEnv, ...credEnv,
       '--memory', this.opts.memory, '--cpus', this.opts.cpus, '--pids-limit', '512',
@@ -270,7 +334,7 @@ export class DockerHost implements ToolHost {
    * works; the failure is in the log the agent can read). The log goes to
    * .harness/setup.log in the workspace.
    */
-  private async runSetup(uid: number, gid: number): Promise<string> {
+  private async runSetup(uid: number, gid: number, rt: string[] = []): Promise<string> {
     const script = this.opts.setup!.script;
     const tag = snapshotTag(this.opts.image, script);
     const log = (l: string) => this.opts.setup!.onLog?.(l);
@@ -285,7 +349,7 @@ export class DockerHost implements ToolHost {
     // is handed back to the session's user, whatever the script did.
     const wrapped = `set -o pipefail; (${script}\n) 2>&1; rc=$?; chown -R ${uid}:${gid} /workspace /tmp/home 2>/dev/null; exit $rc`;
     const r = await run('docker', [
-      'run', '--name', name, '--network', 'bridge', '--user', '0:0', '--security-opt', 'no-new-privileges',
+      'run', '--name', name, ...rt, '--network', 'bridge', '--user', '0:0', '--security-opt', 'no-new-privileges',
       '--memory', this.opts.memory, '--cpus', this.opts.cpus, '--pids-limit', '1024',
       '-e', 'HOME=/tmp/home', '-e', 'CI=1', '-e', 'DEBIAN_FRONTEND=noninteractive',
       '-v', `${this.root}:/workspace`, '-w', '/workspace', '--label', 'harness-web=1',
@@ -330,8 +394,8 @@ export class DockerHost implements ToolHost {
   /** For the agent's environment note: a setup script prepares this sandbox. */
   get hasSetup(): boolean { return !!this.opts.setup?.script.trim(); }
 
-  credentialEnv(): { name: string; vars: string[] }[] {
-    return this.opts.network === 'allowlist' ? (this.opts.credentials ?? []).map((c) => ({ name: c.name, vars: Object.keys(c.env) })) : [];
+  credentialEnv(): { name: string; vars: string[]; writes: boolean }[] {
+    return this.opts.network === 'allowlist' ? credentialSummary(this.opts.credentials ?? []) : [];
   }
 
   async allowedHosts(): Promise<string[]> {
