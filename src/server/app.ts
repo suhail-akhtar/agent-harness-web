@@ -58,6 +58,18 @@ export function send(res: http.ServerResponse, status: number, body: unknown, he
   res.end(data);
 }
 
+/** A body as text, of any type (a trigger takes JSON, a Slack form, or plain text). */
+async function readRaw(req: http.IncomingMessage, limit: number): Promise<string> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const c of req) {
+    size += (c as Buffer).length;
+    if (size > limit) throw new HttpError(413, 'body too large');
+    chunks.push(c as Buffer);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 async function readJson(req: http.IncomingMessage, limit = 1_000_000): Promise<Record<string, unknown>> {
   if (!(req.headers['content-type'] ?? '').includes('application/json')) throw new HttpError(415, 'expected application/json');
   const chunks: Buffer[] = [];
@@ -253,6 +265,24 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       } catch { throw new HttpError(404, 'companion not built; run npm run build'); }
     }
 
+    // ---- triggers: a secret URL starts a stored prompt (Slack, a GitHub webhook, a phone shortcut) ----
+    const trig = /^\/api\/triggers\/(hwt_[A-Za-z0-9_-]{20,64})$/.exec(p);
+    if (trig && method === 'POST') {
+      if (!harness.scheduler) throw new HttpError(404, 'not found');
+      const lim = limiter.take(`trigger:${req.socket.remoteAddress ?? ''}`);
+      if (!lim.ok) throw new HttpError(429, `Too many requests; try again in ${lim.retryAfterSec}s.`, { 'retry-after': String(lim.retryAfterSec) });
+      // JSON {"text": ...}, a Slack slash command's form (text=...), or plain text.
+      const raw = await readRaw(req, 64 * 1024);
+      const type = String(req.headers['content-type'] ?? '');
+      let text = '';
+      if (type.includes('json')) { try { const j = JSON.parse(raw) as { text?: unknown }; text = typeof j.text === 'string' ? j.text : raw; } catch { text = raw; } }
+      else if (type.includes('x-www-form-urlencoded')) text = new URLSearchParams(raw).get('text') ?? '';
+      else text = raw;
+      const r = await harness.scheduler.fireTrigger(trig[1]!, text);
+      if (!r) throw new HttpError(404, 'unknown or disabled trigger');
+      return send(res, 202, { ok: r.result === 'started', result: r.result, ...(r.sessionId ? { session: r.sessionId } : {}) });
+    }
+
     if (p === '/api/login' && method === 'POST') {
       const body = await readJson(req);
       const token = typeof body.token === 'string' ? body.token : '';
@@ -419,6 +449,12 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
           mode: MODES.includes(ns.mode as PermissionMode) ? ns.mode as PermissionMode : 'dontAsk' as PermissionMode,
         } : undefined;
         try {
+          if (b.trigger === true) {
+            // The URL is shown once: only its hash is kept.
+            const t = await scheduler.createTrigger({ owner: me.id, title: typeof b.title === 'string' ? b.title : undefined, prompt: String(b.prompt ?? ''), sessionId, newSession });
+            const base = process.env.HARNESS_PUBLIC_URL?.replace(/\/+$/, '') || `http://${req.headers.host ?? '127.0.0.1'}`;
+            return send(res, 201, { ...t.schedule, token: t.token, url: `${base}/api/triggers/${t.token}` });
+          }
           const s = await scheduler.create({ owner: me.id, title: typeof b.title === 'string' ? b.title : undefined, prompt: String(b.prompt ?? ''), cron: typeof b.cron === 'string' && b.cron ? b.cron : undefined, at: typeof b.at === 'string' ? Date.parse(b.at) : typeof b.at === 'number' ? b.at : undefined, inMinutes: typeof b.inMinutes === 'number' ? b.inMinutes : undefined, sessionId, newSession });
           return send(res, 201, s);
         } catch (e) { throw new HttpError(400, (e as Error).message); }

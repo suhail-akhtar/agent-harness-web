@@ -23,6 +23,8 @@ export interface Schedule {
   sessionId?: string;
   newSession?: { model: string; runtime: SessionMeta['runtime']; mode?: SessionMeta['mode'] };
   enabled: boolean;
+  /** A trigger: started by a secret URL instead of a time (its hash; the URL is shown once). */
+  triggerHash?: string;
   createdAt: number;
   nextRun?: number;
   lastRun?: number;
@@ -78,9 +80,15 @@ export function nextCron(expr: string, after: number): number | undefined {
 }
 
 export interface ScheduleRunner {
-  /** Sends the prompt; returns which session it went to, or why it did not run. */
-  run(s: Schedule): Promise<{ sessionId?: string; result: string }>;
+  /**
+   * Sends the prompt; returns which session it went to, or why it did not run.
+   * `outside` is text a trigger brought from outside (a chat message, a webhook):
+   * it goes with the prompt as data, and the session counts as having read untrusted content.
+   */
+  run(s: Schedule, outside?: string): Promise<{ sessionId?: string; result: string }>;
 }
+
+const hashToken = (t: string) => crypto.createHash('sha256').update(t).digest('hex');
 
 export class Scheduler {
   private file: string;
@@ -136,6 +144,41 @@ export class Scheduler {
     this.items.set(s.id, s);
     await this.save();
     return s;
+  }
+
+  /**
+   * A trigger: the same prompt and target as a schedule, started by POSTing to a secret
+   * URL (from Slack, a GitHub webhook, a phone shortcut). The token is returned once and
+   * stored only as a hash.
+   */
+  async createTrigger(spec: { owner?: string; title?: string; prompt: string; sessionId?: string; newSession?: Schedule['newSession'] }, now = Date.now()): Promise<{ schedule: Schedule; token: string }> {
+    const prompt = spec.prompt?.trim();
+    if (!prompt) throw new ScheduleError('a trigger needs a prompt');
+    if (!spec.sessionId && !spec.newSession) throw new ScheduleError('a trigger goes to a session, or makes a new one');
+    if (this.list(spec.owner).length >= MAX_PER_OWNER) throw new ScheduleError(`at most ${MAX_PER_OWNER} schedules and triggers per person`);
+    const token = `hwt_${crypto.randomBytes(24).toString('base64url')}`;
+    const s: Schedule = {
+      id: crypto.randomBytes(6).toString('hex'), owner: spec.owner, title: (spec.title?.trim() || prompt.split('\n')[0]!).slice(0, 80), prompt,
+      ...(spec.sessionId ? { sessionId: spec.sessionId } : { newSession: spec.newSession }),
+      enabled: true, triggerHash: hashToken(token), createdAt: now, runs: 0,
+    };
+    this.items.set(s.id, s);
+    await this.save();
+    return { schedule: s, token };
+  }
+
+  /** Fires the trigger a token belongs to, with what the caller sent; undefined for an unknown or disabled one. */
+  async fireTrigger(token: string, outside: string, now = Date.now()): Promise<{ sessionId?: string; result: string } | undefined> {
+    const h = hashToken(token);
+    const s = [...this.items.values()].find((x) => x.triggerHash && crypto.timingSafeEqual(Buffer.from(x.triggerHash), Buffer.from(h)));
+    if (!s || !s.enabled) return undefined;
+    let r: { sessionId?: string; result: string };
+    try { r = await this.runner.run(s, outside.slice(0, 20_000)); } catch (e) { r = { result: `failed: ${(e as Error).message}` }; }
+    s.lastRun = now;
+    s.lastResult = r.result;
+    s.runs++;
+    await this.save();
+    return r;
   }
 
   async remove(id: string): Promise<boolean> {

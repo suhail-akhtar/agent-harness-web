@@ -274,6 +274,13 @@ export class Session {
 
   // ---------- persistence ----------
 
+  /** Outside content is about to enter (a trigger's payload): the session counts as having read untrusted content. */
+  markUntrusted(): void {
+    this.meta.tainted = true;
+    this.agent?.markTainted();
+    this.saveMeta().catch(() => {});
+  }
+
   /**
    * For an imported session, before anything has run here: the conversation and
    * the state that goes with it. Untrusted content in it still counts as such.
