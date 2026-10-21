@@ -9,6 +9,7 @@ import type { Harness } from '../kernel/harness.ts';
 import { MemoryError, MemoryStore } from '../memory/store.ts';
 import { allowedImages, dockerAvailable, dockerDefaults, imageExists, sessionImage } from '../runtime/docker.ts';
 import { COMPANION_RESULT_LIMIT } from '../runtime/companion.ts';
+import { BundleError, exportSession, importSession } from '../core/portable.ts';
 import { resolveIn, walk } from '../tools/paths.ts';
 import { type BrowserSessions, isSsoAdmin, NOBODY_ALLOWED, type OidcClient, OidcError, refusal } from './oidc.ts';
 import { RateLimiter, type Role, type SpendLedger, type UserStore } from './users.ts';
@@ -86,6 +87,7 @@ export function safeEqual(a: string, b: string): boolean {
 
 const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.mjs': 'text/javascript; charset=utf-8', '.map': 'application/json' };
 const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
+const IMPORT_LIMIT = Number(process.env.HARNESS_IMPORT_MAX_MB ?? 80) * 1024 * 1024;
 const MODES: PermissionMode[] = ['default', 'acceptEdits', 'auto', 'dontAsk', 'plan', 'bypass'];
 
 export function createApp(o: AppOptions): { server: http.Server; handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> } {
@@ -373,6 +375,19 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       return send(res, 201, s.meta);
     }
 
+    // ---- import a session bundle (from another server, or the desktop app) ----
+    if (p === '/api/sessions/import' && method === 'POST') {
+      const b = await readJson(req, IMPORT_LIMIT);
+      // Into a sandbox by default; a server folder only for administrators, as for a new session.
+      const kind = b.runtime === 'local' ? 'local' : 'docker';
+      if (kind === 'local' && !admin) throw new HttpError(403, 'Server folders are for administrators.');
+      if (kind === 'docker' && (!await dockerAvailable() || !await imageExists(dockerDefaults().image))) throw new HttpError(400, 'Docker (with the sandbox image) is not available on this server; an administrator can import into a server folder.');
+      try {
+        const s = await importSession(sessions, b.bundle, { owner: me.id, runtime: { kind, network: 'none' } });
+        return send(res, 201, s.meta);
+      } catch (e) { throw e instanceof BundleError ? new HttpError(400, e.message) : e; }
+    }
+
     // ---- schedules: prompts that run later, each person's own ----
     if (p === '/api/schedules' || p.startsWith('/api/schedules/')) {
       const scheduler = harness.scheduler;
@@ -479,6 +494,12 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         return send(res, 202, { state: await s.send(b.text.slice(0, 200_000)) });
       }
       if (action === 'abort' && method === 'POST') { s.abort(); return send(res, 200, { ok: true }); }
+      if (action === 'export' && method === 'GET') {
+        // The session as one file, to continue it on another server or in the desktop app.
+        const bundle = await exportSession(s);
+        res.writeHead(200, { 'content-type': 'application/json', 'content-disposition': `attachment; filename="session-${s.meta.id}.json"`, 'cache-control': 'no-store' });
+        return void res.end(JSON.stringify(bundle));
+      }
       if (action === 'capabilities' && method === 'GET') return send(res, 200, await s.capabilities());
       if (action === 'checkpoints' && method === 'GET') return send(res, 200, await s.listCheckpoints());
       if (action === 'rewind' && method === 'POST') {

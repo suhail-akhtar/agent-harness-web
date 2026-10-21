@@ -75,6 +75,8 @@ export interface SessionMeta {
   gitUrl?: string;
   /** Untrusted content has entered the main agent's context (kept across restarts). */
   tainted?: boolean;
+  /** Imported from another server or app: where it came from (title and id there). */
+  importedFrom?: string;
 }
 
 export interface StoredEvent { seq: number; at: number; event: HarnessEvent }
@@ -266,6 +268,22 @@ export class Session {
   }
 
   // ---------- persistence ----------
+
+  /**
+   * For an imported session, before anything has run here: the conversation and
+   * the state that goes with it. Untrusted content in it still counts as such.
+   */
+  async adoptHistory(b: { history: Message[]; todos: Todo[]; tainted: boolean; contextStart: number; compactions: number; lastPromptTokens: number; from?: string }): Promise<void> {
+    if (this.history.length || this.agent) throw new Error('only a new session can take an imported conversation');
+    for (const m of b.history) await this.appendHistory(m);
+    this.meta.todos = b.todos;
+    this.meta.contextStart = Math.max(0, Math.min(b.contextStart, b.history.length));
+    this.meta.compactions = b.compactions;
+    this.meta.lastPromptTokens = b.lastPromptTokens;
+    if (b.tainted) this.meta.tainted = true;
+    this.meta.importedFrom = b.from;
+    await this.saveMeta();
+  }
 
   private async appendHistory(m: Message): Promise<void> {
     this.history.push(m);

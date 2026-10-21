@@ -36,6 +36,12 @@ test('evaluation: cases run per model and repeat; hidden checks judge them; the 
     assert.equal(r.modelCalls, 2);
   }
   const report = await fs.readFile(path.join(out, 'report.md'), 'utf8');
+  // The harness is named with the numbers: a score belongs to a model and a harness together.
+  assert.match(report, /- harness: harness-web \d/);
+  assert.match(report, /- commit: [0-9a-f]{7}/);
+  assert.match(report, /- settings: maxSteps \d+/);
+  assert.match(report, /- platform: \w+ \w+, Node \d/);
+  assert.equal(JSON.parse(await fs.readFile(path.join(out, 'results.json'), 'utf8')).harness.harness, report.match(/- harness: (.*)/)![1]);
   assert.match(report, /\| demo\/hello \| deepseek-flash \| 0\/2 \| 4\/6 \|/);
   assert.match(report, /hidden: shouts: exit 1/);
   await assert.rejects(fs.writeFile(path.join(dir, 'eval.json'), '{"name":"x","checks":[]}').then(() => loadCases(path.join(root, 'evals'))), /needs "workflow" or "prompt"/);

@@ -21,7 +21,9 @@ import path from 'node:path';
 import { runGates } from '../gates/gates.ts';
 import type { Harness } from '../kernel/harness.ts';
 import { createHarness } from '../kernel/harness.ts';
-import { LocalHost } from '../runtime/host.ts';
+import { LocalHost, run } from '../runtime/host.ts';
+import { defaultSettings } from '../core/settings.ts';
+import { fileURLToPath } from 'node:url';
 import type { ToolServices } from '../tools/types.ts';
 
 export interface EvalCheck { name: string; run?: string; gates?: string[]; files?: string[]; playtest?: string; timeoutSec?: number }
@@ -169,16 +171,39 @@ async function pool<T>(jobs: (() => Promise<T>)[], n: number): Promise<T[]> {
 export async function runEvals(opts: { cases: EvalCase[]; models: string[]; repeats: number; out: string; concurrency: number; plugins: string[]; shipped?: string[]; log?: (s: string) => void; setup?: (h: Harness) => void }): Promise<EvalRun[]> {
   const jobs = opts.cases.flatMap((c) => opts.models.flatMap((m) => Array.from({ length: opts.repeats }, (_, r) => () => runOne(c, m, r + 1, opts.out, opts))));
   const runs = await pool(jobs, opts.concurrency);
-  await fs.writeFile(path.join(opts.out, 'results.json'), JSON.stringify(runs, null, 1));
-  await fs.writeFile(path.join(opts.out, 'report.md'), report(runs));
+  const env = await harnessDisclosure(opts.plugins);
+  await fs.writeFile(path.join(opts.out, 'results.json'), JSON.stringify({ harness: env, runs }, null, 1));
+  await fs.writeFile(path.join(opts.out, 'report.md'), report(runs, env));
   return runs;
+}
+
+/**
+ * What produced these numbers. A score describes a model and a harness together
+ * (the same two models swap places by tens of points across harnesses), so every
+ * report names the harness: its version and commit, the settings that shape the
+ * loop, the plugins, and where it ran.
+ */
+export async function harnessDisclosure(plugins: string[] = []): Promise<Record<string, string>> {
+  const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8').catch(() => '{}')) as { version?: string };
+  const git = await run('git', ['-C', root, 'rev-parse', '--short', 'HEAD'], { timeoutMs: 10_000 });
+  const dirty = await run('git', ['-C', root, 'status', '--porcelain', '--untracked-files=no'], { timeoutMs: 10_000 });
+  const s = defaultSettings();
+  return {
+    harness: `harness-web ${pkg.version ?? '?'}`,
+    commit: git.code === 0 ? `${git.stdout.trim()}${dirty.stdout.trim() ? ' (with local changes)' : ''}` : 'unknown',
+    settings: `maxSteps ${s.maxSteps}, maxCostUsd ${s.maxCostUsd}, compactAt ${s.compactAt ?? 'model default'}, subagentModel ${s.subagentModel ?? 'session model'}, gatesOnStop ${s.gatesOnStop ? 'on' : 'off'}, subagent depth ${s.maxSubagentDepth}`,
+    plugins: plugins.map((p) => path.basename(p)).join(', ') || 'none',
+    platform: `${process.platform} ${process.arch}, Node ${process.versions.node}`,
+  };
 }
 
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 const median = (xs: number[]) => { const s = [...xs].sort((a, b) => a - b); return s.length ? (s.length % 2 ? s[(s.length - 1) / 2]! : (s[s.length / 2 - 1]! + s[s.length / 2]!) / 2) : 0; };
 
-export function report(runs: EvalRun[]): string {
+export function report(runs: EvalRun[], harness?: Record<string, string>): string {
   const lines = ['# Evaluation report', '', `${runs.length} run(s), ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC`, ''];
+  if (harness) lines.push('Harness (a score describes the model and the harness together):', '', ...Object.entries(harness).map(([k, v]) => `- ${k}: ${v}`), '');
   lines.push('| Case | Model | Pass | Checks passed | Median cost | Median time | Cache hit | Calls |', '|---|---|---|---|---|---|---|---|');
   const groups = new Map<string, EvalRun[]>();
   for (const r of runs) { const k = `${r.pack}/${r.case}|${r.model}`; groups.set(k, [...(groups.get(k) ?? []), r]); }
