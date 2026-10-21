@@ -6,7 +6,7 @@ import { firstLine } from './graph/runner.ts';
 import { createHarness } from './kernel/harness.ts';
 
 // Headless runs: one prompt, streamed to the terminal, for scripts and benchmarks.
-//   npm run cli -- --model deepseek-flash --runtime docker|local [--dir path] [--mode bypass] "task"
+//   npm run cli -- --model deepseek-flash --runtime docker|local [--image allowed-image] [--dir path] [--mode bypass] "task"
 //   npm run cli -- --data dir --session <id> --resume <runId>
 
 function arg(name: string, fallback?: string): string | undefined {
@@ -53,7 +53,7 @@ async function main() {
   const s = existing ? h.sessions.get(existing) : await h.sessions.create({
     model: arg('model', 'deepseek-flash')!,
     mode: (arg('mode', 'bypass') as 'bypass'),
-    runtime: { kind: runtime, network: arg('network') === 'full' ? 'full' : 'none', ...(dir ? { path: path.resolve(dir) } : {}) },
+    runtime: { kind: runtime, network: arg('network') === 'full' ? 'full' : 'none', ...(dir ? { path: path.resolve(dir) } : {}), ...(runtime === 'docker' && arg('image') ? { image: arg('image') } : {}) },
   });
   if (!s) { console.error(`no session ${existing} in ${dataDir}`); process.exit(2); }
   console.log(`session ${s.meta.id} workspace ${s.workspace}`);

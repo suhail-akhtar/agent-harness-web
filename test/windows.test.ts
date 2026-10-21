@@ -52,6 +52,40 @@ test('converters: found on the PATH, in the usual Windows and macOS install fold
   assert.match(missingMessage('soffice', 'darwin'), /LibreOffice.*brew install --cask libreoffice/);
 });
 
+test('blender and godot: found by override, on the PATH (godot4, Godot_v4.x downloads), and in the Windows, macOS and Linux install folders', () => {
+  const none = () => [];
+  // Windows: the installer's versioned folder, newest version first.
+  const bf = 'C:\\Program Files\\Blender Foundation';
+  const listBf = (d: string) => (d === bf ? ['Blender 3.6', 'Blender 4.10', 'Blender 4.2'] : []);
+  const b42 = `${bf}\\Blender 4.2\\blender.exe`;
+  const b410 = `${bf}\\Blender 4.10\\blender.exe`;
+  const winEnv = { ProgramFiles: 'C:\\Program Files', Path: 'C:\\Windows' };
+  assert.equal(findBinary('blender', { platform: 'win32', env: winEnv, exists: only(b42, `${bf}\\Blender 3.6\\blender.exe`), listDir: listBf }), b42);
+  assert.equal(findBinary('blender', { platform: 'win32', env: winEnv, exists: only(b42, b410), listDir: listBf }), b410);
+  assert.equal(findBinary('blender', { platform: 'win32', env: { HARNESS_BLENDER: 'D:\\b\\blender.exe' }, exists: () => false, listDir: none }), 'D:\\b\\blender.exe');
+  assert.equal(findBinary('blender', { platform: 'linux', env: { PATH: '/usr/bin' }, exists: only('/opt/blender/blender'), listDir: none }), '/opt/blender/blender');
+  assert.equal(findBinary('blender', { platform: 'linux', env: { PATH: '/usr/bin' }, exists: only('/usr/bin/blender', '/opt/blender/blender'), listDir: none }), '/usr/bin/blender');
+  assert.equal(findBinary('blender', { platform: 'darwin', env: { PATH: '/usr/bin' }, exists: only('/Applications/Blender.app/Contents/MacOS/Blender'), listDir: none }), '/Applications/Blender.app/Contents/MacOS/Blender');
+  assert.equal(findBinary('blender', { platform: 'win32', env: winEnv, exists: () => false, listDir: none }), null);
+
+  // Godot: its alias, its download names on the PATH (newest, console build first, never the templates archive).
+  assert.equal(findBinary('godot', { platform: 'linux', env: { PATH: '/usr/bin:/home/me/bin' }, exists: only('/home/me/bin/godot4'), listDir: none }), '/home/me/bin/godot4');
+  const tools = ['Godot_v4.6-stable_win64.exe', 'Godot_v4.7.2-stable_win64.exe', 'Godot_v4.7.2-stable_win64_console.exe', 'Godot_v4.7.2-stable_export_templates.tpz'];
+  assert.equal(findBinary('godot', { platform: 'win32', env: { Path: 'C:\\tools' }, exists: only(...tools.map((t) => `C:\\tools\\${t}`)), listDir: (d: string) => (d === 'C:\\tools' ? tools : []) }), 'C:\\tools\\Godot_v4.7.2-stable_win64_console.exe');
+  assert.equal(findBinary('godot', { platform: 'linux', env: { PATH: '/opt/bin' }, exists: only('/opt/bin/Godot_v4.7.2-stable_linux.x86_64'), listDir: (d: string) => (d === '/opt/bin' ? ['Godot_v4.7.2-stable_linux.x86_64', 'Godot_v4.7.2-stable_linux.x86_64.zip'] : []) }), '/opt/bin/Godot_v4.7.2-stable_linux.x86_64');
+  // winget keeps the portable download in its package folder.
+  const local = 'C:\\Users\\me\\AppData\\Local';
+  const pkgs = `${local}\\Microsoft\\WinGet\\Packages`;
+  const pkg = `${pkgs}\\GodotEngine.GodotEngine_Microsoft.Winget.Source_8wekyb3d8bbwe`;
+  const wingetGodot = `${pkg}\\Godot_v4.7.2-stable_win64.exe`;
+  assert.equal(findBinary('godot', { platform: 'win32', env: { LOCALAPPDATA: local, Path: '' }, exists: only(wingetGodot), listDir: (d: string) => (d === pkgs ? ['GodotEngine.GodotEngine_Microsoft.Winget.Source_8wekyb3d8bbwe'] : d === pkg ? ['Godot_v4.7.2-stable_win64.exe'] : []) }), wingetGodot);
+  assert.equal(findBinary('godot', { platform: 'darwin', env: { PATH: '/usr/bin' }, exists: only('/Applications/Godot.app/Contents/MacOS/Godot'), listDir: none }), '/Applications/Godot.app/Contents/MacOS/Godot');
+  assert.equal(findBinary('godot', { platform: 'linux', env: { PATH: '/usr/bin' }, exists: only('/usr/local/bin/godot'), listDir: none }), '/usr/local/bin/godot');
+  assert.equal(findBinary('godot', { platform: 'linux', env: { HARNESS_GODOT: '/x/godot' }, exists: () => false, listDir: none }), '/x/godot');
+  assert.match(missingMessage('blender', 'win32'), /Blender is not installed.*winget install BlenderFoundation.*HARNESS_BLENDER/);
+  assert.match(missingMessage('godot', 'linux'), /Godot 4 is not installed.*sandbox:image:3d.*HARNESS_GODOT/);
+});
+
 test('quality gates on a PowerShell host fail and say why, instead of all reading as "does not apply"', async () => {
   const h = await createHarness({ dataDir: await tempDir(), plugins: [path.join(here, '..', 'plugins', 'quality-gates')] });
   const host = new LocalHost(await tempDir());

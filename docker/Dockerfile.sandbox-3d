@@ -1,0 +1,50 @@
+# The sandbox plus Blender and Godot, for the games3d plugin's blender and
+# godot tools and its godot-project / blender-file gates. Build the normal
+# sandbox first, then this one:
+#   npm run sandbox:image && npm run sandbox:image:3d
+# Sessions use it when the operator allows it (HARNESS_SANDBOX_IMAGES) and the
+# session asks for it, or for every session with HARNESS_SANDBOX_IMAGE.
+ARG BASE=harness-sandbox:latest
+FROM ${BASE}
+
+# Official builds at pinned versions, checked against the vendors' published
+# checksums (download.blender.org/release/Blender4.2/blender-4.2.23.sha256 and
+# Godot's SHA512-SUMS.txt on its GitHub release).
+ARG BLENDER_SERIES=4.2
+ARG BLENDER_VERSION=4.2.23
+ARG BLENDER_SHA256=bea0eb3146be13eae6225409a117b215184f41b7f79e799f97cb3abb8f6dc404
+ARG GODOT_VERSION=4.7.2
+ARG GODOT_SHA512=9aa00f7a605200940bce3027a567b782f49bd8e940dd06ae9e987bd65aee1b1467edd56ed84fcdcbdd44354bf613bdbb4e5d2913e925850368e150c59ed54c65
+
+# The X and GL libraries Blender loads even in background mode, and for Godot
+# frames: Xvfb (a display in memory) and Mesa's llvmpipe (OpenGL on the CPU).
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends xz-utils unzip \
+      libx11-6 libxi6 libxxf86vm1 libxfixes3 libxrender1 libxext6 libxkbcommon0 libsm6 libice6 \
+      libgl1 libegl1 libglx-mesa0 libgl1-mesa-dri libglu1-mesa libfontconfig1 \
+      libxcursor1 libxinerama1 libxrandr2 libdbus-1-3 xvfb xauth; \
+    rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    cd /tmp; \
+    curl -fsSLo blender.tar.xz "https://download.blender.org/release/Blender${BLENDER_SERIES}/blender-${BLENDER_VERSION}-linux-x64.tar.xz"; \
+    echo "${BLENDER_SHA256}  blender.tar.xz" | sha256sum -c -; \
+    mkdir -p /opt/blender; \
+    tar -xJf blender.tar.xz -C /opt/blender --strip-components=1; \
+    rm blender.tar.xz; \
+    ln -s /opt/blender/blender /usr/local/bin/blender; \
+    blender --version
+
+RUN set -eux; \
+    cd /tmp; \
+    curl -fsSLo godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"; \
+    echo "${GODOT_SHA512}  godot.zip" | sha512sum -c -; \
+    unzip -q godot.zip; \
+    install -m 755 "Godot_v${GODOT_VERSION}-stable_linux.x86_64" /usr/local/bin/godot; \
+    rm -f godot.zip "Godot_v${GODOT_VERSION}-stable_linux.x86_64"; \
+    HOME=/tmp/godot-home godot --headless --version; \
+    rm -rf /tmp/godot-home
+
+# Software OpenGL: there is no GPU in the sandbox.
+ENV LIBGL_ALWAYS_SOFTWARE=1

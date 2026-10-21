@@ -47,6 +47,8 @@ function NewSession({ config, onClose, onCreated, onCompanions }: { config: Conf
   const [runtime, setRuntime] = useState<'docker' | 'local' | 'companion'>(defaultRuntime);
   const [network, setNetwork] = useState<'none' | 'allowlist' | 'full'>('allowlist');
   const [gitUrl, setGitUrl] = useState('');
+  const images = config.runtimes.dockerImages ?? [];
+  const [image, setImage] = useState(config.runtimes.dockerImage ?? images[0] ?? '');
   const [path, setPath] = useState(config.runtimes.localRoots[0] ?? '');
   const [companionId, setCompanionId] = useState(config.companions.find((c) => c.online)?.id ?? config.companions[0]?.id ?? '');
   const [mode, setMode] = useState<Mode>('default');
@@ -55,7 +57,7 @@ function NewSession({ config, onClose, onCreated, onCompanions }: { config: Conf
   const create = async () => {
     setBusy(true); setErr('');
     try {
-      const s = await api.post<SessionMeta>('/api/sessions', { model, effort: effort || undefined, runtime, network, gitUrl: gitUrl.trim() || undefined, path: runtime === 'local' ? path : undefined, companionId: runtime === 'companion' ? companionId : undefined, mode });
+      const s = await api.post<SessionMeta>('/api/sessions', { model, effort: effort || undefined, runtime, network, image: runtime === 'docker' && image && image !== config.runtimes.dockerImage ? image : undefined, gitUrl: gitUrl.trim() || undefined, path: runtime === 'local' ? path : undefined, companionId: runtime === 'companion' ? companionId : undefined, mode });
       onCreated(s.id);
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
@@ -85,6 +87,13 @@ function NewSession({ config, onClose, onCreated, onCompanions }: { config: Conf
         <>
           {!config.runtimes.dockerImage && <div class="notice notice-warn">The sandbox image is not built on the server yet (npm run sandbox:image).</div>}
           <p class="hint">An isolated container per session; commands run inside it, so they don't need approval.</p>
+          {images.length > 1 && (
+            <label class="field"><span>Sandbox image</span>
+              <select class="input" value={image} onChange={(e) => setImage((e.target as HTMLSelectElement).value)}>
+                {images.map((i) => <option key={i} value={i}>{i}</option>)}
+              </select>
+            </label>
+          )}
           <label class="field"><span>Clone a git repository (optional)</span><input class="input" placeholder="https://github.com/owner/repo" value={gitUrl} onInput={(e) => setGitUrl((e.target as HTMLInputElement).value)} /></label>
           <label class="field"><span>Network for commands</span>
             <select class="input" value={network} onChange={(e) => setNetwork((e.target as HTMLSelectElement).value as 'none' | 'allowlist' | 'full')}>

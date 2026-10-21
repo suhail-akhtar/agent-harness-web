@@ -13,7 +13,7 @@ import type { McpManager, McpStatus } from '../mcp/manager.ts';
 import { deferredTools, MCP_INLINE_MAX, type McpEntry, mcpTool } from '../mcp/tools.ts';
 import type { AgentDef } from '../plugins/api.ts';
 import type { CompanionHub } from '../runtime/companion.ts';
-import { defaultAllowHosts, DockerHost, dockerDefaults } from '../runtime/docker.ts';
+import { defaultAllowHosts, DockerHost, dockerDefaults, sessionImage } from '../runtime/docker.ts';
 import type { ToolHost } from '../runtime/host.ts';
 import { LocalHost, run } from '../runtime/host.ts';
 import { makeSkillTool, type Skill, skillsIn, skillsListing, workspaceSkills } from '../skills/skills.ts';
@@ -40,7 +40,8 @@ export interface SessionMeta {
   model: string;
   effort: Effort;
   mode: PermissionMode;
-  runtime: { kind: RuntimeKind; network: 'none' | 'full' | 'allowlist'; companionId?: string; path?: string };
+  /** image: a docker session's sandbox image, one the operator allows (default: HARNESS_SANDBOX_IMAGE). */
+  runtime: { kind: RuntimeKind; network: 'none' | 'full' | 'allowlist'; companionId?: string; path?: string; image?: string };
   createdAt: number;
   updatedAt: number;
   usage: Usage;
@@ -289,7 +290,8 @@ export class Session {
     if (r.kind === 'docker') {
       const blocked = new Set<string>();
       this.host = new DockerHost(this.meta.id, this.workspace, {
-        ...dockerDefaults(), network: r.network, policyFile: this.policyFile(),
+        // Checked again here: the allowlist may have changed since the session was made.
+        ...dockerDefaults(), image: sessionImage(r.image), network: r.network, policyFile: this.policyFile(),
         onEgress: (e) => {
           if (e.allowed || blocked.has(e.host)) return;
           blocked.add(e.host);

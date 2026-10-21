@@ -23,17 +23,29 @@ cd harness-web
 npm install
 npm run build                 # browser UI + companion script
 npm run sandbox:image         # the Docker sandbox image (once)
+npm run sandbox:image:3d      # optional: the same plus Blender 4.2 LTS and Godot 4.7 (games3d)
 export DEEPSEEK_API_KEY=... OPENAI_API_KEY=... ANTHROPIC_API_KEY=...   # or GW_ANTHROPIC_API_KEY
 npm start                     # http://127.0.0.1:4310, prints an access token
 ```
 
 Node 22.18+ is required; it runs the TypeScript directly. Docker is optional: without it, work on your own computer through the companion, or in a server folder.
 
+**The 3D sandbox image** (`docker/Dockerfile.sandbox-3d`, `harness-sandbox-3d:latest`, about 3.3 GB) is the sandbox plus the official Blender 4.2 LTS and Godot 4.7 builds (pinned, checked against the vendors' checksums), Xvfb and Mesa's CPU renderer, so the `blender` and `godot` tools work in a sandbox and Godot can draw frames for screenshots. Build `harness-sandbox:latest` first. Sessions use it when the operator allows it and the session picks it:
+
+```bash
+export HARNESS_SANDBOX_IMAGES=harness-sandbox-3d:latest   # images a session may choose, besides the default
+npm start                                                  # "Sandbox image" appears in the new-session form
+npm run cli -- --runtime docker --image harness-sandbox-3d:latest "Make a stool in Blender and export it"
+```
+
+Or make it every session's image with `HARNESS_SANDBOX_IMAGE=harness-sandbox-3d:latest`. A session can only name an image on that list; the browser and the agent cannot pick any other.
+
 **On Windows, natively.** The npm scripts are plain `node` launchers (`scripts/run.mjs`, `scripts/test.mjs`), so they work in PowerShell and cmd as they do in bash. What to install:
 
 - [Git for Windows](https://git-scm.com/download/win). The harness runs the model's commands in its **Git Bash**. It never uses `C:\Windows\System32\bash.exe`, which is WSL and sees the workspace at a different path. Without Git Bash, commands run in PowerShell; the model is told so, background commands are refused, and the quality gates fail with a message saying they need bash. Set `HARNESS_SHELL` to the path of a `bash.exe` to pick another one.
 - For `render` of Office files (`.pptx`, `.docx`, `.xlsx`): `winget install TheDocumentFoundation.LibreOffice`. PDF, HTML, SVG and Markdown need only Chromium: pages are drawn by pdf.js and Markdown is converted by `marked`, both installed by `npm ci`. poppler and pandoc are used only if those are missing. LibreOffice is found in its install folder even when it is not on the PATH; a missing one is reported with the command that installs it, and `HARNESS_SOFFICE` points at it directly. Linux's no-network namespace for LibreOffice (`unshare`) does not exist on Windows, so there it runs with the machine's network.
 - For `browser`: `npx playwright install chromium`, or set `HARNESS_CHROMIUM`.
+- For `blender` and `godot` in a server folder or the companion: Blender (`winget install BlenderFoundation.Blender.LTS.4.2`) is found in `C:\Program Files\Blender Foundation\Blender *`; Godot (`winget install GodotEngine.GodotEngine`, or the downloaded `Godot_v4.x-stable_win64.exe` in a folder on the PATH, `%LOCALAPPDATA%\Godot` or `Program Files\Godot`). `HARNESS_BLENDER` and `HARNESS_GODOT` point at them directly.
 
 These choices are covered by tests with simulated Windows paths (`test/windows.test.ts`), and the whole suite passes on native Windows 11 (first run 2026-10-21).
 
@@ -284,6 +296,16 @@ LibreOffice runs without network (`unshare -rn`) where the kernel allows, so a d
 
 `build-game`: design document and `playtest.json`, build (Canvas 2D or Three.js), `web-console` + `playtest` gates with a fix loop, an independent `playtester` that plays with real input and screenshots, a polish round with a scenario for every bug fixed, and a how-to-play README. `model-3d`: plan with real dimensions, the model as code (`model.js`) with a viewer that shows fixed views, look-and-fix, export `model.glb`, the `gltf-valid` gate and `model_info` (container checks, triangles per placed instance, size from composed node transforms), an independent `art-director`, revisions. The skills hold a complete template game and a Three.js viewer that were run in the headless browser before they shipped.
 
+Blender and Godot run where the session's commands run: in the 3D sandbox image (above), or on the machine of a server folder or companion. They are looked for there - inside the container through the session's own shell, on the server with the same finder as LibreOffice (the PATH, `godot4` and `Godot_v4.x` download names, the usual Windows, macOS and Linux install folders, `HARNESS_BLENDER` / `HARNESS_GODOT`) - and a missing one is reported with how to get it.
+
+| Tool / gate | What it does |
+|---|---|
+| `blender {script \| code, file?, args?, show?}` | `blender -b [file.blend] --factory-startup --python script -- args`, headless, paths inside the workspace only. A Python error fails the call (`--python-exit-code`). `show` returns images the script wrote, e.g. a Cycles-on-CPU or Workbench preview (Eevee needs a GPU). For procedural models exported to .glb, and for opening a .blend and exporting glb/fbx/obj. |
+| `godot {action, project?, scene?, frames?, args?, out?, preset?, output?}` | `check`: import, then load every script and scene (parse errors, missing resources). `run`: N frames headless at a fixed 60 per second, every script error and `push_error` reported with its `res://` line; `args` reach the game (`--selftest`). `screenshot`: frames drawn with OpenGL (on Xvfb and llvmpipe in the sandbox) and the last saved as a PNG the agent sees. `export`: with a preset; without export templates it says they are missing. |
+| gates | `blender-file` (every .blend opens headless), `godot-project` (each project.godot imports, loads and runs 30 frames with no script errors). When the program is not installed in that runtime they report `not checked` as a warning, never a failure. |
+
+Skills: `blender-scripting` (bpy: bmesh and modifiers, materials, units and axes for glTF, FBX/OBJ export, previews without a GPU) and `godot-essentials` (a Godot 4 project as text files, a scene built in code, input actions, a self-test the `run` action drives). Their recipes were run in the 3D image: the Blender stool exported to .glb, imported by the Godot template and drawn in a screenshot. `3d-artist` uses Blender when asked for it, `game-engineer` builds a Godot project when asked for one; the `build-game` and `model-3d` workflows stay browser-based.
+
 ## Permissions
 
 Enforced in code on every call. Order: deny rules, then ask rules, then allow rules, then the mode's default.
@@ -453,6 +475,8 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 | `HARNESS_SHELL` | auto | Windows: `powershell`, or the path of a `bash.exe` (default: Git Bash, else PowerShell). |
 | `HARNESS_SHELL_WRITE_GUARD` | on | `off` allows shell file writes. |
 | `HARNESS_SANDBOX_IMAGE`, `_MEMORY`, `_CPUS`, `_IDLE_MS` | `harness-sandbox:latest`, `4g`, `2`, 30 min | |
+| `HARNESS_SANDBOX_IMAGES` | | Other images a sandbox session may choose (comma-separated), e.g. `harness-sandbox-3d:latest`. |
+| `HARNESS_BLENDER`, `HARNESS_GODOT` | auto | Blender and Godot for server-folder sessions (searched on the PATH and in the usual install folders). |
 | `HARNESS_PRICING_JSON` | | Override prices per model. |
 
 ## Honest limits
@@ -462,15 +486,17 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 - **Not built yet:**
   - checkpoints and project MCP servers on companion sessions;
   - credential injection at the sandbox's network proxy (it allows or blocks hosts; it does not add secrets to requests);
-  - Blender or Godot integration (3D is Three.js in the headless browser; neither binary was available to test);
+  - Godot export templates in the 3D image (about 1 GB for every platform), so `godot export` works only where they are installed; Godot screenshots on companion sessions (the frames are read on the server);
+  - workflows for Blender or Godot (`build-game` and `model-3d` build for the browser; Blender and Godot are used from a session or by the `3d-artist` and `game-engineer` agents);
   - single sign-on (accounts use tokens).
 - **Limits of what was built:**
   - Plugin code runs in the server process. Declared permissions are enforced on the channels the harness hands out, not on code that ignores them; signing is the control for that.
   - Scripts (`run_script`) have no network namespace outside Linux, so there they ask before running.
   - A plugin's `api.fetch` and `web_fetch` check a host's addresses before connecting, then connect by name; a DNS server that changes its answer in between (rebinding) is not stopped. Pinning the checked address needs an HTTP client with a custom lookup, which Node's built-in fetch does not take.
   - Companion mirrors (the server's copy for render and browser) leave out `.env`, key files, names with `\` or `:`, and files over 20 MB.
-  - The allowlist network needs Linux Docker networking; it was tested on Linux, not on Docker Desktop.
+  - The allowlist network was tested on Linux and, since 2026-10-21, on Docker Desktop for Windows (where the host is `host.docker.internal`); not on Docker Desktop for macOS.
 - **Not tested here:**
-  - the full sandbox image (this environment's proxy blocks Debian packages, so tests used a plain Node image);
+  - the full sandbox image on Linux (it was first built on 2026-10-21, on Docker Desktop for Windows, together with the 3D image; earlier tests used a plain Node image because that environment's proxy blocked Debian packages);
+  - Godot on Windows or macOS outside the sandbox (only discovery is tested there, with simulated paths); Blender ran natively on Windows 11 and in the 3D image;
   - a real Windows machine (the Windows choices are tested with simulated paths, and the Docker setup ran 80/80 on Windows before the review fixes);
   - prices, which come from the providers' pages on 2026-10-19 and can change.

@@ -51,6 +51,24 @@ export const dockerDefaults = (): DockerOptions => ({
   cpus: process.env.HARNESS_SANDBOX_CPUS || '2',
 });
 
+/**
+ * The images a session may ask for: the default and the operator's
+ * HARNESS_SANDBOX_IMAGES (comma-separated, e.g. harness-sandbox-3d:latest for
+ * Blender and Godot). Never an image named by the agent or the browser alone.
+ */
+export function allowedImages(env: NodeJS.ProcessEnv = process.env): string[] {
+  const def = env.HARNESS_SANDBOX_IMAGE || 'harness-sandbox:latest';
+  return [...new Set([def, ...(env.HARNESS_SANDBOX_IMAGES ?? '').split(',').map((s) => s.trim()).filter(Boolean)])];
+}
+
+/** The image for a session that asked for `image` (undefined: the default); throws if it is not allowed. */
+export function sessionImage(image: string | undefined, env: NodeJS.ProcessEnv = process.env): string {
+  const allowed = allowedImages(env);
+  if (!image) return allowed[0]!;
+  if (!allowed.includes(image)) throw new Error(`Sandbox image ${image} is not allowed on this server (allowed: ${allowed.join(', ')}; the operator adds images with HARNESS_SANDBOX_IMAGES).`);
+  return image;
+}
+
 export async function dockerAvailable(): Promise<boolean> {
   const r = await run('docker', ['info', '--format', '{{.ServerVersion}}'], { timeoutMs: 10_000 });
   return r.code === 0;

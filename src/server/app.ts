@@ -7,7 +7,7 @@ import type { Session, SessionMeta } from '../core/session.ts';
 import type { PermissionMode } from '../core/types.ts';
 import type { Harness } from '../kernel/harness.ts';
 import { MemoryError, MemoryStore } from '../memory/store.ts';
-import { dockerAvailable, dockerDefaults, imageExists } from '../runtime/docker.ts';
+import { allowedImages, dockerAvailable, dockerDefaults, imageExists, sessionImage } from '../runtime/docker.ts';
 import { COMPANION_RESULT_LIMIT } from '../runtime/companion.ts';
 import { resolveIn, walk } from '../tools/paths.ts';
 import { RateLimiter, type Role, type SpendLedger, type UserStore } from './users.ts';
@@ -216,7 +216,12 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       const image = dockerDefaults().image;
       return send(res, 200, {
         models: registry.listModels().map((m) => ({ id: m.id, label: m.label, provider: m.provider, contextWindow: m.contextWindow, compactAt: m.compactAt, effort: m.effort, efforts: m.efforts, available: m.available, vision: m.vision, notes: m.notes })),
-        runtimes: { docker, dockerImage: docker ? (await imageExists(image) ? image : null) : null, local: admin && o.localRoots.length > 0, localRoots: admin ? o.localRoots : [] },
+        runtimes: {
+          docker, dockerImage: docker ? (await imageExists(image) ? image : null) : null,
+          // The images a new sandbox session may pick (allowed by the operator and built).
+          dockerImages: docker ? (await Promise.all(allowedImages().map(async (i) => (await imageExists(i) ? i : null)))).filter(Boolean) : [],
+          local: admin && o.localRoots.length > 0, localRoots: admin ? o.localRoots : [],
+        },
         companions: companions.list().filter((c) => mayUse(me, c.owner)),
         plugins: registry.plugins.map((x) => ({ name: x.name, version: x.version, description: x.description, contributes: x.contributes, signature: x.signature, permissions: x.permissions })),
         search: harness.search ?? null,
@@ -241,7 +246,10 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       const runtime: SessionMeta['runtime'] = { kind, network: b.network === 'full' ? 'full' : b.network === 'allowlist' && kind === 'docker' ? 'allowlist' : 'none' };
       if (kind === 'docker') {
         if (!await dockerAvailable()) throw new HttpError(400, 'Docker is not available on the server. Choose a companion or local workspace.');
-        if (!await imageExists(dockerDefaults().image)) throw new HttpError(400, `Sandbox image ${dockerDefaults().image} is missing. Build it with: npm run sandbox:image`);
+        let image: string;
+        try { image = sessionImage(typeof b.image === 'string' && b.image ? b.image : undefined); } catch (e) { throw new HttpError(400, (e as Error).message); }
+        if (!await imageExists(image)) throw new HttpError(400, `Sandbox image ${image} is missing. Build it with: ${/3d/.test(image) ? 'npm run sandbox:image:3d' : 'npm run sandbox:image'}`);
+        if (image !== dockerDefaults().image) runtime.image = image;
       }
       if (kind === 'local') {
         // Commands in a server folder run on the server itself, unsandboxed.
