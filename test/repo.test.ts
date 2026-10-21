@@ -7,8 +7,9 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 async function files(dir: string, exts: string[], out: string[] = []): Promise<string[]> {
+  // (.claude: the assistant's own worktrees and settings, not part of the repository)
   for (const e of await fs.readdir(dir, { withFileTypes: true })) {
-    if (['node_modules', '.git', 'dist', '.harness-data', '.work'].includes(e.name)) continue;
+    if (['node_modules', '.git', 'dist', '.harness-data', '.work', '.claude'].includes(e.name)) continue;
     const p = path.join(dir, e.name);
     if (e.isDirectory()) await files(p, exts, out);
     else if (exts.includes(path.extname(e.name))) out.push(p);
