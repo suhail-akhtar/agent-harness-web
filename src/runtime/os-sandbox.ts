@@ -65,6 +65,10 @@ export interface WrapOptions {
   shell?: string;
   /** For tests: which of the secret paths exist (only existing ones can be masked). */
   exists?: (p: string) => boolean;
+  /** More folders commands may write (a worktree's git data in the repository's .git). */
+  writable?: string[];
+  /** Folders that must be visible read-only even under /tmp (a worktree's repository .git), bound before `writable`. */
+  readable?: string[];
 }
 
 /** bubblewrap: the command line that runs `cmd` contained. */
@@ -82,6 +86,8 @@ export function bwrapArgs(cmd: string, o: WrapOptions): string[] {
   for (const d of SECRET_DIRS) { const p = path.posix.join(home, d); if (exists(p) && !root.startsWith(p)) args.push('--tmpfs', p); }
   for (const f of SECRET_FILES) { const p = path.posix.join(home, f); if (exists(p)) args.push('--ro-bind', '/dev/null', p); }
   // The workspace last, so it is writable even under a masked or read-only parent.
+  for (const r of o.readable ?? []) { const p = path.posix.resolve(r); args.push('--ro-bind', p, p); }
+  for (const w of o.writable ?? []) { const p = path.posix.resolve(w); args.push('--bind', p, p); }
   args.push('--bind', root, root, '--chdir', root, '--setenv', 'TMPDIR', '/tmp', '--', o.shell ?? 'bash', '-c', cmd);
   return args;
 }
@@ -93,7 +99,7 @@ export function seatbeltProfile(o: WrapOptions): string {
   const home = o.home ?? os.homedir();
   const root = path.posix.resolve(o.root);
   // macOS keeps temp folders under /private (var/folders for per-user temp).
-  const writable = [root, '/private/tmp', '/private/var/folders', '/dev'];
+  const writable = [root, '/private/tmp', '/private/var/folders', '/dev', ...(o.writable ?? []).map((w) => path.posix.resolve(w))];
   const lines = [
     '(version 1)',
     '(allow default)',

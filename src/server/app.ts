@@ -367,7 +367,9 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         gitUrl: typeof b.gitUrl === 'string' && b.gitUrl ? b.gitUrl : undefined,
         owner: me.id,
         allowHosts: Array.isArray(b.allowHosts) ? b.allowHosts.map(String) : undefined,
-      });
+        // A server folder that is a git repository can get its own worktree and branch (parallel sessions on one repository).
+        worktree: kind === 'local' && !!runtime.path && b.worktree === true,
+      }).catch((e: Error) => { throw e.name === 'WorktreeError' || e.constructor.name === 'WorktreeError' ? new HttpError(400, e.message) : e; });
       return send(res, 201, s.meta);
     }
 

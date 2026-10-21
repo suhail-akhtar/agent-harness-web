@@ -24,6 +24,7 @@ import { MemoryStore, projectKey } from '../memory/store.ts';
 import { stripInvisible } from './untrusted.ts';
 import { SourceStore } from '../research/sources.ts';
 import { publish, PublishError, shq } from '../git/publish.ts';
+import { createWorktree, removeWorktree, type Worktree, WorktreeError, worktreeWritable } from '../git/worktree.ts';
 import type { SearchService } from '../research/search.ts';
 import { Agent, type AgentHooks, type PermissionAnswer, type TraceSpan } from './agent.ts';
 import { Checkpoints } from './checkpoints.ts';
@@ -49,7 +50,7 @@ export interface SessionMeta {
    * or 'off'. Default: HARNESS_LOCAL_SANDBOX, else off. `image`: a Docker sandbox's
    * image, one the operator allows (default: HARNESS_SANDBOX_IMAGE).
    */
-  runtime: { kind: RuntimeKind; network: 'none' | 'full' | 'allowlist'; companionId?: string; path?: string; sandbox?: LocalSandbox | 'auto'; image?: string; /** Docker: a setup script run as root with network before the session starts (snapshot-cached). */ setup?: string };
+  runtime: { kind: RuntimeKind; network: 'none' | 'full' | 'allowlist'; companionId?: string; path?: string; sandbox?: LocalSandbox | 'auto'; image?: string; /** Docker: a setup script run as root with network before the session starts (snapshot-cached). */ setup?: string; /** local: the session works in its own git worktree of `path`, on its own branch. */ worktree?: Worktree };
   createdAt: number;
   updatedAt: number;
   usage: Usage;
@@ -163,12 +164,18 @@ export class Session {
   }
 
   get workspace(): string {
-    return this.meta.runtime.kind === 'local' && this.meta.runtime.path ? this.meta.runtime.path : path.join(this.deps.dataDir, 'workspaces', this.meta.id);
+    const r = this.meta.runtime;
+    if (r.worktree) return r.worktree.dir;
+    return r.kind === 'local' && r.path ? r.path : path.join(this.deps.dataDir, 'workspaces', this.meta.id);
   }
 
-  static async create(deps: SessionDeps, opts: { title?: string; model: string; effort?: Effort; mode?: PermissionMode; runtime: SessionMeta['runtime']; gitUrl?: string; owner?: string; allowHosts?: string[] }): Promise<Session> {
+  static async create(deps: SessionDeps, opts: { title?: string; model: string; effort?: Effort; mode?: PermissionMode; runtime: SessionMeta['runtime']; gitUrl?: string; owner?: string; allowHosts?: string[]; /** local with a path: work in a new git worktree of it. */ worktree?: boolean }): Promise<Session> {
     const model = deps.registry.model(opts.model);
     const id = crypto.randomBytes(8).toString('hex');
+    if (opts.worktree) {
+      if (opts.runtime.kind !== 'local' || !opts.runtime.path) throw new WorktreeError('A worktree session needs a server folder that is a git repository.');
+      opts.runtime = { ...opts.runtime, worktree: await createWorktree(opts.runtime.path, path.join(deps.dataDir, 'worktrees', id), opts.title ?? 'session') };
+    }
     const now = Date.now();
     const s = new Session({
       id, title: opts.title?.slice(0, 80) || 'New session', model: model.id, effort: opts.effort && model.efforts.includes(opts.effort) ? opts.effort : model.effort,
@@ -316,6 +323,7 @@ export class Session {
     const image = sessionImage(r.image);
     const docker = () => new DockerHost(this.meta.id, this.workspace, {
       ...dockerDefaults(), image, network: r.network, policyFile: this.policyFile(), credentials: this.deps.sandboxCredentials,
+      ...(r.worktree ? { gitWorktree: { commonDir: r.worktree.commonDir, name: r.worktree.name } } : {}),
       ...(setupScript ? { setup: { script: setupScript, onLog: (text: string) => this.emit({ kind: 'notice', level: /failed|could not/.test(text) ? 'warn' : 'info', text }) } } : {}),
       onEgress: (e) => {
         if (e.allowed || blocked.has(e.host)) return;
@@ -333,7 +341,7 @@ export class Session {
       else if (choice.kind === 'off') this.host = new LocalHost(this.workspace);
       else {
         // The OS sandboxes have no proxy: an allowlist is enforced as no network.
-        this.host = new LocalHost(this.workspace, { sandbox: choice.kind, network: r.network === 'full' ? 'full' : 'none' });
+        this.host = new LocalHost(this.workspace, { sandbox: choice.kind, network: r.network === 'full' ? 'full' : 'none', ...(r.worktree ? { writable: worktreeWritable(r.worktree), readable: [r.worktree.commonDir] } : {}) });
         if (r.network === 'allowlist') this.emit({ kind: 'notice', level: 'warn', text: `${choice.kind} cannot enforce a host allowlist: commands have no network. Use the Docker sandbox for an allowlist.` });
       }
       if (want !== 'off') this.emit({ kind: 'notice', level: choice.kind === 'off' ? 'warn' : 'info', text: `Commands run in: ${choice.why}.` });
@@ -389,6 +397,11 @@ export class Session {
       await fs.rm(path.join(this.deps.dataDir, 'workspaces', this.meta.id), { recursive: true, force: true });
     }
     if (this.meta.runtime.kind === 'companion') await this.deps.companions.forget(this.meta.id).catch(() => {});
+    // A worktree goes; its branch stays when it has commits (the work is the user's to merge).
+    if (this.meta.runtime.worktree) {
+      const w = await removeWorktree(this.meta.runtime.worktree).catch((e: Error) => { console.error(`session ${this.meta.id}: worktree not removed: ${e.message}`); return undefined; });
+      if (w?.kept) console.error(`session ${this.meta.id}: branch ${this.meta.runtime.worktree.branch} kept with ${w.commits} commit(s)`);
+    }
   }
 
   private async getSettings(host: ToolHost): Promise<Settings> {

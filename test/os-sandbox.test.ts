@@ -74,13 +74,29 @@ test('bubblewrap for real: what a sandboxed command can and cannot do', { skip: 
   assert.ok(Number(r.stdout.trim()) < 6, `its own process tree, saw ${r.stdout.trim()} processes`);
 });
 
+test('bubblewrap for real: a worktree commits on its branch; the repository\'s hooks and config stay read-only', { skip: !hasBwrap && 'not Linux with a working bubblewrap' }, async () => {
+  const { createWorktree, worktreeWritable } = await import('../src/git/worktree.ts');
+  const repo = await tempDir();
+  const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
+  execFileSync('git', ['init', '-q', '-b', 'main', repo]);
+  await fs.writeFile(path.join(repo, 'a.txt'), '1');
+  execFileSync('git', ['-C', repo, 'add', '-A'], { env });
+  execFileSync('git', ['-C', repo, 'commit', '-qm', 'init'], { env });
+  const w = await createWorktree(repo, path.join(await tempDir(), 'wt'), 'bw');
+  const host = new LocalHost(w.dir, { sandbox: 'bwrap', network: 'none', writable: worktreeWritable(w), readable: [w.commonDir] });
+  const r = await host.exec(`echo 2 > a.txt && GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t git commit -qam two && echo COMMITTED; (echo x > ${w.commonDir}/hooks/post-checkout && echo HOOK) 2>&1 | tail -1; (git config core.hooksPath /tmp && echo CONFIG) 2>&1 | tail -1`, { timeoutMs: 30_000 });
+  assert.match(r.stdout, /COMMITTED/, r.stdout + r.stderr);
+  assert.doesNotMatch(r.stdout, /HOOK\b|CONFIG\b/, r.stdout);
+  assert.equal(execFileSync('git', ['-C', repo, 'log', '--format=%s', '-1', w.branch], { encoding: 'utf8' }).trim(), 'two');
+});
+
 test('bubblewrap verified inside a Linux container (from any host with Docker)', { skip: (process.platform === 'linux' || !hasDocker) && 'runs directly on Linux, or no Docker' }, () => {
   // The real-bubblewrap test above, run where bubblewrap exists. --privileged lets it make namespaces inside the container.
   const repo = path.resolve(here, '..');
   const r = spawnSync('docker', ['run', '--rm', '--privileged', '-v', `${repo}:/repo:ro`, '-w', '/repo', 'harness-sandbox:latest', 'bash', '-c',
     'apt-get update -qq >/dev/null && apt-get install -y -qq bubblewrap >/dev/null && node --test --disable-warning=ExperimentalWarning --test-name-pattern="for real" test/os-sandbox.test.ts'], { encoding: 'utf8', timeout: 300_000 });
   const out = r.stdout + r.stderr;
-  assert.match(out, /# pass 1\b/, out.slice(-3000));
+  assert.match(out, /# pass 2\b/, out.slice(-3000));
   assert.match(out, /# fail 0\b/, out.slice(-3000));
   assert.match(out, /# skipped 0\b/, 'it really ran there, not skipped');
 });

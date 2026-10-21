@@ -163,7 +163,12 @@ export class LocalHost implements ToolHost {
   networkPolicy: 'none' | 'full' = 'full';
   /** The OS sandbox commands run in (bubblewrap, Seatbelt), if any. */
   readonly osSandbox?: OsSandboxKind;
-  constructor(root: string, opts: { sandbox?: OsSandboxKind; network?: 'none' | 'full' } = {}) {
+  /** More folders sandboxed commands may write (a worktree's git data). */
+  private writable: string[] = [];
+  private readable: string[] = [];
+  constructor(root: string, opts: { sandbox?: OsSandboxKind; network?: 'none' | 'full'; writable?: string[]; readable?: string[] } = {}) {
+    this.writable = opts.writable ?? [];
+    this.readable = opts.readable ?? [];
     this.root = root;
     this.displayRoot = root;
     const sh = resolveShell();
@@ -177,7 +182,7 @@ export class LocalHost implements ToolHost {
   }
   async spawnStream(command: string, args: string[], env: Record<string, string>): Promise<ChildProcessWithoutNullStreams> {
     if (this.osSandbox) {
-      const w = wrapCommand(this.osSandbox, [command, ...args].map(shq).join(' '), { root: this.root, network: this.networkPolicy });
+      const w = wrapCommand(this.osSandbox, [command, ...args].map(shq).join(' '), { root: this.root, network: this.networkPolicy, writable: this.writable, readable: this.readable });
       return spawn(w.file, w.args, { cwd: this.root, env: scrubbedEnv(env), stdio: ['pipe', 'pipe', 'pipe'] });
     }
     return spawn(command, args, { cwd: this.root, env: scrubbedEnv(env), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
@@ -185,7 +190,7 @@ export class LocalHost implements ToolHost {
   exec(cmd: string, opts: ExecOptions): Promise<ExecResult> {
     const o = { ...opts, cwd: opts.cwd ?? this.root, env: opts.env ?? scrubbedEnv() };
     if (this.osSandbox) {
-      const w = wrapCommand(this.osSandbox, cmd, { root: this.root, network: this.networkPolicy });
+      const w = wrapCommand(this.osSandbox, cmd, { root: this.root, network: this.networkPolicy, writable: this.writable, readable: this.readable });
       return run(w.file, w.args, o);
     }
     if (this.shell === 'powershell') return run(this.shellPath, ['-NoProfile', '-NonInteractive', '-Command', cmd], o);

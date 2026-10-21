@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { worktreeWritable } from '../git/worktree.ts';
 import { proxyCredentialFile, type SandboxCredential } from './credentials.ts';
 import type { ExecOptions, ExecResult, ToolHost } from './host.ts';
 import { run } from './host.ts';
@@ -54,6 +55,23 @@ export interface DockerOptions {
    * are then quick). The session's own container starts from the result.
    */
   setup?: { script: string; onLog?: (line: string) => void };
+  /**
+   * The workspace is a git worktree: its git data lives in the repository's .git,
+   * outside the mount. That .git is mounted read-only at /repo.git with only what
+   * committing on the session's branch needs made writable (never hooks or config),
+   * and git is pointed at it.
+   */
+  gitWorktree?: { commonDir: string; name: string };
+}
+
+/** Mounts and environment for a worktree's git data (see DockerOptions.gitWorktree). */
+export function worktreeMounts(w: { commonDir: string; name: string }): string[] {
+  const rel = (p: string) => path.relative(w.commonDir, p).split(path.sep).join('/');
+  return [
+    '-v', `${w.commonDir}:/repo.git:ro`,
+    ...worktreeWritable(w).flatMap((p) => ['-v', `${p}:/repo.git/${rel(p)}`]),
+    '-e', `GIT_DIR=/repo.git/worktrees/${w.name}`, '-e', 'GIT_WORK_TREE=/workspace',
+  ];
 }
 
 const SNAPSHOT_DAYS = Number(process.env.HARNESS_SNAPSHOT_DAYS ?? 7);
@@ -237,6 +255,7 @@ export class DockerHost implements ToolHost {
       '--user', `${uid}:${gid}`,
       '-e', 'HOME=/tmp/home', '-e', 'CI=1',
       '-v', `${this.root}:/workspace`, '-w', '/workspace',
+      ...(this.opts.gitWorktree ? worktreeMounts(this.opts.gitWorktree) : []),
       '--label', 'harness-web=1',
       image, 'sleep', 'infinity',
     ];
