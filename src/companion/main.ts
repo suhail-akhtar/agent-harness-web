@@ -1,5 +1,7 @@
 import path from 'node:path';
 import { resolveShell } from '../runtime/host.ts';
+import { sandboxedFolderHost } from '../runtime/local-sandbox.ts';
+import type { LocalSandbox } from '../runtime/os-sandbox.ts';
 import { type CompanionJob, createCompanionHandler } from './handler.ts';
 
 // harness-companion: lets the browser harness work on a folder on THIS computer.
@@ -15,13 +17,18 @@ const server = (arg('server') ?? process.env.HARNESS_SERVER ?? '').replace(/\/$/
 const token = arg('token') ?? process.env.HARNESS_COMPANION_TOKEN ?? '';
 const dir = path.resolve(arg('dir') ?? process.cwd());
 const allowHooks = process.argv.includes('--allow-hooks');
+// Commands from the agent run contained: the OS sandbox (Linux, macOS), else Docker, else plainly (and are asked about).
+const sandboxWant = (arg('sandbox') ?? process.env.HARNESS_COMPANION_SANDBOX ?? 'auto') as LocalSandbox | 'auto';
+const network = (arg('network') ?? 'full') as 'none' | 'full';
 
-if (!server || !token) {
-  console.error('usage: node harness-companion.mjs --server <url> --token <hwc_...> [--dir <folder>] [--allow-hooks]');
+if (!server || !token || !['auto', 'bwrap', 'seatbelt', 'docker', 'off'].includes(sandboxWant) || !['none', 'full'].includes(network)) {
+  console.error('usage: node harness-companion.mjs --server <url> --token <hwc_...> [--dir <folder>] [--sandbox auto|bwrap|seatbelt|docker|off] [--network full|none] [--allow-hooks]');
   process.exit(2);
 }
 
-const handle = createCompanionHandler(dir, { allowHooks, log: (m) => console.log(`[${new Date().toLocaleTimeString()}] ${m}`) });
+const sandbox = await sandboxedFolderHost(dir, sandboxWant, network).catch((e: Error) => { console.error(`sandbox: ${e.message}`); process.exit(2); });
+console.log(`commands run: ${sandbox.why}${sandbox.kind !== 'off' ? `, network ${network}` : ''}`);
+const handle = createCompanionHandler(dir, { allowHooks, host: sandbox.host, log: (m) => console.log(`[${new Date().toLocaleTimeString()}] ${m}`) });
 
 async function post(p: string, body: unknown, signal?: AbortSignal): Promise<Response> {
   return fetch(`${server}${p}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body), signal });
@@ -44,7 +51,9 @@ async function loop(): Promise<void> {
   let backoff = 1000;
   while (true) {
     try {
-      const res = await post('/api/companion/poll', { info: { platform: process.platform, shell: resolveShell().kind, root: dir, version: '0.3.0' } }, AbortSignal.timeout(60_000));
+      const h = sandbox.host;
+      const info = { platform: h.platform, shell: h.kind === 'docker' ? 'bash' : resolveShell().kind, root: h.displayRoot, version: '0.4.0', sandbox: sandbox.kind, network: h.sandboxed ? h.networkPolicy : 'full' };
+      const res = await post('/api/companion/poll', { info }, AbortSignal.timeout(60_000));
       if (res.status === 401) { console.error('The server rejected this token. Create a new companion in the web app.'); process.exit(1); }
       if (res.status === 200) run(await res.json() as CompanionJob).catch((e) => console.error(e));
       else if (res.status !== 204) throw new Error(`poll failed: ${res.status}`);

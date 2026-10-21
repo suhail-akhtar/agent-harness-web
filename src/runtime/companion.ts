@@ -48,7 +48,7 @@ interface CompanionRecord {
 
 interface Live {
   lastSeen: number;
-  info: { platform: string; shell: string; root: string; version?: string };
+  info: { platform: string; shell: string; root: string; version?: string; /** How the companion contains commands ('off' or absent: not at all). */ sandbox?: string; network?: 'none' | 'full' };
   queue: CompanionJob[];
   waiter?: (job: CompanionJob | null) => void;
   pending: Map<string, Pending>;
@@ -222,8 +222,9 @@ export class CompanionHub {
       get displayRoot() { return l.info.root || '(companion folder)'; },
       get platform() { return l.info.platform; },
       get shell() { return l.info.shell; },
-      sandboxed: false,
-      networkPolicy: 'full',
+      // What the companion reports: its own sandbox (bubblewrap, Seatbelt, Docker) contains commands.
+      get sandboxed() { return !!l.info.sandbox && l.info.sandbox !== 'off'; },
+      get networkPolicy() { return l.info.sandbox && l.info.sandbox !== 'off' && l.info.network === 'none' ? 'none' : 'full'; },
       exec(command: string, opts: ExecOptions): Promise<ExecResult> {
         return hub.dispatch<ExecResult>(id, { kind: 'exec', sessionId, command, timeoutMs: opts.timeoutMs, stdin: opts.stdin }, opts.signal, opts.timeoutMs + 30_000);
       },

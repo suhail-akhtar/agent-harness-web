@@ -155,8 +155,9 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       if (!id) throw new HttpError(401, 'unknown companion token');
       const body = await readJson(req, p === '/api/companion/result' ? COMPANION_RESULT_LIMIT : 1_000_000);
       if (p === '/api/companion/poll') {
-        const info = (body.info ?? {}) as { platform?: string; shell?: string; root?: string; version?: string };
-        const job = await companions.poll(id, { platform: String(info.platform ?? 'unknown'), shell: String(info.shell ?? 'bash'), root: String(info.root ?? ''), version: info.version });
+        const info = (body.info ?? {}) as { platform?: string; shell?: string; root?: string; version?: string; sandbox?: string; network?: string };
+        const sandbox = ['bwrap', 'seatbelt', 'docker'].includes(String(info.sandbox)) ? String(info.sandbox) : 'off';
+        const job = await companions.poll(id, { platform: String(info.platform ?? 'unknown'), shell: String(info.shell ?? 'bash'), root: String(info.root ?? ''), version: info.version, sandbox, network: info.network === 'none' ? 'none' : 'full' });
         return job ? send(res, 200, job) : send(res, 204, '');
       }
       const ok = companions.complete(id, String(body.jobId), body.ok === true, body.value);

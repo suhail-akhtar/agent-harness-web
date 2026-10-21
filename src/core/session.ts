@@ -13,7 +13,8 @@ import type { McpManager, McpStatus } from '../mcp/manager.ts';
 import { deferredTools, MCP_INLINE_MAX, type McpEntry, mcpTool } from '../mcp/tools.ts';
 import type { AgentDef } from '../plugins/api.ts';
 import type { CompanionHub } from '../runtime/companion.ts';
-import { defaultAllowHosts, DockerHost, dockerDefaults } from '../runtime/docker.ts';
+import { defaultAllowHosts, DockerHost, dockerAvailable, dockerDefaults, imageExists } from '../runtime/docker.ts';
+import { chooseSandbox, detectOsSandbox, type LocalSandbox } from '../runtime/os-sandbox.ts';
 import type { ToolHost } from '../runtime/host.ts';
 import { LocalHost, run } from '../runtime/host.ts';
 import { makeSkillTool, type Skill, skillsIn, skillsListing, workspaceSkills } from '../skills/skills.ts';
@@ -41,7 +42,12 @@ export interface SessionMeta {
   model: string;
   effort: Effort;
   mode: PermissionMode;
-  runtime: { kind: RuntimeKind; network: 'none' | 'full' | 'allowlist'; companionId?: string; path?: string };
+  /**
+   * Where commands run. For 'local', `sandbox` contains them: the OS sandbox
+   * (bubblewrap, Seatbelt), Docker with the folder mounted, 'auto' (the best there is)
+   * or 'off'. Default: HARNESS_LOCAL_SANDBOX, else off.
+   */
+  runtime: { kind: RuntimeKind; network: 'none' | 'full' | 'allowlist'; companionId?: string; path?: string; sandbox?: LocalSandbox | 'auto' };
   createdAt: number;
   updatedAt: number;
   usage: Usage;
@@ -289,18 +295,30 @@ export class Session {
   private async getHost(): Promise<ToolHost> {
     if (this.host) return this.host;
     const r = this.meta.runtime;
-    if (r.kind === 'docker') {
-      const blocked = new Set<string>();
-      this.host = new DockerHost(this.meta.id, this.workspace, {
-        ...dockerDefaults(), network: r.network, policyFile: this.policyFile(), credentials: this.deps.sandboxCredentials,
-        onEgress: (e) => {
-          if (e.allowed || blocked.has(e.host)) return;
-          blocked.add(e.host);
-          this.emit({ kind: 'notice', level: 'warn', text: `The sandbox tried to reach ${e.host}:${e.port}, which is not allowed (${e.why}). Allow it in the session's network settings if it should be.` });
-        },
-      });
+    const blocked = new Set<string>();
+    const docker = () => new DockerHost(this.meta.id, this.workspace, {
+      ...dockerDefaults(), network: r.network, policyFile: this.policyFile(), credentials: this.deps.sandboxCredentials,
+      onEgress: (e) => {
+        if (e.allowed || blocked.has(e.host)) return;
+        blocked.add(e.host);
+        this.emit({ kind: 'notice', level: 'warn', text: `The sandbox tried to reach ${e.host}:${e.port}, which is not allowed (${e.why}). Allow it in the session's network settings if it should be.` });
+      },
+    });
+    if (r.kind === 'docker') this.host = docker();
+    else if (r.kind === 'local') {
+      const want = r.sandbox ?? (process.env.HARNESS_LOCAL_SANDBOX as LocalSandbox | 'auto' | undefined) ?? 'off';
+      const os = want === 'off' || want === 'docker' ? null : detectOsSandbox();
+      const dockerOk = (want === 'docker' || (want === 'auto' && !os)) && await dockerAvailable() && await imageExists(dockerDefaults().image);
+      const choice = chooseSandbox(want, { os, docker: dockerOk });
+      if (choice.kind === 'docker') this.host = docker();
+      else if (choice.kind === 'off') this.host = new LocalHost(this.workspace);
+      else {
+        // The OS sandboxes have no proxy: an allowlist is enforced as no network.
+        this.host = new LocalHost(this.workspace, { sandbox: choice.kind, network: r.network === 'full' ? 'full' : 'none' });
+        if (r.network === 'allowlist') this.emit({ kind: 'notice', level: 'warn', text: `${choice.kind} cannot enforce a host allowlist: commands have no network. Use the Docker sandbox for an allowlist.` });
+      }
+      if (want !== 'off') this.emit({ kind: 'notice', level: choice.kind === 'off' ? 'warn' : 'info', text: `Commands run in: ${choice.why}.` });
     }
-    else if (r.kind === 'local') this.host = new LocalHost(this.workspace);
     else this.host = this.deps.companions.host(r.companionId ?? '', this.meta.id);
     if (this.host.kind !== 'companion') this.checkpoints = new Checkpoints(this.dir, this.workspace);
     return this.host;

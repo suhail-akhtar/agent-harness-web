@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import type { ToolDisplay } from '../core/types.ts';
+import { type OsSandboxKind, wrapCommand } from './os-sandbox.ts';
 
 // A ToolHost is where tools touch a filesystem and run commands.
 //   docker    - a per-session container; files live in a host directory
@@ -146,6 +147,8 @@ export function run(cmd: string, args: string[], opts: ExecOptions): Promise<Exe
   });
 }
 
+const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+
 /** Longer `-c` commands are broken by Git Bash on Windows (the limit is near 8K). */
 const WIN_BASH_ARG_MAX = 4000;
 
@@ -157,19 +160,34 @@ export class LocalHost implements ToolHost {
   shell: string;
   private shellPath: string;
   sandboxed = false;
-  networkPolicy = 'full' as const;
-  constructor(root: string) {
+  networkPolicy: 'none' | 'full' = 'full';
+  /** The OS sandbox commands run in (bubblewrap, Seatbelt), if any. */
+  readonly osSandbox?: OsSandboxKind;
+  constructor(root: string, opts: { sandbox?: OsSandboxKind; network?: 'none' | 'full' } = {}) {
     this.root = root;
     this.displayRoot = root;
     const sh = resolveShell();
     this.shell = sh.kind;
     this.shellPath = sh.path;
+    if (opts.sandbox) {
+      this.osSandbox = opts.sandbox;
+      this.sandboxed = true;
+      this.networkPolicy = opts.network ?? 'none';
+    }
   }
   async spawnStream(command: string, args: string[], env: Record<string, string>): Promise<ChildProcessWithoutNullStreams> {
+    if (this.osSandbox) {
+      const w = wrapCommand(this.osSandbox, [command, ...args].map(shq).join(' '), { root: this.root, network: this.networkPolicy });
+      return spawn(w.file, w.args, { cwd: this.root, env: scrubbedEnv(env), stdio: ['pipe', 'pipe', 'pipe'] });
+    }
     return spawn(command, args, { cwd: this.root, env: scrubbedEnv(env), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
   }
   exec(cmd: string, opts: ExecOptions): Promise<ExecResult> {
     const o = { ...opts, cwd: opts.cwd ?? this.root, env: opts.env ?? scrubbedEnv() };
+    if (this.osSandbox) {
+      const w = wrapCommand(this.osSandbox, cmd, { root: this.root, network: this.networkPolicy });
+      return run(w.file, w.args, o);
+    }
     if (this.shell === 'powershell') return run(this.shellPath, ['-NoProfile', '-NonInteractive', '-Command', cmd], o);
     // Git Bash cuts a `-c` argument off at about 8K characters, so a long
     // command (a large heredoc) goes in a script file instead.

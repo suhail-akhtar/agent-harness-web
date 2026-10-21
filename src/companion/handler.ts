@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { LocalHost } from '../runtime/host.ts';
+import { LocalHost, type ToolHost } from '../runtime/host.ts';
 import { toolByName } from '../tools/index.ts';
 import { resolveIn } from '../tools/paths.ts';
 import type { FileStamp, ToolContext } from '../tools/types.ts';
@@ -21,8 +21,8 @@ export const MIRROR_SKIP = new Set(['node_modules', '.git', '.harness', '.venv',
 export const MIRROR_SKIP_FILE = /^(\.env(\..*)?|.*\.(pem|key|p12|pfx)|id_(rsa|ed25519|ecdsa)(\.pub)?|\.npmrc|\.netrc)$/i;
 const FILE_MAX = 20 * 1024 * 1024;
 
-export function createCompanionHandler(dir: string, opts: { allowHooks?: boolean; log?: (m: string) => void } = {}) {
-  const host = new LocalHost(dir);
+export function createCompanionHandler(dir: string, opts: { allowHooks?: boolean; log?: (m: string) => void; /** Where commands run: a sandboxed host for the folder (default: plain). */ host?: ToolHost } = {}) {
+  const host: ToolHost = opts.host ?? new LocalHost(dir);
   const readFiles = new Map<string, Map<string, FileStamp>>();
 
   /**
