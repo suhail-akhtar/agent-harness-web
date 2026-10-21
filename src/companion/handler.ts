@@ -13,7 +13,14 @@ export type CompanionJob =
   | { id: string; kind: 'tool'; sessionId: string; name: string; input: Record<string, unknown> }
   | { id: string; kind: 'exec'; sessionId: string; command: string; timeoutMs: number; stdin?: string }
   | { id: string; kind: 'pull'; sessionId: string; known: Record<string, [number, number]>; maxBytes: number; chunkBytes?: number }
-  | { id: string; kind: 'push'; sessionId: string; path: string; data: string };
+  | { id: string; kind: 'push'; sessionId: string; path: string; data: string }
+  /** One file in the folder: its bytes (null when absent), or remove it - for checkpoints and project config. */
+  | { id: string; kind: 'file'; sessionId: string; op: 'get' | 'delete'; path: string }
+  /**
+   * A project MCP server on this computer: start it, or send it a message and get
+   * back what it has said since (a request waits for its own answer).
+   */
+  | { id: string; kind: 'mcp'; sessionId: string; op: 'start' | 'send' | 'stop'; server: string; command?: string; args?: string[]; env?: Record<string, string>; message?: Record<string, unknown>; timeoutMs?: number };
 
 /** Folders never copied to the server: big, regenerated, or private to tools. */
 export const MIRROR_SKIP = new Set(['node_modules', '.git', '.harness', '.venv', 'venv', '__pycache__', '.next', 'target', 'dist', 'build', 'coverage']);
@@ -21,7 +28,7 @@ export const MIRROR_SKIP = new Set(['node_modules', '.git', '.harness', '.venv',
 export const MIRROR_SKIP_FILE = /^(\.env(\..*)?|.*\.(pem|key|p12|pfx)|id_(rsa|ed25519|ecdsa)(\.pub)?|\.npmrc|\.netrc)$/i;
 const FILE_MAX = 20 * 1024 * 1024;
 
-export function createCompanionHandler(dir: string, opts: { allowHooks?: boolean; log?: (m: string) => void; /** Where commands run: a sandboxed host for the folder (default: plain). */ host?: ToolHost } = {}) {
+export function createCompanionHandler(dir: string, opts: { allowHooks?: boolean; /** Project MCP servers (.mcp.json) may start here without a sandbox. */ trustProject?: boolean; log?: (m: string) => void; /** Where commands run: a sandboxed host for the folder (default: plain). */ host?: ToolHost } = {}) {
   const host: ToolHost = opts.host ?? new LocalHost(dir);
   const readFiles = new Map<string, Map<string, FileStamp>>();
 
@@ -55,6 +62,49 @@ export function createCompanionHandler(dir: string, opts: { allowHooks?: boolean
     return { files, more };
   }
 
+  /** Project MCP servers running on this computer, by session and name; what each has said and not yet been relayed. */
+  const servers = new Map<string, { child: import('node:child_process').ChildProcessWithoutNullStreams; inbox: Record<string, unknown>[]; waiters: (() => void)[]; closed?: string }>();
+
+  async function mcp(job: Extract<CompanionJob, { kind: 'mcp' }>): Promise<unknown> {
+    const key = `${job.sessionId}/${job.server}`;
+    if (job.op === 'start') {
+      if (!opts.trustProject && !host.sandboxed) throw new Error('project MCP servers do not start on this computer: start the companion with --trust-project, or with a sandbox');
+      if (!host.spawnStream || !job.command) throw new Error('this companion cannot start processes');
+      servers.get(key)?.child.kill();
+      const child = await host.spawnStream(job.command, job.args ?? [], job.env ?? {});
+      const s = { child, inbox: [] as Record<string, unknown>[], waiters: [] as (() => void)[], closed: undefined as string | undefined };
+      let buf = '';
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (d: string) => {
+        buf += d;
+        let nl: number;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          try { s.inbox.push(JSON.parse(line)); } catch { /* not a message */ }
+          for (const w of s.waiters.splice(0)) w();
+        }
+      });
+      child.on('exit', (code) => { s.closed = `exited with ${code}`; for (const w of s.waiters.splice(0)) w(); });
+      servers.set(key, s);
+      opts.log?.(`started project MCP server ${job.server}`);
+      return { ok: true };
+    }
+    const s = servers.get(key);
+    if (job.op === 'stop') { s?.child.kill(); servers.delete(key); return { ok: true }; }
+    if (!s) throw new Error(`MCP server ${job.server} is not running here`);
+    if (s.closed) throw new Error(`MCP server ${job.server} ${s.closed}`);
+    s.child.stdin.write(JSON.stringify(job.message) + '\n');
+    // A request waits for its own answer (anything else said meanwhile comes along); a notification does not wait.
+    const id = (job.message as { id?: unknown })?.id;
+    const deadline = Date.now() + Math.min(job.timeoutMs ?? 60_000, 15 * 60_000);
+    while (id !== undefined && !s.inbox.some((m) => m.id === id && ('result' in m || 'error' in m)) && !s.closed && Date.now() < deadline) {
+      await new Promise<void>((r) => { s.waiters.push(r); setTimeout(r, 1000); });
+    }
+    return { messages: s.inbox.splice(0), ...(s.closed ? { closed: s.closed } : {}) };
+  }
+
   return async function handle(job: CompanionJob): Promise<{ ok: boolean; value: unknown }> {
     try {
       if (job.kind === 'exec') {
@@ -65,6 +115,15 @@ export function createCompanionHandler(dir: string, opts: { allowHooks?: boolean
         opts.log?.('copying changed files for a server-side tool');
         return { ok: true, value: await pull(job.known ?? {}, job.maxBytes, job.chunkBytes) };
       }
+      if (job.kind === 'file') {
+        const real = await resolveIn(host, job.path);
+        if (job.op === 'delete') { await fs.rm(real, { force: true }); return { ok: true, value: { ok: true } }; }
+        const st = await fs.stat(real).catch(() => null);
+        if (!st?.isFile()) return { ok: true, value: { data: null } };
+        if (st.size > FILE_MAX) throw new Error(`${job.path} is larger than ${FILE_MAX / 1048576} MB`);
+        return { ok: true, value: { data: (await fs.readFile(real)).toString('base64') } };
+      }
+      if (job.kind === 'mcp') return { ok: true, value: await mcp(job) };
       if (job.kind === 'push') {
         const real = await resolveIn(host, job.path);
         await fs.mkdir(path.dirname(real), { recursive: true });

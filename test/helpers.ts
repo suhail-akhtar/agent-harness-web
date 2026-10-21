@@ -1,3 +1,4 @@
+import { rmSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,8 +11,16 @@ import { LocalHost } from '../src/runtime/host.ts';
 import { BUILTIN_TOOLS } from '../src/tools/index.ts';
 import type { FileStamp, Tool } from '../src/tools/types.ts';
 
+/** Every folder a test made, removed when the test process ends (thousands piled up to 13 GB before). */
+const made: string[] = [];
+process.once('exit', () => {
+  for (const d of made) { try { rmSync(d, { recursive: true, force: true, maxRetries: 2 }); } catch { /* in use (Windows) or not ours to remove */ } }
+});
+
 export async function tempDir(prefix = 'hw-test-'): Promise<string> {
-  return fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix)));
+  const d = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix)));
+  made.push(d);
+  return d;
 }
 
 type Step = { text?: string; calls?: { name: string; input?: Record<string, unknown>; parseError?: string }[]; stop?: StopKind; usage?: Partial<Usage> };

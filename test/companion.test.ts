@@ -155,3 +155,75 @@ test('render on a companion session: the file on the user\'s computer is rendere
     assert.deepEqual(saved, ['page-1.png']);
   } finally { stop(); await h.close(); }
 });
+
+/** Like runCompanion, with the handler's options (trust, a host). */
+function runCompanionWith(hub: CompanionHub, id: string, dir: string, opts: Parameters<typeof createCompanionHandler>[1], info: Record<string, unknown> = {}) {
+  const handle = createCompanionHandler(dir, opts);
+  let on = true;
+  (async () => {
+    while (on) {
+      const job = await hub.poll(id, { platform: process.platform, shell: 'bash', root: dir, ...info }, 200);
+      if (!job) continue;
+      const r = await handle(job as CompanionJob);
+      hub.complete(id, job.id, r.ok, r.value);
+    }
+  })();
+  return () => { on = false; };
+}
+
+test('companion checkpoints: files the agent changes on the user\'s computer are saved first and can be rewound', async () => {
+  const h = await createHarness({ dataDir: await tempDir(), search: null, memory: 'off' });
+  const { id } = await h.companions.create('laptop');
+  const dir = await tempDir();
+  await fs.writeFile(path.join(dir, 'notes.md'), 'original\n');
+  const stop = runCompanionWith(h.companions, id, dir, {});
+  h.registry.setProviderInstance('deepseek', new FakeProvider([
+    { calls: [{ name: 'read', input: { path: 'notes.md' } }] },
+    { calls: [{ name: 'write', input: { path: 'notes.md', content: 'changed\n' } }, { name: 'write', input: { path: 'sub/new.md', content: 'new\n' } }] },
+    { text: 'done' },
+  ]));
+  try {
+    await new Promise((r) => setTimeout(r, 300));
+    const s = await h.sessions.create({ model: 'deepseek-flash', mode: 'bypass', runtime: { kind: 'companion', network: 'none', companionId: id } });
+    const done = new Promise<void>((r) => s.subscribe(0, ({ event }) => { if (event.kind === 'turn_end' && !event.agent) r(); }));
+    await s.send('change the notes');
+    await done;
+    assert.equal(await fs.readFile(path.join(dir, 'notes.md'), 'utf8'), 'changed\n');
+    const turns = await s.listCheckpoints();
+    assert.deepEqual(turns.map((t) => t.files.sort()), [['notes.md', 'sub/new.md']]);
+    const restored = await s.rewind(turns[0]!.turn);
+    assert.deepEqual(restored, ['notes.md', 'sub/new.md']);
+    assert.equal(await fs.readFile(path.join(dir, 'notes.md'), 'utf8'), 'original\n', 'restored on the user\'s computer');
+    await assert.rejects(fs.stat(path.join(dir, 'sub', 'new.md')), 'a file the turn created is removed');
+  } finally { stop(); await h.close(); }
+});
+
+test('companion project MCP servers: started on the user\'s computer only when trusted or sandboxed, their tools usable from the session', async () => {
+  const fixture = path.join(here, 'fixtures', 'mcp-server.mjs');
+  for (const trusted of [false, true]) {
+    const h = await createHarness({ dataDir: await tempDir(), search: null, memory: 'off' });
+    const { id } = await h.companions.create('laptop');
+    const dir = await tempDir();
+    await fs.writeFile(path.join(dir, '.mcp.json'), JSON.stringify({ mcpServers: { local: { command: process.execPath, args: [fixture] } } }));
+    const stop = runCompanionWith(h.companions, id, dir, { trustProject: trusted }, { trustProject: trusted });
+    h.registry.setProviderInstance('deepseek', new FakeProvider([{ calls: [{ name: 'mcp__local__add', input: { a: 20, b: 22 } }] }, { text: 'done' }]));
+    try {
+      await new Promise((r) => setTimeout(r, 300));
+      const s = await h.sessions.create({ model: 'deepseek-flash', mode: 'bypass', runtime: { kind: 'companion', network: 'none', companionId: id } });
+      const caps = await s.capabilities();
+      const status = caps.mcp.find((m) => m.name === 'local')!;
+      if (!trusted) {
+        assert.equal(status.ok, false);
+        assert.match(status.error!, /--trust-project/);
+        continue;
+      }
+      assert.equal(status.ok, true, status.error ?? '');
+      const done = new Promise<void>((r) => s.subscribe(0, ({ event }) => { if (event.kind === 'turn_end' && !event.agent) r(); }));
+      await s.send('add them');
+      await done;
+      const { results } = await import('./helpers.ts');
+      assert.equal(results(s.history[2])[0]!.content, '42');
+      await h.sessions.remove(s.meta.id);
+    } finally { stop(); await h.close(); }
+  }
+});

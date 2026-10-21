@@ -368,8 +368,12 @@ export class Agent {
     let outcome: ToolOutcome;
     try {
       const ctx = this.toolContext(signal);
-      outcome = this.cfg.host.remoteTool && tool.remoteable
-        ? await this.cfg.host.remoteTool(name, input, signal)
+      const remote = !!this.cfg.host.remoteTool && tool.remoteable;
+      // A file changed on the companion's computer is checkpointed here first (the tool there has no checkpoints).
+      const writes = remote ? tool.writesPath?.(input) : undefined;
+      if (writes) await this.cfg.beforeWrite?.(writes);
+      outcome = remote
+        ? await this.cfg.host.remoteTool!(name, input, signal)
         : await tool.run(input, ctx);
     } catch (err) {
       if (signal.aborted) return finish('Interrupted by the user.', true, undefined, undefined, name);

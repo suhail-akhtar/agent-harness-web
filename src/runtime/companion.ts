@@ -48,7 +48,7 @@ interface CompanionRecord {
 
 interface Live {
   lastSeen: number;
-  info: { platform: string; shell: string; root: string; version?: string; /** How the companion contains commands ('off' or absent: not at all). */ sandbox?: string; network?: 'none' | 'full' };
+  info: { platform: string; shell: string; root: string; version?: string; /** How the companion contains commands ('off' or absent: not at all). */ sandbox?: string; network?: 'none' | 'full'; /** The user started it with --trust-project: the project's MCP servers may start there. */ trustProject?: boolean };
   queue: CompanionJob[];
   waiter?: (job: CompanionJob | null) => void;
   pending: Map<string, Pending>;
@@ -233,6 +233,45 @@ export class CompanionHub {
       },
       mirror: (signal?: AbortSignal) => hub.mirror(id, sessionId, signal),
       pushFile: (rel: string, data: Buffer, signal?: AbortSignal) => hub.push(id, sessionId, rel, data, signal),
+      get trustProject() { return l.info.trustProject === true; },
+      async readFile(rel: string, signal?: AbortSignal): Promise<Buffer | null> {
+        const r = await hub.dispatch<{ data: string | null }>(id, { kind: 'file', sessionId, op: 'get', path: rel }, signal, 5 * 60_000);
+        return r.data === null ? null : Buffer.from(r.data, 'base64');
+      },
+      async removeFile(rel: string, signal?: AbortSignal): Promise<void> {
+        await hub.dispatch(id, { kind: 'file', sessionId, op: 'delete', path: rel }, signal, 60_000);
+      },
+      mcpTransport: (server: string, command: string, args: string[], env: Record<string, string>) => hub.mcpTransport(id, sessionId, server, command, args, env),
     } as ToolHost;
+  }
+
+  /**
+   * An MCP transport to a project server running on the companion's computer:
+   * messages go out as jobs, and what the server says comes back with each reply
+   * (a request's own answer included). Notifications from the server between
+   * requests arrive with the next reply.
+   */
+  async mcpTransport(id: string, sessionId: string, server: string, command: string, args: string[], env: Record<string, string>) {
+    await this.dispatch(id, { kind: 'mcp', sessionId, op: 'start', server, command, args, env }, undefined, 120_000);
+    const handlers: ((m: Record<string, unknown>) => void)[] = [];
+    const closers: ((r: string) => void)[] = [];
+    let closed = false;
+    const hub = this;
+    return {
+      async send(msg: Record<string, unknown>, opts?: { timeoutMs?: number; signal?: AbortSignal }) {
+        if (closed) throw new Error(`MCP server ${server} is closed`);
+        const timeoutMs = opts?.timeoutMs ?? 120_000;
+        const r = await hub.dispatch<{ messages: Record<string, unknown>[]; closed?: string }>(id, { kind: 'mcp', sessionId, op: 'send', server, message: msg, timeoutMs }, opts?.signal, timeoutMs + 30_000);
+        for (const m of r.messages ?? []) for (const h of handlers) h(m);
+        if (r.closed) { closed = true; for (const c of closers) c(r.closed); }
+      },
+      onMessage(cb: (m: Record<string, unknown>) => void) { handlers.push(cb); },
+      onClose(cb: (r: string) => void) { closers.push(cb); },
+      async close() {
+        if (closed) return;
+        closed = true;
+        await hub.dispatch(id, { kind: 'mcp', sessionId, op: 'stop', server }, undefined, 30_000).catch(() => {});
+      },
+    };
   }
 }

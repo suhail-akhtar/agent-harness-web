@@ -27,7 +27,7 @@ import { publish, PublishError, shq } from '../git/publish.ts';
 import { createWorktree, removeWorktree, type Worktree, WorktreeError, worktreeWritable } from '../git/worktree.ts';
 import type { SearchService } from '../research/search.ts';
 import { Agent, type AgentHooks, type PermissionAnswer, type TraceSpan } from './agent.ts';
-import { Checkpoints } from './checkpoints.ts';
+import { type CheckpointFiles, Checkpoints } from './checkpoints.ts';
 import { fireHooks, type HookJudge, runHooks } from './hooks.ts';
 import type { Effort, ModelSpec } from './models.ts';
 import { costOf } from './models.ts';
@@ -129,6 +129,30 @@ export function runView(run: RunRecord, w?: WorkflowDef): WorkflowRunView {
     id: run.id, workflow: run.workflow, status: run.status, current: run.current, cost: run.cost, error: run.error,
     nodes: w ? Object.entries(w.nodes).map(([id, n]) => ({ id, type: n.type, title: n.title })) : [],
     history: run.history.map((h) => ({ node: h.node, type: h.type, status: h.status, outcome: h.outcome, summary: h.summary, startedAt: h.startedAt, endedAt: h.endedAt, cost: h.cost })),
+  };
+}
+
+/**
+ * Checkpoint files on a companion. A tool names a file as the model sees it (the
+ * companion's own path, or relative) or, for server-side tools, inside the
+ * server's mirror of the folder; either way it becomes a folder-relative path,
+ * and nothing outside the folder is ever touched.
+ */
+export function companionFiles(host: ToolHost, mirrorRoot: string): CheckpointFiles {
+  const strip = (p: string, root: string) => {
+    const r = root.replace(/\\/g, '/').replace(/\/+$/, '');
+    return r && (p === r || p.toLowerCase().startsWith(`${r.toLowerCase()}/`)) ? p.slice(r.length + 1) : p;
+  };
+  return {
+    async rel(p) {
+      const s = strip(strip(p.replace(/\\/g, '/'), mirrorRoot), host.displayRoot);
+      if (/^[a-zA-Z]:\//.test(s) || s.startsWith('/')) return undefined;
+      const parts = s.split('/').filter((x) => x && x !== '.');
+      return parts.length && !parts.includes('..') ? parts.join('/') : undefined;
+    },
+    read: (rel) => host.readFile!(rel),
+    write: (rel, data) => host.pushFile!(rel, data),
+    remove: (rel) => host.removeFile!(rel),
   };
 }
 
@@ -348,6 +372,8 @@ export class Session {
     }
     else this.host = this.deps.companions.host(r.companionId ?? '', this.meta.id);
     if (this.host.kind !== 'companion') this.checkpoints = new Checkpoints(this.dir, this.workspace);
+    // A companion's files are on the user's computer: checkpoints read and restore them through it.
+    else if (this.host.readFile && this.host.pushFile && this.host.removeFile) this.checkpoints = new Checkpoints(this.dir, companionFiles(this.host, path.join(this.deps.dataDir, 'mirrors', this.meta.id)));
     return this.host;
   }
 
@@ -373,7 +399,8 @@ export class Session {
 
   /** Repository content is trusted to run code only inside the sandbox (or when the operator says so). */
   private projectTrusted(host: ToolHost): boolean {
-    return host.sandboxed || TRUST_PROJECT;
+    // A companion the user started with --trust-project trusts its own project on its own computer.
+    return host.sandboxed || TRUST_PROJECT || host.trustProject === true;
   }
 
   async stopSandbox(): Promise<void> {
@@ -392,7 +419,11 @@ export class Session {
     }
     if (this.toolbox) await (await this.toolbox).closeProject().catch(() => {});
     if (this.host instanceof DockerHost) await this.host.close();
-    await fs.rm(this.dir, { recursive: true, force: true });
+    // Writes still queued (trace, meta) would land in a folder being removed: wait for them,
+    // and retry (Windows refuses to remove a folder a file was just written into).
+    clearTimeout(this.saveTimer);
+    await Promise.all([this.traceWrite, this.metaWrite.catch(() => {})]);
+    await fs.rm(this.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     if (this.meta.runtime.kind === 'docker' || (this.meta.runtime.kind === 'local' && !this.meta.runtime.path)) {
       await fs.rm(path.join(this.deps.dataDir, 'workspaces', this.meta.id), { recursive: true, force: true });
     }

@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { McpServerConfig } from '../plugins/api.ts';
 import { scrubbedEnv, type ToolHost } from '../runtime/host.ts';
 import { assertPublicUrl } from '../tools/web.ts';
-import { HttpTransport, McpClient, StdioTransport } from './client.ts';
+import { HttpTransport, McpClient, StdioTransport, type Transport } from './client.ts';
 import { type McpEntry, qualifiedName } from './tools.ts';
 
 // Two scopes of MCP server:
@@ -65,11 +65,16 @@ async function connect(name: string, cfg: ServerMcpConfig, scope: 'server' | 'pr
     const args = (cfg.args ?? []).map(x);
     const env = Object.fromEntries(Object.entries(cfg.env ?? {}).map(([k, v]) => [k, x(v)]));
     const plan = spawnPlan(cfg.command, args);
-    // Never the server's whole environment: a server gets the provider keys only if its config passes them.
-    const child = scope === 'server'
-      ? spawn(plan.command, plan.args, { cwd: cfg.cwd, env: scrubbedEnv(env), stdio: ['pipe', 'pipe', 'pipe'], shell: plan.shell })
-      : await host!.spawnStream!(cfg.command, args, env);
-    client = new McpClient(new StdioTransport(child), opts);
+    if (scope === 'project' && host?.mcpTransport) {
+      // A companion: the server runs on the user's computer, its messages relayed through the companion.
+      client = new McpClient(await host.mcpTransport(name, cfg.command, args, env) as unknown as Transport, opts);
+    } else {
+      // Never the server's whole environment: a server gets the provider keys only if its config passes them.
+      const child = scope === 'server'
+        ? spawn(plan.command, plan.args, { cwd: cfg.cwd, env: scrubbedEnv(env), stdio: ['pipe', 'pipe', 'pipe'], shell: plan.shell })
+        : await host!.spawnStream!(cfg.command, args, env);
+      client = new McpClient(new StdioTransport(child), opts);
+    }
   }
   await client.initialize();
   return client;
@@ -139,19 +144,23 @@ export class McpManager {
     const entries: McpEntry[] = [];
     const clients: { close(): Promise<void> }[] = [];
     const close = async () => { await Promise.all(clients.map((c) => c.close().catch(() => {}))); };
-    if (host.kind === 'companion') return { entries, status, close };
     let configs: Record<string, McpServerConfig> = {};
     try {
-      const j = JSON.parse(await fs.readFile(path.join(host.root, '.mcp.json'), 'utf8')) as { mcpServers?: Record<string, McpServerConfig> };
+      // On a companion the file is on the user's computer.
+      const text = host.kind === 'companion' ? (await host.readFile?.('.mcp.json'))?.toString('utf8') : await fs.readFile(path.join(host.root, '.mcp.json'), 'utf8');
+      if (!text) return { entries, status, close };
+      const j = JSON.parse(text) as { mcpServers?: Record<string, McpServerConfig> };
       configs = j.mcpServers ?? {};
     } catch { return { entries, status, close }; }
     for (const [name, cfg] of Object.entries(configs)) {
       const isStdio = cfg.type !== 'http';
       if (isStdio && !trusted) {
-        status.push({ name, scope: 'project', ok: false, tools: 0, error: 'stdio servers from the project run only in a sandboxed session (or with HARNESS_TRUST_PROJECT=1)' });
+        status.push({ name, scope: 'project', ok: false, tools: 0, error: host.kind === 'companion'
+          ? 'stdio servers from the project start on your computer only when the companion is sandboxed or started with --trust-project'
+          : 'stdio servers from the project run only in a sandboxed session (or with HARNESS_TRUST_PROJECT=1)' });
         continue;
       }
-      if (isStdio && !host.spawnStream) {
+      if (isStdio && !host.spawnStream && !host.mcpTransport) {
         status.push({ name, scope: 'project', ok: false, tools: 0, error: 'this workspace cannot start processes' });
         continue;
       }

@@ -15,7 +15,11 @@ const plugins = path.join(here, '..', 'plugins');
 // @ts-expect-error plain JS module
 const { chromiumPath, serveDir } = await import('../plugins/visual/lib/browser.mjs');
 const hasChromium = await import('playwright-core').then(() => true, () => false) && !!chromiumPath();
-const hasOffice = (() => { try { execFileSync('soffice', ['--version'], { stdio: 'ignore', timeout: 20_000 }); return true; } catch { return false; } })();
+// Found the way the render tool finds it: on the PATH or in its install folder.
+// @ts-expect-error plain JS module
+const { findBinary } = await import('../plugins/visual/lib/binaries.mjs');
+const soffice = await findBinary('soffice');
+const hasOffice = !!soffice;
 
 // A tiny canvas game: state on window.__game, Enter starts, ArrowRight moves.
 const GAME = `<!doctype html><title>Dot</title><canvas id=c width=320 height=200></canvas><script>

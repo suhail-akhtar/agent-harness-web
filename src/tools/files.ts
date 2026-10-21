@@ -117,6 +117,7 @@ export const writeTool: Tool = {
     },
   },
   summarize: (i) => `write ${str(i.path)} (${str(i.content).split('\n').length} lines)`,
+  writesPath: (i) => str(i.path),
   async run(input, ctx) {
     const p = await resolveIn(ctx.host, str(input.path));
     if (typeof input.content !== 'string') return fail('content must be a string.');
@@ -150,6 +151,7 @@ export const editTool: Tool = {
     },
   },
   summarize: (i) => `edit ${str(i.path)}`,
+  writesPath: (i) => str(i.path),
   async run(input, ctx) {
     const p = await resolveIn(ctx.host, str(input.path));
     const oldS = str(input.old_string);

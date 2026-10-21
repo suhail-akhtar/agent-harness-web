@@ -11,6 +11,7 @@ import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { findBinary, missingMessage } from './binaries.mjs';
 import { runPage } from './browser.mjs';
 import { pdfFacts, pdfjsDir, renderPdfPages } from './pdf.mjs';
@@ -69,7 +70,8 @@ export function parsePages(spec, total, max) {
 
 async function officeToPdf(file, tmp, signal) {
   const profile = path.join(tmp, 'lo-profile');
-  const r = await run('soffice', ['--headless', '--norestore', '--nolockcheck', `-env:UserInstallation=file://${profile}`, '--convert-to', 'pdf', '--outdir', tmp, file], { timeoutMs: 180_000, signal });
+  // A real file URL: "file://" + a Windows path ("C:\Users\A B\...") is not one, and LibreOffice then cannot make its profile.
+  const r = await run('soffice', ['--headless', '--norestore', '--nolockcheck', `-env:UserInstallation=${pathToFileURL(profile).href}`, '--convert-to', 'pdf', '--outdir', tmp, file], { timeoutMs: 180_000, signal });
   const pdf = path.join(tmp, `${path.basename(file, path.extname(file))}.pdf`);
   if (!(await fsp.stat(pdf).catch(() => null))) throw new Error(`LibreOffice could not convert ${path.basename(file)}${r.error ? ` (${r.error})` : ''}: ${(r.stderr || r.stdout).trim().slice(-400) || 'no output'}`);
   return pdf;
