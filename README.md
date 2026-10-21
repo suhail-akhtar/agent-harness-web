@@ -102,7 +102,7 @@ await s.send('Fix the failing tests');
 | **Skills** | One line per skill sits in context. The full instructions load only when the task needs them. |
 | **Sub-agents** | Exploration and review run in their own context and return a report, not their transcript. They can run on another model (`HARNESS_SUBAGENT_MODEL`, or a `model:` in the agent definition). |
 | **Context clearing** | Old tool results are cleared in large batches. Claude does it on the server (context editing, so the transcript stays append-only); OpenAI and DeepSeek do it in the harness, only past 60% of the compaction threshold and only if at least 12K tokens are freed. The stored history keeps everything. |
-| **Compaction** | Thresholds are set per model for cost. Haiku 5.5 compacts before 100K tokens, where its price rises five times. Claude compacts **on the server** (`compact_20260112`): the summary is made inside the request, with no blocking extra call, and the history stays append-only, which Claude 5.5's preserved-thinking check requires. DeepSeek and GPT-6 Luna use the harness's own compaction: one summary request that reuses the cached context, then nothing older is replayed (the shape Anthropic recommends; OpenAI's server compaction was tried and did not shrink what the next request is billed for). |
+| **Compaction** | Thresholds are set per model for cost. Haiku 5.5 compacts before 100K tokens, where its price rises five times. Claude compacts **on the server** (`compact_20260112`): the summary is made inside the request, with no blocking extra call, and the history stays append-only, which Claude 5.5's preserved-thinking check requires. DeepSeek and GPT-6 Luna use the harness's own compaction: one summary request that reuses the cached context, then nothing older is replayed (the shape Anthropic recommends; OpenAI's server compaction was tried and did not shrink what the next request is billed for). Checked against the current API on 2026-10-21: `compact_20260112` and `clear_tool_uses_20250919` are current; the newer on-demand and keep-tail compaction (`compact-2026-09-04`) exists for harnesses that must edit history and still keep thinking blocks valid, which this one never does on Claude (frozen prefix, appended reminders, no client-side clearing; its own compaction restarts from a summary, which the check allows). |
 | **Code mode** | `run_script`: the model writes a short JavaScript program that calls tools and keeps only what it needs; intermediate results never enter the context. On a 40-file aggregation task it gave the same correct answer at about **half the cost** on all three models. |
 | **Small outputs** | `edit` sends only the changed text and echoes the changed lines (no re-read needed). Command output is trimmed to its head and tail. `read` pages large files. |
 | **Effort** | Per session, per model. Explore sub-agents run at low effort. |
@@ -312,18 +312,42 @@ Enforced in code on every call. Order: deny rules, then ask rules, then allow ru
 
 | Mode | Edits | Commands | External services |
 |---|---|---|---|
-| Ask before edits (default) | ask | free in the sandbox, ask on a real machine | ask |
-| Auto-accept edits | free | free in the sandbox, ask on a real machine | ask |
+| Ask before edits (default) | ask | free in a sandbox, ask on a real machine | ask |
+| Auto-accept edits | free | free in a sandbox, ask on a real machine | ask |
+| Auto (checked by a model) | free | what would be asked goes to a small checking model first | the same |
+| Never ask (`dontAsk`) | refused | free in a sandbox, refused on a real machine | refused |
 | Plan mode | blocked | read-only only | blocked |
 | Bypass | free | free | free |
 
 In plan mode the agent researches read-only, then presents its plan for approval. "Always allow" in an approval adds a rule for the session. A prefix rule like `bash(npm test:*)` never covers a compound command.
 
-Two calls are asked about whatever the mode, bypass aside:
-- **Saving to memory after untrusted content**: once a web page or service result is in the context, a memory write needs a yes.
-- **Running a script without network isolation**: `run_script` asks first, like `web_fetch`, where its process cannot be cut off from the network (outside Linux).
+- **Auto mode**, like Claude Code's: a call that would be asked about is first shown to a small model (`HARNESS_AUTO_MODEL`, else the sub-agent model) with the user's request and whether untrusted content was read. A clear yes runs it; anything else is asked, with the checker's reason. Its cost is charged to the session. Checked live on DeepSeek: `npm test` cleared, posting `.env` to a paste site refused.
+- **Never ask (`dontAsk`)** is for unattended runs (scheduled tasks use it by default): what would be asked is refused, so a run never hangs waiting; allow rules still let work through.
 
-A script runs in a fresh V8 context with no `require`, `process`, `fetch` or `eval`. That context runs inside a process under Node's permission model (no files, no child processes) and, on Linux, in a namespace with no network. Every tool it calls goes through these same checks.
+**Untrusted content changes what is asked.** Once a web page, a search result or a service's answer is in the context (also through a sub-agent, at any depth, or a resumed or imported session):
+- **every way out of the session is confirmed**, whatever the mode, bypass aside: a call to a service (any MCP tool, read-only ones too), a URL, a push, and a command on a machine or sandbox with open network. This is the "lethal trifecta" - private data, untrusted content and a way out in one agent - that Willison and GitHub's MCP exploit showed. A sandbox with no network or only the operator's allowlist is not a way out;
+- **saving to memory or scheduling a prompt** needs a yes, so a page cannot plant instructions for later;
+- **hidden text never reaches the model**: Unicode tag characters (ASCII smuggling), zero-width characters, bidi controls and smuggling variation selectors are stripped from outside content, with a note saying how many; elements a person never sees on a page (`hidden`, `display:none`, `visibility:hidden`, zero font size, `aria-hidden`, hidden inputs) are dropped from fetched pages.
+
+`HARNESS_TAINT_GUARD=off` turns the confirmation off (not recommended).
+
+**Fetching outside URLs checks the address twice**: before the request, and again on the exact address the connection uses (a pinned DNS lookup), so a name that resolves publicly for the check and to `127.0.0.1` a moment later (DNS rebinding) is refused. Plugin fetches get the same.
+
+**Scripts** (`run_script`) run in a fresh V8 context with no `require`, `process`, `fetch` or `eval`, inside a process under Node's permission model (no files, no child processes). In a Docker session that process runs inside the sandbox, under its network policy, like any command there; on Linux elsewhere, in a namespace with no network; on other machines it asks first. Every tool it calls goes through these same checks.
+
+## Hooks
+
+Deterministic steps the model cannot skip, at 14 points: `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact`, `Stop`, `StopFailure`. Three kinds:
+
+| Kind | How | Answers |
+|---|---|---|
+| `command` | runs on the session's host with the event as JSON on stdin | exit 0 proceeds (stdout is feedback, or JSON `{"decision":"allow"\|"deny"\|"block","reason"}`); exit 2 blocks with stderr as the reason |
+| `http` | POSTs the event as JSON; `headers` may read server variables as `${VAR}` | a 2xx with the same JSON, or nothing |
+| `prompt` | a small model judges the event against `prompt` (an instruction) | ok allows, not ok blocks (denies, for `PermissionRequest`) |
+
+- `PreToolUse` runs before anyone is asked: it can block a call or allow it without a prompt. `PermissionRequest` can answer a prompt instead of a person (a policy service, a judging model); deny wins over allow. `PreCompact`'s feedback is added to what the summary must keep. `SubagentStart` adds context to a sub-agent's brief; `SubagentStop` can send a sub-agent back, like `Stop` for the main agent. `Notification` fires whenever the agent waits for a person (and on `notify_user`), so an `http` hook can reach a chat channel or a phone.
+- **Who may configure what.** The operator's settings file (`HARNESS_SETTINGS`, JSON with `permissions`, `hooks` and limits; a file that cannot be read stops the server rather than dropping its rules) and plugin manifests take every kind; a plugin's `http` hook goes only to its declared hosts and reads only its declared secrets. A repository's `.harness/settings.json` adds only `command` hooks, which run in its sandbox: an `http` hook would run on the server.
+- In-process hooks from code plugins (`api.on(event, handler)`) answer `{ block?, feedback?, decision? }`.
 
 ## Where the agent works
 
@@ -335,12 +359,17 @@ A script runs in a fresh V8 context with no `require`, `process`, `fetch` or `ev
     - **an allowlist** (the default in the UI): the sandbox sits on an internal Docker network with no route out, and no host address on it either. A small proxy container beside it is the only way out and admits only the allowed hosts. The package registries and GitHub are allowed by default (`HARNESS_SANDBOX_ALLOW_HOSTS`). The list can be edited while the session runs, the agent is told what is allowed, and blocked attempts are reported. Tested against real Docker.
     - **full**.
   - Files sit in a host folder mounted at `/workspace`. The file tools check real paths, so a symlink planted from inside the container cannot reach the host.
+  - **API keys without the key in the sandbox.** With `HARNESS_SANDBOX_CREDENTIALS` (presets `openai`, `anthropic`, `deepseek`, `github`, or a JSON file of your own), an allowlist sandbox gets base URLs pointing at its proxy (`OPENAI_BASE_URL=http://egress:3128/__cred/openai/v1`, ...) and a placeholder key; the proxy adds the real key on the way out, from a file only it mounts, and drops whatever auth the sandbox sent. The agent is told which credentials exist. Verified live: a sandbox listed OpenAI's models while `env` inside showed only the placeholder.
+  - **Setup scripts.** A session's `setup` (or a repository's `.harness/setup.sh` when `HARNESS_REPO_SETUP=1`) runs once as root with the network open, in a throwaway container with the workspace mounted, as cloud harnesses do. What it installs is kept as a snapshot image (by base image and script, for `HARNESS_SNAPSHOT_DAYS`, 7) and reused; the script runs again on top of it, so idempotent installs are quick. The session then starts from the snapshot with its own user and network policy. The log is in `.harness/setup.log`; a failing script leaves the session usable on the base image.
 - **Your computer** (companion)
   - Open "Your computers", then run the two lines it shows.
   - It connects out over HTTPS (long-poll: no open ports, works behind NAT) and only touches the folder you start it in.
-- **Server folder**: opt-in with `HARNESS_LOCAL_ROOTS`.
-  - Commands are unsandboxed, with credentials stripped from their environment.
-  - They can still reach services on the server's network: keep this mode for trusted, single-user machines.
+  - **It contains the agent's commands** (`--sandbox`, default `auto`): bubblewrap on Linux, Seatbelt on macOS, else Docker with the folder mounted; `--network none|full`. It tells the server, which then treats its commands as sandboxed.
+  - Checkpoints and rewind work on its files (saved through it before each write or edit), and the project's MCP servers (`.mcp.json`) start on that computer, their messages relayed through the companion - only when it is sandboxed or started with `--trust-project`.
+- **Server folder**: opt-in with `HARNESS_LOCAL_ROOTS`, for administrators.
+  - **Contained when you choose** (`sandbox` per session, default `HARNESS_LOCAL_SANDBOX`): bubblewrap (Linux) or Seatbelt (macOS) make the system read-only except the folder and temp, hide credential folders (`~/.ssh`, `~/.aws`, `~/.config/gh`, ...) and cut the network unless allowed; or Docker mounts the folder into a sandbox (Windows has no OS sandbox for a command). `auto` takes the best there is. A sandbox that was asked for and is missing is an error, never a silent fallback. Verified: bubblewrap for real in a Linux container, Docker on Windows.
+  - Uncontained, commands run with credentials stripped from their environment and are asked about; they can still reach the server's network: keep that for trusted, single-user machines.
+  - **Worktrees**: a folder that is a git repository can give each session its own worktree and branch (`harness/<title>-<id>`), so several sessions work on one repository in parallel without touching your checkout. The branch stays when it has commits. In a sandbox only what committing on that branch needs is writable in the repository's `.git` (objects, `refs/heads/harness/`, the worktree's folder); hooks and config stay read-only, because a hook written from a sandbox would run on the host.
 
 ## Publishing: branches and pull requests
 
@@ -395,10 +424,18 @@ The server prints the redirect URI to register when it starts. How it works:
 - **Trace.** Every model call and tool call is recorded in `trace.jsonl`: model, time, uncached / cache read / cache write / output tokens, cost, stop reason, retries; tool, time, error. Shown in the UI under "Open trace", and as JSON at `GET /api/sessions/:id/trace`.
 - **Images.** `read` (and `render`, `browser`) show pictures to the model, for checking screenshots, renders and charts. Each provider gets its own format. If a provider rejects an image, it is replaced by a note in the live context and the request goes on.
 - **Networks fail.** A stream that drops mid-way is retried like a failed request, on every provider; a step that still fails is saved and resumes where it stopped (`--resume`, or **Resume** in the UI).
+- **Portable sessions.** A session exports as one file (`GET /api/sessions/:id/export`, the ⇩ button): its conversation, todos and workspace files, without heavy folders or secret files. Importing it (`POST /api/sessions/import`, or the new-session form) on another server or the desktop app makes a new session that continues where it stopped - never with a looser permission mode, and still counted as having read untrusted content if it had.
+
+## Scheduled work and sub-agents
+
+- **Scheduled prompts.** The agent's `schedule` tool sets up work for later in its own session - once (`in_minutes`, `at`) or on a five-field cron - and `/api/schedules` does the same for people, to an existing session or a new one per run (`dontAsk` by default: nobody is there to answer). Missed runs fire once after a restart, a busy session is skipped, and every run goes through the same permissions and spend limits as a typed message. `notify_user` tells the person something now, through the session and the `Notification` hooks.
+- **Sub-agents** run in parallel (at most `HARNESS_SUBAGENTS_PARALLEL` at once, default 10, at most 20) and may start their own up to `HARNESS_SUBAGENT_DEPTH` levels (default 1: they cannot; at most 3, as Claude Code). A sub-agent that read outside content taints every agent above it.
 
 ## Evaluations
 
 `npm run eval -- [--packs sdlc,documents,games,3d] [--models a,b] [--repeat 2] [--concurrency 3]` runs each case in `evals/<pack>/<case>/eval.json` on every model and repeat, in fresh workspaces, and judges it with **hidden checks** the agent never sees: shell commands (the URL shortener's 25 HTTP acceptance checks), gates, required files, and hidden playtests in the headless browser. It writes `report.md` (pass rate, checks passed, median cost, time, cache hit, calls, every failed check) and `results.json`. The checks were calibrated against results verified by hand before they were trusted.
+
+Every report names the harness that produced it - version, commit (and whether it had local changes), the loop's settings, plugins and platform - because a score describes a model and a harness together: a controlled study found the same two models swapping places by up to ~38 points across harnesses.
 
 ## Observability
 
@@ -514,25 +551,26 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 | `HARNESS_SANDBOX_IMAGES` | | Other images a sandbox session may choose (comma-separated), e.g. `harness-sandbox-3d:latest`. |
 | `HARNESS_BLENDER`, `HARNESS_GODOT` | auto | Blender and Godot for server-folder sessions (searched on the PATH and in the usual install folders). |
 | `HARNESS_PRICING_JSON` | | Override prices per model. |
+| `HARNESS_SETTINGS` | | The operator's settings file (JSON: `permissions`, `hooks` of every kind, `maxSteps`, `maxCostUsd`, `compactAt`, `subagentModel`, `autoModel`, `gatesOnStop`, `maxSubagentDepth`, `maxParallelSubagents`). |
+| `HARNESS_AUTO_MODEL` | sub-agent model | The model that checks calls in auto mode. |
+| `HARNESS_TAINT_GUARD` | on | `off` stops confirming ways out after untrusted content (not recommended). |
+| `HARNESS_SANDBOX_CREDENTIALS` | | API credentials allowlist sandboxes use through their proxy: `openai`, `anthropic`, `deepseek`, `github` (`HARNESS_SANDBOX_GITHUB_TOKEN`), and/or the path of a JSON file of `{name, upstream, headers, env}`. |
+| `HARNESS_LOCAL_SANDBOX` | off | How server-folder sessions contain commands by default: `auto`, `bwrap`, `seatbelt`, `docker` or `off`. |
+| `HARNESS_REPO_SETUP` | off | `1`: a repository's `.harness/setup.sh` runs as a Docker session's setup script. |
+| `HARNESS_SNAPSHOT_DAYS` / `HARNESS_SETUP_TIMEOUT_S` | 7 / 900 | How long setup snapshots are reused / how long a setup script may run. |
+| `HARNESS_SUBAGENT_DEPTH` / `HARNESS_SUBAGENTS_PARALLEL` | 1 / 10 | How deep sub-agents may nest (at most 3) / how many run at once (at most 20). |
+| `HARNESS_MAX_SCHEDULES` | 50 | Scheduled prompts per person. |
+| `HARNESS_EXPORT_MAX_MB` / `HARNESS_IMPORT_MAX_MB` | 50 / 80 | Workspace files in an exported session / the largest import. |
+| `.env` | | `npm start` (and every npm launcher) reads a `.env` file where it runs; variables already set win. |
 
 ## Honest limits
 
 - **This is not Claude Code's code.** Claude Code is closed source. This harness follows its published design and open-source harnesses; unpublished tuning (the exact prompts) is not reproduced.
 - **The harness lifts every model but cannot make them equal.** Studies put the harness's effect at 5–30 points on agent benchmarks; the model is still most of the result.
-- **Not built yet:**
-  - checkpoints and project MCP servers on companion sessions;
-  - credential injection at the sandbox's network proxy (it allows or blocks hosts; it does not add secrets to requests);
-  - Godot export templates in the 3D image (about 1 GB for every platform), so `godot export` works only where they are installed; Godot screenshots on companion sessions (the frames are read on the server);
-  - workflows for Blender or Godot (`build-game` and `model-3d` build for the browser; Blender and Godot are used from a session or by the `3d-artist` and `game-engineer` agents);
-  - signing out at the identity provider (single sign-on's sign-out ends the harness session only).
-- **Limits of what was built:**
-  - Plugin code runs in the server process. Declared permissions are enforced on the channels the harness hands out, not on code that ignores them; signing is the control for that.
-  - Scripts (`run_script`) have no network namespace outside Linux, so there they ask before running.
-  - A plugin's `api.fetch` and `web_fetch` check a host's addresses before connecting, then connect by name; a DNS server that changes its answer in between (rebinding) is not stopped. Pinning the checked address needs an HTTP client with a custom lookup, which Node's built-in fetch does not take.
-  - Companion mirrors (the server's copy for render and browser) leave out `.env`, key files, names with `\` or `:`, and files over 20 MB.
-  - The allowlist network was tested on Linux and, since 2026-10-21, on Docker Desktop for Windows (where the host is `host.docker.internal`); not on Docker Desktop for macOS.
-- **Not tested here:**
-  - the full sandbox image on Linux (it was first built on 2026-10-21, on Docker Desktop for Windows, together with the 3D image; earlier tests used a plain Node image because that environment's proxy blocked Debian packages);
-  - Godot on Windows or macOS outside the sandbox (only discovery is tested there, with simulated paths); Blender ran natively on Windows 11 and in the 3D image;
-  - a real Windows machine (the Windows choices are tested with simulated paths, and the Docker setup ran 80/80 on Windows before the review fixes);
-  - prices, which come from the providers' pages on 2026-10-19 and can change.
+- **Limits by design** (each is a trust boundary chosen on purpose, not missing work):
+  - Plugin code runs in the server process, as Claude Code's plugins do. Declared permissions are enforced on the channels the harness hands out (fetch, secrets, MCP environment, hooks), not on code that ignores them; signing (`HARNESS_PLUGIN_KEYS`) is the control for which code may run at all.
+  - Outside Docker and Linux, a script's process cannot be cut off from the network, so there `run_script` asks before running.
+  - Behind an HTTP proxy, the proxy resolves names, so `web_fetch` can check addresses only before the request (without a proxy it pins the address it checked).
+  - Companion mirrors (the server's copy for render and browser) leave out `.env`, key files and files over 20 MB, so secrets stay on the user's computer; on a Windows server, names with `\` or `:` too.
+  - The OS sandboxes (bubblewrap, Seatbelt) have no proxy, so a host allowlist needs the Docker sandbox; with them an allowlist means no network.
+- **Not tested here:** Seatbelt on a real Mac and Docker Desktop for macOS (no Mac was available: the Seatbelt profile is tested as generated text); bubblewrap ran for real inside a Linux container, not on a Linux desktop; prices, which come from the providers' pages on 2026-10-19 and can change.
