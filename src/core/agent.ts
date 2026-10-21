@@ -5,7 +5,7 @@ import type { ImageData, ToolHost } from '../runtime/host.ts';
 import { validateInput } from '../tools/index.ts';
 import { PathError } from '../tools/paths.ts';
 import type { FileStamp, Tool, ToolContext, ToolOutcome } from '../tools/types.ts';
-import { runHooks } from './hooks.ts';
+import { type HookJudge, runHooks } from './hooks.ts';
 import type { Effort, ModelSpec } from './models.ts';
 import { costOf } from './models.ts';
 import { decide, type Rules, suggestRule } from './permissions.ts';
@@ -70,6 +70,8 @@ export interface AgentConfig {
   readFiles: Map<string, FileStamp>;
   /** Hooks registered by trusted code plugins. */
   inProcessHooks?: InProcessHook[];
+  /** Answers prompt hooks (a small model judging an event). */
+  hookJudge?: HookJudge;
   runSubagent?: ToolContext['runSubagent'];
   askUser?: ToolContext['askUser'];
   proposePlan?: ToolContext['proposePlan'];
@@ -132,7 +134,7 @@ export class Agent {
   }
 
   private hookRun(event: HookEvent, payload: Record<string, unknown>, matchName: string | undefined, signal: AbortSignal) {
-    return runHooks(this.cfg.settings, this.cfg.host, event, payload, matchName, signal, this.cfg.inProcessHooks);
+    return runHooks(this.cfg.settings, this.cfg.host, event, { ...payload, ...(this.cfg.name !== 'main' ? { agent: this.cfg.name } : {}) }, matchName, signal, this.cfg.inProcessHooks, this.cfg.hookJudge);
   }
 
   /** Runs model calls and tools until the model stops calling tools (or a limit hits). */
@@ -177,7 +179,8 @@ export class Agent {
           this.append({ role: 'user', content: queued.map((t) => ({ type: 'text' as const, text: t })) });
           continue;
         }
-        const stopHook = await this.hookRun('Stop', { agent }, undefined, signal);
+        // The main agent's end is Stop; a sub-agent's (or a workflow node's) is SubagentStop, matched by agent name.
+        const stopHook = agent === 'main' ? await this.hookRun('Stop', { agent }, undefined, signal) : await this.hookRun('SubagentStop', {}, agent, signal);
         for (const e of stopHook.errors) this.hooks.emit({ kind: 'notice', level: 'warn', text: e, agent });
         if (stopHook.blocked && stopHookBlocks < 3) {
           stopHookBlocks++;
@@ -215,7 +218,11 @@ export class Agent {
   private recordUsage(resp: ProviderResponse): number {
     const cost = costOf(this.cfg.model, resp.usage);
     this.lastPromptTokens = resp.contextTokens ?? promptTokens(resp.usage);
-    if (resp.compacted) this.hooks.emit({ kind: 'compaction', before: resp.compacted.before, after: this.lastPromptTokens, summaryTokens: resp.compacted.summaryTokens });
+    if (resp.compacted) {
+      this.hooks.emit({ kind: 'compaction', before: resp.compacted.before, after: this.lastPromptTokens, summaryTokens: resp.compacted.summaryTokens });
+      // Compacted on the provider's side: PostCompact hooks still hear of it (nothing waits on them).
+      void this.hookRun('PostCompact', { trigger: 'server', before: resp.compacted.before, after: this.lastPromptTokens }, undefined, new AbortController().signal).catch(() => {});
+    }
     this.hooks.onUsage(this.cfg.model, resp.usage, cost);
     this.hooks.emit({
       kind: 'usage', model: this.cfg.model.id, usage: resp.usage, cost,
@@ -328,14 +335,23 @@ export class Agent {
 
     const decision = decide(tool, input, { mode: this.hooks.getMode(), rules: this.hooks.rules(), sandboxed: this.cfg.host.sandboxed, tainted: this.tainted, network: this.cfg.host.networkPolicy });
     if (decision.action === 'deny') return finish(`Permission denied: ${decision.reason}.`, true, undefined, undefined, name);
-    if (decision.action === 'ask') {
-      const answer = await this.hooks.requestPermission(tool, input, tool.summarize(input), suggestRule(tool, input), agent);
-      if (!answer.allow) return finish(`The user denied this call.${answer.feedback ? ` They said: ${answer.feedback}` : ' Do not retry it unchanged; ask or take another approach.'}`, true, undefined, undefined, name);
-    }
 
+    // PreToolUse runs before anyone is asked: a hook that blocks spares the person a
+    // prompt, and one that allows answers it (deny rules above still win).
     const pre = await this.hookRun('PreToolUse', { tool: name, input }, name, signal);
     for (const e of pre.errors) this.hooks.emit({ kind: 'notice', level: 'warn', text: e, agent });
     if (pre.blocked) return finish(`A PreToolUse hook blocked this call: ${pre.feedback}`, true, undefined, undefined, name);
+
+    if (decision.action === 'ask' && pre.decision !== 'allow') {
+      // A PermissionRequest hook may answer before a person is asked (a policy service, a judging model).
+      const ph = await this.hookRun('PermissionRequest', { tool: name, input, reason: decision.reason }, name, signal);
+      for (const e of ph.errors) this.hooks.emit({ kind: 'notice', level: 'warn', text: e, agent });
+      if (ph.decision === 'deny' || ph.blocked) return finish(`A PermissionRequest hook denied this call${ph.feedback ? `: ${ph.feedback}` : '.'}`, true, undefined, undefined, name);
+      if (ph.decision !== 'allow') {
+        const answer = await this.hooks.requestPermission(tool, input, tool.summarize(input), suggestRule(tool, input), agent);
+        if (!answer.allow) return finish(`The user denied this call.${answer.feedback ? ` They said: ${answer.feedback}` : ' Do not retry it unchanged; ask or take another approach.'}`, true, undefined, undefined, name);
+      }
+    }
 
     let outcome: ToolOutcome;
     try {
@@ -346,7 +362,9 @@ export class Agent {
     } catch (err) {
       if (signal.aborted) return finish('Interrupted by the user.', true, undefined, undefined, name);
       const msg = err instanceof PathError ? err.message : `${name} failed: ${(err as Error).message ?? String(err)}`;
-      return finish(msg, true, undefined, undefined, name);
+      const fail = await this.hookRun('PostToolUseFailure', { tool: name, input, error: msg }, name, signal);
+      for (const e of fail.errors) this.hooks.emit({ kind: 'notice', level: 'warn', text: e, agent });
+      return finish(fail.feedback ? `${msg}\n<hook_feedback>\n${fail.feedback}\n</hook_feedback>` : msg, true, undefined, undefined, name);
     }
     if (name === 'todo_write') this.stepsSinceTodo = 0;
     const untrusted = tool.kind === 'network' || tool.kind === 'external' || tool.untrusted || outcome.untrusted;
@@ -357,6 +375,11 @@ export class Agent {
     const post = await this.hookRun('PostToolUse', { tool: name, input, is_error: !!outcome.is_error }, name, signal);
     for (const e of post.errors) this.hooks.emit({ kind: 'notice', level: 'warn', text: e, agent });
     if (post.feedback) content += `\n<hook_feedback>\n${post.feedback}\n</hook_feedback>`;
+    if (outcome.is_error) {
+      const fail = await this.hookRun('PostToolUseFailure', { tool: name, input, error: outcome.content.slice(0, 4000) }, name, signal);
+      for (const e of fail.errors) this.hooks.emit({ kind: 'notice', level: 'warn', text: e, agent });
+      if (fail.feedback) content += `\n<hook_feedback>\n${fail.feedback}\n</hook_feedback>`;
+    }
     return finish(content, !!outcome.is_error || post.blocked, outcome.display, outcome.images, name);
   }
 
@@ -446,7 +469,11 @@ export class Agent {
    */
   async compact(signal: AbortSignal): Promise<void> {
     const before = this.lastPromptTokens;
-    const request: Message[] = [...this.messages, { role: 'user', content: [{ type: 'text', text: COMPACT_PROMPT }] }];
+    // PreCompact hooks can add what the summary must keep (their feedback becomes extra instructions).
+    const pre = await this.hookRun('PreCompact', { trigger: 'auto', contextTokens: before }, undefined, signal);
+    for (const e of pre.errors) this.hooks.emit({ kind: 'notice', level: 'warn', text: e, agent: this.cfg.name });
+    const instructions = pre.feedback ? `${COMPACT_PROMPT}\n\nAlso keep:\n${pre.feedback}` : COMPACT_PROMPT;
+    const request: Message[] = [...this.messages, { role: 'user', content: [{ type: 'text', text: instructions }] }];
     const resp = await this.callModel(request, signal, true);
     this.recordUsage(resp);
     const summary = resp.message.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n').trim();
@@ -469,6 +496,8 @@ export class Agent {
     this.lastPromptTokens = Math.ceil(parts.join('').length / 4);
     this.hooks.onCompact(this.messages);
     this.hooks.emit({ kind: 'compaction', before, after: this.lastPromptTokens, summaryTokens: resp.usage.output });
+    const post = await this.hookRun('PostCompact', { trigger: 'auto', before, after: this.lastPromptTokens, summary: summary.slice(0, 8000) }, undefined, signal);
+    for (const e of post.errors) this.hooks.emit({ kind: 'notice', level: 'warn', text: e, agent: this.cfg.name });
   }
 }
 

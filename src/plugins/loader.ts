@@ -4,6 +4,7 @@ import net from 'node:net';
 import { pathToFileURL } from 'node:url';
 import { loadAgentDir } from '../agents/agents.ts';
 import type { Registry } from '../kernel/registry.ts';
+import { HOOK_EVENTS } from '../core/settings.ts';
 import type { WorkflowDef } from '../graph/types.ts';
 import { validateWorkflow } from '../graph/validate.ts';
 import { assertPublicUrl, publicFetch } from '../tools/web.ts';
@@ -82,7 +83,18 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void): P
     contributes.push(`mcp:${name}`);
   }
   for (const [ev, specs] of Object.entries(m.hooks ?? {})) {
-    (reg.shellHooks[ev as keyof typeof reg.shellHooks] ??= []).push(...(specs ?? []));
+    if (!(HOOK_EVENTS as readonly string[]).includes(ev)) { log(`${m.name}: unknown hook event ${ev} (skipped)`); continue; }
+    // An http hook goes only to hosts the plugin declared, and reads only the secrets it declared.
+    const ok = (specs ?? []).filter((h) => {
+      if (h?.type !== 'http') return true;
+      let host = '';
+      try { host = new URL(String(h.url)).hostname; } catch { /* not a URL */ }
+      const vars = Object.values(h.headers ?? {}).flatMap((v) => [...String(v).matchAll(/\$\{([A-Za-z0-9_]+)\}/g)].map((x) => x[1]!));
+      const bad = !host || !hostAllowed(host, declared.network) ? `its URL's host is not in permissions.network` : vars.find((v) => !declared.secrets.includes(v)) ? `it reads a variable not in permissions.secrets` : '';
+      if (bad) log(`${m.name}: ${ev} http hook skipped: ${bad}`);
+      return !bad;
+    });
+    (reg.shellHooks[ev as keyof typeof reg.shellHooks] ??= []).push(...ok);
     contributes.push(`hooks:${ev}`);
   }
 

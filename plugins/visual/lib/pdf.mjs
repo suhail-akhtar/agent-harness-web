@@ -6,6 +6,7 @@
 import fsp from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { withBrowser } from './browser.mjs';
 
 const require = createRequire(import.meta.url);
@@ -16,8 +17,10 @@ export function pdfjsDir() {
 }
 
 async function open(data) {
-  const pdfjs = await import(path.join(pdfjsDir(), 'pdf.mjs'));
-  const fonts = path.join(pdfjsDir(), '..', '..', 'standard_fonts') + path.sep;
+  // A file URL: on Windows a bare "C:\..." path is not something import() can load.
+  const pdfjs = await import(pathToFileURL(path.join(pdfjsDir(), 'pdf.mjs')).href);
+  // pdf.js wants a "/"-ended location; forward slashes read fine as a path on Windows too.
+  const fonts = path.join(pdfjsDir(), '..', '..', 'standard_fonts').split(path.sep).join('/') + '/';
   return pdfjs.getDocument({ data: new Uint8Array(data), standardFontDataUrl: fonts, isEvalSupported: false, disableFontFace: true, useSystemFonts: false, verbosity: 0 });
 }
 

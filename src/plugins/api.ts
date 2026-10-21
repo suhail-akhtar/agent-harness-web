@@ -49,7 +49,9 @@ export interface QualityGate {
 }
 
 export interface HookPayload { event: HookEvent; [k: string]: unknown }
-export type HookHandler = (payload: HookPayload, ctx: { host: ToolHost; signal: AbortSignal }) => Promise<{ block?: boolean; feedback?: string } | void> | { block?: boolean; feedback?: string } | void;
+/** What a hook answers: block (with feedback the model sees), or, for PermissionRequest, decide the prompt. */
+export interface HookAnswer { block?: boolean; feedback?: string; decision?: 'allow' | 'deny' }
+export type HookHandler = (payload: HookPayload, ctx: { host: ToolHost; signal: AbortSignal }) => Promise<HookAnswer | void> | HookAnswer | void;
 
 export interface ProviderDef {
   /** Environment variables that hold its key, first match wins. */
@@ -139,7 +141,7 @@ export interface PluginManifest {
   /** Directory of agent definitions (markdown with frontmatter). */
   agents?: string;
   mcpServers?: Record<string, McpServerConfig>;
-  hooks?: Partial<Record<HookEvent, { matcher?: string; command: string; timeoutMs?: number }[]>>;
+  hooks?: Partial<Record<HookEvent, import('../core/settings.ts').HookSpec[]>>;
   /** Directory of workflow definitions (*.json). */
   workflows?: string;
   /**

@@ -6,6 +6,8 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import http from 'node:http';
+import { createRequire } from 'node:module';
+import os from 'node:os';
 import path from 'node:path';
 
 const MIME = {
@@ -16,15 +18,46 @@ const MIME = {
   '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.ttf': 'font/ttf', '.woff': 'font/woff', '.woff2': 'font/woff2', '.txt': 'text/plain',
 };
 
+/** Where Playwright keeps browsers: PLAYWRIGHT_BROWSERS_PATH, the Docker image's folder, then each OS's cache. */
+function browserRoots() {
+  const home = os.homedir();
+  return [
+    process.env.PLAYWRIGHT_BROWSERS_PATH,
+    '/opt/pw-browsers',
+    process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA ?? path.join(home, 'AppData', 'Local'), 'ms-playwright') : undefined,
+    process.platform === 'darwin' ? path.join(home, 'Library', 'Caches', 'ms-playwright') : undefined,
+    process.platform === 'linux' ? path.join(process.env.XDG_CACHE_HOME ?? path.join(home, '.cache'), 'ms-playwright') : undefined,
+  ].filter(Boolean);
+}
+
+/** The executable inside one chromium-NNNN folder, for this OS. */
+function inBuild(dir) {
+  const candidates = process.platform === 'win32' ? ['chrome-win64/chrome.exe', 'chrome-win/chrome.exe']
+    : process.platform === 'darwin' ? ['chrome-mac-arm64/Chromium.app/Contents/MacOS/Chromium', 'chrome-mac/Chromium.app/Contents/MacOS/Chromium']
+    : ['chrome-linux64/chrome', 'chrome-linux/chrome'];
+  return candidates.map((c) => path.join(dir, ...c.split('/'))).find((p) => fs.existsSync(p));
+}
+
+let found;
+/**
+ * The Chromium to launch: HARNESS_CHROMIUM, else the build playwright-core was
+ * made for, else the newest build in Playwright's folders. Undefined when there
+ * is none (the browser tools then say how to install one).
+ */
 export function chromiumPath() {
   if (process.env.HARNESS_CHROMIUM) return process.env.HARNESS_CHROMIUM;
+  if (found !== undefined) return found ?? undefined;
   try {
-    for (const d of fs.readdirSync('/opt/pw-browsers').filter((x) => /^chromium-\d+$/.test(x)).sort().reverse()) {
-      const p = path.join('/opt/pw-browsers', d, 'chrome-linux', 'chrome');
-      if (fs.existsSync(p)) return p;
-    }
-  } catch { /* not this layout */ }
-  return undefined; // playwright-core's own lookup
+    const own = createRequire(import.meta.url)('playwright-core').chromium.executablePath();
+    if (own && fs.existsSync(own)) return (found = own);
+  } catch { /* playwright-core not installed */ }
+  for (const root of browserRoots()) {
+    let builds = [];
+    try { builds = fs.readdirSync(root).filter((x) => /^chromium-\d+$/.test(x)).sort((a, b) => Number(b.split('-')[1]) - Number(a.split('-')[1])); } catch { continue; }
+    for (const b of builds) { const p = inBuild(path.join(root, b)); if (p) return (found = p); }
+  }
+  found = null;
+  return undefined;
 }
 
 let browserP = null;
@@ -262,7 +295,8 @@ export function describePage(r) {
   for (const e of r.evals) lines.push(`eval ${e.js} => ${e.value}`);
   for (const t of r.timeouts ?? []) lines.push(`waitFor timed out: ${t}`);
   if (r.result !== undefined) lines.push(`Result: ${r.result}`);
-  if (r.saved) lines.push(r.saved.error ? `Save failed: ${r.saved.error}` : `Saved ${r.saved.label}: ${r.saved.bytes} bytes`);
+  // Workspace paths read the same on every OS (the tools take either separator).
+  if (r.saved) lines.push(r.saved.error ? `Save failed: ${r.saved.error}` : `Saved ${String(r.saved.label).replace(/\\/g, '/')}: ${r.saved.bytes} bytes`);
   for (const s of r.shots) lines.push(`Screenshot "${s.label}": ${s.stats.blank ? 'BLANK (one colour - nothing was drawn)' : `${s.stats.colours} colours, contrast ${s.stats.stddev}`}`);
   return lines.join('\n');
 }
