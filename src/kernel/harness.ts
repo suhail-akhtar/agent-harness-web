@@ -13,6 +13,7 @@ import { loadTrustedKeys, SIG_FILE, verifyPlugin } from '../plugins/signing.ts';
 import { OtelExporter, parseHeaders } from './otel.ts';
 import { BUILTIN_PROVIDERS } from '../providers/index.ts';
 import { CompanionHub } from '../runtime/companion.ts';
+import { sandboxCredentials as sandboxCredentials_ } from '../runtime/credentials.ts';
 import { BUILTIN_TOOLS } from '../tools/index.ts';
 import { BUILTIN_SEARCH, makeSearchService, type SearchService } from '../research/search.ts';
 import { Registry, type LoadedPlugin } from './registry.ts';
@@ -68,6 +69,8 @@ export interface HarnessOptions {
    * on when a token or a repository list is set. null turns it off.
    */
   publish?: SessionDeps['publish'] | null;
+  /** API credentials allowlist sandboxes use through the egress proxy. Default: HARNESS_SANDBOX_CREDENTIALS. */
+  sandboxCredentials?: SessionDeps['sandboxCredentials'];
   log?: (message: string) => void;
 }
 
@@ -165,10 +168,18 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   if (!['on', 'read', 'off'].includes(memoryMode)) throw new Error(`HARNESS_MEMORY must be on, read or off (got "${memoryMode}")`);
   const search = opts.search === null ? undefined : opts.search ?? makeSearchService([...registry.searchBackends.values(), ...(opts.bare ? [] : BUILTIN_SEARCH)]);
   if (search) log(`web search: ${search.backend}`);
+  let sandboxCredentials = opts.sandboxCredentials;
+  if (!sandboxCredentials) {
+    const c = sandboxCredentials_(process.env);
+    for (const p of c.problems) log(`sandbox credential skipped: ${p}`);
+    if (c.credentials.length) log(`sandbox credentials (added by the egress proxy): ${c.credentials.map((x) => x.name).join(', ')}`);
+    sandboxCredentials = c.credentials;
+  }
   const sessions = new SessionManager({
     dataDir: opts.dataDir, companions, registry, mcp, onSpan: otel ? (sid, span) => otel.record(sid, span) : undefined,
     memory: { root: path.resolve(opts.memoryDir ?? path.join(opts.dataDir, 'memory')), mode: memoryMode }, search, spend: opts.spend,
     publish: opts.publish === null ? undefined : opts.publish ?? publishFromEnv(),
+    sandboxCredentials,
   });
   await sessions.load();
   /** Downloads, checks the hash, unpacks, verifies the signature, then installs like a folder plugin. */

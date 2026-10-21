@@ -71,3 +71,16 @@ test('the npm launchers are plain node scripts (no inline env vars, which cmd an
   const out = execFileSync(process.execPath, [path.join(here, '..', 'scripts', 'run.mjs'), '--eval', 'console.log(process.env.NODE_USE_ENV_PROXY)'], { encoding: 'utf8' });
   assert.equal(out.trim(), '1');
 });
+
+test('the launcher reads keys from a .env file where it runs; variables already set win; no file is fine', async () => {
+  const fsp = await import('node:fs/promises');
+  const { tempDir } = await import('./helpers.ts');
+  const dir = await tempDir();
+  const run = (env: NodeJS.ProcessEnv) => execFileSync(process.execPath, [path.join(here, '..', 'scripts', 'run.mjs'), '--eval', 'console.log(process.env.HW_A, process.env.HW_B)'], { encoding: 'utf8', cwd: dir, env }).trim();
+  const base = { ...process.env };
+  delete base.HW_A; delete base.HW_B;
+  assert.equal(run(base), 'undefined undefined');
+  await fsp.writeFile(path.join(dir, '.env'), 'HW_A=from-file\nHW_B="quoted value"\n');
+  assert.equal(run(base), 'from-file quoted value');
+  assert.equal(run({ ...base, HW_A: 'from-env' }), 'from-env quoted value');
+});

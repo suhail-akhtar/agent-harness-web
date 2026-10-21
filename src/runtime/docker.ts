@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { proxyCredentialFile, type SandboxCredential } from './credentials.ts';
 import type { ExecOptions, ExecResult, ToolHost } from './host.ts';
 import { run } from './host.ts';
 
@@ -42,6 +43,8 @@ export interface DockerOptions {
   policyFile?: string;
   /** allowlist: called for every connection the proxy decides (blocked ones are worth telling the user). */
   onEgress?: (e: EgressEvent) => void;
+  /** allowlist: API credentials the proxy adds to requests through it; the sandbox only sees base URLs and placeholders. */
+  credentials?: SandboxCredential[];
 }
 
 export const dockerDefaults = (): DockerOptions => ({
@@ -106,11 +109,19 @@ export class DockerHost implements ToolHost {
     if (state.code !== 0 || state.stdout.trim() !== 'true') {
       await run('docker', ['rm', '-f', this.proxyName], { timeoutMs: 15_000 });
       const upstream = process.env.HARNESS_SANDBOX_UPSTREAM_PROXY;
+      // The keys go to the proxy container only, in a file beside the policy (never mounted into the sandbox).
+      const creds = this.opts.credentials ?? [];
+      const credDir = path.join(path.dirname(policyDir), 'egress-credentials');
+      if (creds.length) {
+        await fs.mkdir(credDir, { recursive: true, mode: 0o700 });
+        await fs.writeFile(path.join(credDir, 'credentials.json'), proxyCredentialFile(creds), { mode: 0o600 });
+      }
       const r = await run('docker', [
         'run', '-d', '--init', '--name', this.proxyName, '--network', 'bridge',
         '--memory', '256m', '--cpus', '0.5', '--pids-limit', '128', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--read-only',
         '--user', `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`,
         '-v', `${PROXY_SCRIPT}:/egress-proxy.mjs:ro`, '-v', `${policyDir}:/policy:ro`,
+        ...(creds.length ? ['-v', `${credDir}:/secrets:ro`, '-e', 'CREDENTIALS_FILE=/secrets/credentials.json'] : []),
         '-e', `ALLOW_FILE=/policy/${path.basename(this.opts.policyFile)}`, ...(upstream ? ['-e', `UPSTREAM_PROXY=${upstream}`] : []),
         '--label', 'harness-web=1', this.opts.image, 'node', '/egress-proxy.mjs',
       ], { timeoutMs: 120_000 });
@@ -158,12 +169,14 @@ export class DockerHost implements ToolHost {
     const gid = process.getgid?.() ?? 1000;
     const allowlist = this.opts.network === 'allowlist';
     const proxyEnv = allowlist
-      ? ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy'].flatMap((k) => ['-e', `${k}=http://egress:3128`]).concat(['-e', 'NO_PROXY=localhost,127.0.0.1', '-e', 'no_proxy=localhost,127.0.0.1', '-e', 'NODE_USE_ENV_PROXY=1'])
+      ? ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy'].flatMap((k) => ['-e', `${k}=http://egress:3128`]).concat(['-e', 'NO_PROXY=localhost,127.0.0.1,egress', '-e', 'no_proxy=localhost,127.0.0.1,egress', '-e', 'NODE_USE_ENV_PROXY=1'])
       : [];
+    // Base URLs to the credential gateway and placeholder keys; the real ones never enter.
+    const credEnv = allowlist ? (this.opts.credentials ?? []).flatMap((c) => Object.entries(c.env).flatMap(([k, v]) => ['-e', `${k}=${v}`])) : [];
     const args = [
       'run', '-d', '--init', '--name', this.name,
       '--network', allowlist ? this.netName : this.opts.network === 'full' ? 'bridge' : 'none',
-      ...proxyEnv,
+      ...proxyEnv, ...credEnv,
       '--memory', this.opts.memory, '--cpus', this.opts.cpus, '--pids-limit', '512',
       '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
       '--user', `${uid}:${gid}`,
@@ -194,6 +207,10 @@ export class DockerHost implements ToolHost {
     return spawn('docker', ['exec', '-i', ...envArgs, '-w', '/workspace', this.name, command, ...args], { stdio: ['pipe', 'pipe', 'pipe'] });
   }
 
+  credentialEnv(): { name: string; vars: string[] }[] {
+    return this.opts.network === 'allowlist' ? (this.opts.credentials ?? []).map((c) => ({ name: c.name, vars: Object.keys(c.env) })) : [];
+  }
+
   async allowedHosts(): Promise<string[]> {
     if (!this.opts.policyFile) return [];
     try { return (JSON.parse(await fs.readFile(this.opts.policyFile, 'utf8')) as { hosts?: string[] }).hosts ?? []; } catch { return defaultAllowHosts(); }
@@ -214,6 +231,7 @@ export class DockerHost implements ToolHost {
     if (this.opts.network === 'allowlist') {
       await run('docker', ['rm', '-f', this.proxyName], { timeoutMs: 30_000 });
       await run('docker', ['network', 'rm', this.netName], { timeoutMs: 30_000 });
+      if (this.opts.policyFile) await fs.rm(path.join(path.dirname(path.dirname(this.opts.policyFile)), 'egress-credentials'), { recursive: true, force: true });
     }
   }
 }

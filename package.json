@@ -22,7 +22,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0",
-    "preact": "^11.0.1"
+    "preact": "^11.0.1",
+    "undici": "7.30.0"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

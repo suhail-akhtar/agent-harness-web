@@ -1,5 +1,6 @@
 import dns from 'node:dns/promises';
 import net from 'node:net';
+import { Agent, type Dispatcher, EnvHttpProxyAgent, fetch as undiciFetch } from 'undici';
 import type { Tool } from './types.ts';
 import { num, str } from './types.ts';
 
@@ -20,15 +21,45 @@ export function isPrivateAddress(ip: string): boolean {
   return v === '::' || v === '::1' || v.startsWith('fc') || v.startsWith('fd') || v.startsWith('fe8') || v.startsWith('fe9') || v.startsWith('fea') || v.startsWith('feb') || v.startsWith('ff');
 }
 
+/** How host names are resolved for outside requests (replaceable in tests). */
+export const resolver = {
+  lookup: (host: string): Promise<{ address: string; family: number }[]> => dns.lookup(host, { all: true }),
+};
+
 export async function assertPublicUrl(raw: string): Promise<URL> {
   let u: URL;
   try { u = new URL(raw); } catch { throw new Error(`not a valid URL: ${raw}`); }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('only http and https URLs can be fetched');
   const host = u.hostname.replace(/^\[|\]$/g, '');
   if (/^localhost$|\.localhost$|\.internal$|\.local$/i.test(host)) throw new Error(`${host} is a private host`);
-  const addrs = net.isIP(host) ? [host] : (await dns.lookup(host, { all: true })).map((a) => a.address);
+  const addrs = net.isIP(host) ? [host] : (await resolver.lookup(host)).map((a) => a.address);
   if (!addrs.length || addrs.some(isPrivateAddress)) throw new Error(`${host} resolves to a private address`);
   return u;
+}
+
+/**
+ * The address check again at connection time, on the very addresses the socket
+ * connects to: a name that resolved to a public address for assertPublicUrl and
+ * to 127.0.0.1 a moment later (DNS rebinding) is refused here.
+ */
+function pinnedLookup(hostname: string, options: { all?: boolean }, cb: (err: Error | null, address?: string | { address: string; family: number }[], family?: number) => void): void {
+  resolver.lookup(hostname).then((addrs) => {
+    if (!addrs.length || addrs.some((a) => isPrivateAddress(a.address))) return cb(Object.assign(new Error(`${hostname} resolves to a private address`), { code: 'EPRIVATE' }));
+    if (options.all) cb(null, addrs);
+    else cb(null, addrs[0]!.address, addrs[0]!.family);
+  }, (err) => cb(err as Error));
+}
+
+let pinnedAgent: Dispatcher | undefined;
+/**
+ * fetch for outside URLs: every connection's address is checked as it is made.
+ * Behind an HTTP proxy the proxy resolves names, so only assertPublicUrl's check
+ * applies there.
+ */
+export function publicFetch(url: string | URL, init: RequestInit = {}): Promise<Response> {
+  const proxied = !!(process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy);
+  pinnedAgent ??= proxied ? new EnvHttpProxyAgent() : new Agent({ connect: { lookup: pinnedLookup as never } });
+  return undiciFetch(url, { ...(init as object), dispatcher: pinnedAgent }) as unknown as Promise<Response>;
 }
 
 /**
@@ -79,6 +110,15 @@ export function htmlToText(html: string, opts: { dropChrome?: boolean } = {}): s
       i = e < 0 ? html.length : e + 1;
       continue;
     }
+    // Text a person never sees is not shown to the model either: a page can hide
+    // instructions in an element that is not displayed.
+    if (!closing && isHidden(inner)) {
+      if (VOID.has(name) || inner.endsWith('/')) continue;
+      const end = closeOf(html, lower, name, i);
+      if (end < 0) break;
+      i = end;
+      continue;
+    }
     if (name === 'br') out.push('\n');
     else if (closing && (name === 'td' || name === 'th')) out.push(' | ');
     else if (closing && BLOCK_END.has(name)) out.push('\n');
@@ -96,6 +136,41 @@ export function htmlToText(html: string, opts: { dropChrome?: boolean } = {}): s
 }
 
 const safeCodePoint = (n: number) => (n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : ' ');
+
+const VOID = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr']);
+
+/** A tag that hides its element: the hidden attribute, aria-hidden, a hidden input, or an inline style that hides it. */
+function isHidden(tag: string): boolean {
+  return /\shidden(\s|=|\/?$)/i.test(tag)
+    || /\saria-hidden\s*=\s*["']?true/i.test(tag)
+    || /^input\b[^>]*\stype\s*=\s*["']?hidden/i.test(tag)
+    || /\sstyle\s*=\s*["'][^"']*(display\s*:\s*none|visibility\s*:\s*hidden|font-size\s*:\s*0(px|pt|em|rem)?\s*(;|["'])|opacity\s*:\s*0(\.0+)?\s*(;|["']))/i.test(tag);
+}
+
+/** Where the element opened just before `from` ends (after its closing tag), counting nested ones of the same name; -1 if it never closes. */
+function closeOf(html: string, lower: string, name: string, from: number): number {
+  // Both searches only ever move forward (the next opening tag is kept until passed), so this is linear.
+  const nextOpen = (at: number) => {
+    let o = lower.indexOf(`<${name}`, at);
+    // Only a real tag of this name counts (<div>, not <divider>).
+    while (o >= 0 && /[a-z0-9-]/.test(lower[o + name.length + 1] ?? '')) o = lower.indexOf(`<${name}`, o + 1);
+    return o;
+  };
+  let depth = 1;
+  let i = from;
+  let open = nextOpen(i);
+  let close = -1;
+  while (depth > 0) {
+    if (close < i) close = lower.indexOf(`</${name}`, i);
+    if (close < 0) return -1;
+    if (open >= 0 && open < i) open = nextOpen(i);
+    if (open >= 0 && open < close) { depth++; i = open + name.length + 1; open = nextOpen(i); continue; }
+    depth--;
+    const gt = html.indexOf('>', close);
+    i = gt < 0 ? html.length : gt + 1;
+  }
+  return i;
+}
 
 /** The inner HTML of each <tag>...</tag>, found with indexOf (no backtracking). */
 function sections(html: string, lower: string, tag: string): string[] {
@@ -160,7 +235,7 @@ export const webFetchTool: Tool = {
     let url = await assertPublicUrl(asked);
     let res: Response | undefined;
     for (let hop = 0; hop < 6; hop++) {
-      res = await fetch(url, { redirect: 'manual', signal: ctx.signal, headers: { 'user-agent': 'harness-web/0.1 (+agent fetch)', accept: 'text/html,text/plain,application/json,application/pdf,*/*;q=0.5' } });
+      res = await publicFetch(url, { redirect: 'manual', signal: ctx.signal, headers: { 'user-agent': 'harness-web/0.1 (+agent fetch)', accept: 'text/html,text/plain,application/json,application/pdf,*/*;q=0.5' } });
       if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
         url = await assertPublicUrl(new URL(res.headers.get('location')!, url).toString());
         continue;

@@ -6,7 +6,7 @@ import { loadAgentDir } from '../agents/agents.ts';
 import type { Registry } from '../kernel/registry.ts';
 import type { WorkflowDef } from '../graph/types.ts';
 import { validateWorkflow } from '../graph/validate.ts';
-import { assertPublicUrl } from '../tools/web.ts';
+import { assertPublicUrl, publicFetch } from '../tools/web.ts';
 import { resolveIn } from '../tools/paths.ts';
 import { defineTool, type PluginAPI, type PluginDefinition, type PluginManifest } from './api.ts';
 
@@ -93,7 +93,13 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void): P
     const api: PluginAPI = {
       pluginName: m.name,
       pluginDir: dir,
-      registerTool: (t) => { const tool = 'spec' in t ? t : defineTool(t); reg.addTool(tool, m.name); contributes.push(`tool:${tool.spec.name}`); },
+      registerTool: (t) => {
+        const tool = 'spec' in t ? t : defineTool(t);
+        // A plugin that may reach the network (declared hosts) can send what its tools are given there.
+        if (declared.network.length && tool.sendsOut === undefined) tool.sendsOut = true;
+        reg.addTool(tool, m.name);
+        contributes.push(`tool:${tool.spec.name}`);
+      },
       workspacePath: (host, p) => resolveIn(host, p),
       registerModel: (spec) => { reg.models.set(spec.id, spec); contributes.push(`model:${spec.id}`); },
       registerProvider: (id, p) => { reg.providers.set(id, p); contributes.push(`provider:${id}`); },
@@ -170,8 +176,10 @@ export async function pluginFetch(plugin: string, allowed: string[], url: string
     const exact = allowed.some((p) => p.toLowerCase() === host || p.toLowerCase() === u.hostname.toLowerCase());
     if (!hostAllowed(u.hostname, allowed) && !exact) throw new Error(`${plugin}: ${u.hostname} is not in the plugin's declared network hosts (harness-plugin.json permissions.network)`);
     const literal = net.isIP(u.hostname.replace(/^\[|\]$/g, '')) !== 0 || u.hostname.toLowerCase() === 'localhost';
-    if (!(exact && literal)) await assertPublicUrl(u.toString());
-    const res = await fetch(u, { ...init, redirect: 'manual' });
+    const checked = !(exact && literal);
+    if (checked) await assertPublicUrl(u.toString());
+    // Checked hosts are checked again on connect (no DNS rebinding in between).
+    const res = await (checked ? publicFetch : fetch)(u, { ...init, redirect: 'manual' });
     const loc = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null;
     if (!loc) return res;
     u = new URL(loc, u);

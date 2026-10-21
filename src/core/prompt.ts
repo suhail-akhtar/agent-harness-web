@@ -90,6 +90,8 @@ export async function environmentBlock(host: ToolHost, extra?: { gitBranch?: str
     `Platform: ${host.platform}; shell: ${host.shell}; commands run ${host.sandboxed ? 'in an isolated container' : "on the user's machine"}; network: ${net}`,
     `Date: ${new Date().toISOString().slice(0, 10)}`,
   ];
+  const creds = host.credentialEnv?.() ?? [];
+  if (creds.length) lines.push(`API credentials for commands (a proxy adds the real key outside the sandbox; use these variables as they are, the key is not in the sandbox): ${creds.map((c) => `${c.name} (${c.vars.join(', ')})`).join('; ')}`);
   if (extra?.gitBranch) lines.push(`Git branch: ${extra.gitBranch}`);
   return `<environment>\n${lines.join('\n')}\n</environment>`;
 }

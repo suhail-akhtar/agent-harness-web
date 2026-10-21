@@ -6,7 +6,8 @@ import { spawn } from 'node:child_process';
 
 const [entry, ...args] = process.argv.slice(2);
 if (!entry) { console.error('usage: node scripts/run.mjs <entry.ts> [args...]'); process.exit(2); }
-const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', '--disable-warning=UNDICI-EHPA', entry, ...args], {
+// A .env file in the folder it runs from supplies keys (variables already set win).
+const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', '--disable-warning=UNDICI-EHPA', '--env-file-if-exists=.env', entry, ...args], {
   stdio: 'inherit',
   // Node's fetch uses HTTP(S)_PROXY only with this set; harmless without a proxy.
   env: { ...process.env, NODE_USE_ENV_PROXY: process.env.NODE_USE_ENV_PROXY ?? '1' },

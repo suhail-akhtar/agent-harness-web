@@ -75,6 +75,8 @@ export interface ToolHost {
   networkPolicy: 'none' | 'full' | 'allowlist';
   /** allowlist: the hosts currently allowed. */
   allowedHosts?(): Promise<string[]>;
+  /** API credentials commands can use through the proxy, and the variables that point at them. */
+  credentialEnv?(): { name: string; vars: string[] }[];
   exec(cmd: string, opts: ExecOptions): Promise<ExecResult>;
   /** Starts a long-lived process with piped stdio where tools run (MCP servers). */
   spawnStream?(command: string, args: string[], env: Record<string, string>): Promise<ChildProcessWithoutNullStreams>;

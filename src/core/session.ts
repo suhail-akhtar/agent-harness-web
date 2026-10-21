@@ -20,6 +20,7 @@ import { makeSkillTool, type Skill, skillsIn, skillsListing, workspaceSkills } f
 import { sortTools } from '../tools/index.ts';
 import type { FileStamp, Tool, ToolServices } from '../tools/types.ts';
 import { MemoryStore, projectKey } from '../memory/store.ts';
+import { stripInvisible } from './untrusted.ts';
 import { SourceStore } from '../research/sources.ts';
 import { publish, PublishError, shq } from '../git/publish.ts';
 import type { SearchService } from '../research/search.ts';
@@ -87,6 +88,8 @@ export interface SessionDeps {
   publish?: import('../git/publish.ts').PublishConfig;
   /** Spend per account: recorded on every charge, and a cap that stops turns. */
   spend?: { add(owner: string | undefined, usd: number): void; over(owner: string | undefined): string | undefined };
+  /** API credentials an allowlist sandbox may use through the egress proxy (the keys stay outside). */
+  sandboxCredentials?: import('../runtime/credentials.ts').SandboxCredential[];
 }
 
 /** What one session can use, assembled once (the tool list never changes mid-session: it would break the cache). */
@@ -289,7 +292,7 @@ export class Session {
     if (r.kind === 'docker') {
       const blocked = new Set<string>();
       this.host = new DockerHost(this.meta.id, this.workspace, {
-        ...dockerDefaults(), network: r.network, policyFile: this.policyFile(),
+        ...dockerDefaults(), network: r.network, policyFile: this.policyFile(), credentials: this.deps.sandboxCredentials,
         onEgress: (e) => {
           if (e.allowed || blocked.has(e.host)) return;
           blocked.add(e.host);
@@ -636,7 +639,9 @@ export class Session {
     this.emit({ kind: 'turn_end', reason, agent: name });
     const last = [...sub.messages].reverse().find((m) => m.role === 'assistant');
     const text = last?.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n').trim() ?? '';
-    const report = text ? (text.length > 16_000 ? text.slice(0, 16_000) + '\n[report truncated]' : text) : 'The agent finished without a report.';
+    // A sub-agent that read outside content may repeat hidden text from it.
+    const clean = sub.tainted ? stripInvisible(text).text : text;
+    const report = clean ? (clean.length > 16_000 ? clean.slice(0, 16_000) + '\n[report truncated]' : clean) : 'The agent finished without a report.';
     return { report: reason === 'done' ? report : `${report}\n\n(The agent stopped early: ${reason}.)`, reason, cost };
   }
 

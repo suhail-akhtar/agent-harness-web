@@ -10,6 +10,7 @@ import type { Effort, ModelSpec } from './models.ts';
 import { costOf } from './models.ts';
 import { decide, type Rules, suggestRule } from './permissions.ts';
 import { COMPACT_PROMPT, todosText } from './prompt.ts';
+import { sanitizeUntrusted } from './untrusted.ts';
 import type { HookEvent, Settings } from './settings.ts';
 import type { Block, HarnessEvent, Message, PermissionMode, Todo, ToolDisplay, ToolResultBlock, ToolUseBlock, TurnEndReason, Usage } from './types.ts';
 import { promptTokens } from './types.ts';
@@ -325,7 +326,7 @@ export class Agent {
     }
     const name = tool.spec.name;
 
-    const decision = decide(tool, input, { mode: this.hooks.getMode(), rules: this.hooks.rules(), sandboxed: this.cfg.host.sandboxed, tainted: this.tainted });
+    const decision = decide(tool, input, { mode: this.hooks.getMode(), rules: this.hooks.rules(), sandboxed: this.cfg.host.sandboxed, tainted: this.tainted, network: this.cfg.host.networkPolicy });
     if (decision.action === 'deny') return finish(`Permission denied: ${decision.reason}.`, true, undefined, undefined, name);
     if (decision.action === 'ask') {
       const answer = await this.hooks.requestPermission(tool, input, tool.summarize(input), suggestRule(tool, input), agent);
@@ -348,9 +349,11 @@ export class Agent {
       return finish(msg, true, undefined, undefined, name);
     }
     if (name === 'todo_write') this.stepsSinceTodo = 0;
-    if (tool.kind === 'network' || tool.kind === 'external' || tool.untrusted || outcome.untrusted) this.markTainted();
+    const untrusted = tool.kind === 'network' || tool.kind === 'external' || tool.untrusted || outcome.untrusted;
+    if (untrusted) this.markTainted();
 
-    let content = outcome.content;
+    // Hidden text in outside content never reaches the model.
+    let content = untrusted ? sanitizeUntrusted(outcome.content) : outcome.content;
     const post = await this.hookRun('PostToolUse', { tool: name, input, is_error: !!outcome.is_error }, name, signal);
     for (const e of post.errors) this.hooks.emit({ kind: 'notice', level: 'warn', text: e, agent });
     if (post.feedback) content += `\n<hook_feedback>\n${post.feedback}\n</hook_feedback>`;

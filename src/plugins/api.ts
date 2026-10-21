@@ -105,6 +105,8 @@ export interface ToolDefinition {
   parallelSafe?: boolean;
   /** Its output carries content from outside the user's control (web pages, a service): saving to memory afterwards is confirmed. */
   untrusted?: boolean;
+  /** Whether a call can carry data out of the session (default: from its kind, or true for a plugin that declares network hosts). */
+  sendsOut?: boolean | ((input: Record<string, unknown>) => boolean);
   summarize?: (input: Record<string, unknown>) => string;
   run(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutcome | string>;
 }
@@ -116,6 +118,7 @@ export function defineTool(t: ToolDefinition): Tool {
     ...(t.kindsFor ? { kindsFor: t.kindsFor } : {}),
     parallelSafe: t.parallelSafe ?? false,
     ...(t.untrusted ? { untrusted: true } : {}),
+    ...(t.sendsOut !== undefined ? { sendsOut: t.sendsOut } : {}),
     remoteable: false,
     summarize: t.summarize ?? ((i) => `${t.name} ${JSON.stringify(i).slice(0, 80)}`),
     async run(input, ctx) {
