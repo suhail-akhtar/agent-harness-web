@@ -28,7 +28,7 @@ export interface OidcConfig {
   trustEmail?: boolean;
 }
 
-export interface Identity { iss: string; sub: string; email: string; name?: string }
+export interface Identity { iss: string; sub: string; email: string; name?: string; /** The raw id_token, kept as the id_token_hint for signing out at the provider. */ idToken?: string }
 
 /** A refusal with the HTTP status to answer it with. */
 export class OidcError extends Error {
@@ -243,7 +243,7 @@ export class OidcClient {
    * back to this server afterwards; undefined when the provider has no such endpoint
    * (Google) - then only the harness session ends.
    */
-  async logoutUrl(): Promise<string | undefined> {
+  async logoutUrl(idTokenHint?: string): Promise<string | undefined> {
     const end = (await this.discovery()).end_session_endpoint;
     if (typeof end !== 'string') return undefined;
     let u: URL;
@@ -251,6 +251,9 @@ export class OidcClient {
     if (u.protocol !== 'https:' && !(u.protocol === 'http:' && isLoopback(u.hostname))) return undefined;
     u.searchParams.set('client_id', this.cfg.clientId);
     u.searchParams.set('post_logout_redirect_uri', `${this.cfg.publicUrl}/`);
+    // With the hint the provider knows whose session to end and signs out without asking
+    // (Keycloak shows a "Do you want to log out?" page without it).
+    if (idTokenHint) u.searchParams.set('id_token_hint', idTokenHint);
     return u.toString();
   }
 
@@ -280,13 +283,13 @@ export class OidcClient {
     const verified = c.email_verified === true || c.email_verified === 'true';
     if (c.email_verified === false || c.email_verified === 'false' || (!verified && !this.cfg.trustEmail)) throw bad(c.email_verified === undefined ? 'the provider did not say this e-mail address is verified (set HARNESS_OIDC_TRUST_EMAIL=1 only if it never lets people use an address it has not verified)' : 'the provider has not verified this e-mail address');
     if (typeof c.email !== 'string' || !c.email.includes('@')) throw bad('the provider sent no e-mail address (is "email" in HARNESS_OIDC_SCOPES?)');
-    return { iss: c.iss, sub: c.sub, email: c.email, name: typeof c.name === 'string' ? c.name : undefined };
+    return { iss: c.iss, sub: c.sub, email: c.email, name: typeof c.name === 'string' ? c.name : undefined, idToken: r.body.id_token };
   }
 }
 
 // ---- browser sessions ----
 
-interface BrowserSession { user: string; created: number; seen: number }
+interface BrowserSession { user: string; created: number; seen: number; /** The provider's id_token, for id_token_hint at sign-out (it signs no one in here). */ idt?: string }
 
 /**
  * Signed-in browsers: the cookie holds a random id, this store holds its hash
@@ -329,11 +332,12 @@ export class BrowserSessions {
     return this.writing;
   }
 
-  async create(user: string): Promise<string> {
+  async create(user: string, idToken?: string): Promise<string> {
     for (const [k, r] of this.recs) if (this.expired(r)) this.recs.delete(k);
     const id = rand(32);
     const t = this.now();
-    this.recs.set(sha(id), { user, created: t, seen: t });
+    // A very large token is not worth keeping (the hint is optional).
+    this.recs.set(sha(id), { user, created: t, seen: t, ...(idToken && idToken.length <= 8192 ? { idt: idToken } : {}) });
     await this.save();
     return id;
   }
@@ -354,6 +358,11 @@ export class BrowserSessions {
       this.timer.unref?.();
     }
     return r.user;
+  }
+
+  /** The id_token a browser session was signed in with (for the provider's sign-out). */
+  idToken(id: string | undefined): string | undefined {
+    return id ? this.recs.get(sha(id))?.idt : undefined;
   }
 
   async delete(id: string | undefined): Promise<void> {

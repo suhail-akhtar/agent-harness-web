@@ -56,6 +56,8 @@ export type HookHandler = (payload: HookPayload, ctx: { host: ToolHost; signal: 
 export interface ProviderDef {
   /** Environment variables that hold its key, first match wins. */
   keyEnv: string[];
+  /** Works without a key (a local server): available even when no keyEnv variable is set. */
+  keyless?: boolean;
   create(apiKey: string): Provider;
 }
 

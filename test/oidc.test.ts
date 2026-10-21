@@ -314,6 +314,8 @@ test('signing out at the provider too, where it offers that (RP-initiated logout
   assert.equal(u.origin + u.pathname, `${idp.issuer}/logout`);
   assert.equal(u.searchParams.get('client_id'), CLIENT);
   assert.equal(u.searchParams.get('post_logout_redirect_uri'), `${PUBLIC}/`);
+  // The id_token it signed in with is the hint (Keycloak then signs out without asking).
+  assert.equal(JSON.parse(Buffer.from(u.searchParams.get('id_token_hint')!.split('.')[1]!, 'base64url').toString()).sub, 'sub-alice');
   // Without a provider session (a token sign-in), no provider sign-out is offered.
   const plain = await t.call('POST', '/auth/logout', { token: OPERATOR });
   assert.equal(plain.body.providerLogout, undefined);

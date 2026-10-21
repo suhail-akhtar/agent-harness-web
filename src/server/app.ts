@@ -205,7 +205,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       if (why) throw new OidcError(403, why);
       if (o.users!.bySso(id.iss, id.sub)?.disabled) throw new OidcError(403, 'This account is disabled. Ask an administrator.');
       const u = await o.users!.signInSso({ iss: id.iss, sub: id.sub, email: id.email }, isSsoAdmin(cfg, id.email) ? 'admin' : 'member');
-      const sid = await sso.sessions.create(u.id);
+      const sid = await sso.sessions.create(u.id, id.idToken);
       res.writeHead(302, {
         location: `${cfg.publicUrl}/`,
         'cache-control': 'no-store',
@@ -227,7 +227,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     if (req.headers['x-harness'] !== '1') throw new HttpError(403, 'missing x-harness header');
     const sid = cookie(req, 'hw_sid');
     // Signed in through the provider: sign out there too, where it offers that.
-    const providerLogout = sso && sid && sso.sessions.get(sid) ? await sso.client.logoutUrl().catch(() => undefined) : undefined;
+    const providerLogout = sso && sid && sso.sessions.get(sid) ? await sso.client.logoutUrl(sso.sessions.idToken(sid)).catch(() => undefined) : undefined;
     await sso?.sessions.delete(sid);
     return send(res, 200, { ok: true, ...(providerLogout ? { providerLogout } : {}) }, { 'set-cookie': [`hw_token=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${tokenSecure}`, `hw_sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${ssoSecure}`] });
   }

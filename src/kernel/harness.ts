@@ -13,6 +13,7 @@ import { findPluginDirs, loadPlugin, readManifest } from '../plugins/loader.ts';
 import { loadTrustedKeys, SIG_FILE, verifyPlugin } from '../plugins/signing.ts';
 import { OtelExporter, parseHeaders } from './otel.ts';
 import { BUILTIN_PROVIDERS } from '../providers/index.ts';
+import { loadCompatModels } from '../providers/compat.ts';
 import { CompanionHub } from '../runtime/companion.ts';
 import { Scheduler } from '../core/scheduler.ts';
 import { type InstalledMcpb, installedMcpb, installMcpb, McpbError, saveInstalled } from '../mcp/mcpb.ts';
@@ -120,6 +121,13 @@ export function builtinRegistry(): Registry {
   const reg = new Registry();
   for (const m of BUILTIN_MODELS) reg.models.set(m.id, m);
   for (const [id, p] of Object.entries(BUILTIN_PROVIDERS)) reg.providers.set(id, p);
+  // The operator's OpenAI-compatible models (HARNESS_MODELS_JSON / HARNESS_MODELS_FILE).
+  const compat = loadCompatModels();
+  for (const m of compat.models) {
+    if (reg.models.has(m.id)) throw new Error(`HARNESS_MODELS_JSON: model "${m.id}" is already a built-in model; give it another id`);
+    reg.models.set(m.id, m);
+  }
+  for (const [id, p] of Object.entries(compat.providers)) reg.providers.set(id, p);
   for (const t of BUILTIN_TOOLS) reg.addTool(t);
   return reg;
 }
