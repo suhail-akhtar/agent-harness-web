@@ -70,7 +70,9 @@ async function main() {
     console.log(`${sig}: shutting down`);
     setTimeout(() => process.exit(1), 15_000).unref();
     server.close();
-    harness.close().catch((e: Error) => console.error(e.message)).finally(() => process.exit(0));
+    harness.close().catch((e: Error) => console.error(e.message))
+      .then(() => Promise.all([spend.flush(), sso?.sessions.flush()])).catch(() => {})
+      .finally(() => process.exit(0));
   };
   process.on('SIGINT', () => stop('SIGINT'));
   process.on('SIGTERM', () => stop('SIGTERM'));

@@ -364,7 +364,9 @@ export function linuxScript(req: DesktopRequest, o: { shotFile: string; dir: str
   ];
   if (req.screen) L.push(`if [ "$w" != ${req.screen.w} ] || [ "$h" != ${req.screen.h} ]; then echo '@@MISMATCH'; exit 0; fi`);
   const acts = req.steps.map(xdoStep);
-  if (req.launch) acts.push(`(cd ${shq(o.dir)} && setsid nohup sh -c ${shq(req.launch)} >${shq(o.logFile)} 2>&1 </dev/null &) && echo ${shq(`@@LOG ${o.logFile}`)}`);
+  // Only the app goes to the background (the braces). In `(cd && app &)` the whole list would, in a
+  // subshell that keeps the $(...) pipe open until the app exits: the call hung until its timeout.
+  if (req.launch) acts.push(`(cd ${shq(o.dir)} && { setsid nohup sh -c ${shq(req.launch)} >${shq(o.logFile)} 2>&1 </dev/null & }) && echo ${shq(`@@LOG ${o.logFile}`)}`);
   if (acts.length) {
     L.push(
       `out=$( { ${acts.join(' && ')}; } 2>&1 ); rc=$?`,

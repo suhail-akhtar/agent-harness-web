@@ -68,7 +68,7 @@ export class Registry {
   }
 
   listModels(): (ModelSpec & { available: boolean })[] {
-    return [...this.models.values()].map((m) => ({ ...m, available: this.instances.has(m.provider) || !!this.keyFor(m.provider) }));
+    return [...this.models.values()].map((m) => ({ ...m, available: this.instances.has(m.provider) || !!this.keyFor(m.provider) || !!this.providers.get(m.provider)?.keyless }));
   }
 
   private keyFor(provider: string): string | undefined {
@@ -84,8 +84,8 @@ export class Registry {
     const def = this.providers.get(model.provider);
     if (!def) throw new Error(`No provider "${model.provider}" is registered for ${model.id}.`);
     const key = this.keyFor(model.provider);
-    if (!key) throw new Error(`No API key for ${model.provider}. Set ${def.keyEnv.join(' or ')} on the server.`);
-    const p = def.create(key);
+    if (!key && !def.keyless) throw new Error(`No API key for ${model.provider}. Set ${def.keyEnv.join(' or ')} on the server.`);
+    const p = def.create(key ?? '');
     this.instances.set(model.provider, p);
     return p;
   }

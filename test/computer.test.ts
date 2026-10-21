@@ -150,7 +150,7 @@ test('the call script starts the desktop once and detached, launches apps detach
   assert.match(s, /pgrep -x 'firefox/);
   const l = lib.callScript(lib.plan({ action: 'launch', text: "firefox-esr 'https://example.com'" }, SCREEN), { w: 1024, h: 768 });
   assert.match(l, /-screen 0 1024x768x24/);
-  assert.match(l, /\(cd \/workspace && setsid nohup bash -lc 'firefox-esr '"'"'https:\/\/example\.com'"'"'' >"\$log" 2>&1 <\/dev\/null &\)/);
+  assert.match(l, /\(cd \/workspace && \{ setsid nohup bash -lc 'firefox-esr '"'"'https:\/\/example\.com'"'"'' >"\$log" 2>&1 <\/dev\/null & \}\)/);
   const z = lib.callScript(lib.plan({ action: 'zoom', region: [0, 0, 640, 400] }, SCREEN), SCREEN);
   assert.match(z, /import -window root -crop 640x400\+0\+0 \+repage png:- \| convert png:- -resize 1280x800 png:-/);
   assert.doesNotMatch(lib.callScript(lib.plan({ action: 'cursor_position' }, SCREEN), SCREEN), /@@SHOT/);

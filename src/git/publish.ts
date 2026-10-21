@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { run } from '../runtime/host.ts';
+import { writeFileAtomic } from '../util/shared-file.ts';
 
 // Publishing the agent's work: commit, push a branch, open a pull request.
 //
@@ -74,8 +75,7 @@ async function ledgerAdd(file: string | undefined, key: string): Promise<void> {
   if (!file) return;
   const have = await ledgerRead(file);
   if (have.includes(key)) return;
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, JSON.stringify({ branches: [...have, key] }, null, 1), { mode: 0o600 });
+  await writeFileAtomic(file, JSON.stringify({ branches: [...have, key] }, null, 1), { mode: 0o600 });
 }
 
 /** A repository as a comparable key: "owner/name" on github.com, else host and path. */

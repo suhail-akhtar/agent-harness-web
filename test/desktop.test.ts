@@ -191,7 +191,7 @@ test('Linux: X11 with xdotool and ImageMagick (the sandbox\'s command lines); Wa
   assert.match(sh({ action: 'scroll', scroll_direction: 'right', scroll_amount: 2 }), /xdotool click --repeat 2 --delay 50 7/);
   assert.match(sh({ action: 'cursor_position' }), /eval "\$\(xdotool getmouselocation --shell\)" && echo "@@CURSOR \$X \$Y"/);
   assert.match(sh({ action: 'zoom', region: [100, 50, 420, 250] }), /convert png:- -crop 640x400\+200\+100 \+repage -resize 1280x800 png:/);
-  assert.match(sh({ action: 'launch', text: 'xterm' }), /\(cd '\/home\/me\/project' && setsid nohup sh -c 'xterm' >'\/tmp\/launch\.log' 2>&1 <\/dev\/null &\) && echo '@@LOG \/tmp\/launch\.log'/);
+  assert.match(sh({ action: 'launch', text: 'xterm' }), /\(cd '\/home\/me\/project' && \{ setsid nohup sh -c 'xterm' >'\/tmp\/launch\.log' 2>&1 <\/dev\/null & \}\) && echo '@@LOG \/tmp\/launch\.log'/);
 });
 
 test('the companion checks every desktop job again: only the shape the server sends', () => {

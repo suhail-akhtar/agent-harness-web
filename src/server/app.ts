@@ -1,9 +1,11 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import http from 'node:http';
+import https from 'node:https';
 import path from 'node:path';
 import type { Effort } from '../core/models.ts';
-import type { Session, SessionMeta } from '../core/session.ts';
+import { type Session, SessionElsewhereError, type SessionMeta } from '../core/session.ts';
+import type { LeaseRecord } from '../util/lease.ts';
 import type { PermissionMode } from '../core/types.ts';
 import type { Harness } from '../kernel/harness.ts';
 import { MemoryError, MemoryStore } from '../memory/store.ts';
@@ -206,7 +208,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       if (why) throw new OidcError(403, why);
       if (o.users!.bySso(id.iss, id.sub)?.disabled) throw new OidcError(403, 'This account is disabled. Ask an administrator.');
       const u = await o.users!.signInSso({ iss: id.iss, sub: id.sub, email: id.email }, isSsoAdmin(cfg, id.email) ? 'admin' : 'member');
-      const sid = await sso.sessions.create(u.id);
+      const sid = await sso.sessions.create(u.id, id.idToken);
       res.writeHead(302, {
         location: `${cfg.publicUrl}/`,
         'cache-control': 'no-store',
@@ -228,7 +230,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     if (req.headers['x-harness'] !== '1') throw new HttpError(403, 'missing x-harness header');
     const sid = cookie(req, 'hw_sid');
     // Signed in through the provider: sign out there too, where it offers that.
-    const providerLogout = sso && sid && sso.sessions.get(sid) ? await sso.client.logoutUrl().catch(() => undefined) : undefined;
+    const providerLogout = sso && sid && sso.sessions.get(sid) ? await sso.client.logoutUrl(sso.sessions.idToken(sid)).catch(() => undefined) : undefined;
     await sso?.sessions.delete(sid);
     return send(res, 200, { ok: true, ...(providerLogout ? { providerLogout } : {}) }, { 'set-cookie': [`hw_token=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${tokenSecure}`, `hw_sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${ssoSecure}`] });
   }
@@ -251,20 +253,65 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
   async function memoryOf(p: Principal, url: URL) {
     const sid = url.searchParams.get('session');
     if (!sid) throw new HttpError(400, 'session is required');
+    await harness.sessions.sync();
     const mem = await sessionFor(p, sid).memoryStore();
     if (!mem) throw new HttpError(404, 'memory is turned off on this server');
     return mem;
+  }
+
+  // ---- several servers on one data folder ----
+
+  /**
+   * A request for a session another server is working on (it holds the session's
+   * lease): passed on to that server when it advertises its address (HARNESS_NODE_URL)
+   * and the request was not passed on already; else a 409 that says where it is.
+   */
+  function elsewhere(req: http.IncomingMessage, res: http.ServerResponse, holder: LeaseRecord): Promise<void> | void {
+    // A body already read here cannot be passed on: then the 409.
+    if (holder.url && !req.headers['x-harness-forwarded'] && !req.readableEnded) return forward(req, res, holder);
+    send(res, 409, {
+      error: `This session is being worked on by another server (${holder.owner}). Try again there${holder.url ? ` (${holder.url})` : ''}, or when it is done.`,
+      server: holder.owner, ...(holder.url ? { url: holder.url } : {}),
+    }, holder.url ? { 'x-harness-session-server': holder.url } : {});
+  }
+
+  /** Streams the request to the server holding the session and its answer back (event streams too). */
+  function forward(req: http.IncomingMessage, res: http.ServerResponse, holder: LeaseRecord): Promise<void> {
+    return new Promise((resolve) => {
+      const target = new URL(req.url ?? '/', `${holder.url}/`);
+      const headers: http.OutgoingHttpHeaders = { ...req.headers, host: target.host, 'x-harness-forwarded': harness.cluster?.id ?? '1' };
+      const up = (target.protocol === 'https:' ? https : http).request(target, { method: req.method, headers }, (r) => {
+        res.writeHead(r.statusCode ?? 502, { ...r.headers, 'x-harness-served-by': holder.owner });
+        r.pipe(res);
+        r.on('end', () => resolve());
+        r.on('error', () => { res.end(); resolve(); });
+      });
+      up.on('error', (e) => {
+        if (!res.headersSent) send(res, 502, { error: `The server working on this session (${holder.owner}, ${holder.url}) cannot be reached: ${e.message}` });
+        else res.end();
+        resolve();
+      });
+      // An event stream the browser closes closes the forwarded one.
+      res.on('close', () => up.destroy());
+      req.pipe(up);
+    });
   }
 
   async function route(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://x');
     const p = url.pathname;
     const method = req.method ?? 'GET';
+    // Accounts, sign-ins, spend and companions another server sharing the data folder changed
+    // (a stat at most once a second each; nothing is read unless a file changed).
+    if (p.startsWith('/api/') || p.startsWith('/auth/')) {
+      await Promise.all([o.users?.refresh(), sso?.sessions.refresh(), o.spend?.refresh()]);
+    }
 
     // ---- companion protocol (its own token) ----
     if (p === '/api/companion/poll' || p === '/api/companion/result') {
       const token = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1] ?? '';
       const companions = harness.companions;
+      await companions.refresh();
       const auth = token ? companions.authenticateToken(token) : undefined;
       if (!auth) throw new HttpError(401, 'unknown or expired companion token');
       const id = auth.id;
@@ -405,7 +452,10 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       } catch (e) { throw new HttpError(409, (e as Error).message); }
     }
 
-    if (p === '/api/sessions' && method === 'GET') return send(res, 200, sessions.list().filter((m) => mayUse(me, m.owner)).map((m) => ({ ...m, status: sessions.statusOf(m.id) })));
+    if (p === '/api/sessions' && method === 'GET') {
+      await sessions.sync();
+      return send(res, 200, sessions.list().filter((m) => mayUse(me, m.owner)).map((m) => ({ ...m, status: sessions.statusOf(m.id) })));
+    }
     if (p === '/api/sessions' && method === 'POST') {
       const b = await readJson(req);
       const model = String(b.model ?? registry.listModels().find((m) => m.available)?.id ?? '');
@@ -550,6 +600,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     if (p === '/api/schedules' || p.startsWith('/api/schedules/')) {
       const scheduler = harness.scheduler;
       if (!scheduler) throw new HttpError(404, 'Scheduling is turned off on this server.');
+      await Promise.all([scheduler.sync(), sessions.sync()]);
       const mine = (s: { owner?: string }) => mayUse(me, s.owner);
       if (p === '/api/schedules' && method === 'GET') return send(res, 200, scheduler.list().filter(mine));
       if (p === '/api/schedules' && method === 'POST') {
@@ -622,6 +673,15 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         throw e;
       }
       throw new HttpError(405, 'method not allowed');
+    }
+
+    // A session: read again if another server changed it; passed on if another server is working on it.
+    const sid = /^\/api\/sessions\/([a-f0-9]{16})(?:\/|$)/.exec(p)?.[1];
+    if (sid && harness.cluster) {
+      await sessions.sync();
+      sessionFor(me, sid);
+      const holder = await sessions.heldElsewhere(sid);
+      if (holder) return elsewhere(req, res, holder);
     }
 
     const rm = /^\/api\/sessions\/([a-f0-9]{16})\/runs\/(run_[a-f0-9]+)(?:\/(resume))?$/.exec(p);
@@ -755,6 +815,8 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     try {
       await route(req, res);
     } catch (err) {
+      // Another server took the session between the check and the start.
+      if (err instanceof SessionElsewhereError && !res.headersSent) return void await elsewhere(req, res, err.holder);
       const status = err instanceof HttpError ? err.status : 500;
       if (status === 500) console.error(err);
       if (!res.headersSent) send(res, status, { error: err instanceof Error ? err.message : String(err) }, err instanceof HttpError ? err.headers : undefined);

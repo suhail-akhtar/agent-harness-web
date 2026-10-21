@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import fs from 'node:fs/promises';
+import { FileWatch, readJson, withFileLock, writeFileAtomic } from '../util/shared-file.ts';
 import path from 'node:path';
 import type { SessionMeta } from './session.ts';
 
@@ -97,10 +97,16 @@ export class Scheduler {
   private ticking = false;
   private runner: ScheduleRunner;
   private log: (m: string) => void;
+  private watch: FileWatch;
   /** Whether an owner's account may still run work (set by the server: disabled accounts may not). */
   ownerActive?: (owner: string) => boolean;
   /** Why its owner may not start one more run now (their concurrency limits), set by the server; the run is skipped and says why. */
   mayRun?: (owner: string, s: Schedule) => string | undefined;
+  /**
+   * Several servers on one data folder: whether this one fires the schedules now
+   * (it holds the scheduler lease). Absent: it always does.
+   */
+  leader?: () => Promise<boolean>;
 
   /** The runner, unless the schedule's owner can no longer run work. */
   private async launch(s: Schedule, outside?: string): Promise<{ sessionId?: string; result: string }> {
@@ -114,12 +120,37 @@ export class Scheduler {
     this.file = path.join(dataDir, 'schedules.json');
     this.runner = runner;
     this.log = log;
+    this.watch = new FileWatch(this.file);
   }
 
   async load(): Promise<void> {
-    try {
-      for (const s of JSON.parse(await fs.readFile(this.file, 'utf8')) as Schedule[]) this.items.set(s.id, s);
-    } catch { /* none yet */ }
+    await this.reload();
+  }
+
+  /** The schedules as they are on disk now (another server may have changed them). */
+  private async reload(): Promise<void> {
+    const list = await readJson<Schedule[]>(this.file, []);
+    this.items = new Map((Array.isArray(list) ? list : []).map((s) => [s.id, s]));
+    await this.watch.mark();
+  }
+
+  /** Reads the schedules again when another server changed them (checked at most once a second unless `force`). */
+  async sync(force = false): Promise<void> {
+    if (await this.watch.changed(force)) await this.reload();
+  }
+
+  /**
+   * One change, made under the file's lock on the schedules as they are on disk now
+   * and written atomically, so changes from several servers never overwrite each other.
+   */
+  private async mutate<T>(fn: () => T): Promise<T> {
+    return withFileLock(this.file, async () => {
+      await this.reload();
+      const r = fn();
+      await writeFileAtomic(this.file, JSON.stringify([...this.items.values()], null, 1));
+      await this.watch.mark();
+      return r;
+    });
   }
 
   /** Checks every 30 s; runs missed while the server was down fire once on start. */
@@ -145,7 +176,6 @@ export class Scheduler {
     if (!spec.cron === (at === undefined)) throw new ScheduleError('give either cron (repeating) or a time (at / in_minutes), not both or neither');
     if (at !== undefined && at <= now) throw new ScheduleError('that time has passed');
     if (!spec.sessionId && !spec.newSession) throw new ScheduleError('a schedule goes to a session, or makes a new one');
-    if (this.list(spec.owner).length >= MAX_PER_OWNER) throw new ScheduleError(`at most ${MAX_PER_OWNER} schedules per person; delete some first`);
     const nextRun = spec.cron ? nextCron(spec.cron, now) : at;
     if (nextRun === undefined) throw new ScheduleError('that cron expression never matches');
     const s: Schedule = {
@@ -153,9 +183,11 @@ export class Scheduler {
       ...(spec.cron ? { cron: spec.cron.trim() } : { at }), ...(spec.sessionId ? { sessionId: spec.sessionId } : { newSession: spec.newSession }),
       enabled: true, createdAt: now, nextRun, runs: 0,
     };
-    this.items.set(s.id, s);
-    await this.save();
-    return s;
+    return this.mutate(() => {
+      if (this.list(spec.owner).length >= MAX_PER_OWNER) throw new ScheduleError(`at most ${MAX_PER_OWNER} schedules per person; delete some first`);
+      this.items.set(s.id, s);
+      return s;
+    });
   }
 
   /**
@@ -167,90 +199,97 @@ export class Scheduler {
     const prompt = spec.prompt?.trim();
     if (!prompt) throw new ScheduleError('a trigger needs a prompt');
     if (!spec.sessionId && !spec.newSession) throw new ScheduleError('a trigger goes to a session, or makes a new one');
-    if (this.list(spec.owner).length >= MAX_PER_OWNER) throw new ScheduleError(`at most ${MAX_PER_OWNER} schedules and triggers per person`);
     const token = `hwt_${crypto.randomBytes(24).toString('base64url')}`;
     const s: Schedule = {
       id: crypto.randomBytes(6).toString('hex'), owner: spec.owner, title: (spec.title?.trim() || prompt.split('\n')[0]!).slice(0, 80), prompt,
       ...(spec.sessionId ? { sessionId: spec.sessionId } : { newSession: spec.newSession }),
       enabled: true, triggerHash: hashToken(token), createdAt: now, runs: 0,
     };
-    this.items.set(s.id, s);
-    await this.save();
-    return { schedule: s, token };
+    return this.mutate(() => {
+      if (this.list(spec.owner).length >= MAX_PER_OWNER) throw new ScheduleError(`at most ${MAX_PER_OWNER} schedules and triggers per person`);
+      this.items.set(s.id, s);
+      return { schedule: s, token };
+    });
   }
 
   /** Fires the trigger a token belongs to, with what the caller sent; undefined for an unknown or disabled one. */
   async fireTrigger(token: string, outside: string, now = Date.now()): Promise<{ sessionId?: string; result: string } | undefined> {
+    await this.sync(true);
     const h = hashToken(token);
     const s = [...this.items.values()].find((x) => x.triggerHash && crypto.timingSafeEqual(Buffer.from(x.triggerHash), Buffer.from(h)));
     if (!s || !s.enabled) return undefined;
     const r = await this.launch(s, outside.slice(0, 20_000));
-    s.lastRun = now;
-    s.lastResult = r.result;
-    s.runs++;
-    await this.save();
+    await this.record(s.id, now, r);
     return r;
   }
 
   async remove(id: string): Promise<boolean> {
-    const ok = this.items.delete(id);
-    if (ok) await this.save();
-    return ok;
+    return this.mutate(() => this.items.delete(id));
   }
 
   async setEnabled(id: string, enabled: boolean, now = Date.now()): Promise<Schedule | undefined> {
-    const s = this.items.get(id);
-    if (!s) return undefined;
-    // A one-time schedule that already ran (or whose time passed) has nothing left to run.
-    if (enabled && !s.cron && !s.triggerHash && (s.at === undefined || s.at <= now)) throw new Error('This one-time schedule has already run or its time has passed; create a new one.');
-    s.enabled = enabled;
-    if (enabled && s.cron) s.nextRun = nextCron(s.cron, now);
-    if (enabled && !s.cron && s.at !== undefined) s.nextRun = s.at;
-    await this.save();
-    return s;
+    return this.mutate(() => {
+      const s = this.items.get(id);
+      if (!s) return undefined;
+      // A one-time schedule that already ran (or whose time passed) has nothing left to run.
+      if (enabled && !s.cron && !s.triggerHash && (s.at === undefined || s.at <= now)) throw new Error('This one-time schedule has already run or its time has passed; create a new one.');
+      s.enabled = enabled;
+      if (enabled && s.cron) s.nextRun = nextCron(s.cron, now);
+      if (enabled && !s.cron && s.at !== undefined) s.nextRun = s.at;
+      return s;
+    });
   }
 
-  /** Runs what is due. A run is one at a time per schedule; a one-time schedule ends after it. */
+  /**
+   * Runs what is due. A run is one at a time per schedule; a one-time schedule ends
+   * after it. Each run is claimed on disk first (its next time moved on), so with
+   * several servers it fires once even if the leadership changes hands.
+   */
   async tick(now = Date.now()): Promise<Schedule[]> {
     if (this.ticking) return [];
     this.ticking = true;
     const fired: Schedule[] = [];
     try {
-      for (const s of this.items.values()) {
-        if (!s.enabled || s.nextRun === undefined || s.nextRun > now) continue;
-        fired.push(s);
-        await this.fire(s, now);
+      if (this.leader && !(await this.leader())) return [];
+      await this.sync(true);
+      for (const due of [...this.items.values()]) {
+        if (!due.enabled || due.nextRun === undefined || due.nextRun > now) continue;
+        const claimed = await this.mutate(() => {
+          const s = this.items.get(due.id);
+          if (!s || !s.enabled || s.nextRun === undefined || s.nextRun > now) return undefined;
+          const copy = { ...s };
+          if (s.cron) s.nextRun = nextCron(s.cron, now);
+          else { s.enabled = false; s.nextRun = undefined; }
+          return copy;
+        });
+        if (!claimed) continue;
+        const r = await this.launch(claimed);
+        const done = await this.record(claimed.id, now, r);
+        if (done) fired.push(done);
       }
-      if (fired.length) await this.save();
     } finally { this.ticking = false; }
     return fired;
   }
 
   /** Runs one schedule now (the "run now" button), outside its timing. */
   async runNow(id: string, now = Date.now()): Promise<Schedule | undefined> {
+    await this.sync(true);
     const s = this.items.get(id);
     if (!s) return undefined;
-    await this.fire(s, now, true);
-    await this.save();
-    return s;
-  }
-
-  private async fire(s: Schedule, now: number, manual = false): Promise<void> {
     const r = await this.launch(s);
-    s.lastRun = now;
-    s.lastResult = r.result;
-    s.runs++;
-    if (r.sessionId && !s.sessionId && s.newSession) this.log(`schedule ${s.id} ran in new session ${r.sessionId}`);
-    if (!manual) {
-      if (s.cron) s.nextRun = nextCron(s.cron, now);
-      else { s.enabled = false; s.nextRun = undefined; }
-    }
+    return this.record(id, now, r);
   }
 
-  private async save(): Promise<void> {
-    await fs.mkdir(path.dirname(this.file), { recursive: true });
-    const tmp = `${this.file}.${crypto.randomUUID().slice(0, 8)}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify([...this.items.values()], null, 1));
-    await fs.rename(tmp, this.file);
+  /** Writes down a run's outcome. */
+  private async record(id: string, now: number, r: { sessionId?: string; result: string }): Promise<Schedule | undefined> {
+    return this.mutate(() => {
+      const s = this.items.get(id);
+      if (!s) return undefined;
+      s.lastRun = now;
+      s.lastResult = r.result;
+      s.runs++;
+      if (r.sessionId && !s.sessionId && s.newSession) this.log(`schedule ${s.id} ran in new session ${r.sessionId}`);
+      return s;
+    });
   }
 }
