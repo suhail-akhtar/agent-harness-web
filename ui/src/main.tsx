@@ -62,12 +62,20 @@ function NewSession({ config, onClose, onCreated, onCompanions }: { config: Conf
   const [path, setPath] = useState(config.runtimes.localRoots[0] ?? '');
   const [companionId, setCompanionId] = useState(config.companions.find((c) => c.online)?.id ?? config.companions[0]?.id ?? '');
   const [mode, setMode] = useState<Mode>('default');
+  const [setup, setSetup] = useState('');
+  const [sandbox, setSandbox] = useState<'auto' | 'bwrap' | 'seatbelt' | 'docker' | 'off'>('auto');
+  const [worktree, setWorktree] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const create = async () => {
     setBusy(true); setErr('');
     try {
-      const s = await api.post<SessionMeta>('/api/sessions', { model, effort: effort || undefined, runtime, network, image: runtime === 'docker' && image && image !== config.runtimes.dockerImage ? image : undefined, gitUrl: gitUrl.trim() || undefined, path: runtime === 'local' ? path : undefined, companionId: runtime === 'companion' ? companionId : undefined, mode });
+      const inDocker = runtime === 'docker' || (runtime === 'local' && sandbox === 'docker');
+      const s = await api.post<SessionMeta>('/api/sessions', {
+        model, effort: effort || undefined, runtime, network, image: runtime === 'docker' && image && image !== config.runtimes.dockerImage ? image : undefined,
+        gitUrl: gitUrl.trim() || undefined, path: runtime === 'local' ? path : undefined, companionId: runtime === 'companion' ? companionId : undefined, mode,
+        setup: inDocker && setup.trim() ? setup : undefined, sandbox: runtime === 'local' ? sandbox : undefined, worktree: runtime === 'local' && worktree ? true : undefined,
+      });
       onCreated(s.id);
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
@@ -112,6 +120,9 @@ function NewSession({ config, onClose, onCreated, onCompanions }: { config: Conf
               <option value="full">Full internet</option>
             </select>
           </label>
+          <label class="field"><span>Setup script (optional: runs once as root with the network open; kept as a snapshot)</span>
+            <textarea class="input mono" rows={3} placeholder="apt-get install -y ffmpeg && npm ci" value={setup} onInput={(e) => setSetup((e.target as HTMLTextAreaElement).value)} />
+          </label>
         </>
       )}
       {runtime === 'companion' && (
@@ -124,7 +135,33 @@ function NewSession({ config, onClose, onCreated, onCompanions }: { config: Conf
         ) : <div class="notice notice-info">No computer connected yet. <button class="link" onClick={onCompanions}>Connect one</button></div>
       )}
       {runtime === 'local' && (
-        <label class="field"><span>Folder on the server (under {config.runtimes.localRoots.join(', ')})</span><input class="input" value={path} onInput={(e) => setPath((e.target as HTMLInputElement).value)} /></label>
+        <>
+          <label class="field"><span>Folder on the server (under {config.runtimes.localRoots.join(', ')})</span><input class="input" value={path} onInput={(e) => setPath((e.target as HTMLInputElement).value)} /></label>
+          <label class="field"><span>Contain commands</span>
+            <select class="input" value={sandbox} onChange={(e) => setSandbox((e.target as HTMLSelectElement).value as typeof sandbox)}>
+              <option value="auto">The best this server has (OS sandbox, else Docker)</option>
+              <option value="bwrap">bubblewrap (Linux)</option>
+              <option value="seatbelt">Seatbelt (macOS)</option>
+              <option value="docker">Docker, with the folder mounted</option>
+              <option value="off">Not contained (commands need approval)</option>
+            </select>
+          </label>
+          {sandbox !== 'off' && (
+            <label class="field"><span>Network for commands</span>
+              <select class="input" value={network} onChange={(e) => setNetwork((e.target as HTMLSelectElement).value as 'none' | 'allowlist' | 'full')}>
+                <option value="none">None</option>
+                {sandbox === 'docker' && <option value="allowlist">Package registries and GitHub only (editable)</option>}
+                <option value="full">Full internet</option>
+              </select>
+            </label>
+          )}
+          {sandbox === 'docker' && (
+            <label class="field"><span>Setup script (optional)</span>
+              <textarea class="input mono" rows={3} value={setup} onInput={(e) => setSetup((e.target as HTMLTextAreaElement).value)} />
+            </label>
+          )}
+          <label class="check"><input type="checkbox" checked={worktree} onChange={(e) => setWorktree((e.target as HTMLInputElement).checked)} /> Work in its own git worktree and branch (sessions in parallel on one repository)</label>
+        </>
       )}
       <label class="field"><span>Permissions</span>
         <select class="input" value={mode} onChange={(e) => setMode((e.target as HTMLSelectElement).value as Mode)}>
@@ -132,6 +169,17 @@ function NewSession({ config, onClose, onCreated, onCompanions }: { config: Conf
         </select>
       </label>
       {err && <div class="notice notice-error">{err}</div>}
+      <label class="field"><span>Or continue a session exported elsewhere</span>
+        <input class="input" type="file" accept="application/json,.json" disabled={busy} onChange={async (e) => {
+          const f = (e.target as HTMLInputElement).files?.[0];
+          if (!f) return;
+          setBusy(true); setErr('');
+          try {
+            const s = await api.post<SessionMeta>('/api/sessions/import', { bundle: JSON.parse(await f.text()), runtime: runtime === 'local' ? 'local' : 'docker' });
+            onCreated(s.id);
+          } catch (x) { setErr((x as Error).message); } finally { setBusy(false); }
+        }} />
+      </label>
       <div class="row gap end">
         <button class="btn" onClick={onClose}>Cancel</button>
         <button class="btn primary" disabled={busy || !spec?.available || (runtime === 'companion' && !companionId)} onClick={create}>{busy ? 'Creating…' : 'Create session'}</button>
@@ -326,6 +374,7 @@ function SessionView({ id, config, onMeta }: { id: string; config: Config; onMet
           <input class="title-input" value={meta.title} onChange={(e) => patch({ title: (e.target as HTMLInputElement).value })} aria-label="Session title" />
           <span class={`badge rt-${meta.runtime.kind}`}>{RUNTIME_LABEL[meta.runtime.kind]}{meta.runtime.kind === 'docker' ? (meta.runtime.network === 'full' ? ' · net' : meta.runtime.network === 'allowlist' ? ' · allowlist' : ' · offline') : ''}</span>
           <span class={`status status-${status}`}>{status === 'running' ? 'Working' : status === 'waiting' ? 'Needs you' : 'Idle'}</span>
+          <a class="icon-btn" href={`/api/sessions/${id}/export`} download title="Export this session (to continue it elsewhere)" aria-label="Export session">⇩</a>
           <button class="icon-btn side-toggle" onClick={() => setShowSide(!showSide)} aria-label="Session details">☰</button>
         </div>
         <div class="timeline" ref={scroller} onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }}>
