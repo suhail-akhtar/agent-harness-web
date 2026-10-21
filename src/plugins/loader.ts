@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import net from 'node:net';
+import os from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { loadAgentDir } from '../agents/agents.ts';
 import type { Registry } from '../kernel/registry.ts';
@@ -48,17 +49,17 @@ export async function findPluginDirs(root: string): Promise<string[]> {
  * Loads one plugin, all or nothing: a plugin that fails partway through (a bad
  * workflow, a throwing setup) leaves no tools, agents, gates or hooks behind.
  */
-export async function loadPlugin(reg: Registry, dir: string, log: (m: string) => void = () => {}): Promise<void> {
+export async function loadPlugin(reg: Registry, dir: string, log: (m: string) => void = () => {}, opts: { dataDir?: string } = {}): Promise<void> {
   const restore = reg.snapshot();
   try {
-    await loadInto(reg, dir, log);
+    await loadInto(reg, dir, log, opts.dataDir);
   } catch (e) {
     restore();
     throw e;
   }
 }
 
-async function loadInto(reg: Registry, dir: string, log: (m: string) => void): Promise<void> {
+async function loadInto(reg: Registry, dir: string, log: (m: string) => void, dataRoot?: string): Promise<void> {
   const m = await readManifest(dir);
   if (!m) throw new Error(`no ${MANIFEST} in ${dir}`);
   if (reg.plugins.some((p) => p.name === m.name)) throw new Error(`plugin ${m.name} is loaded twice`);
@@ -110,6 +111,8 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void): P
     const api: PluginAPI = {
       pluginName: m.name,
       pluginDir: dir,
+      // The server's data folder when there is one; a temporary folder otherwise (a plugin loaded on its own, in a test).
+      dataDir: path.resolve(dataRoot ?? path.join(os.tmpdir(), 'harness-plugin-data'), 'plugin-data', m.name),
       registerTool: (t) => {
         const tool = limitVault('spec' in t ? t : defineTool(t), m.name, declared.vault);
         // A plugin that may reach the network (declared hosts) can send what its tools are given there.

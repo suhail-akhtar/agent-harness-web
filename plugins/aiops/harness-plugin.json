@@ -1,0 +1,13 @@
+{
+  "name": "aiops",
+  "version": "1.0.0",
+  "description": "AI operations: an ops inventory (hosts, services, SLOs, alert rules, maintenance windows), monitoring (Prometheus, Loki or docker logs, probes, host stats, Docker), ssh with Key Vault credentials and pinned host keys, alert checks and SLO burn rates, incidents and postmortems, safe runbooks, the incident-response and ops-advisor workflows, SRE agents and skills, and the runbook-safe, inventory-valid, alerts-valid and ops-healthy gates. Its tools appear in sessions whose workspace has .harness/ops/inventory.yaml (or when the operator sets HARNESS_OPS_INVENTORY). It reaches the hosts and endpoints the inventory names directly - that is its job; with an operator inventory, hosts and monitoring endpoints come only from it.",
+  "main": "index.mjs",
+  "agents": "agents",
+  "skills": "skills",
+  "workflows": "workflows",
+  "permissions": {
+    "secrets": ["HARNESS_OPS_SECRETS"],
+    "vault": ["ops-*"]
+  }
+}

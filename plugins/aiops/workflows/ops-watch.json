@@ -1,0 +1,21 @@
+{
+  "name": "ops-watch",
+  "description": "One watch round, meant to be scheduled (every N minutes, in an unattended dontAsk session): evaluate every alert rule now, and when something fires, open or update an incident for it and tell the user (notify_user). Read-only apart from the incident record.",
+  "inputs": {
+    "scope": { "description": "Only this service (optional).", "default": "" }
+  },
+  "state": {
+    "firing": { "type": "number", "description": "how many alerts fire now, outside maintenance windows" }
+  },
+  "start": "check",
+  "maxAgentRuns": 2,
+  "nodes": {
+    "check": {
+      "type": "agent", "title": "Check alerts", "agent": "sre", "maxSteps": 25,
+      "prompt": "Run ops_check (with service \"{{input.scope}}\" when that is not empty). Do not change any system and do not investigate at length.\nIf alerts fire outside maintenance windows: for each affected service, look for an open incident (incident list) and add a timeline entry (kind detection) with the alert lines, or open one (severity by the alert: critical -> sev2, warning -> sev3). Then call notify_user once with a short message: which alerts fire, on which services, and the incident ids. Errors (rules that could not be evaluated) count as alerts about monitoring itself.\nIf nothing fires, do not notify.\n\nReport: the ops_check summary line and what you did.",
+      "outputs": ["firing"],
+      "next": "done"
+    },
+    "done": { "type": "end", "title": "Watch round done", "status": "success" }
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "name": "runbook-clear-disk",
+  "description": "Free disk space on a host without guessing: a report of what fills the filesystem and a written cleanup plan (exact paths and sizes, nothing deleted), human approval of that plan, deletion of exactly the approved paths, and verification of the free space after.",
+  "inputs": {
+    "host": { "description": "The inventory host.", "required": true },
+    "path": { "description": "The mount point or directory that is full.", "default": "/" },
+    "target_free_pct": { "description": "Free space to reach, in percent.", "default": "30" }
+  },
+  "start": "report",
+  "maxAgentRuns": 4,
+  "nodes": {
+    "report": {
+      "type": "agent", "title": "What fills the disk", "agent": "sre", "maxSteps": 30,
+      "prompt": "Host {{input.host}}, path {{input.path}}. Read-only: host_stats with disk_usage_path {{input.path}} (and deeper paths with ssh_exec read-only commands such as du -xsk <dir>/* or ls -la <dir>) to find what uses the space. Classify what you find: safe to delete (caches, temp files, rotated or old logs, core dumps, build leftovers), needs the owner (application data, databases, uploads, backups), and never (anything you cannot identify).\nWrite the cleanup plan to .harness/ops/runbooks/clear-disk-plan.md: the current use, then a numbered list of ONLY the safe items, each with the exact path or glob, its size, why it is safe, and the exact command (rm -f / find -delete on that path only). List what you leave alone and why. Do NOT delete anything now.\n\nReport: the use now, the plan's items with sizes, and the space they free (in total and as % of the filesystem).",
+      "next": "approve"
+    },
+    "approve": {
+      "type": "approval", "title": "Approve the cleanup plan",
+      "message": "Free space on {{input.host}} ({{input.path}}) by deleting exactly the items in .harness/ops/runbooks/clear-disk-plan.md?\n\n{{state.report}}",
+      "files": [".harness/ops/runbooks/clear-disk-plan.md"],
+      "next": { "on": { "approve": "clean", "reject": "stopped" } }
+    },
+    "clean": {
+      "type": "agent", "title": "Delete the approved items", "agent": "sre", "change": true, "maxSteps": 20,
+      "prompt": "A person approved the cleanup plan .harness/ops/runbooks/clear-disk-plan.md for host {{input.host}}. Read it and delete EXACTLY its listed items with ssh_exec, one command per item as written in the plan - nothing that is not in the plan, no wider globs, no other directories.\n\nReport: each command and its exit status.",
+      "next": "verify"
+    },
+    "verify": {
+      "type": "agent", "title": "Verify free space", "agent": "sre", "verify": true, "maxSteps": 20,
+      "prompt": "Verify the cleanup on {{input.host}}: host_stats with disk_usage_path {{input.path}}. The target is at least {{input.target_free_pct}}% free on the filesystem of {{input.path}}; also check that what the plan left alone is still there, and probe/ops_check the services on the host. VERIFIED when the target is met and the services are healthy; otherwise FAILED.\n\nReport: free space before and after, and the checks.",
+      "decide": ["VERIFIED", "FAILED"],
+      "next": { "on": { "VERIFIED": "done" }, "default": "failed" }
+    },
+    "done": { "type": "end", "title": "Space freed", "status": "success" },
+    "stopped": { "type": "end", "title": "Not approved: nothing deleted", "status": "failed" },
+    "failed": { "type": "end", "title": "Not enough space freed", "status": "failed" }
+  }
+}

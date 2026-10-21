@@ -1,0 +1,82 @@
+# The AIOps test stack (evals/aiops/stack): a shop API in a container on this
+# machine, a database host reached over ssh, Prometheus.
+monitoring:
+  prometheus: http://127.0.0.1:19090
+  scrape_interval: 5s
+
+environments: [prod]
+
+hosts:
+  - name: db-1
+    address: 127.0.0.1
+    port: 12222
+    user: ops
+    credential: ops-db-1-key
+    role: database
+    env: prod
+    tags: [db, linux]
+
+services:
+  - name: shop-api
+    host: local
+    env: prod
+    container: hwtest-aiops-demoapp
+    health: http://127.0.0.1:19180/health
+    tls: https://127.0.0.1:19443
+    metrics_job: demoapp
+    logs: { docker: hwtest-aiops-demoapp }
+    owner: team-shop
+    slos:
+      - name: availability
+        objective: 99.5
+        window: 1d
+        errors: sum(rate(http_requests_total{job="demoapp",route=~"/api/.*",code=~"5.."}[{{window}}]))
+        total: sum(rate(http_requests_total{job="demoapp",route=~"/api/.*"}[{{window}}]))
+      - name: orders-latency
+        objective: 99
+        window: 1d
+        errors: sum(rate(http_request_duration_seconds_count{job="demoapp",route="/api/orders"}[{{window}}])) - sum(rate(http_request_duration_seconds_bucket{job="demoapp",route="/api/orders",le="0.5"}[{{window}}]))
+        total: sum(rate(http_request_duration_seconds_count{job="demoapp",route="/api/orders"}[{{window}}]))
+  - name: billing-worker
+    host: db-1
+    env: prod
+    unit: billing-worker.service
+    owner: team-billing
+
+maintenance:
+  - name: sunday-night
+    env: prod
+    cron: "0 2 * * 0"
+    duration: 2h
+
+alerts:
+  - name: ShopOrdersLatencyHigh
+    expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{job="demoapp",route="/api/orders"}[30s]))) > 0.5
+    for: 15s
+    severity: critical
+    service: shop-api
+    summary: p95 latency of GET /api/orders over 500 ms
+  - name: ShopErrorRatio
+    expr: sum(rate(http_requests_total{job="demoapp",code=~"5.."}[1m])) / sum(rate(http_requests_total{job="demoapp"}[1m])) > 0.05
+    for: 30s
+    severity: critical
+    service: shop-api
+  - name: ShopDataVolumeFull
+    expr: demo_data_free_bytes{job="demoapp"} / demo_data_size_bytes{job="demoapp"} < 0.1
+    severity: critical
+    service: shop-api
+  - name: ShopWorkerDown
+    expr: demo_worker_up{job="demoapp"} == 0
+    for: 20s
+    severity: warning
+    service: shop-api
+  - name: ShopMemoryHigh
+    expr: process_resident_memory_bytes{job="demoapp"} > 400e6
+    for: 1m
+    severity: warning
+    service: shop-api
+  - name: ShopTargetDown
+    expr: up{job="demoapp"} == 0
+    for: 30s
+    severity: critical
+    service: shop-api

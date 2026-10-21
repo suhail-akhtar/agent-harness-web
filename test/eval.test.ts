@@ -76,6 +76,32 @@ test('checks run on Windows too: case and workspace paths reach the shell with f
   } finally { await h.close(); }
 });
 
+test('a case\'s setup runs before the agent (a failure skips the run) and its teardown after the checks', async () => {
+  const root = await tempDir();
+  const dir = path.join(root, 'evals', 'demo', 'env');
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, 'step.mjs'), "import fs from 'node:fs'; import path from 'node:path'; const [what, ws] = process.argv.slice(2); if (what === 'fail') { console.log('no docker here'); process.exit(3); } fs.appendFileSync(path.join(ws, '..', 'steps.log'), what + '\\n');");
+  await fs.writeFile(path.join(dir, 'eval.json'), JSON.stringify({
+    name: 'env', prompt: 'x', setup: 'node {{case}}/step.mjs setup {{ws}}', teardown: 'node {{case}}/step.mjs teardown {{ws}}',
+    checks: [{ name: 'setup ran first', run: 'node -e "process.exit(require(\'fs\').readFileSync(\'../steps.log\',\'utf8\')===\'setup\\n\'?0:1)"' }],
+  }));
+  const out = path.join(root, 'out');
+  await fs.mkdir(out);
+  const fake = () => new FakeProvider([{ text: 'Done.' }]);
+  const [ok] = await runEvals({ cases: await loadCases(path.join(root, 'evals')), models: ['deepseek-flash'], repeats: 1, out, concurrency: 1, plugins: [], setup: (h) => h.registry.setProviderInstance('deepseek', fake()) });
+  assert.equal(ok!.pass, true, JSON.stringify(ok!.checks));
+  assert.equal(await fs.readFile(path.join(ok!.workspace, '..', 'steps.log'), 'utf8'), 'setup\nteardown\n');
+  await fs.writeFile(path.join(dir, 'eval.json'), JSON.stringify({ name: 'env', prompt: 'x', setup: 'node {{case}}/step.mjs fail {{ws}}', checks: [{ name: 'c', files: ['x'] }] }));
+  const out2 = path.join(root, 'out2');
+  await fs.mkdir(out2);
+  const model = fake();
+  const [bad] = await runEvals({ cases: await loadCases(path.join(root, 'evals')), models: ['deepseek-flash'], repeats: 1, out: out2, concurrency: 1, plugins: [], setup: (h) => h.registry.setProviderInstance('deepseek', model) });
+  assert.equal(bad!.status, 'setup-failed');
+  assert.equal(bad!.pass, false);
+  assert.match(bad!.error!, /setup exited 3: no docker here/);
+  assert.equal(model.requests.length, 0, 'the agent never ran');
+});
+
 test('the 95% Wilson interval for a pass rate', async () => {
   const { wilson } = await import('../src/eval/runner.ts');
   const r = (k: number, n: number) => wilson(k, n).map((x) => Math.round(x * 1000) / 1000);

@@ -1,0 +1,44 @@
+{
+  "name": "runbook-cert-check",
+  "description": "Certificate check for every TLS endpoint in the inventory (expired, expiring within the warning days, self-signed, name mismatch, chain), and - when one needs renewing and the renewal is known (certbot, an ACME client, a documented command) - approval, renewal, and a TLS probe to verify.",
+  "inputs": {
+    "warn_days": { "description": "Warn when fewer days are left.", "default": "21" }
+  },
+  "state": {
+    "renew": { "type": "boolean", "description": "true when a certificate needs renewing and the renewal command is known" }
+  },
+  "start": "check",
+  "maxAgentRuns": 4,
+  "nodes": {
+    "check": {
+      "type": "agent", "title": "Check certificates", "agent": "security-auditor", "maxSteps": 30,
+      "prompt": "Probe the certificate of every service with a TLS endpoint in the inventory (ops_inventory list services; probe type tls, warn_days {{input.warn_days}}), and any https health URL. Write .harness/ops/reports/certificates.md: per endpoint the subject, issuer, expiry, days left and problems. For each one that needs renewing, find how it is renewed on its host with read-only commands (certbot certificates, ls /etc/letsencrypt/renewal, the service's documentation in the workspace) and give the exact renewal command; if it cannot be found, say who must renew it.\n\nReport: the endpoints with days left and problems; renew is true only when a renewal is due AND its exact command is known.",
+      "outputs": ["renew"],
+      "next": "needs-renewal"
+    },
+    "needs-renewal": {
+      "type": "branch", "title": "Renewal due and possible?", "when": "state.renew == true",
+      "next": { "on": { "true": "approve", "false": "done" } }
+    },
+    "approve": {
+      "type": "approval", "title": "Approve the renewal",
+      "message": "Renew these certificates with the commands below?\n\n{{state.check}}",
+      "files": [".harness/ops/reports/certificates.md"],
+      "next": { "on": { "approve": "renew-certs", "reject": "stopped" } }
+    },
+    "renew-certs": {
+      "type": "agent", "title": "Renew", "agent": "sre", "change": true, "maxSteps": 15,
+      "prompt": "A person approved renewing the certificates in .harness/ops/reports/certificates.md. Run exactly the renewal commands listed there (ssh_exec), and reload the service only if the command does not (as listed).\n\nReport: each command and its result.",
+      "next": "verify"
+    },
+    "verify": {
+      "type": "agent", "title": "Verify", "agent": "security-auditor", "verify": true, "maxSteps": 15,
+      "prompt": "Probe (type tls) every renewed endpoint again: VERIFIED when each now has at least {{input.warn_days}} days left and no problems; otherwise FAILED.\n\nReport: the new expiry dates.",
+      "decide": ["VERIFIED", "FAILED"],
+      "next": { "on": { "VERIFIED": "done" }, "default": "failed" }
+    },
+    "done": { "type": "end", "title": "Certificates checked", "status": "success" },
+    "stopped": { "type": "end", "title": "Renewal not approved", "status": "failed" },
+    "failed": { "type": "end", "title": "Renewal not verified", "status": "failed" }
+  }
+}

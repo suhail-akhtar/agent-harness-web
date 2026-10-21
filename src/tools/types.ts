@@ -96,6 +96,11 @@ export interface Tool {
   vaultNames?(input: Record<string, unknown>): string[];
   /** Secret values a call carries in its own input (vault set): hidden before the call is shown, stored or sent anywhere. */
   secretInputs?(input: Record<string, unknown>): { name: string; value: string }[];
+  /**
+   * What "tool(spec)" permission rules match for this call (e.g. ssh_exec: "<host> <command>"):
+   * the exact text, or "prefix:*", which never covers a compound command. Without it a spec matches input.path.
+   */
+  ruleSubject?(input: Record<string, unknown>): string;
   /** One line for permission prompts and the UI. */
   summarize(input: Record<string, unknown>): string;
   /**
