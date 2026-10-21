@@ -6,11 +6,14 @@ import path from 'node:path';
 // single-user, as before: whoever holds HARNESS_TOKEN. With accounts, each
 // person signs in with their own token; members see only their own sessions,
 // companions and memory; administrators see everything and manage accounts.
-// Tokens are shown once and stored only as hashes.
+// Tokens are shown once and stored only as hashes. With single sign-on, an
+// account is also made for each person the identity provider vouches for,
+// keyed by issuer and subject (an e-mail address can be reassigned; those are not).
 
 export type Role = 'admin' | 'member';
-export interface User { id: string; name: string; role: Role; tokenHash: string; createdAt: number; disabled?: boolean }
-export interface PublicUser { id: string; name: string; role: Role; createdAt: number; disabled?: boolean }
+export interface SsoIdentity { iss: string; sub: string; email: string }
+export interface User { id: string; name: string; role: Role; tokenHash: string; createdAt: number; disabled?: boolean; sso?: SsoIdentity }
+export interface PublicUser { id: string; name: string; role: Role; createdAt: number; disabled?: boolean; sso?: SsoIdentity }
 
 const hash = (t: string) => crypto.createHash('sha256').update(t).digest('hex');
 
@@ -48,11 +51,36 @@ export class UserStore {
     return rest;
   }
 
+  private taken(name: string): boolean { return [...this.users.values()].some((u) => u.name.toLowerCase() === name.toLowerCase()); }
+
+  /** The account of a single sign-on identity, disabled or not (so the caller can say why it is refused). */
+  bySso(iss: string, sub: string): PublicUser | undefined {
+    for (const u of this.users.values()) if (u.sso?.iss === iss && u.sso.sub === sub) return this.get(u.id);
+    return undefined;
+  }
+
+  /** Finds or creates the account of a verified identity, keeping its e-mail address and role current. */
+  async signInSso(id: SsoIdentity, role: Role): Promise<PublicUser> {
+    const found = [...this.users.values()].find((u) => u.sso?.iss === id.iss && u.sso.sub === id.sub);
+    if (found) {
+      if (found.role !== role || found.sso!.email !== id.email) { found.role = role; found.sso = { ...id }; await this.save(); }
+      return this.get(found.id)!;
+    }
+    let name = id.email.slice(0, 60);
+    for (let n = 2; this.taken(name); n++) name = `${id.email.slice(0, 54)} (${n})`;
+    // No personal token: the hash is of a random value nobody is given. An administrator can still rotate one.
+    const u: User = { id: `usr_${crypto.randomBytes(6).toString('hex')}`, name, role, tokenHash: hash(`sso_${crypto.randomBytes(24).toString('base64url')}`), createdAt: Date.now(), sso: { ...id } };
+    this.users.set(u.id, u);
+    this.byHash.set(u.tokenHash, u.id);
+    await this.save();
+    return this.get(u.id)!;
+  }
+
   /** Creates an account; the token is returned once and never stored. */
   async add(name: string, role: Role = 'member'): Promise<{ user: PublicUser; token: string }> {
     const clean = name.trim().slice(0, 60);
     if (!clean) throw new Error('a name is required');
-    if ([...this.users.values()].some((u) => u.name.toLowerCase() === clean.toLowerCase())) throw new Error(`an account named "${clean}" exists`);
+    if (this.taken(clean)) throw new Error(`an account named "${clean}" exists`);
     const id = `usr_${crypto.randomBytes(6).toString('hex')}`;
     const token = `hwu_${crypto.randomBytes(24).toString('base64url')}`;
     const u: User = { id, name: clean, role, tokenHash: hash(token), createdAt: Date.now() };

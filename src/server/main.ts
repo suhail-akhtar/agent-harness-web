@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHarness } from '../kernel/harness.ts';
 import { createApp } from './app.ts';
+import { BrowserSessions, NOBODY_ALLOWED, OidcClient, oidcConfigFromEnv, refusal } from './oidc.ts';
 import { SpendLedger, UserStore } from './users.ts';
 
 // The server process: configuration from the environment, then the app.
@@ -21,7 +22,9 @@ const PLUGIN_DIRS = [...(process.env.HARNESS_BUNDLED_PLUGINS === 'off' ? [] : [p
 const num = (v: string | undefined) => (v !== undefined && v !== '' && Number.isFinite(Number(v)) ? Number(v) : undefined);
 
 async function main() {
+  const oidc = oidcConfigFromEnv(process.env);
   const users = await new UserStore(DATA_DIR).load();
+  const sso = oidc ? { client: new OidcClient(oidc), sessions: await new BrowserSessions(DATA_DIR).load() } : undefined;
   const spend = await new SpendLedger(DATA_DIR, num(process.env.HARNESS_USER_DAILY_USD)).load();
   const harness = await createHarness({
     dataDir: DATA_DIR,
@@ -33,7 +36,7 @@ async function main() {
   });
   const { server } = createApp({
     harness, token: TOKEN, authOff: AUTH_OFF, loopback, localRoots: LOCAL_ROOTS,
-    uiDir: path.join(appRoot, 'ui', 'dist'), appRoot, users, spend,
+    uiDir: path.join(appRoot, 'ui', 'dist'), appRoot, users, spend, sso,
     rateLimit: num(process.env.HARNESS_RATE_LIMIT), messageRateLimit: num(process.env.HARNESS_MESSAGE_RATE_LIMIT),
   });
   server.listen(PORT, HOST, () => {
@@ -42,6 +45,10 @@ async function main() {
     if (AUTH_OFF) console.log('auth: off (loopback only)');
     else if (!process.env.HARNESS_TOKEN) console.log(`access token (set HARNESS_TOKEN to fix it): ${TOKEN}`);
     if (users.size) console.log(`accounts: ${users.size} (npm run users -- list)`);
+    if (sso) {
+      console.log(`single sign-on: ${oidc!.issuer}; register the redirect URI ${sso.client.redirectUri}${oidc!.only ? '; personal tokens are off (HARNESS_OIDC_ONLY)' : ''}`);
+      if (refusal(oidc!, undefined) === NOBODY_ALLOWED) console.warn(`single sign-on: ${NOBODY_ALLOWED}`);
+    }
     const models = harness.registry.listModels();
     console.log(`models: ${models.map((m) => `${m.id}${m.available ? '' : ' (no key)'}`).join(', ')}`);
     console.log(`plugins: ${harness.registry.plugins.map((x) => x.name).join(', ') || 'none'}`);

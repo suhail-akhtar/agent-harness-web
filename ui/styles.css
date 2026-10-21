@@ -40,6 +40,8 @@ button { font: inherit; color: inherit; }
 .btn.block { width: 100%; }
 .link { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; text-align: left; }
 .link.danger { color: var(--bad); }
+.link.center { text-align: center; }
+a.btn { text-decoration: none; text-align: center; }
 .icon-btn { background: none; border: 0; cursor: pointer; font-size: 16px; padding: 4px 8px; border-radius: 6px; color: var(--muted); }
 .icon-btn:hover { background: var(--panel-2); }
 .input { width: 100%; border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 8px; padding: 8px 10px; font: inherit; }

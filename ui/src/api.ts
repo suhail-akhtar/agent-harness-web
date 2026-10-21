@@ -1,4 +1,5 @@
-// Thin client for the harness server. Auth is an HttpOnly cookie set by /api/login.
+// Thin client for the harness server. Auth is an HttpOnly cookie: a token set by
+// /api/login, or a single sign-on session set by /auth/callback.
 
 export class ApiError extends Error {
   status: number;
@@ -37,7 +38,7 @@ export interface Config {
   companions: CompanionInfo[];
   plugins?: { name: string; version: string; description: string; contributes: string[]; signature?: string; permissions?: { network?: string[]; secrets?: string[] } }[];
   search?: string | null;
-  me?: { id?: string; name: string; role: 'admin' | 'member' };
+  me?: { id?: string; name: string; role: 'admin' | 'member'; email?: string };
 }
 export interface Usage { input: number; cacheRead: number; cacheWrite: number; output: number; reasoning: number }
 export interface Todo { content: string; status: 'pending' | 'in_progress' | 'completed' }

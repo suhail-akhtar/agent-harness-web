@@ -337,6 +337,35 @@ Without accounts the server is single-user: whoever holds `HARNESS_TOKEN`. With 
 
 Every request and every message is rate-limited per person (`HARNESS_RATE_LIMIT`, `HARNESS_MESSAGE_RATE_LIMIT`). An optional daily spend cap per account (`HARNESS_USER_DAILY_USD`) refuses new messages and stops a running turn at its next step.
 
+### Single sign-on
+
+With an OpenID Connect provider (Microsoft Entra ID, Google, Okta, Keycloak, ...), people sign in with their work account instead of a token. The login page shows a **Sign in** button; the sidebar shows who is signed in and **Sign out**.
+
+```bash
+HARNESS_PUBLIC_URL=https://harness.example.com
+HARNESS_OIDC_ISSUER=https://login.microsoftonline.com/<tenant-id>/v2.0
+HARNESS_OIDC_CLIENT_ID=<application (client) id>
+HARNESS_OIDC_CLIENT_SECRET=<client secret>      # optional for a public client
+HARNESS_OIDC_ALLOWED_DOMAINS=example.com        # and/or HARNESS_OIDC_ALLOWED_EMAILS=a@x.com,b@y.com
+HARNESS_OIDC_ADMINS=lead@example.com
+# HARNESS_OIDC_ONLY=1                           # turn off personal tokens
+```
+
+- **Microsoft Entra ID:** App registrations, New registration, platform "Web", redirect URI `https://harness.example.com/auth/callback`; add a client secret under Certificates & secrets. The issuer is `https://login.microsoftonline.com/<tenant-id>/v2.0` (its discovery document is that URL plus `/.well-known/openid-configuration`). Use a single-tenant registration: the multi-tenant `common` endpoint does not have one fixed issuer. Entra may leave out `email` for accounts without a mailbox; add the optional `email` claim to the ID token in Token configuration.
+- **Google:** issuer `https://accounts.google.com`; create an OAuth client ID of type "Web application" with the same redirect URI.
+- **Okta / Keycloak:** issuer `https://<org>.okta.com/oauth2/default` or `https://<host>/realms/<realm>`.
+
+The server prints the redirect URI to register when it starts. How it works:
+
+- **Flow:** authorization code with PKCE (S256), `state` and `nonce`. The provider's discovery document and keys (JWKS) are cached for an hour; a token signed with an unknown key id fetches the keys again, so key rotation needs nothing. A started sign-in is kept on the server for 10 minutes, can be finished once, and only in the browser that started it (a short-lived cookie binds them).
+- **The id_token is checked:** signature (RS256/384/512, PS256/384/512, ES256/384/512 or EdDSA; never `none` or HMAC), issuer exactly, audience contains the client id (and `azp` is the client id when there are several audiences), `exp`/`iat`/`nbf` with one minute of clock skew, the nonce, and `email_verified` must not be false.
+- **Who gets in:** only addresses in `HARNESS_OIDC_ALLOWED_EMAILS` or in a domain of `HARNESS_OIDC_ALLOWED_DOMAINS` (exact domain; subdomains are not included). With neither set, every sign-in is refused with a message saying so.
+- **Accounts:** the first sign-in creates an account (named after the e-mail address) keyed by the provider's issuer and subject, so a reassigned e-mail address never inherits someone's account. Later sign-ins reuse it. It is a member, or an administrator when its address is in `HARNESS_OIDC_ADMINS` (checked on every request, so removing an address takes effect at once). Ownership, rate limits and spend caps apply as for token accounts; `npm run users -- disable <id>` works the same and ends the person's sessions at once, as does removing them from the allowlist.
+- **Browser sessions:** the cookie `hw_sid` holds only a random id (`HttpOnly`, `SameSite=Lax`, `Path=/`, `Secure` on https). The server keeps its hash, the account and the last use in `browser-sessions.json` in the data folder, so a restart keeps people signed in. A session ends after 12 idle hours, or 7 days after sign-in, or at **Sign out** (`POST /auth/logout`), which deletes it on the server. Signing out does not sign you out of the provider.
+- **Cross-site requests:** every API write needs the `x-harness: 1` header, which the UI sends and another site cannot (a cross-site page cannot set it without a CORS preflight this server never allows); for a single sign-on session the `Origin`, when the browser sends one, must also be `HARNESS_PUBLIC_URL`'s. The event stream is a GET and works with the cookie.
+- `HARNESS_OIDC_ONLY=1` refuses personal tokens everywhere (Bearer, cookie and `/api/login`). The operator token (`HARNESS_TOKEN`) still works, for scripts and as the way in if the provider is down; companions keep their own tokens.
+- `GET /auth/config` tells the UI whether single sign-on is on.
+
 ## Durability, checkpoints, trace
 
 - **History** is append-only JSONL. If the server stops mid-turn, every unfinished tool call gets a result saying so (the transcript stays valid). The session is idle again on restart, and with `HARNESS_AUTO_RESUME=1` it continues on its own.
@@ -442,6 +471,13 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 | `HARNESS_SANDBOX_ALLOW_HOSTS` | registries + GitHub | Comma-separated hosts an allowlist sandbox may reach; `HARNESS_SANDBOX_UPSTREAM_PROXY` chains its proxy through a corporate one. |
 | `HARNESS_USER_DAILY_USD` | none | Daily spend cap per account. |
 | `HARNESS_RATE_LIMIT` / `HARNESS_MESSAGE_RATE_LIMIT` | 600 / 30 | Requests / messages per minute per person (0 = none). |
+| `HARNESS_OIDC_ISSUER` | | Single sign-on: the provider's issuer, exactly as its discovery document gives it (https; http only on loopback). |
+| `HARNESS_OIDC_CLIENT_ID` / `HARNESS_OIDC_CLIENT_SECRET` | | The application registered at the provider. The secret is optional (a public client uses PKCE alone). |
+| `HARNESS_PUBLIC_URL` | | Where people reach the server, e.g. `https://harness.example.com`; the redirect URI is this plus `/auth/callback`. Cookies are `Secure` when it is https. |
+| `HARNESS_OIDC_SCOPES` | `openid email profile` | Scopes asked for. |
+| `HARNESS_OIDC_ALLOWED_DOMAINS` / `HARNESS_OIDC_ALLOWED_EMAILS` | | Who may sign in (comma-separated e-mail domains / addresses). With neither, nobody can. |
+| `HARNESS_OIDC_ADMINS` | | E-mail addresses that are administrators. |
+| `HARNESS_OIDC_ONLY` | off | `1`: people sign in only through the provider; personal tokens stop working (the operator token and companion tokens keep working). |
 | `HARNESS_ANTHROPIC_SERVER_COMPACTION` | on | `off` makes Claude sessions use the harness's own compaction. |
 | `HARNESS_SCRIPT_ISOLATION` | on | `off` runs scripts without the network namespace (they then ask first). |
 | `HARNESS_MIRROR_MAX_MB` | 100 | How much of a companion folder server-side tools may copy. |
@@ -463,7 +499,7 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
   - checkpoints and project MCP servers on companion sessions;
   - credential injection at the sandbox's network proxy (it allows or blocks hosts; it does not add secrets to requests);
   - Blender or Godot integration (3D is Three.js in the headless browser; neither binary was available to test);
-  - single sign-on (accounts use tokens).
+  - signing out at the identity provider (single sign-on's sign-out ends the harness session only).
 - **Limits of what was built:**
   - Plugin code runs in the server process. Declared permissions are enforced on the channels the harness hands out, not on code that ignores them; signing is the control for that.
   - Scripts (`run_script`) have no network namespace outside Linux, so there they ask before running.
