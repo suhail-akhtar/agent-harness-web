@@ -241,12 +241,17 @@ test('the computer tool operates a real desktop in the sandbox: launch xterm, cl
     }
     assert.equal(out.trim(), 'hello-desktop', 'the command typed into xterm ran');
 
-    const shot = await tool.run({ action: 'screenshot' }, ctx);
-    const png = Buffer.from(shot.images![0]!.data, 'base64');
-    assert.deepEqual(lib.pngSize(png), SCREEN);
-    assert.equal(shot.untrusted, undefined, 'no browser open');
-    await fs.writeFile(path.join(root, 'shot.png'), png);
-    const colors = Number((await sh('identify -format %k /workspace/shot.png')).stdout.trim());
+    // On a loaded machine xterm may still be redrawing: a few screenshots, a second apart.
+    let colors = 0;
+    for (let i = 0; i < 8 && colors <= 4; i++) {
+      if (i) await new Promise((r) => setTimeout(r, 1000));
+      const shot = await tool.run({ action: 'screenshot' }, ctx);
+      const png = Buffer.from(shot.images![0]!.data, 'base64');
+      assert.deepEqual(lib.pngSize(png), SCREEN);
+      assert.equal(shot.untrusted, undefined, 'no browser open');
+      await fs.writeFile(path.join(root, 'shot.png'), png);
+      colors = Number((await sh('identify -format %k /workspace/shot.png')).stdout.trim());
+    }
     assert.ok(colors > 4, `the screen is not blank (${colors} colours)`);
 
     const zoom = await tool.run({ action: 'zoom', region: [100, 100, 420, 300] }, ctx);
