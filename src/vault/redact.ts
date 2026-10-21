@@ -46,13 +46,26 @@ export function secretForms(value: string): string[] {
   return [...out];
 }
 
+/** A provider's signed reasoning block, replayed byte for byte (see redactDeep). */
+function signedReasoning(o: Record<string, unknown>): boolean {
+  if (o.type === 'thinking') return typeof o.signature === 'string' && typeof o.thinking === 'string';
+  if (o.type === 'redacted_thinking') return typeof o.data === 'string';
+  if (o.type === 'reasoning') return typeof o.encrypted_content === 'string';
+  return false;
+}
+
 export class Redactor {
   private forms = new Map<string, string>();
   private ordered: [string, string][] = [];
   private names = new Set<string>();
-  /** `onAdd`: told each newly registered name (a session keeps the names, to hide the values again after a restart). */
-  private onAdd?: (name: string) => void;
-  constructor(onAdd?: (name: string) => void) { this.onAdd = onAdd; }
+  private values = new Set<string>();
+  /**
+   * `onAdd`: told each value newly registered, with its name (a session keeps the names,
+   * and the values sealed, to hide them again after a restart - even once the vault no
+   * longer has them: deleted, or rotated past the versions it keeps).
+   */
+  private onAdd?: (name: string, value: string) => void;
+  constructor(onAdd?: (name: string, value: string) => void) { this.onAdd = onAdd; }
 
   /** How many fragments are watched for (0: redact() is a no-op). */
   get size(): number { return this.ordered.length; }
@@ -61,7 +74,9 @@ export class Redactor {
 
   add(name: string, value: string): void {
     if (typeof value !== 'string' || value.length < MIN_SECRET_LENGTH) return;
-    if (!this.names.has(name)) { this.names.add(name); this.onAdd?.(name); }
+    this.names.add(name);
+    const key = `${name}\0${value}`;
+    if (!this.values.has(key)) { this.values.add(key); this.onAdd?.(name, value); }
     const label = `[vault:${name}]`;
     let changed = false;
     for (const f of secretForms(value)) if (!this.forms.has(f)) { this.forms.set(f, label); changed = true; }
@@ -78,9 +93,12 @@ export class Redactor {
 
   /**
    * A copy of a JSON-like value with every string redacted; the same object when
-   * nothing changed. Images are skipped (base64 pixels), and so are provider blocks
-   * that carry a signature or encrypted content: changing one breaks the provider's
-   * check, and they are the model's own opaque reasoning.
+   * nothing changed. Images are skipped (base64 pixels), and so are the providers'
+   * signed reasoning blocks - Anthropic `thinking` (with its `signature`) and
+   * `redacted_thinking`, OpenAI `reasoning` items with `encrypted_content`: changing
+   * one breaks the provider's check, and they are the model's own opaque reasoning.
+   * Only those exact shapes: any other object with a `signature` key (a tool input the
+   * model wrote) is redacted like everything else.
    */
   redactDeep<T>(v: T): T {
     if (!this.ordered.length) return v;
@@ -96,7 +114,7 @@ export class Redactor {
     }
     if (v && typeof v === 'object') {
       const o = v as Record<string, unknown>;
-      if ('signature' in o || 'encrypted_content' in o || o.type === 'image') return v;
+      if (o.type === 'image' || signedReasoning(o)) return v;
       let changed = false;
       const out: Record<string, unknown> = {};
       for (const [k, x] of Object.entries(o)) {

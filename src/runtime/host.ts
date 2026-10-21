@@ -28,7 +28,7 @@ export interface LocalNetOptions {
 export interface ExecResult { stdout: string; stderr: string; code: number | null; timedOut: boolean; orphansKilled?: boolean }
 export interface ExecOptions {
   timeoutMs: number; signal?: AbortSignal; stdin?: string; cwd?: string; env?: NodeJS.ProcessEnv;
-  /** Vault values for this one command's environment (never in its text; Docker gets them as `-e NAME` from the CLI's environment, not its arguments). */
+  /** Vault values for this one command's environment (never in its text; Docker gets them through a private --env-file, never the CLI's own environment or its arguments). */
   secretEnv?: Record<string, string>;
 }
 

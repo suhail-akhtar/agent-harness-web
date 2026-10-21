@@ -5,7 +5,7 @@ import https from 'node:https';
 import path from 'node:path';
 import type { Effort } from '../core/models.ts';
 import { type Session, SessionElsewhereError, type SessionMeta } from '../core/session.ts';
-import type { LeaseRecord } from '../util/lease.ts';
+import { type LeaseRecord, leaseUrlSig } from '../util/lease.ts';
 import type { PermissionMode } from '../core/types.ts';
 import type { Harness } from '../kernel/harness.ts';
 import { MemoryError, MemoryStore } from '../memory/store.ts';
@@ -111,6 +111,38 @@ const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 const IMPORT_LIMIT = Number(process.env.HARNESS_IMPORT_MAX_MB ?? 80) * 1024 * 1024;
 const MODES: PermissionMode[] = ['default', 'acceptEdits', 'auto', 'dontAsk', 'plan', 'bypass'];
 
+/** Request headers never passed to another server: credentials, and the hop's own. */
+const NOT_FORWARDED = new Set(['authorization', 'cookie', 'proxy-authorization', 'host', 'connection', 'keep-alive', 'proxy-connection', 'upgrade', 'te', 'trailer', 'x-harness-forwarded', 'x-harness-cluster-auth']);
+/** How old a forwarded request's signature may be (clock drift between servers included). */
+const CLUSTER_AUTH_MS = 60_000;
+
+const loopbackHost = (h: string) => h === 'localhost' || h === '[::1]' || /^127\.\d+\.\d+\.\d+$/.test(h);
+
+/**
+ * The header one server sends with a request it passes to another: who the person is
+ * (as the first server signed them in), when, and for which method and path, signed
+ * with HARNESS_CLUSTER_SECRET. The receiving server checks it and maps it back to the
+ * account; no cookie or token travels.
+ */
+export function clusterAuthHeader(secret: string, p: Principal, method: string, pathAndQuery: string, from: string, now = Date.now()): string {
+  const payload = Buffer.from(JSON.stringify({ ...(p.id ? { id: p.id } : {}), name: p.name, from })).toString('base64url');
+  const base = `v1.${now}.${payload}`;
+  return `${base}.${crypto.createHmac('sha256', secret).update(`${base}\n${method.toUpperCase()} ${pathAndQuery}`).digest('base64url')}`;
+}
+
+/** The signed principal of a forwarded request, or undefined when the header is not valid for this request now. */
+export function verifyClusterAuth(secret: string, header: string, method: string, pathAndQuery: string, now = Date.now()): { id?: string; name: string; from: string } | undefined {
+  const m = /^v1\.(\d{10,16})\.([A-Za-z0-9_-]{2,4096})\.([A-Za-z0-9_-]{43})$/.exec(header);
+  if (!m) return undefined;
+  const base = `v1.${m[1]}.${m[2]}`;
+  const want = crypto.createHmac('sha256', secret).update(`${base}\n${method.toUpperCase()} ${pathAndQuery}`).digest('base64url');
+  if (!safeEqual(want, m[3]!) || Math.abs(now - Number(m[1])) > CLUSTER_AUTH_MS) return undefined;
+  try {
+    const j = JSON.parse(Buffer.from(m[2]!, 'base64url').toString('utf8')) as { id?: unknown; name?: unknown; from?: unknown };
+    return { ...(typeof j.id === 'string' ? { id: j.id } : {}), name: String(j.name ?? ''), from: String(j.from ?? '') };
+  } catch { return undefined; }
+}
+
 export function createApp(o: AppOptions): { server: http.Server; handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> } {
   const { harness } = o;
   // Scheduled work and triggers of a disabled account stop with it.
@@ -152,6 +184,15 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
   const ssoOnly = !!sso?.client.cfg.only;
   const ssoSecure = sso?.client.secure ? '; Secure' : '';
   const tokenSecure = o.loopback ? '' : '; Secure';
+  // An account's sessions use every operator-scope vault entry only when it is an administrator (as the server sees it now).
+  if (harness.vault && o.users) {
+    harness.vault.isAdmin = (id) => {
+      if (id === undefined) return true;
+      const u = o.users!.get(id);
+      if (!u || u.disabled) return false;
+      return u.sso && sso ? isSsoAdmin(sso.client.cfg, u.sso.email) : u.role === 'admin';
+    };
+  }
 
   function principalFor(token: string | undefined): Principal | undefined {
     if (!token) return undefined;
@@ -170,7 +211,31 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     return { id: u.id, name: u.name, role: isSsoAdmin(sso.client.cfg, u.sso.email) ? 'admin' : 'member', email: u.sso.email };
   }
 
+  /**
+   * A request another server of the cluster passed on (see forward): the principal it
+   * signed, mapped back to the account as it is here now (a disabled account is refused,
+   * the role is this server's). Undefined when the signature does not hold.
+   */
+  function forwardedPrincipal(req: http.IncomingMessage, header: string): Principal | undefined {
+    const secret = harness.cluster?.secret;
+    if (!secret) return undefined;
+    const u = new URL(req.url ?? '/', 'http://x');
+    const signed = verifyClusterAuth(secret, header, req.method ?? 'GET', u.pathname + u.search);
+    if (!signed) return undefined;
+    if (!signed.id) return { name: 'operator', role: 'admin' };
+    const acc = o.users?.get(signed.id);
+    if (!acc || acc.disabled) return undefined;
+    if (acc.sso && sso) {
+      if (refusal(sso.client.cfg, acc.sso.email)) return undefined;
+      return { id: acc.id, name: acc.name, role: isSsoAdmin(sso.client.cfg, acc.sso.email) ? 'admin' : 'member', email: acc.sso.email };
+    }
+    return { id: acc.id, name: acc.name, role: acc.role };
+  }
+
   function who(req: http.IncomingMessage): { p: Principal; viaSession: boolean } | undefined {
+    // Passed on by another server: its signature, nothing else, says who it is.
+    const forwarded = req.headers['x-harness-cluster-auth'];
+    if (typeof forwarded === 'string') { const p = forwardedPrincipal(req, forwarded); return p && { p, viaSession: false }; }
     if (o.authOff) return { p: { name: 'operator', role: 'admin' }, viaSession: false };
     const bearer = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1];
     const byBearer = principalFor(bearer);
@@ -266,20 +331,51 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
    * lease): passed on to that server when it advertises its address (HARNESS_NODE_URL)
    * and the request was not passed on already; else a 409 that says where it is.
    */
-  function elsewhere(req: http.IncomingMessage, res: http.ServerResponse, holder: LeaseRecord): Promise<void> | void {
-    // A body already read here cannot be passed on: then the 409.
-    if (holder.url && !req.headers['x-harness-forwarded'] && !req.readableEnded) return forward(req, res, holder);
-    send(res, 409, {
-      error: `This session is being worked on by another server (${holder.owner}). Try again there${holder.url ? ` (${holder.url})` : ''}, or when it is done.`,
-      server: holder.owner, ...(holder.url ? { url: holder.url } : {}),
-    }, holder.url ? { 'x-harness-session-server': holder.url } : {});
+  /**
+   * The origin a session's holder may be reached at, when this server may pass requests
+   * to it: a cluster secret is set, the address is https (or loopback), and it is one of
+   * HARNESS_CLUSTER_PEERS - or, without that list, the lease's address carries a valid
+   * signature under the secret (a lease file anyone with write access to the shared folder
+   * could edit names no other address).
+   */
+  function peerOrigin(holder: LeaseRecord): string | undefined {
+    const c = harness.cluster;
+    if (!c?.secret || !holder.url) return undefined;
+    let u: URL;
+    try { u = new URL(holder.url); } catch { return undefined; }
+    if (u.protocol !== 'https:' && !(u.protocol === 'http:' && loopbackHost(u.hostname))) return undefined;
+    if (u.username || u.password) return undefined;
+    if (c.peers?.length) return c.peers.includes(u.origin) ? u.origin : undefined;
+    return holder.sig && safeEqual(holder.sig, leaseUrlSig(c.secret, holder.owner, holder.url)) ? u.origin : undefined;
   }
 
-  /** Streams the request to the server holding the session and its answer back (event streams too). */
-  function forward(req: http.IncomingMessage, res: http.ServerResponse, holder: LeaseRecord): Promise<void> {
+  function elsewhere(req: http.IncomingMessage, res: http.ServerResponse, holder: LeaseRecord, me?: Principal): Promise<void> | void {
+    const origin = peerOrigin(holder);
+    // A body already read here cannot be passed on: then the 409.
+    if (origin && me && !req.headers['x-harness-forwarded'] && !req.readableEnded) return forward(req, res, holder, origin, me);
+    send(res, 409, {
+      error: `This session is being worked on by another server (${holder.owner}). Try again there${origin ? ` (${origin})` : ''}, or when it is done.`,
+      server: holder.owner, ...(origin ? { url: origin } : {}),
+    }, origin ? { 'x-harness-session-server': origin } : {});
+  }
+
+  /**
+   * Streams the request to the server holding the session and its answer back (event
+   * streams too). The target is the peer's origin with this request's path and query
+   * only; credentials stay here: the person goes along as a signed cluster header.
+   */
+  function forward(req: http.IncomingMessage, res: http.ServerResponse, holder: LeaseRecord, origin: string, me: Principal): Promise<void> {
     return new Promise((resolve) => {
-      const target = new URL(req.url ?? '/', `${holder.url}/`);
-      const headers: http.OutgoingHttpHeaders = { ...req.headers, host: target.host, 'x-harness-forwarded': harness.cluster?.id ?? '1' };
+      const here = new URL(req.url ?? '/', 'http://x');
+      const target = new URL(origin);
+      target.pathname = here.pathname;
+      target.search = here.search;
+      const c = harness.cluster!;
+      const headers: http.OutgoingHttpHeaders = {};
+      for (const [k, v] of Object.entries(req.headers)) if (!NOT_FORWARDED.has(k.toLowerCase())) headers[k] = v;
+      headers.host = target.host;
+      headers['x-harness-forwarded'] = c.id;
+      headers['x-harness-cluster-auth'] = clusterAuthHeader(c.secret!, me, req.method ?? 'GET', target.pathname + target.search, c.id);
       const up = (target.protocol === 'https:' ? https : http).request(target, { method: req.method, headers }, (r) => {
         res.writeHead(r.statusCode ?? 502, { ...r.headers, 'x-harness-served-by': holder.owner });
         r.pipe(res);
@@ -287,7 +383,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         r.on('error', () => { res.end(); resolve(); });
       });
       up.on('error', (e) => {
-        if (!res.headersSent) send(res, 502, { error: `The server working on this session (${holder.owner}, ${holder.url}) cannot be reached: ${e.message}` });
+        if (!res.headersSent) send(res, 502, { error: `The server working on this session (${holder.owner}, ${origin}) cannot be reached: ${e.message}` });
         else res.end();
         resolve();
       });
@@ -532,10 +628,11 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         rotateEveryDays: typeof b.rotateEveryDays === 'number' ? b.rotateEveryDays : undefined,
         backend: typeof b.backend === 'string' && b.backend ? b.backend : undefined,
         ref: typeof b.ref === 'string' && b.ref ? b.ref : undefined,
+        allow: Array.isArray(b.allow) ? b.allow.map(String) : undefined,
       });
       try {
         if (p === '/api/vault/entries' && method === 'GET') { await vault.sync(); return send(res, 200, { entries: vault.list(actor), backends: [...vault.backends.keys()], defaultBackend: vault.defaultBackend }); }
-        const em = /^\/api\/vault\/entries(?:\/([^/]+)(?:\/(rotate|rollback|history))?)?$/.exec(p);
+        const em = /^\/api\/vault\/entries(?:\/([^/]+)(?:\/(rotate|rollback|history|allow))?)?$/.exec(p);
         if (!em) throw new HttpError(404, 'not found');
         const b = method === 'GET' || method === 'DELETE' ? {} : await readJson(req, 200_000);
         const name = em[1] ? decodeURIComponent(em[1]) : String(b.name ?? '');
@@ -553,6 +650,10 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         if (em[2] === 'rotate' && method === 'POST') {
           const grantsFor = (plugin: string) => registry.plugins.find((x) => x.name === plugin)?.permissions?.vault ?? [];
           return send(res, 200, await vault.rotate(actor, name, { scope: spec(b).scope ?? scopeQ, ...(typeof b.value === 'string' ? { value: b.value } : {}), grantsFor }));
+        }
+        if (em[2] === 'allow' && (method === 'POST' || method === 'PUT')) {
+          if (!admin) throw new HttpError(403, 'administrators only');
+          return send(res, 200, await vault.setAllow(actor, name, b.allow));
         }
         if (em[2] === 'rollback' && method === 'POST') {
           if (typeof b.version !== 'number') throw new HttpError(400, 'version (a number from the history) is required');
@@ -681,7 +782,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       await sessions.sync();
       sessionFor(me, sid);
       const holder = await sessions.heldElsewhere(sid);
-      if (holder) return elsewhere(req, res, holder);
+      if (holder) return elsewhere(req, res, holder, me);
     }
 
     const rm = /^\/api\/sessions\/([a-f0-9]{16})\/runs\/(run_[a-f0-9]+)(?:\/(resume))?$/.exec(p);
@@ -816,7 +917,11 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       await route(req, res);
     } catch (err) {
       // Another server took the session between the check and the start.
-      if (err instanceof SessionElsewhereError && !res.headersSent) return void await elsewhere(req, res, err.holder);
+      if (err instanceof SessionElsewhereError && !res.headersSent) {
+        let me: Principal | undefined;
+        try { me = who(req)?.p; } catch { /* not signed in */ }
+        return void await elsewhere(req, res, err.holder, me);
+      }
       const status = err instanceof HttpError ? err.status : 500;
       if (status === 500) console.error(err);
       if (!res.headersSent) send(res, status, { error: err instanceof Error ? err.message : String(err) }, err instanceof HttpError ? err.headers : undefined);

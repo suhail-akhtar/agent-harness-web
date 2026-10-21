@@ -84,7 +84,7 @@ export interface HarnessOptions {
    * The key vault. Default on (HARNESS_VAULT=off turns it off), with the backends of
    * HARNESS_VAULT_BACKENDS; `mayUse` decides whose sessions get it (HARNESS_VAULT=admins). null: off.
    */
-  vault?: { backends?: string | Record<string, unknown>; env?: NodeJS.ProcessEnv; mayUse?: (account: string | undefined) => boolean } | null;
+  vault?: { backends?: string | Record<string, unknown>; env?: NodeJS.ProcessEnv; mayUse?: (account: string | undefined) => boolean; isAdmin?: (account: string | undefined) => boolean } | null;
   /**
    * Several servers on one shared data folder: this server's id and address, and the
    * lease time. Sessions are driven by the server holding their lease; schedules fire
@@ -121,7 +121,7 @@ export interface Harness {
   /** The key vault (absent when turned off). */
   vault?: VaultStore;
   /** Several servers on one data folder (absent: a single server). */
-  cluster?: { id: string; url?: string; leases: Leases };
+  cluster?: { id: string; url?: string; leases: Leases; /** HARNESS_CLUSTER_SECRET: signs forwarded requests and lease addresses. */ secret?: string; /** HARNESS_CLUSTER_PEERS: the only origins requests are passed to (else a lease address signed with the secret). */ peers?: string[] };
   /** MCP bundles (.mcpb, Desktop Extensions) installed on this server; new sessions get their tools. */
   mcpb: {
     list(): Promise<InstalledMcpb[]>;
@@ -224,11 +224,12 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   const vaultMode = (process.env.HARNESS_VAULT ?? 'on').trim();
   if (!['on', 'off', 'admins'].includes(vaultMode)) throw new Error(`HARNESS_VAULT must be on, off or admins (got "${vaultMode}")`);
   const vault = opts.vault === null || vaultMode === 'off' ? undefined
-    : await new VaultStore({ dataDir: opts.dataDir, env: opts.vault?.env, backends: opts.vault?.backends, rotators: () => registry.vaultRotators, mayUse: opts.vault?.mayUse }).load();
+    : await new VaultStore({ dataDir: opts.dataDir, env: opts.vault?.env, backends: opts.vault?.backends, rotators: () => registry.vaultRotators, mayUse: opts.vault?.mayUse, isAdmin: opts.vault?.isAdmin }).load();
   if (vault && vault.backends.size > 1) log(`key vault backends: ${[...vault.backends.keys()].join(', ')} (new entries: ${vault.defaultBackend})`);
   let sessionsRef: SessionManager | undefined;
   const clusterCfg = opts.cluster === null ? undefined : opts.cluster ?? clusterFromEnv();
-  const leases = clusterCfg ? new Leases(path.join(opts.dataDir, 'leases'), { owner: clusterCfg.id, url: clusterCfg.url, ttlMs: clusterCfg.leaseTtlMs, log }) : undefined;
+  const leases = clusterCfg ? new Leases(path.join(opts.dataDir, 'leases'), { owner: clusterCfg.id, url: clusterCfg.url, ttlMs: clusterCfg.leaseTtlMs, log, secret: clusterCfg.secret }) : undefined;
+  if (clusterCfg?.url && !clusterCfg.secret) log('cluster: HARNESS_NODE_URL is set but HARNESS_CLUSTER_SECRET is not: requests for sessions this server drives are not passed to it (the others answer 409).');
   if (leases) { leases.start(); log(`cluster: server ${leases.owner}${leases.url ? ` (${leases.url})` : ''}, leases of ${leases.ttlMs / 1000}s in ${leases.dir}`); }
   const scheduler = opts.scheduler === false ? undefined : new Scheduler(opts.dataDir, {
     async run(s, outside) {
@@ -301,7 +302,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
 
   return {
     registry, sessions, companions, mcp, scheduler, vault, dataDir: opts.dataDir, search: search?.backend,
-    ...(leases ? { cluster: { id: leases.owner, url: leases.url, leases } } : {}),
+    ...(leases ? { cluster: { id: leases.owner, url: leases.url, leases, ...(clusterCfg?.secret ? { secret: clusterCfg.secret } : {}), ...(clusterCfg?.peers ? { peers: clusterCfg.peers } : {}) } } : {}),
     mcpb: {
       list: () => installedMcpb(mcpbRoot),
       async install(bundle, userConfig) {
