@@ -29,6 +29,9 @@ const ssh = await import('../plugins/aiops/lib/ssh.mjs');
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN = path.join(here, '..', 'plugins', 'aiops');
 const FIXTURE = path.join(here, '..', 'evals', 'aiops', 'fixtures');
+const OPERATOR_INVENTORY = path.join(here, '..', 'evals', 'aiops', 'stack', 'operator-inventory.yaml');
+const OPS_ENV = ['HARNESS_OPS_INVENTORY', 'HARNESS_OPS_LOCAL_DOCKER', 'HARNESS_OPS_LOCAL_DOCKER_ALLOW'];
+const envBefore = Object.fromEntries(OPS_ENV.map((k) => [k, process.env[k]]));
 const IMAGES = ['node:22-alpine', 'prom/prometheus:v2.54.1', 'prom/node-exporter:v1.8.2', 'lscr.io/linuxserver/openssh-server:latest'];
 const want = process.env.HARNESS_TEST_AIOPS_STACK;
 const run = want !== '0' && (await dockerAvailable()) && (want === '1' || (await Promise.all(IMAGES.map(imageExists))).every(Boolean));
@@ -62,15 +65,19 @@ before(async () => {
   secrets = JSON.parse(await fs.readFile(stack.SECRETS_FILE, 'utf8'));
   ws = await tempDir();
   await fs.cp(FIXTURE, ws, { recursive: true });
-  // A second host entry for the same machine, reached with the password credential.
-  const inv = await fs.readFile(path.join(ws, '.harness', 'ops', 'inventory.yaml'), 'utf8');
-  await fs.writeFile(path.join(ws, '.harness', 'ops', 'inventory.yaml'), inv.replace('services:', '  - name: db-1-pw\n    address: 127.0.0.1\n    port: 12222\n    user: ops\n    credential: ops-db-1-password\n    env: prod\n\nservices:'));
+  // The operator's inventory (hosts, endpoints, credentials), plus a second host entry for the
+  // same machine, reached with the password credential; the shop's containers on this engine.
+  const op = await fs.readFile(OPERATOR_INVENTORY, 'utf8');
+  const opFile = path.join(await tempDir(), 'operator-inventory.yaml');
+  await fs.writeFile(opFile, `${op}  - name: db-1-pw\n    address: 127.0.0.1\n    port: 12222\n    user: ops\n    credential: ops-db-1-password\n    env: prod\n`);
+  Object.assign(process.env, { HARNESS_OPS_INVENTORY: opFile, HARNESS_OPS_LOCAL_DOCKER: '1', HARNESS_OPS_LOCAL_DOCKER_ALLOW: 'hwtest-aiops-*' });
   dataDir = await tempDir();
   h = await createHarness({ dataDir, plugins: [PLUGIN], search: null, memory: 'off', scheduler: false });
 }, { timeout: 600_000 });
 
 after(async () => {
   if (!run) return;
+  for (const [k, v] of Object.entries(envBefore)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   await h?.close();
   stack.down();
 }, { timeout: 300_000 });
@@ -108,6 +115,10 @@ test('stack: docker_status shows the shop container running as root with no heal
   assert.match(d.content, /runs as root/);
   assert.match(d.content, /hwtest-aiops-prometheus \[running\] health=healthy/);
   assert.doesNotMatch(d.content, /prometheus-local|crm-db/);
+  // Unfiltered, the server's engine still shows only what the operator allows: no other session's sandbox, no one else's containers.
+  const all = await call('docker_status', {});
+  const names = [...all.content.matchAll(/^(\S+) \[/gm)].map((m) => m[1]!);
+  assert.ok(names.length >= 4 && names.every((n) => n.startsWith('hwtest-aiops-')), all.content);
 });
 
 test('stack: ssh_exec with a vault key (pinned on first use) and with a vault password; output redacted; every call audited', { skip }, async () => {

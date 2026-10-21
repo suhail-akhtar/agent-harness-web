@@ -1,7 +1,7 @@
 {
   "name": "aiops",
   "version": "1.0.0",
-  "description": "AI operations: an ops inventory (hosts, services, SLOs, alert rules, maintenance windows), monitoring (Prometheus, Loki or docker logs, probes, host stats, Docker), ssh with Key Vault credentials and pinned host keys, alert checks and SLO burn rates, incidents and postmortems, safe runbooks, the incident-response and ops-advisor workflows, SRE agents and skills, and the runbook-safe, inventory-valid, alerts-valid and ops-healthy gates. Its tools appear in sessions whose workspace has .harness/ops/inventory.yaml (or when the operator sets HARNESS_OPS_INVENTORY). It reaches the hosts and endpoints the inventory names directly - that is its job; with an operator inventory, hosts and monitoring endpoints come only from it.",
+  "description": "AI operations: an ops inventory (hosts, services, SLOs, alert rules, maintenance windows), monitoring (Prometheus, Loki or docker logs, probes, host stats, Docker), ssh with Key Vault credentials and pinned host keys, alert checks and SLO burn rates, incidents and postmortems, safe runbooks, the incident-response and ops-advisor workflows, SRE agents and skills, and the runbook-safe, inventory-valid, alerts-valid and ops-healthy gates. Its tools appear in sessions whose workspace has .harness/ops/inventory.yaml (or when the operator sets HARNESS_OPS_INVENTORY). It reaches the hosts and endpoints the inventory names directly - that is its job; only the operator's inventory attaches Key Vault credentials (to its hosts and endpoints), every call that uses one is asked about (vault rules), and the server's own Docker engine is off unless the operator allows containers.",
   "main": "index.mjs",
   "agents": "agents",
   "skills": "skills",

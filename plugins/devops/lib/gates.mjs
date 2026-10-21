@@ -5,7 +5,7 @@
 import { locate, missing, parseJson, q, sh, tail } from './common.mjs';
 import { countLine, hadolint, trivy } from './container.mjs';
 import { actionlint } from './ci.mjs';
-import { moduleDirs, PLAN_DIR, summarizePlan, validateDir } from './iac.mjs';
+import { moduleDirs, PLAN_DIR, plansFor, summarizePlan, validateDir } from './iac.mjs';
 import { findCharts, findManifests, kubeconform } from './k8s.mjs';
 
 const PRUNE = ['node_modules', '.git', '.harness', '.terraform', 'vendor', 'dist', 'build', '.venv', 'venv', '__pycache__', 'coverage', 'target']
@@ -30,13 +30,17 @@ async function runPolicy(host, signal) {
   return parseJson(r.stdout) ?? {};
 }
 
-/** The latest plan the iac tool made, if its file is still there unchanged. */
+/**
+ * The latest plan the iac tool made in this session: the workspace's latest.json
+ * names it (a workflow removes that file to start afresh), and what it destroys is
+ * taken from the plan the server keeps, never from the file (which the agent can edit).
+ */
 async function latestPlan(host, signal) {
   const r = await sh(host, `f=${PLAN_DIR}/latest.json; [ -f "$f" ] || exit 1; cat "$f"`, { signal, timeoutMs: 15_000 });
   const p = parseJson(r.stdout);
-  if (!p?.file || !/^[0-9a-f]{64}$/.test(String(p.hash))) return undefined;
-  const c = await sh(host, `echo ${q(`${p.hash}  ${p.file}`)} | sha256sum -c --status - 2>/dev/null`, { signal, timeoutMs: 30_000 });
-  return c.code === 0 ? p : undefined;
+  if (!/^[0-9a-f]{64}$/.test(String(p?.hash))) return undefined;
+  const kept = plansFor(host).get(p.hash);
+  return kept ? { hash: kept.hash, id: kept.id, destroys: kept.destroys } : undefined;
 }
 
 /** A plan made by the gate itself: no lock, a throwaway file, only addresses and actions read. */
@@ -86,7 +90,7 @@ export const gates = [
       let from;
       if (latest) {
         destroys = latest.destroys ?? [];
-        from = `the approved-for-review plan ${latest.file} (sha256 ${latest.hash.slice(0, 12)})`;
+        from = `the approved-for-review plan ${latest.id} (sha256 ${latest.hash.slice(0, 12)})`;
       } else {
         const dirs = await moduleDirs(host, signal);
         if (!dirs.length) return { pass: true, summary: 'no .tf files in the workspace' };

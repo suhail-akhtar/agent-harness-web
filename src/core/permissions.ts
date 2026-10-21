@@ -133,7 +133,8 @@ function decideSecrets(tool: Tool, input: Record<string, unknown>, names: string
   const { rules, mode } = ctx;
   const any = (list: string[]) => list.some((r) => names.some((n) => vaultRuleCovers(r, n)));
   if (any(rules.deny)) return { action: 'deny', reason: 'a deny rule covers a vault entry this command would get' };
-  const base = decide(tool, { ...input, secrets: undefined }, ctx);
+  // The call as it would be decided without the vault entries (a plugin tool names them from its input, so they are left out explicitly).
+  const base = decide(tool, { ...input, secrets: undefined }, ctx, true);
   if (base.action === 'deny' || mode === 'bypass') return base;
   if (any(rules.ask)) return dontAsk({ action: 'ask', reason: 'an ask rule covers a vault entry this command would get' }, mode);
   const trusted = ctx.tainted ? (rules.operatorAllow ?? []) : rules.allow.filter((r) => !rules.projectAllow?.includes(r));
@@ -145,9 +146,9 @@ function decideSecrets(tool: Tool, input: Record<string, unknown>, names: string
   return base;
 }
 
-export function decide(tool: Tool, input: Record<string, unknown>, ctx: PermissionContext): Decision {
+export function decide(tool: Tool, input: Record<string, unknown>, ctx: PermissionContext, withoutSecrets = false): Decision {
   const { rules, mode } = ctx;
-  const names = tool.vaultNames?.(input) ?? [];
+  const names = withoutSecrets ? [] : tool.vaultNames?.(input) ?? [];
   if (names.length) return decideSecrets(tool, input, names, ctx);
   if (rules.deny.some((r) => ruleMatches(r, tool, input))) return { action: 'deny', reason: 'blocked by a deny rule' };
   if (rules.ask.some((r) => ruleMatches(r, tool, input))) return mode === 'bypass' ? { action: 'allow', reason: 'bypass mode' } : dontAsk({ action: 'ask', reason: 'matches an ask rule' }, mode);

@@ -21,20 +21,33 @@ export const runner = { prefix: 'harness-devops-' };
 
 const VAR = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+/** The private folders secrets are written to: "<tmp>/<SECRET_DIR_PREFIX><call id>". */
+export const SECRET_DIR_PREFIX = 'hw-devops-secrets-';
+/** Older than this, a secrets folder belongs to no running call (the longest call is 2 hours): swept. */
+const SWEEP_MINUTES = 180;
+
 /**
  * Loads secrets from stdin before the command: NUL-separated (kind, name,
  * value) triples. "e" exports the value; "f" writes it to a file in a private
  * temporary folder (outside the workspace) and exports the file's path. The
- * folder is removed when the command ends, however it ends.
+ * folder has a name the server chose (`id`), so the server removes it after the
+ * command however the command ended - a trap does not run when the command is
+ * killed (SIGKILL on a timeout) - and each call first sweeps folders left by
+ * calls that never got that far (a server that died).
  */
-export const PRELUDE = [
-  '__hw_t=$(mktemp -d) || exit 97',
+export const prelude = (id) => [
+  `find "\${TMPDIR:-/tmp}" -maxdepth 1 -type d -name '${SECRET_DIR_PREFIX}*' -mmin +${SWEEP_MINUTES} -exec rm -rf {} + 2>/dev/null`,
+  `__hw_t="\${TMPDIR:-/tmp}/${SECRET_DIR_PREFIX}${id}"`,
+  '(umask 077; mkdir "$__hw_t") || exit 97',
   'trap \'rm -rf "$__hw_t"\' EXIT',
   'while IFS= read -r -d \'\' __k && IFS= read -r -d \'\' __n && IFS= read -r -d \'\' __v; do',
   '  if [ "$__k" = f ]; then (umask 077; printf \'%s\' "$__v" > "$__hw_t/$__n"); export "$__n=$__hw_t/$__n"; else export "$__n=$__v"; fi',
   'done',
   'unset __k __n __v',
 ].join('\n');
+
+/** Thrown for vault use in a session whose commands run on the user's own computer. */
+export const COMPANION_NO_VAULT = 'Not run: Key Vault secrets are never sent to a companion (a session that works on your computer). Run this in a sandbox or server-folder session, or without secrets.';
 
 /** One argument as a bash word. */
 export const q = (s) => {
@@ -118,20 +131,24 @@ async function runnerExec(host, cmd, opts) {
  * Runs a bash command where the session's commands run. `env` values are
  * exported, `files` values written to private temporary files whose paths are
  * exported (KUBECONFIG); both travel on stdin, and both are redacted from the
- * output.
+ * output. `raw`: also return the unredacted stdout as rawStdout (binary data
+ * encoded by the command, never shown).
  */
-export async function sh(host, cmd, { signal, timeoutMs = 300_000, env = {}, files = {} } = {}) {
+export async function sh(host, cmd, { signal, timeoutMs = 300_000, env = {}, files = {}, raw = false } = {}) {
   if (host.shell === 'powershell' && !usesRunner(host)) throw new Error('The devops tools run bash commands; this runtime has PowerShell only (on Windows, install Git for Windows for Git Bash, or set HARNESS_DEVOPS_IMAGE to run them in the ops image).');
   const triples = [
     ...Object.entries(env).map(([n, v]) => ['e', n, v]),
     ...Object.entries(files).map(([n, v]) => ['f', n, v]),
   ];
+  // Secret values stay on the server's side: never on stdin of a command on the user's computer.
+  if (triples.length && host.kind === 'companion') throw new UserError(COMPANION_NO_VAULT);
   for (const [, n, v] of triples) {
     if (!VAR.test(n)) throw new Error(`${n} is not a valid environment variable name`);
     if (typeof v !== 'string' || v.includes('\0')) throw new Error(`the value for ${n} is not text`);
   }
   const stdin = triples.length ? triples.map((t) => `${t.join('\0')}\0`).join('') : undefined;
-  const full = triples.length ? `${PRELUDE}\n${cmd}` : cmd;
+  const id = triples.length ? crypto.randomBytes(8).toString('hex') : '';
+  const full = triples.length ? `${prelude(id)}\n${cmd}` : cmd;
   const opts = { timeoutMs, signal, ...(stdin !== undefined ? { stdin } : {}) };
   let r;
   try {
@@ -139,9 +156,12 @@ export async function sh(host, cmd, { signal, timeoutMs = 300_000, env = {}, fil
   } catch (e) {
     if (host.kind === 'companion' && /--allow-hooks/.test(e.message)) throw new Error('The devops tools run their programs on the companion\'s computer, which it allows only when started with --allow-hooks (as for the quality gates). Ask the user to restart the companion with --allow-hooks.');
     throw e;
+  } finally {
+    // A command killed on its timeout never ran its trap: its secrets folder goes now (the runner's container is gone with it).
+    if (id && !usesRunner(host)) await host.exec(`rm -rf "\${TMPDIR:-/tmp}/${SECRET_DIR_PREFIX}${id}"`, { timeoutMs: 30_000 }).catch(() => {});
   }
   const secrets = triples.map((t) => t[2]);
-  return { ...r, stdout: redact(r.stdout, secrets), stderr: redact(r.stderr, secrets), output: redact(`${r.stdout}${r.stdout && r.stderr ? '\n' : ''}${r.stderr}`, secrets) };
+  return { ...r, stdout: redact(r.stdout, secrets), stderr: redact(r.stderr, secrets), output: redact(`${r.stdout}${r.stdout && r.stderr ? '\n' : ''}${r.stderr}`, secrets), ...(raw ? { rawStdout: r.stdout } : {}) };
 }
 
 const found = new WeakMap();
@@ -216,6 +236,8 @@ export async function fromVault(ctx, map, purpose) {
     if (!VAR.test(k)) throw new UserError(`${k} is not a valid environment variable name`);
     if (typeof v !== 'string') throw new UserError(`the secret for ${k} must be a Key Vault secret name`);
   }
+  // Values would travel to the user's computer (the command's stdin there): not read at all.
+  if (ctx.host?.kind === 'companion') throw new UserError(`${COMPANION_NO_VAULT} (${entries.map(([, v]) => v).join(', ')})`);
   const vault = ctx.services?.vault;
   if (!vault) throw new UserError(`This needs secrets from the Key Vault (${entries.map(([, v]) => v).join(', ')}), and this server has no Key Vault for this session. Ask the operator to set it up, or run without them.`);
   try {

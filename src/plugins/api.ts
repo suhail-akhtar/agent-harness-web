@@ -124,6 +124,12 @@ export interface ToolDefinition {
   ruleSubject?: Tool['ruleSubject'];
   /** Whether a session on this host gets the tool at all (e.g. only where the sandbox image has the program). */
   availableIn?: Tool['availableIn'];
+  /**
+   * The key vault entries a call reads (from its input; the same answer every time). Declared, they go
+   * through the vault permission rules (vault(NAME) deny/ask/allow, asked unless allowed, the
+   * untrusted-content guard) before the call runs, and the call can then read only those names.
+   */
+  vaultNames?: Tool['vaultNames'];
   run(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutcome | string>;
 }
 
@@ -137,13 +143,29 @@ export function defineTool(t: ToolDefinition): Tool {
     ...(t.sendsOut !== undefined ? { sendsOut: t.sendsOut } : {}),
     ...(t.availableIn ? { availableIn: t.availableIn } : {}),
     ...(t.ruleSubject ? { ruleSubject: t.ruleSubject } : {}),
+    ...(t.vaultNames ? { vaultNames: t.vaultNames } : {}),
     remoteable: false,
     summarize: t.summarize ?? ((i) => `${t.name} ${JSON.stringify(i).slice(0, 80)}`),
     async run(input, ctx) {
-      const r = await t.run(input, ctx);
+      const r = await t.run(input, t.vaultNames ? onlyDeclared(ctx, t.name, t.vaultNames(input)) : ctx);
       return typeof r === 'string' ? { content: r } : r;
     },
   };
+}
+
+/** A call that declared its vault entries reads only those: the permission decision was about them. */
+function onlyDeclared(ctx: ToolContext, tool: string, names: string[]): ToolContext {
+  const v = ctx.services?.vault;
+  if (!v) return ctx;
+  const check = (name: string) => {
+    if (!names.includes(name)) throw new Error(`${tool} may not read the vault entry "${name}" in this call: it was not among the entries the call declared (${names.join(', ') || 'none'}), which are what the permission check decided`);
+  };
+  const vault: NonNullable<ToolServices['vault']> = {
+    list: () => v.list(),
+    reveal: (name, ...rest) => { check(name); return v.reveal(name, ...rest); },
+    envFor: (map, ...rest) => { for (const n of Object.values(map)) check(n); return v.envFor(map, ...rest); },
+  };
+  return { ...ctx, services: { ...ctx.services, vault } };
 }
 
 export interface PluginManifest {

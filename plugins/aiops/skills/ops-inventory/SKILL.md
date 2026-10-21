@@ -6,7 +6,11 @@ description: The ops inventory format (.harness/ops/inventory.yaml) - hosts with
 
 The AIOps tools (ops_inventory, prometheus_query, logs_search, probe, host_stats, docker_status, ssh_exec, service_control, ops_check, slo_status, capacity_forecast, incident, runbook) appear in sessions whose workspace has `.harness/ops/inventory.yaml` (or `.yml` / `.json`), or when the operator sets `HARNESS_OPS_INVENTORY`. After creating the file, start a new session to get them. Check it with `ops_inventory validate` or the `inventory-valid` gate.
 
-The operator's file (HARNESS_OPS_INVENTORY) is trusted. When it exists, hosts and monitoring endpoints come only from it; the workspace file can add services, alerts, SLOs and maintenance windows.
+The operator's file (HARNESS_OPS_INVENTORY) is trusted. When it exists, hosts and monitoring endpoints come only from it; the workspace file can add services, alerts, SLOs and maintenance windows (its services may run on the operator's hosts).
+
+Credentials (`credential`, `prometheus_credential`, `loki_credential`) count only in the operator's file. In a workspace file they are ignored with a warning: a workspace may name a host or an endpoint, never a vault entry to send to it. So ssh (ssh_exec, host_stats, logs over ssh) and authenticated Prometheus/Loki need the operator's inventory. Every tool call that uses a credential is asked about (the vault permission rules, e.g. `vault(ops-web-1-key)`), and a call uses only the credentials attached to what it names: a workspace service on an operator host reaches it only when the call names the host (`logs_search` with `host` and `container` or `file`). Quality gates never use credentials.
+
+An entry with an error is left out until it is fixed (its error is reported). The server's own Docker engine (`host: local` services, `docker_status` without a host) is off unless the operator sets `HARNESS_OPS_LOCAL_DOCKER=1` and lists the containers in `HARNESS_OPS_LOCAL_DOCKER_ALLOW`.
 
 ## Format
 
@@ -15,7 +19,7 @@ monitoring:
   prometheus: http://prometheus.internal:9090   # or HARNESS_OPS_PROMETHEUS_URL
   loki: http://loki.internal:3100               # optional; else docker logs / files over ssh
   scrape_interval: 15s
-  # prometheus_credential: ops-prometheus-token # optional bearer token, a vault name
+  # prometheus_credential: ops-prometheus-token # optional bearer token, a vault name (operator's file only)
 
 environments: [prod, staging]
 
@@ -24,14 +28,14 @@ hosts:
     address: 10.0.0.5           # what ssh connects to
     port: 22
     user: ops
-    credential: ops-web-1-key   # a Key Vault name (ops-*): a private key or a password, never the value
+    credential: ops-web-1-key   # a Key Vault name (ops-*): a private key or a password, never the value (operator's file only)
     role: web
     env: prod
     tags: [web, linux]
 
 services:
   - name: shop-api
-    host: web-1                 # or local (the harness's Docker engine)
+    host: web-1                 # or local (the harness's Docker engine, when the operator allows the container)
     env: prod
     container: shop-api         # a docker container (logs, restarts), or
     # unit: shop-api.service    # a systemd unit on the host
@@ -74,7 +78,8 @@ alerts:
 ## Rules the validator applies
 - Names are unique per kind; every `host`, `service` and `env` reference exists.
 - URLs are http(s); durations look like `30s`, `5m`, `2h`, `30d`; cron has five fields.
-- `credential` is a vault name the plugin may read (`ops-*`). Values never go in the inventory or the workspace.
+- `credential` is a vault name the plugin may read (`ops-*`), in the operator's file. Values never go in the inventory or the workspace.
+- User names, addresses, container and unit names and log file paths are checked strictly (no leading `-`, no spaces or shell characters).
 - An alert has exactly one of `expr`, `probe`, `logs`; PromQL is parsed by Prometheus in the `alerts-valid` gate.
 - Implicit alerts: every service `health` URL must answer (critical) and every `tls` endpoint must have 21+ days left (warning) - ops_check evaluates them without a rule.
 - A service with neither `health` nor `metrics_job` is reported: nothing would notice it failing.

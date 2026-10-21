@@ -5,17 +5,45 @@
 //
 // Two sources. The operator's file (HARNESS_OPS_INVENTORY) is trusted. The
 // workspace's (.harness/ops/inventory.yaml|yml|json) can be edited by the
-// agent, so when the operator has a file, hosts and monitoring endpoints come
-// from the operator only: a workspace cannot point an operator credential at a
-// machine of its choosing. Without an operator file the workspace inventory is
-// used whole, and everything shows where it came from.
+// agent (and comes with a repository), so:
+// - credentials (a host's `credential`, monitoring's `prometheus_credential` and
+//   `loki_credential`) are attached only by the operator's file: a workspace
+//   entry may name a host or an endpoint, never a vault entry to send to it;
+// - when the operator has a file, hosts and monitoring endpoints come from it
+//   only; without one, the workspace's are used, without credentials.
+// An entry that fails validation is dropped (its error is reported): nothing
+// malformed - a user name that is an ssh option, a container name with a shell
+// command - ever reaches a command.
 
+import { readFileSync, statSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { parseYaml } from './yaml.mjs';
 
 export const WORKSPACE_FILES = ['.harness/ops/inventory.yaml', '.harness/ops/inventory.yml', '.harness/ops/inventory.json'];
 const NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,62}$/;
+
+/**
+ * What may go into an ssh or remote shell command, checked again right before
+ * one is built. None of them can start with "-" (an option) or hold a space,
+ * quote, "=" or shell character.
+ */
+export const SAFE = {
+  user: /^[a-z_][a-z0-9_.-]{0,31}$/i,
+  // A host name, an IPv4 address, or an IPv6 address (bare or in brackets).
+  address: /^(?:[a-zA-Z0-9_][a-zA-Z0-9._-]{0,252}|\[?[0-9a-fA-F]*:[0-9a-fA-F:.]+\]?)$/,
+  container: /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/,
+  unit: /^[a-zA-Z0-9][a-zA-Z0-9@_.:-]{0,127}$/,
+  credential: /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/,
+  file: /^\/[\w./@+-]+$/,
+};
+/** Throws unless `value` is a safe `kind` (user, address, container, unit, file). */
+export function assertSafe(kind, value) {
+  if (typeof value !== 'string' && typeof value !== 'number') throw new Error(`${kind} is missing`);
+  if (!SAFE[kind].test(String(value))) throw new Error(`"${String(value).slice(0, 80)}" is not a valid ${kind}: refused`);
+  return String(value);
+}
+const CREDENTIAL_KEYS = ['prometheus_credential', 'loki_credential'];
 export const SEVERITIES = ['critical', 'warning', 'info'];
 
 /** "90s", "5m", "2h", "30d", "1w", "250ms" (or a number of seconds) in milliseconds; NaN when not a duration. */
@@ -74,10 +102,12 @@ const isUrl = (s, protos = ['http:', 'https:']) => { try { return protos.include
 
 /**
  * Checks an inventory document. Returns { errors, warnings, inv } where inv is
- * the normalised inventory (lists everywhere, defaults filled). `vaultPatterns`:
- * the credential names this plugin may read (harness-plugin.json permissions.vault).
+ * the normalised inventory (lists everywhere, defaults filled) without the
+ * entries that have errors. `vaultPatterns`: the credential names this plugin may
+ * read (harness-plugin.json permissions.vault). `external.hosts`: host names
+ * another file (the operator's) defines, which services here may name.
  */
-export function validateInventory(doc, { source = 'workspace', vaultPatterns = ['ops-*'] } = {}) {
+export function validateInventory(doc, { source = 'workspace', vaultPatterns = ['ops-*'], external = {} } = {}) {
   const errors = []; const warnings = [];
   const inv = { monitoring: {}, environments: [], hosts: [], services: [], maintenance: [], alerts: [] };
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return { errors: ['the inventory must be a mapping with hosts, services, environments, maintenance, alerts'], warnings, inv };
@@ -88,9 +118,18 @@ export function validateInventory(doc, { source = 'workspace', vaultPatterns = [
   const m = doc.monitoring ?? {};
   if (typeof m !== 'object' || Array.isArray(m)) errors.push('monitoring: must be a mapping (prometheus, loki, scrape_interval)');
   else {
+    const before = errors.length;
     for (const k of ['prometheus', 'loki']) if (m[k] !== undefined && !isUrl(m[k])) errors.push(`monitoring.${k}: "${m[k]}" is not an http(s) URL`);
     if (m.scrape_interval !== undefined && !(parseDuration(m.scrape_interval) > 0)) errors.push(`monitoring.scrape_interval: "${m.scrape_interval}" is not a duration (e.g. 15s)`);
-    inv.monitoring = { ...m, source };
+    const mon = { ...m };
+    for (const k of CREDENTIAL_KEYS) {
+      if (mon[k] === undefined) continue;
+      if (source !== 'operator') { warnings.push(`monitoring.${k}: "${mon[k]}" is ignored: only the operator's inventory (HARNESS_OPS_INVENTORY) attaches Key Vault credentials to endpoints`); delete mon[k]; continue; }
+      if (!SAFE.credential.test(String(mon[k]))) errors.push(`monitoring.${k}: "${mon[k]}" is not a vault name`);
+      else if (!credOk(String(mon[k]))) errors.push(`monitoring.${k}: "${mon[k]}" is outside what this plugin may read from the vault (${vaultPatterns.join(', ')})`);
+    }
+    if (errors.length > before) errors.push('monitoring: left out of the inventory until fixed');
+    else inv.monitoring = { ...mon, source };
   }
 
   const envNames = new Set();
@@ -104,44 +143,57 @@ export function validateInventory(doc, { source = 'workspace', vaultPatterns = [
   });
   const checkEnv = (at, env) => { if (env !== undefined && envNames.size && !envNames.has(env)) errors.push(`${at}: env "${env}" is not in environments (${[...envNames].join(', ')})`); };
 
-  const hostNames = new Set();
+  const hostNames = new Set(); const hostSeen = new Set();
   asList(doc.hosts).forEach((h, i) => {
     const at = `hosts[${i}]`;
     if (!h || typeof h !== 'object' || !NAME.test(String(h.name ?? ''))) { errors.push(`${at}: needs a name (letters, digits, . _ -)`); return; }
     const where = `hosts.${h.name}`;
-    if (hostNames.has(h.name)) errors.push(`${where}: host "${h.name}" appears twice`);
-    hostNames.add(h.name);
+    const before = errors.length;
+    if (hostSeen.has(h.name)) errors.push(`${where}: host "${h.name}" appears twice`);
+    hostSeen.add(h.name);
     if (h.name === 'local') errors.push(`${where}: "local" is reserved for the machine the harness runs on`);
-    if (h.address !== undefined && !/^[a-zA-Z0-9.:_[\]-]{1,253}$/.test(String(h.address))) errors.push(`${where}: address "${h.address}" is not a host name or IP address`);
+    if (h.address !== undefined && !SAFE.address.test(String(h.address))) errors.push(`${where}: address "${h.address}" is not a host name or IP address`);
     const port = h.port ?? 22;
     if (!Number.isInteger(port) || port < 1 || port > 65535) errors.push(`${where}: port ${port} is not a TCP port`);
-    if (h.user !== undefined && !/^[a-z_][a-z0-9_.-]{0,31}$/i.test(String(h.user))) errors.push(`${where}: user "${h.user}" is not a valid user name`);
-    if (h.credential !== undefined) {
-      if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(String(h.credential))) errors.push(`${where}: credential "${h.credential}" is not a vault name`);
-      else if (!credOk(String(h.credential))) errors.push(`${where}: credential "${h.credential}" is outside what this plugin may read from the vault (${vaultPatterns.join(', ')})`);
+    if (h.user !== undefined && !SAFE.user.test(String(h.user))) errors.push(`${where}: user "${h.user}" is not a valid user name`);
+    let credential = h.credential;
+    if (credential !== undefined && source !== 'operator') {
+      warnings.push(`${where}: its credential "${credential}" is ignored: only the operator's inventory (HARNESS_OPS_INVENTORY) attaches Key Vault credentials to hosts`);
+      credential = undefined;
     }
-    if (h.address !== undefined && h.credential === undefined) warnings.push(`${where}: no credential, so ssh_exec and host_stats cannot reach it`);
+    if (credential !== undefined) {
+      if (!SAFE.credential.test(String(credential))) errors.push(`${where}: credential "${credential}" is not a vault name`);
+      else if (!credOk(String(credential))) errors.push(`${where}: credential "${credential}" is outside what this plugin may read from the vault (${vaultPatterns.join(', ')})`);
+    }
     checkEnv(where, h.env);
-    inv.hosts.push({ ...h, port, user: h.user ?? 'root', tags: asList(h.tags).map(String), source });
+    if (errors.length > before) { errors.push(`${where}: left out of the inventory until fixed`); return; }
+    hostNames.add(h.name);
+    if (h.address !== undefined && credential === undefined) warnings.push(`${where}: no credential, so ssh_exec and host_stats cannot reach it`);
+    const { credential: _drop, ...rest } = h;
+    inv.hosts.push({ ...rest, ...(credential !== undefined ? { credential: String(credential) } : {}), port, user: String(h.user ?? 'root'), tags: asList(h.tags).map(String), source });
   });
 
-  const svcNames = new Set();
+  const svcNames = new Set(); const svcSeen = new Set();
   asList(doc.services).forEach((s, i) => {
     const at = `services[${i}]`;
     if (!s || typeof s !== 'object' || !NAME.test(String(s.name ?? ''))) { errors.push(`${at}: needs a name (letters, digits, . _ -)`); return; }
     const where = `services.${s.name}`;
-    if (svcNames.has(s.name)) errors.push(`${where}: service "${s.name}" appears twice`);
-    svcNames.add(s.name);
-    if (s.host !== undefined && s.host !== 'local' && !hostNames.has(s.host)) errors.push(`${where}: host "${s.host}" is not in hosts`);
+    const before = errors.length;
+    if (svcSeen.has(s.name)) errors.push(`${where}: service "${s.name}" appears twice`);
+    svcSeen.add(s.name);
+    if (s.host !== undefined && s.host !== 'local' && !hostNames.has(s.host) && !external.hosts?.has(s.host)) errors.push(`${where}: host "${s.host}" is not in hosts`);
     if (s.health !== undefined && !isUrl(s.health)) errors.push(`${where}: health "${s.health}" is not an http(s) URL`);
     if (s.tls !== undefined && !isUrl(s.tls, ['https:']) && !/^[a-zA-Z0-9.-]+:\d+$/.test(String(s.tls))) errors.push(`${where}: tls "${s.tls}" is not an https URL or host:port`);
-    if (s.container !== undefined && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(String(s.container))) errors.push(`${where}: container "${s.container}" is not a container name`);
-    if (s.unit !== undefined && !/^[a-zA-Z0-9@_.:-]{1,128}$/.test(String(s.unit))) errors.push(`${where}: unit "${s.unit}" is not a systemd unit name`);
+    if (s.container !== undefined && !SAFE.container.test(String(s.container))) errors.push(`${where}: container "${s.container}" is not a container name`);
+    if (s.unit !== undefined && !SAFE.unit.test(String(s.unit))) errors.push(`${where}: unit "${s.unit}" is not a systemd unit name`);
     if (s.logs !== undefined) {
       const l = s.logs;
       const ok = l && typeof l === 'object' && (typeof l.docker === 'string' || typeof l.loki === 'string' || typeof l.file === 'string');
       if (!ok) errors.push(`${where}: logs must be { docker: <container> }, { loki: <LogQL selector> } or { file: <path on the host> }`);
-      else if (l.file && !String(l.file).startsWith('/')) errors.push(`${where}: logs.file must be an absolute path`);
+      else {
+        if (l.file !== undefined && !SAFE.file.test(String(l.file))) errors.push(`${where}: logs.file must be an absolute path (letters, digits, . _ - @ + / only)`);
+        if (l.docker !== undefined && !SAFE.container.test(String(l.docker))) errors.push(`${where}: logs.docker "${l.docker}" is not a container name`);
+      }
     }
     checkEnv(where, s.env);
     const slos = [];
@@ -154,6 +206,8 @@ export function validateInventory(doc, { source = 'workspace', vaultPatterns = [
       if (typeof o.errors !== 'string' || typeof o.total !== 'string') errors.push(`${sat}: needs errors and total: PromQL rates of bad and all events, with [{{window}}] for the range (e.g. sum(rate(http_requests_total{code=~"5.."}[{{window}}])))`);
       slos.push({ window: '30d', ...o, objective: obj });
     });
+    if (errors.length > before) { errors.push(`${where}: left out of the inventory until fixed`); return; }
+    svcNames.add(s.name);
     if (!s.health && !s.metrics_job) warnings.push(`${where}: no health URL and no metrics job: nothing would notice it failing`);
     inv.services.push({ ...s, tags: asList(s.tags).map(String), slos, source });
   });
@@ -162,6 +216,7 @@ export function validateInventory(doc, { source = 'workspace', vaultPatterns = [
     const at = `maintenance[${i}]`;
     if (!w || typeof w !== 'object' || !NAME.test(String(w.name ?? ''))) { errors.push(`${at}: needs a name`); return; }
     const where = `maintenance.${w.name}`;
+    const before = errors.length;
     const hasCron = typeof w.cron === 'string';
     const hasFixed = w.start !== undefined;
     if (hasCron === hasFixed) errors.push(`${where}: give either cron + duration (a recurring window) or start + end (a one-off)`);
@@ -170,9 +225,10 @@ export function validateInventory(doc, { source = 'workspace', vaultPatterns = [
       if (!(parseDuration(w.duration) > 0)) errors.push(`${where}: duration "${w.duration}" is not a duration (e.g. 2h)`);
     }
     if (hasFixed && (Number.isNaN(Date.parse(w.start)) || Number.isNaN(Date.parse(w.end)) || Date.parse(w.end) <= Date.parse(w.start))) errors.push(`${where}: start and end must be ISO times with end after start`);
-    for (const h of asList(w.hosts)) if (!hostNames.has(h)) errors.push(`${where}: host "${h}" is not in hosts`);
+    for (const h of asList(w.hosts)) if (!hostNames.has(h) && !external.hosts?.has(h)) errors.push(`${where}: host "${h}" is not in hosts`);
     for (const s of asList(w.services)) if (!svcNames.has(s)) errors.push(`${where}: service "${s}" is not in services`);
     checkEnv(where, w.env);
+    if (errors.length > before) { errors.push(`${where}: left out of the inventory until fixed`); return; }
     inv.maintenance.push({ ...w, hosts: asList(w.hosts), services: asList(w.services), source });
   });
 
@@ -181,6 +237,7 @@ export function validateInventory(doc, { source = 'workspace', vaultPatterns = [
     const at = `alerts[${i}]`;
     if (!a || typeof a !== 'object' || !NAME.test(String(a.name ?? ''))) { errors.push(`${at}: needs a name`); return; }
     const where = `alerts.${a.name}`;
+    const before = errors.length;
     if (alertNames.has(a.name)) errors.push(`${where}: alert "${a.name}" appears twice`);
     alertNames.add(a.name);
     const kinds = ['expr', 'probe', 'logs'].filter((k) => a[k] !== undefined);
@@ -202,8 +259,10 @@ export function validateInventory(doc, { source = 'workspace', vaultPatterns = [
         try { new RegExp(l.pattern); } catch (e) { errors.push(`${where}: logs.pattern is not a regular expression: ${e.message}`); }
         if (l.service && !svcNames.has(l.service)) errors.push(`${where}: logs.service "${l.service}" is not in services`);
         if (l.window !== undefined && !(parseDuration(l.window) > 0)) errors.push(`${where}: logs.window "${l.window}" is not a duration`);
+        if (l.container !== undefined && !SAFE.container.test(String(l.container))) errors.push(`${where}: logs.container "${l.container}" is not a container name`);
       }
     }
+    if (errors.length > before) { errors.push(`${where}: left out of the inventory until fixed`); return; }
     inv.alerts.push({ severity: 'warning', ...a, source });
   });
   return { errors, warnings, inv };
@@ -253,7 +312,8 @@ export async function loadInventory({ host, resolve, env = process.env, vaultPat
   }
   const out = { monitoring: {}, environments: [], hosts: [], services: [], maintenance: [], alerts: [], files: docs.map((d) => `${d.file} (${d.source})`), errors: [], warnings: [] };
   for (const d of docs) {
-    const r = validateInventory(d.doc, { source: d.source, vaultPatterns });
+    // The workspace's services may run on the operator's hosts (checked again after the merge).
+    const r = validateInventory(d.doc, { source: d.source, vaultPatterns, external: { hosts: new Set(out.hosts.map((h) => h.name)) } });
     out.errors.push(...r.errors.map((e) => `${d.file}: ${e}`));
     out.warnings.push(...r.warnings.map((e) => `${d.file}: ${e}`));
     const fromWorkspaceUnderOperator = d.source === 'workspace' && !!opFile;
@@ -274,14 +334,37 @@ export async function loadInventory({ host, resolve, env = process.env, vaultPat
   }
   if (fromEnv(env, 'HARNESS_OPS_PROMETHEUS_URL')) out.monitoring.prometheus = env.HARNESS_OPS_PROMETHEUS_URL;
   if (fromEnv(env, 'HARNESS_OPS_LOKI_URL')) out.monitoring.loki = env.HARNESS_OPS_LOKI_URL;
-  // References from the workspace to hosts the operator file does not have.
-  for (const s of out.services) if (s.host && s.host !== 'local' && !out.hosts.some((h) => h.name === s.host)) out.errors.push(`services.${s.name}: host "${s.host}" is not in the inventory's hosts`);
+  // References from the workspace to hosts the operator file does not have: such a service is left out too.
+  out.services = out.services.filter((s) => {
+    if (!s.host || s.host === 'local' || out.hosts.some((h) => h.name === s.host)) return true;
+    out.errors.push(`services.${s.name}: host "${s.host}" is not in the inventory's hosts (left out until fixed)`);
+    return false;
+  });
   out.warnings.push(...notes);
   out.present = docs.length > 0 || !!out.monitoring.prometheus;
   return out;
 }
 
 const fromEnv = (env, k) => typeof env[k] === 'string' && env[k].trim() !== '';
+
+let opCache;
+/**
+ * The operator's inventory alone, read synchronously (a permission check needs it
+ * before a call runs: which vault entries the call will use), validated, cached
+ * while the file is unchanged. Undefined without one or when it cannot be read.
+ */
+export function operatorInventorySync({ env = process.env, vaultPatterns } = {}) {
+  const file = env.HARNESS_OPS_INVENTORY;
+  if (!file) return undefined;
+  try {
+    const st = statSync(file);
+    const key = `${file}|${st.mtimeMs}|${st.size}|${(vaultPatterns ?? []).join(',')}`;
+    if (opCache?.key === key) return opCache.inv;
+    const { inv } = validateInventory(parseInventoryText(readFileSync(file, 'utf8'), file), { source: 'operator', vaultPatterns });
+    opCache = { key, inv };
+    return inv;
+  } catch { return undefined; }
+}
 
 export function findHost(inv, name) {
   if (name === 'local') return { name: 'local', local: true, tags: [], source: 'harness' };

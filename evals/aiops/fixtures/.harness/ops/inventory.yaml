@@ -1,21 +1,8 @@
 # The AIOps test stack (evals/aiops/stack): a shop API in a container on this
-# machine, a database host reached over ssh, Prometheus.
-monitoring:
-  prometheus: http://127.0.0.1:19090
-  scrape_interval: 5s
-
-environments: [prod]
-
-hosts:
-  - name: db-1
-    address: 127.0.0.1
-    port: 12222
-    user: ops
-    credential: ops-db-1-key
-    role: database
-    env: prod
-    tags: [db, linux]
-
+# machine, a database host reached over ssh, Prometheus. The host db-1, the
+# monitoring endpoints and their credentials are the operator's
+# (evals/aiops/stack/operator-inventory.yaml, HARNESS_OPS_INVENTORY): a
+# workspace inventory names services, alerts and windows, never credentials.
 services:
   - name: shop-api
     host: local

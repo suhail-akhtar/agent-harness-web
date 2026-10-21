@@ -8,18 +8,24 @@
 // dispatching CI - is external and always asked. Anything that talks to a
 // remote API (a cluster, GitHub, a Docker host) can carry data out (sendsOut).
 // Credentials come from the Key Vault (ctx.services.vault) into the command's
-// stdin, never into the workspace, the command line or the output.
+// stdin, never into the workspace, the command line or the output. Every tool
+// declares the vault entries a call reads (vaultNames), so the vault permission
+// rules (vault(NAME) deny/ask/allow; asked unless allowed; the untrusted-content
+// guard) decide them before the call runs, and the call can read no others. A
+// session on the user's computer (a companion) gets no vault values at all.
 
 import { defineTool } from '../../src/plugins/api.ts';
 import { opsAvailable } from './lib/common.mjs';
-import { CI_CHANGES, CI_REMOTE, ciParameters, runCi } from './lib/ci.mjs';
+import { CI_CHANGES, CI_REMOTE, ciParameters, ciVaultNames, runCi } from './lib/ci.mjs';
 import { containerParameters, runContainer } from './lib/container.mjs';
 import { DEPLOY_CHANGES, deployParameters, runDeploy } from './lib/deploy.mjs';
 import { gates, secretsGate } from './lib/gates.mjs';
-import { describeApply, iacParameters, runIac } from './lib/iac.mjs';
+import { describeApply, iacParameters, iacVaultNames, runIac } from './lib/iac.mjs';
 import { K8S_CHANGES, K8S_REMOTE, k8sParameters, runK8s } from './lib/k8s.mjs';
 
 const act = (i) => String(i.action ?? '');
+/** Key Vault entry names a call reads (strings only, in input order). */
+const named = (...vs) => vs.filter((v) => typeof v === 'string' && v !== '');
 
 export function tools(api) {
   return [
@@ -30,6 +36,7 @@ export function tools(api) {
       kind: 'exec',
       kindsFor: (i) => (act(i) === 'apply' ? ['exec', 'external'] : ['exec']),
       sendsOut: (i) => act(i) === 'plan' || act(i) === 'apply',
+      vaultNames: iacVaultNames,
       availableIn: opsAvailable,
       summarize: (i) => (act(i) === 'apply' ? describeApply(i) : `${act(i)} ${i.dir ?? '.'}${i.env && Object.keys(i.env).length ? ` with vault ${Object.values(i.env).join(',')}` : ''}`),
       run: (input, ctx) => runIac(input, ctx),
@@ -41,6 +48,7 @@ export function tools(api) {
       kind: 'exec',
       kindsFor: (i) => (K8S_CHANGES.has(act(i)) ? ['exec', 'external'] : ['exec']),
       sendsOut: (i) => K8S_REMOTE.has(act(i)),
+      vaultNames: (i) => (K8S_REMOTE.has(act(i)) ? named(i.kubeconfig) : []),
       availableIn: opsAvailable,
       summarize: (i) => `${act(i)} ${i.resource ?? (Array.isArray(i.paths) ? i.paths.join(' ') : i.chart ?? '')}${i.namespace ? ` -n ${i.namespace}` : ''}${i.context ? ` --context ${i.context}` : ''}${i.kubeconfig ? ` (kubeconfig ${i.kubeconfig})` : ''}`.trim(),
       run: (input, ctx) => runK8s(input, ctx),
@@ -52,6 +60,7 @@ export function tools(api) {
       kind: 'exec',
       kindsFor: (i) => (CI_CHANGES.has(act(i)) ? ['external'] : CI_REMOTE.has(act(i)) ? ['network'] : ['exec']),
       sendsOut: (i) => CI_REMOTE.has(act(i)),
+      vaultNames: ciVaultNames,
       summarize: (i) => `${act(i)}${i.repo ? ` ${i.repo}` : ''}${i.workflow ? ` ${i.workflow}` : ''}${i.runId ? ` run ${i.runId}` : ''}${i.jobId ? ` job ${i.jobId}` : ''}${i.branch ? ` on ${i.branch}` : ''}${i.ref ? ` at ${i.ref}` : ''}`,
       run: (input, ctx) => runCi(input, ctx, api),
     }),
@@ -62,6 +71,7 @@ export function tools(api) {
       kind: 'exec',
       kindsFor: (i) => (act(i) === 'build' && i.dockerHost ? ['exec', 'external'] : ['exec']),
       sendsOut: (i) => act(i) === 'build' && !!i.dockerHost,
+      vaultNames: (i) => (act(i) === 'build' ? named(i.dockerHost) : []),
       availableIn: opsAvailable,
       summarize: (i) => `${act(i)} ${i.tag ?? i.tarball ?? i.dockerfile ?? i.path ?? ''}${i.dockerHost ? ` on ${i.dockerHost}` : ''}`.trim(),
       run: (input, ctx) => runContainer(input, ctx),
@@ -73,6 +83,7 @@ export function tools(api) {
       kind: 'exec',
       kindsFor: (i) => (DEPLOY_CHANGES.has(act(i)) ? ['exec', 'external'] : ['exec']),
       sendsOut: (i) => !!i.dockerHost || DEPLOY_CHANGES.has(act(i)),
+      vaultNames: (i) => named(i.dockerHost, i.sshKey),
       availableIn: opsAvailable,
       summarize: (i) => `${act(i)} ${i.project ?? '?'}${i.service ? ` ${i.service}=${i.image ?? '?'}` : ''}${i.dockerHost ? ` on ${i.dockerHost}` : ' (local daemon)'}`,
       run: (input, ctx) => runDeploy(input, ctx),

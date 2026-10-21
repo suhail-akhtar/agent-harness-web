@@ -26,13 +26,25 @@ async function repoOf(input, ctx) {
   return repo;
 }
 
+/**
+ * The vault entries a call may read: the named token, or (for a call to the API) the vault's
+ * github-token when it has one. Declared to the framework (vaultNames), so the vault permission
+ * rules decide them before the call runs.
+ */
+export const ciVaultNames = (input) => (input.token ? [String(input.token)] : CI_REMOTE.has(String(input.action ?? '')) ? ['github-token'] : []);
+
 /** The token: the named vault secret, else the vault's github-token, else HARNESS_GITHUB_TOKEN. */
 async function tokenFor(ctx, input, api, purpose) {
   const vault = ctx.services?.vault;
-  const name = input.token ? String(input.token) : (await vaultHas(ctx, 'github-token')) ? 'github-token' : undefined;
-  if (name) {
-    if (!vault) throw new UserError(`The token is to come from the Key Vault (${name}), and this server has no Key Vault for this session.`);
-    try { return await vault.reveal(name, purpose); } catch (e) { throw new UserError(`The Key Vault refused ${name}: ${e.message}`); }
+  // A session on the user's computer (a companion) is given no vault values at all.
+  if (ctx.host.kind === 'companion') {
+    if (input.token) throw new UserError(`Not run: Key Vault entries (${input.token}) are not used in a session that works on your computer through the companion. Run it in a sandbox or server-folder session, or leave out "token" (the server's own HARNESS_GITHUB_TOKEN is used when the operator set one).`);
+  } else {
+    const name = input.token ? String(input.token) : (await vaultHas(ctx, 'github-token')) ? 'github-token' : undefined;
+    if (name) {
+      if (!vault) throw new UserError(`The token is to come from the Key Vault (${name}), and this server has no Key Vault for this session.`);
+      try { return await vault.reveal(name, purpose); } catch (e) { throw new UserError(`The Key Vault refused ${name}: ${e.message}`); }
+    }
   }
   try { return api.secret('HARNESS_GITHUB_TOKEN') || undefined; } catch { return undefined; }
 }

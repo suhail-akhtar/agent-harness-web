@@ -3,14 +3,35 @@
 // file's SHA-256 must equal the hash the user approved, checked in the same
 // command that applies it. State is never printed.
 
+import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fromVault, guard, need, newId, parseJson, q, relIn, seconds, sh, tail, UserError } from './common.mjs';
 
 export const PLAN_DIR = '.harness/devops/plans';
 
-/** Plans made in this server process, by hash: what apply and the permission prompt show. */
-export const plans = new Map();
+/**
+ * Plans made in this server process. The plan file itself (which holds every
+ * variable's value, TF_VAR_* secrets included) never stays where the session's
+ * commands run: its bytes are kept here, per session (keyed by the session's
+ * runtime), and handed to the apply command on stdin. The workspace gets a record
+ * of names and counts only.
+ */
+const sessionPlans = new WeakMap();
+export const plansFor = (host) => {
+  let m = sessionPlans.get(host);
+  if (!m) sessionPlans.set(host, (m = new Map()));
+  return m;
+};
+/** What the permission prompt shows for an apply, and which vault entries it needs (no values, no plan bytes). */
+export const planInfo = new Map();
+/** The vault entries an iac call reads: plan's env, or the env its plan was made with. */
+export function iacVaultNames(input) {
+  const action = String(input.action ?? '');
+  if (action === 'plan') return Object.values(input.env && typeof input.env === 'object' ? input.env : {}).filter((v) => typeof v === 'string' && v !== '');
+  if (action === 'apply') return Object.values(planInfo.get(String(input.planHash ?? '').trim().toLowerCase())?.env ?? {});
+  return [];
+}
 
 const TF = ['tofu', 'terraform'];
 const TF_WHAT = 'OpenTofu or Terraform (tofu / terraform)';
@@ -124,19 +145,22 @@ async function plan(input, ctx, bin) {
   const env = input.env && typeof input.env === 'object' ? input.env : {};
   const secrets = await fromVault(ctx, env, `iac plan in ${dir}`);
   const id = newId();
-  const file = `${PLAN_DIR}/${id}.tfplan`;
   const args = [varArgs(input.vars), await varFileArgs(host, input.varFiles, dir), input.destroy === true ? '-destroy' : '', input.refresh === false ? '-refresh=false' : '', ...(Array.isArray(input.targets) ? input.targets.slice(0, 20).map((t) => `-target=${q(t)}`) : [])].filter(Boolean).join(' ');
+  // The plan file is made in a private folder outside the workspace and removed by the same command:
+  // its bytes come back to the server (base64), which keeps them for apply.
   const cmd = [
-    `__ws=$(pwd); mkdir -p ${PLAN_DIR}; __log=$(mktemp)`,
+    '__pd=$(mktemp -d) || exit 97',
+    'trap \'rm -rf "$__pd" "${__hw_t:-}"\' EXIT',
+    `__log="$__pd/log"; __plan="$__pd/plan.tfplan"`,
     `cd ${q(dir)} || exit 2`,
-    `${bin} init -input=false -no-color > "$__log" 2>&1 || { echo __INIT_FAILED__; tail -n 40 "$__log"; rm -f "$__log"; exit 3; }`,
-    `${bin} plan -input=false -no-color -lock-timeout=60s -detailed-exitcode -out="$__ws/${file}" ${args} > "$__log" 2>&1; rc=$?`,
-    `if [ $rc = 1 ]; then echo __PLAN_FAILED__; tail -n 60 "$__log"; rm -f "$__log" "$__ws/${file}"; exit 4; fi`,
-    'rm -f "$__log"',
-    `echo __PLAN_JSON__; ${bin} show -json -no-color "$__ws/${file}" | { ${PLAN_FILTER}\n}`,
-    `echo __PLAN_SHA__; sha256sum "$__ws/${file}" | cut -d' ' -f1`,
+    `${bin} init -input=false -no-color > "$__log" 2>&1 || { echo __INIT_FAILED__; tail -n 40 "$__log"; exit 3; }`,
+    `${bin} plan -input=false -no-color -lock-timeout=60s -detailed-exitcode -out="$__plan" ${args} > "$__log" 2>&1; rc=$?`,
+    'if [ $rc = 1 ]; then echo __PLAN_FAILED__; tail -n 60 "$__log"; exit 4; fi',
+    `echo __PLAN_JSON__; ${bin} show -json -no-color "$__plan" | { ${PLAN_FILTER}\n}`,
+    'echo __PLAN_SHA__; sha256sum "$__plan" | cut -d\' \' -f1',
+    'echo __PLAN_B64__; base64 < "$__plan" | tr -d \'\\n\'; echo; echo __PLAN_END__',
   ].join('\n');
-  const r = await sh(host, cmd, { signal, timeoutMs: seconds(input.timeoutSec, 900, 3600) * 1000, env: secrets });
+  const r = await sh(host, cmd, { signal, timeoutMs: seconds(input.timeoutSec, 900, 3600) * 1000, env: secrets, raw: true });
   if (r.stdout.includes('__INIT_FAILED__')) {
     const why = tail(r.stdout.split('__INIT_FAILED__')[1], 30);
     return { content: `${bin} init failed in ${dir}:\n${why}${/Failed to (query|install)|could not connect|no such host|dial tcp/i.test(why) ? `\n${OFFLINE_HINT}` : ''}`, is_error: true };
@@ -146,44 +170,52 @@ async function plan(input, ctx, bin) {
   const json = parseJson(r.stdout.split('__PLAN_JSON__')[1]?.split('__PLAN_SHA__')[0]);
   const hash = (r.stdout.split('__PLAN_SHA__')[1] ?? '').trim().split(/\s+/)[0];
   if (!json || !/^[0-9a-f]{64}$/.test(hash)) return { content: `Could not read the plan (exit ${r.code}):\n${tail(r.output, 30)}`, is_error: true };
+  const bytes = Buffer.from((r.rawStdout.split('__PLAN_B64__')[1] ?? '').split('__PLAN_END__')[0].trim(), 'base64');
+  if (crypto.createHash('sha256').update(bytes).digest('hex') !== hash) return { content: `The plan file could not be brought back whole (${bytes.length} bytes; a plan over about 3 MB is too large to keep): nothing to apply. Plan a smaller part (targets) or a smaller module.`, is_error: true };
   const s = summarizePlan(json, { dir, bin });
-  const entry = { id, hash, dir, file, bin, counts: s.counts, destroys: s.destroys, summary: s.text, env, destroyPlan: input.destroy === true, createdAt: Date.now() };
-  plans.set(hash, entry);
-  const record = { ...entry, env: Object.keys(env) };
+  const entry = { id, hash, dir, bin, bytes, counts: s.counts, destroys: s.destroys, summary: s.text, env, destroyPlan: input.destroy === true, createdAt: Date.now() };
+  plansFor(host).set(hash, entry);
+  planInfo.set(hash, { hash, dir, counts: s.counts, destroys: s.destroys, env: { ...env } });
+  const record = { id, hash, dir, bin, counts: s.counts, destroys: s.destroys, summary: s.text, env: Object.keys(env), destroyPlan: entry.destroyPlan, createdAt: entry.createdAt };
   await writeWs(host, `${PLAN_DIR}/${id}.json`, JSON.stringify(record, null, 1), signal);
   await writeWs(host, `${PLAN_DIR}/latest.json`, JSON.stringify(record, null, 1), signal);
   const applyHint = s.changes
-    ? `To apply exactly this plan: iac {"action": "apply", "planHash": "${hash}"}${s.destroys.length ? ' with "allowDestroy": true (it destroys resources)' : ''}. The user approves it; a changed plan file is refused.`
+    ? `To apply exactly this plan: iac {"action": "apply", "planHash": "${hash}"}${s.destroys.length ? ' with "allowDestroy": true (it destroys resources)' : ''}. The user approves it; the plan file is kept by the server (outside the workspace) until then.`
     : 'Nothing to apply.';
-  await writeWs(host, `${PLAN_DIR}/latest.md`, `# Plan ${id}\n\n\`\`\`\n${s.text}\n\`\`\`\n\nPlan file: \`${file}\`  \nsha256: \`${hash}\`\n`, signal);
-  return `${s.text}\n\nPlan file: ${file}\nsha256: ${hash}\n${applyHint}`;
+  await writeWs(host, `${PLAN_DIR}/latest.md`, `# Plan ${id}\n\n\`\`\`\n${s.text}\n\`\`\`\n\nsha256: \`${hash}\`\n`, signal);
+  return `${s.text}\n\nPlan ${id} (kept by the server, outside the workspace)\nsha256: ${hash}\n${applyHint}`;
 }
 
 async function apply(input, ctx, bin) {
   const { host, signal } = ctx;
   const hash = String(input.planHash ?? '').trim().toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(hash)) return { content: 'apply needs planHash: the sha256 the plan action printed (the plan the user approved). Make a plan first with {"action": "plan"}.', is_error: true };
+  const plans = plansFor(host);
   const entry = plans.get(hash);
   if (!entry) return { content: `No plan with sha256 ${hash.slice(0, 12)}... was made in this session (plans are kept until applied or the server restarts). Make the plan again with {"action": "plan"} and have it approved.`, is_error: true };
   if (entry.destroys.length && input.allowDestroy !== true) return { content: `This plan destroys ${entry.destroys.length} resource(s): ${entry.destroys.slice(0, 10).join(', ')}. Apply it only if destroying them is intended, with "allowDestroy": true.`, is_error: true };
+  if (crypto.createHash('sha256').update(entry.bytes).digest('hex') !== hash) {
+    plans.delete(hash);
+    return { content: `Refused: the kept plan no longer matches the approved plan (sha256 ${hash.slice(0, 12)}...). Make a new plan and have it approved.`, is_error: true };
+  }
   const secrets = await fromVault(ctx, entry.env, `iac apply in ${entry.dir}`);
+  // The plan travels on stdin into the command's private folder, is checked against the approved hash there, and is gone when the command ends.
   const cmd = [
-    '__ws=$(pwd)',
-    `echo ${q(`${hash}  ${entry.file}`)} | sha256sum -c --status - 2>/dev/null || { echo __HASH_MISMATCH__; exit 5; }`,
+    'base64 -d < "$HW_TF_PLAN_B64" > "$__hw_t/plan.tfplan" || exit 5',
+    `echo "${hash}  $__hw_t/plan.tfplan" | sha256sum -c --status - 2>/dev/null || { echo __HASH_MISMATCH__; exit 5; }`,
     `cd ${q(entry.dir)} || exit 2`,
-    `${entry.bin} apply -input=false -no-color -lock-timeout=60s "$__ws/${entry.file}" 2>&1; rc=$?`,
-    `[ $rc = 0 ] && rm -f "$__ws/${entry.file}"`,
-    'exit $rc',
-  ].join('\n');
-  const r = await sh(host, cmd, { signal, timeoutMs: seconds(input.timeoutSec, 1800, 7200) * 1000, env: secrets });
+    `${entry.bin} apply -input=false -no-color -lock-timeout=60s "$__hw_t/plan.tfplan" 2>&1`,
+  ].filter(Boolean).join('\n');
+  const r = await sh(host, cmd, { signal, timeoutMs: seconds(input.timeoutSec, 1800, 7200) * 1000, env: secrets, files: { HW_TF_PLAN_B64: entry.bytes.toString('base64') } });
   if (r.stdout.includes('__HASH_MISMATCH__')) {
     plans.delete(hash);
-    return { content: `Refused: ${entry.file} is missing or no longer matches the approved plan (sha256 ${hash.slice(0, 12)}...). It was changed after it was approved. Make a new plan and have it approved.`, is_error: true };
+    return { content: `Refused: the plan that reached the command does not match the approved plan (sha256 ${hash.slice(0, 12)}...). Make a new plan and have it approved.`, is_error: true };
   }
   // Resource lines and the summary; output values are not repeated (names only).
   const lines = stripOutputs(r.output);
-  if (r.code !== 0) return { content: `${entry.bin} apply failed (exit ${r.code}${r.timedOut ? ', timed out' : ''}) in ${entry.dir}:\n${tail(lines, 60)}\nThe plan file is kept; a partial apply may have happened - run a new plan to see where things stand.`, is_error: true };
+  if (r.code !== 0) return { content: `${entry.bin} apply failed (exit ${r.code}${r.timedOut ? ', timed out' : ''}) in ${entry.dir}:\n${tail(lines, 60)}\nThe plan is kept; a partial apply may have happened - run a new plan to see where things stand.`, is_error: true };
   plans.delete(hash);
+  planInfo.delete(hash);
   await writeWs(host, `${PLAN_DIR}/last-apply.json`, JSON.stringify({ hash, dir: entry.dir, appliedAt: new Date().toISOString(), counts: entry.counts, destroys: entry.destroys }, null, 1), signal);
   return `Applied plan ${hash.slice(0, 12)}... in ${entry.dir}.\n${tail(lines, 40)}`;
 }
@@ -237,7 +269,7 @@ export async function runIac(input, ctx) {
 
 /** The permission prompt's line for an apply: the plan the user is approving. */
 export function describeApply(input) {
-  const e = plans.get(String(input.planHash ?? '').toLowerCase());
+  const e = planInfo.get(String(input.planHash ?? '').trim().toLowerCase());
   if (!e) return `apply plan ${String(input.planHash ?? '?').slice(0, 12)} (unknown plan: will be refused)`;
   const c = e.counts;
   return `APPLY plan ${e.hash.slice(0, 12)} in ${e.dir}: +${c.add} ~${c.change} -${c.destroy}${e.destroys.length ? ` DESTROYS ${e.destroys.slice(0, 5).join(', ')}${e.destroys.length > 5 ? '...' : ''}` : ''}`;
