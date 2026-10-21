@@ -247,7 +247,7 @@ test('map respects the agent-run cap and the 200-step cap before it starts anyth
   };
   run = await go(big, a.host);
   assert.equal(run.status, 'failed');
-  assert.match(run.error ?? '', /250 item\(s\) to run, more than the 199 step\(s\) left of the 200-step cap/);
+  assert.match(run.error ?? '', /250 item\(s\) to run, but only 198 step\(s\) are left of the 200-step cap after this one/);
   // 150 items fit; then a loop back would pass the cap.
   big.state!.items!.initial = Array.from({ length: 150 }, (_, i) => i);
   run = await go(big, a.host);

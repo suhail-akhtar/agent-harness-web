@@ -36,7 +36,7 @@ const browser = await chromium.launch({ executablePath: chromiumPath() });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
 const shot = async (name, full = false) => { await sleep(600); await page.screenshot({ path: path.join(OUT, `${name}.png`), fullPage: full }); console.log(`saved ${name}.png`); };
 const want = (n) => !ONLY?.length || ONLY.includes(n);
-const open = async (id) => { await page.goto(`${BASE}/#${id}`); await page.waitForLoadState('domcontentloaded'); await sleep(1500); };
+const open = async (id) => { await page.goto(`${BASE}/#${id}`); await page.reload(); await page.waitForLoadState('domcontentloaded'); await sleep(1500); };
 
 try {
   if (want('home')) {
@@ -82,6 +82,14 @@ try {
     await open(s.id);
     await shot('06-computer-use');
     await shot('06-computer-use-full', true);
+  }
+  if (want('background')) {
+    const s = await api('POST', '/api/sessions', { title: 'Background server and monitor', model: 'deepseek-flash', mode: 'acceptEdits', runtime: 'docker', network: 'none' });
+    await api('POST', `/api/sessions/${s.id}/messages`, { text: 'Start `python3 -m http.server 8000` in the background, wait with monitor until it is serving, fetch http://127.0.0.1:8000/ with curl, list the background tasks, then stop the server with task_stop and summarise what happened.' });
+    await idle(s.id);
+    await open(s.id);
+    await shot('09-background-tasks');
+    await shot('09-background-tasks-full', true);
   }
   if (want('workflow')) {
     const sessions = await api('GET', '/api/sessions');
