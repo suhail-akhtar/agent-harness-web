@@ -1,0 +1,76 @@
+{
+  "name": "pipeline-fix",
+  "description": "A failing CI pipeline made green: read the failing GitHub Actions run (or reproduce locally), find the cause, fix it in the workspace, run the same job steps locally in the sandbox until they pass, gates, push a branch and pull request with publish_branch, and watch the new run - back to diagnosis if it fails again.",
+  "inputs": {
+    "repo": { "description": "owner/name (default: the workspace's GitHub origin)", "default": "" },
+    "branch": { "description": "The branch whose CI is failing", "default": "main" },
+    "runId": { "description": "A specific failing run id (default: the newest failing run on the branch)", "default": "" },
+    "source": { "description": "\"github\" to read the failing run from GitHub and push the fix, \"local\" to reproduce and fix with the workflow files only (no GitHub access)", "default": "github" }
+  },
+  "start": "diagnose",
+  "maxAgentRuns": 14,
+  "state": {
+    "workflowFile": { "type": "string", "description": "The failing workflow file under .github/workflows" },
+    "job": { "type": "string", "description": "The failing job id in that workflow" },
+    "cause": { "type": "string", "description": "The root cause, one or two sentences" },
+    "fixed": { "type": "boolean", "description": "ci run-local passes for the job" },
+    "commit": { "type": "string", "description": "The commit sha that was pushed" },
+    "pushedBranch": { "type": "string", "description": "The branch the fix was pushed to" }
+  },
+  "nodes": {
+    "diagnose": {
+      "type": "agent",
+      "title": "Find the failure and its cause",
+      "agent": "platform-engineer",
+      "prompt": "A CI pipeline is failing. Find the failing step and its root cause; do not change files yet. Load the ci-debugging skill.\n\nSource: {{input.source}}. Repo: {{input.repo}}. Branch: {{input.branch}}. Run: {{input.runId}}\n- github: ci runs (branch, status failure) unless a run id is given, then ci logs for the run.\n- local: ci lint, then ci run-local for each job of each workflow in .github/workflows until one fails.\nClassify the failure (code, workflow, environment, flaky) as the skill describes.\nEarlier attempt, if any: {{feedback}}\n\nReport the failing workflow file, job, step, the error, and the cause.",
+      "outputs": ["workflowFile", "job", "cause"],
+      "next": "fix"
+    },
+    "fix": {
+      "type": "agent",
+      "title": "Fix and reproduce locally",
+      "agent": "platform-engineer",
+      "prompt": "Fix this CI failure at its cause, in the workspace.\n\nWorkflow: {{state.workflowFile}}, job {{state.job}}\nCause: {{state.cause}}\nGate failures, if any: {{feedback}}\n\nFix the code or the workflow (change a test only if the test is wrong, and say so). Then run the job's steps here: ci {\"action\": \"run-local\", \"workflow\": \"{{state.workflowFile}}\", \"job\": \"{{state.job}}\"} - iterate until it passes - and ci lint. fixed is true only if run-local passed.",
+      "outputs": ["fixed"],
+      "next": "check-fixed"
+    },
+    "check-fixed": {
+      "type": "branch",
+      "title": "Passes locally?",
+      "when": "state.fixed",
+      "next": { "on": { "true": "gates", "false": "failed" } }
+    },
+    "gates": {
+      "type": "gate",
+      "title": "Quality gates",
+      "gates": "applicable",
+      "maxFailures": 3,
+      "next": { "on": { "pass": "where", "fail": "fix", "exhausted": "failed" } }
+    },
+    "where": {
+      "type": "branch",
+      "title": "Push to GitHub?",
+      "value": "{{input.source}}",
+      "next": { "on": { "local": "done" }, "default": "publish" }
+    },
+    "publish": {
+      "type": "agent",
+      "title": "Push the fix",
+      "agent": "platform-engineer",
+      "prompt": "Publish the fix with the publish_branch tool: a branch and pull request titled after the cause, with a body that says what failed (workflow {{state.workflowFile}}, job {{state.job}}), the cause ({{state.cause}}), the fix, and that ci run-local passed. Report the branch and the commit sha it pushed.",
+      "outputs": ["pushedBranch", "commit"],
+      "next": "watch"
+    },
+    "watch": {
+      "type": "agent",
+      "title": "Watch the new run",
+      "agent": "platform-engineer",
+      "maxSteps": 30,
+      "prompt": "Watch the CI run for the fix: ci {\"action\": \"watch\", \"repo\": \"{{input.repo}}\", \"branch\": \"{{state.pushedBranch}}\", \"sha\": \"{{state.commit}}\"} (omit repo if it is empty). Report the result; if it failed, the failing step and error.",
+      "decide": ["PASSED", "FAILED"],
+      "next": { "on": { "FAILED": "diagnose" }, "default": "done" }
+    },
+    "done": { "type": "end", "title": "Pipeline green", "status": "success" },
+    "failed": { "type": "end", "title": "Not fixed: see the reports", "status": "failed" }
+  }
+}

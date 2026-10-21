@@ -1,0 +1,11 @@
+{
+  "name": "fix-terraform",
+  "description": "A broken OpenTofu configuration with deployed state: fix it so it validates and plans the intended resources without destroying or replacing what is deployed. Hidden checks run tofu validate and plan in the ops image (harness-sandbox-ops:latest). Run with HARNESS_DEVOPS_IMAGE=harness-sandbox-ops:latest so the agent's devops tools work in a server-folder session.",
+  "prompt": "The OpenTofu configuration in infra/ no longer validates, so nobody can plan or apply it. Fix it.\n\nWhat it must manage:\n- random_pet.name: the deployment's name. It is already deployed - infra/terraform.tfstate is the current local state - and must stay exactly as it is.\n- local_file.motd: the file infra/motd.txt with the content \"Welcome to <the pet name>\" and a newline.\n- null_resource.ready: re-created whenever the motd's content changes, and only after the motd file exists.\n\nThe fix must not destroy or replace anything that is deployed. Use the iac tool (validate, then plan) to prove it; do not apply. Load the terraform-practices skill first.",
+  "fixtures": "fixtures",
+  "timeoutMin": 30,
+  "checks": [
+    { "name": "hidden: tofu validate passes", "run": "node {{case}}/check-terraform.mjs {{ws}} validate", "timeoutSec": 300 },
+    { "name": "hidden: plan creates motd and ready, keeps the deployed pet, destroys nothing", "run": "node {{case}}/check-terraform.mjs {{ws}} plan", "timeoutSec": 300 }
+  ]
+}

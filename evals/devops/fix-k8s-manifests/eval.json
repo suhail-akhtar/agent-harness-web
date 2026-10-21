@@ -1,0 +1,11 @@
+{
+  "name": "fix-k8s-manifests",
+  "description": "Kubernetes manifests that the API server rejects and that break the team's policy: make them valid and compliant. Hidden checks: kubeconform strict and a policy check (pinned image, requests and limits, probes on the right port, non-root, read-only root filesystem, the Service selecting the pods on a real port), run in the ops image. Run with HARNESS_DEVOPS_IMAGE=harness-sandbox-ops:latest.",
+  "prompt": "The manifests in k8s/ for the shop's web front end are rejected by the cluster, and the Service does not reach the pods. Fix them so they validate (strict: no unknown fields) and follow our policy for every workload: at least 2 replicas; an image pinned to a release (never :latest); CPU and memory requests and limits; a readiness and a liveness probe; runs as non-root, no privilege escalation, a read-only root filesystem; the Service selects the Deployment's pods and targets a port the container really has. k8s/README.md describes the app. Keep the names and the namespace. Prove it with the k8s tool (validate) and the quality gates (k8s-manifests-valid, iac-security). Load the kubernetes-operations skill first.",
+  "fixtures": "fixtures",
+  "timeoutMin": 30,
+  "checks": [
+    { "name": "hidden: kubeconform strict", "run": "node {{case}}/check-manifests.mjs {{ws}} schema", "timeoutSec": 300 },
+    { "name": "hidden: policy", "run": "node {{case}}/check-manifests.mjs {{ws}} policy", "timeoutSec": 300 }
+  ]
+}

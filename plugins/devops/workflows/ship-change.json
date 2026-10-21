@@ -1,0 +1,133 @@
+{
+  "name": "ship-change",
+  "description": "An infrastructure change from request to production, safely: implement and plan (Terraform/OpenTofu, Kubernetes or Compose), peer review by a platform engineer and an IaC security review, the DevOps gates, human approval of the exact plan (by its sha256), apply/deploy, health and smoke verification, automatic rollback on failure, and a change record.",
+  "inputs": {
+    "change": { "description": "What to change, as you would write it in a ticket.", "required": true },
+    "kind": { "description": "\"terraform\" (iac plan/apply), \"kubernetes\" (k8s diff/apply/rollout) or \"compose\" (deploy up)", "default": "terraform" },
+    "dir": { "description": "Where the code lives (module folder, manifests folder, or compose file)", "default": "." },
+    "target": { "description": "How to reach the target: Key Vault secret names and names, e.g. \"env AWS_ACCESS_KEY_ID=cloud-aws-key-id\", \"kubeconfig kubeconfig-staging, namespace shop\", \"compose project shop, dockerHost docker-host-prod\"", "default": "" },
+    "smoke": { "description": "Smoke checks to run after the change (commands or URLs that must succeed)", "default": "" },
+    "allowDestroy": { "description": "\"yes\" if the change may destroy or replace resources; otherwise any destroy blocks the run", "default": "no" }
+  },
+  "start": "policy",
+  "maxAgentRuns": 16,
+  "state": {
+    "planHash": { "type": "string", "description": "sha256 of the plan file to apply (Terraform/OpenTofu), or empty" },
+    "planSummary": { "type": "string", "description": "The plan or diff summary the human approves" },
+    "applied": { "type": "boolean", "description": "The change was applied or deployed" },
+    "healthy": { "type": "boolean", "description": "Verification passed after the change" },
+    "rolledBack": { "type": "boolean", "description": "A rollback was done" }
+  },
+  "nodes": {
+    "policy": {
+      "type": "shell",
+      "title": "Record the run's destroy policy",
+      "command": "mkdir -p .harness/devops && case {{input.allowDestroy}} in yes|true|YES|Yes) d=true;; *) d=false;; esac && printf '{\"allowDestroy\": %s}\\n' \"$d\" > .harness/devops/run-policy.json && rm -f .harness/devops/plans/latest.json .harness/devops/plans/latest.md",
+      "next": { "on": { "ok": "change" }, "default": "failed" }
+    },
+    "change": {
+      "type": "agent",
+      "title": "Implement and plan",
+      "agent": "platform-engineer",
+      "prompt": "Implement this infrastructure change in the workspace, then prove it. Do not apply or deploy anything.\n\n<change>\n{{input.change}}\n</change>\nKind: {{input.kind}}. Where: {{input.dir}}. Target: {{input.target}}\nFeedback from an earlier review or approval, if any: {{feedback}}\n\n- terraform: iac fmt (write) and validate, then iac plan for {{input.dir}} (with the Key Vault env the target names). planHash is the sha256 it printed; planSummary is its summary.\n- kubernetes: k8s validate, and k8s diff for {{input.dir}} against the target cluster when it is reachable; planHash is empty; planSummary is the diff summary (objects and what changes).\n- compose: container lint/scan for the images' Dockerfiles; planHash is empty; planSummary says which services change to which images.\nRun the quality_gates tool and fix what fails.\n\nReport what you changed (files) and why each destroy or replacement, if any, is needed.",
+      "outputs": ["planHash", "planSummary"],
+      "next": "review"
+    },
+    "review": {
+      "type": "parallel",
+      "title": "Peer and security review",
+      "branches": ["peer-review", "security-review"],
+      "next": { "on": { "REQUEST_CHANGES": "address" }, "default": "gates" }
+    },
+    "peer-review": {
+      "type": "agent",
+      "title": "Platform engineer review",
+      "agent": "platform-engineer",
+      "prompt": "Review this change as a peer (do not change files other than the review). Write docs/reviews/platform-review.md.\n\nThe request:\n{{input.change}}\n\nThe plan or diff:\n{{state.planSummary}}\n\nCheck correctness against the request, blast radius, every destroy or replacement, reversibility, and that the gates pass (quality_gates).",
+      "decide": ["APPROVE", "REQUEST_CHANGES"]
+    },
+    "security-review": {
+      "type": "agent",
+      "title": "IaC security review",
+      "agent": "security-reviewer-iac",
+      "prompt": "Review the infrastructure change in the workspace for security problems. The request was:\n{{input.change}}\n\nThe plan or diff:\n{{state.planSummary}}",
+      "decide": ["APPROVE", "REQUEST_CHANGES"]
+    },
+    "address": {
+      "type": "agent",
+      "title": "Address the reviews",
+      "agent": "platform-engineer",
+      "prompt": "Address every BLOCKING and MAJOR finding in docs/reviews/platform-review.md and docs/reviews/security-review-iac.md, note under each how it was resolved, and make a new plan or diff exactly as before (planHash and planSummary of the NEW plan).\n\nPeer review: {{state.peer-review}}\nSecurity review: {{state.security-review}}",
+      "outputs": ["planHash", "planSummary"],
+      "next": "gates"
+    },
+    "gates": {
+      "type": "gate",
+      "title": "DevOps gates",
+      "gates": ["terraform-valid", "tf-plan-no-destroy", "k8s-manifests-valid", "dockerfile-lint", "shell-lint", "workflow-lint", "iac-security", "secrets-in-repo"],
+      "maxFailures": 3,
+      "next": { "on": { "pass": "approve", "fail": "fix", "exhausted": "failed" } }
+    },
+    "fix": {
+      "type": "agent",
+      "title": "Fix failing gates",
+      "agent": "platform-engineer",
+      "prompt": "The DevOps gates failed. Fix the causes (not the gates), then make the plan or diff again exactly as before (planHash and planSummary of the NEW plan). If a destroy is reported and it is not needed, change the configuration so it is not destroyed; if it is needed, say so - the run must be started with allowDestroy=yes.\n\n{{feedback}}",
+      "outputs": ["planHash", "planSummary"],
+      "next": "gates"
+    },
+    "approve": {
+      "type": "approval",
+      "title": "Approve the plan",
+      "message": "Approve applying exactly this change ({{input.kind}}, {{input.dir}}; target {{input.target}}). Destroys allowed: {{input.allowDestroy}}.\n\nPlan sha256: {{state.planHash}}\n\n{{state.planSummary}}\n\nReviews: peer - {{state.peer-review}}; security - {{state.security-review}}",
+      "files": [".harness/devops/plans/latest.md", "docs/reviews/platform-review.md", "docs/reviews/security-review-iac.md"],
+      "next": { "on": { "approve": "apply", "reject": "change" } }
+    },
+    "apply": {
+      "type": "agent",
+      "title": "Apply / deploy",
+      "agent": "release-manager",
+      "prompt": "The human approved this change. Ship it.\n\nKind: {{input.kind}}. Where: {{input.dir}}. Target: {{input.target}}\n- terraform: iac apply with planHash {{state.planHash}} (pass allowDestroy: true only if destroys were allowed - allowDestroy input: {{input.allowDestroy}}). Never make and apply a different plan.\n- kubernetes: k8s apply of {{input.dir}} (it waits for the rollouts).\n- compose: deploy up as the change describes, with the health check.\n\nThe approved plan or diff:\n{{state.planSummary}}\n\napplied is true only if the apply/deploy finished without error.",
+      "outputs": ["applied"],
+      "next": "check-applied"
+    },
+    "check-applied": {
+      "type": "branch",
+      "title": "Applied?",
+      "when": "state.applied",
+      "next": { "on": { "true": "verify", "false": "record" } }
+    },
+    "verify": {
+      "type": "agent",
+      "title": "Verify health and smoke checks",
+      "agent": "release-manager",
+      "prompt": "Verify the change that was just applied. Check health (k8s rollout-status/get/events, deploy ps, or the resources Terraform changed through their own checks) and run the smoke checks:\n{{input.smoke}}\n\nTarget: {{input.target}}\nWhat was applied: {{state.apply}}\n\nhealthy is true only if everything checked passed.",
+      "outputs": ["healthy"],
+      "decide": ["HEALTHY", "UNHEALTHY"],
+      "next": { "on": { "UNHEALTHY": "rollback" }, "default": "record" }
+    },
+    "rollback": {
+      "type": "agent",
+      "title": "Roll back",
+      "agent": "release-manager",
+      "prompt": "Verification failed after the change. Roll back now and verify again.\n- kubernetes: k8s rollout-undo for every workload the change touched, then rollout-status.\n- compose: deploy rollback (or confirm the automatic rollback already happened).\n- terraform: do NOT improvise an apply. Report exactly what was applied and what must be reverted; a revert is a new reviewed change.\n\nTarget: {{input.target}}\nWhy verification failed: {{state.verify}}",
+      "outputs": ["rolledBack"],
+      "next": "record"
+    },
+    "record": {
+      "type": "agent",
+      "title": "Change record",
+      "agent": "release-manager",
+      "prompt": "Write the change record (docs/changes/<today>-<short-name>.md) as your instructions describe.\n\nRequest: {{input.change}}\nKind/where/target: {{input.kind}} {{input.dir}} {{input.target}}\nPlan sha256: {{state.planHash}}\nPlan or diff:\n{{state.planSummary}}\nReviews: peer - {{state.peer-review}}; security - {{state.security-review}}\nGates: {{state.gates}}\nApproval: {{state.approve}}\nApply: {{state.apply}}\nVerification: {{state.verify}}\nRollback: {{state.rollback}}",
+      "next": "outcome"
+    },
+    "outcome": {
+      "type": "branch",
+      "title": "Healthy?",
+      "when": "state.applied && state.healthy && !state.rolledBack",
+      "next": { "on": { "true": "done", "false": "failed" } }
+    },
+    "done": { "type": "end", "title": "Shipped and verified", "status": "success" },
+    "failed": { "type": "end", "title": "Not shipped (or rolled back): see the change record", "status": "failed" }
+  }
+}

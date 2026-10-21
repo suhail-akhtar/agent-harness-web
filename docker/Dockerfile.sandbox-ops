@@ -1,0 +1,131 @@
+# The sandbox plus the DevOps toolchain, for the devops plugin's iac, k8s, ci,
+# container and deploy tools and its gates. Build the normal sandbox first:
+#   npm run sandbox:image && npm run sandbox:image:ops
+# Sessions use it when the operator allows it (HARNESS_SANDBOX_IMAGES=harness-sandbox-ops:latest)
+# and the session asks for it, or for every session with HARNESS_SANDBOX_IMAGE.
+#
+# Every program is an official release at a pinned version, checked against
+# the vendor's published SHA-256 (the *SHA256SUMS / checksums.txt / .sha256
+# files on each release). Two vendors publish no checksum file for the asset
+# used here (ShellCheck, the Docker static CLI): their hashes are the release
+# assets' SHA-256 as GitHub and download.docker.com served them when pinned.
+# Python tools are installed with pip --require-hashes from ops-requirements.txt.
+# linux/amd64 only (the checksums are for those assets).
+#
+# There is no Docker daemon in here: the docker CLI and compose talk to a
+# daemon only when DOCKER_HOST points at one (the deploy tool's target), and
+# kind needs a daemon's socket, so it is for a dedicated runner, never a
+# session sandbox. Size: 1.87 GB on disk, 465 MB compressed (the base sandbox is 0.96 GB).
+ARG BASE=harness-sandbox:latest
+FROM ${BASE}
+
+ARG TOFU_VERSION=1.13.1
+ARG TOFU_SHA256=378ada19d4bc70c43732004e8159be771b23b9a5afdf059e5f8a2b3fa2c70a69
+ARG KUBECTL_VERSION=1.37.1
+ARG KUBECTL_SHA256=65691ff77eb6fa44c908b77a1082c9f092c3b9733b5cefabec0d1104890e21a8
+ARG HELM_VERSION=4.3.1
+ARG HELM_SHA256=0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b
+ARG KIND_VERSION=0.33.0
+ARG KIND_SHA256=aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d
+ARG KUBECONFORM_VERSION=0.8.0
+ARG KUBECONFORM_SHA256=9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
+ARG HADOLINT_VERSION=2.15.1
+ARG HADOLINT_SHA256=c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507
+ARG SHELLCHECK_VERSION=0.11.0
+ARG SHELLCHECK_SHA256=b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6
+ARG TRIVY_VERSION=0.76.1
+ARG TRIVY_SHA256=c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0
+ARG ACTIONLINT_VERSION=1.7.12
+ARG ACTIONLINT_SHA256=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+ARG DOCKER_VERSION=29.9.2
+ARG DOCKER_SHA256=9ac225999fd5e863f7694c728ef23d480616b1e5639328fa309befd4243d69eb
+ARG COMPOSE_VERSION=5.6.1
+ARG COMPOSE_SHA256=47737f4236e6d3ccea7291995203f8f018058783b4c3a9469119811a0b5db8c0
+# kubeconform's schemas for the common kinds, from yannh/kubernetes-json-schema at a pinned
+# commit (content-addressed), so manifests validate with no network.
+ARG K8S_SCHEMAS_COMMIT=93153a1458e24e93f386c50f9980d584fcba574b
+ARG K8S_SCHEMA_KINDS="deployment-apps-v1 statefulset-apps-v1 daemonset-apps-v1 replicaset-apps-v1 service-v1 configmap-v1 secret-v1 pod-v1 namespace-v1 serviceaccount-v1 persistentvolumeclaim-v1 job-batch-v1 cronjob-batch-v1 ingress-networking-v1 networkpolicy-networking-v1 role-rbac-v1 rolebinding-rbac-v1 clusterrole-rbac-v1 clusterrolebinding-rbac-v1 horizontalpodautoscaler-autoscaling-v2 poddisruptionbudget-policy-v1 limitrange-v1 resourcequota-v1"
+# OpenTofu providers baked in for offline `init` (checked by tofu against the registry's signed checksums).
+ARG TOFU_PROVIDERS="null=3.3.2 local=2.9.1 random=3.9.1"
+# Trivy's vulnerability database (about 0.8 GB unpacked) is not baked in: config and secret
+# scans work offline; vulnerability scans download it (network) unless built with TRIVY_DB=1.
+ARG TRIVY_DB=0
+
+# One download, checked, in /tmp/dl.
+COPY ops-fetch.sh /usr/local/lib/harness/ops-fetch.sh
+
+RUN set -eux; \
+    f=/usr/local/lib/harness/ops-fetch.sh; \
+    sh $f "https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/tofu_${TOFU_VERSION}_linux_amd64.tar.gz" "$TOFU_SHA256"; \
+    tar -xzf /tmp/dl -C /usr/local/bin tofu; \
+    sh $f "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kubectl" "$KUBECTL_SHA256"; \
+    install -m 755 /tmp/dl /usr/local/bin/kubectl; \
+    sh $f "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz" "$HELM_SHA256"; \
+    tar -xzf /tmp/dl -C /usr/local/bin --strip-components=1 linux-amd64/helm; \
+    sh $f "https://github.com/kubernetes-sigs/kind/releases/download/v${KIND_VERSION}/kind-linux-amd64" "$KIND_SHA256"; \
+    install -m 755 /tmp/dl /usr/local/bin/kind; \
+    sh $f "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" "$KUBECONFORM_SHA256"; \
+    tar -xzf /tmp/dl -C /usr/local/bin kubeconform; \
+    sh $f "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-linux-x86_64" "$HADOLINT_SHA256"; \
+    install -m 755 /tmp/dl /usr/local/bin/hadolint; \
+    sh $f "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.gz" "$SHELLCHECK_SHA256"; \
+    tar -xzf /tmp/dl -C /usr/local/bin --strip-components=1 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"; \
+    sh $f "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" "$TRIVY_SHA256"; \
+    tar -xzf /tmp/dl -C /usr/local/bin trivy; \
+    sh $f "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" "$ACTIONLINT_SHA256"; \
+    tar -xzf /tmp/dl -C /usr/local/bin actionlint; \
+    sh $f "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_VERSION}.tgz" "$DOCKER_SHA256"; \
+    tar -xzf /tmp/dl -C /usr/local/bin --strip-components=1 docker/docker; \
+    mkdir -p /usr/local/lib/docker/cli-plugins; \
+    sh $f "https://github.com/docker/compose/releases/download/v${COMPOSE_VERSION}/docker-compose-linux-x86_64" "$COMPOSE_SHA256"; \
+    install -m 755 /tmp/dl /usr/local/lib/docker/cli-plugins/docker-compose; \
+    rm -f /tmp/dl; \
+    chown root:root /usr/local/bin/*; \
+    mkdir -p /opt/k8s-schemas/master-standalone-strict; \
+    for k in $K8S_SCHEMA_KINDS; do \
+      curl -fsSLo "/opt/k8s-schemas/master-standalone-strict/$k.json" "https://raw.githubusercontent.com/yannh/kubernetes-json-schema/${K8S_SCHEMAS_COMMIT}/master-standalone-strict/$k.json"; \
+    done; \
+    chmod -R a+rX /opt/k8s-schemas
+
+COPY ops-requirements.txt /usr/local/lib/harness/ops-requirements.txt
+RUN pip3 install --no-cache-dir --require-hashes --no-deps -r /usr/local/lib/harness/ops-requirements.txt
+
+# The providers mirror and a CLI config that installs those providers from it (no network).
+# Other providers (aws, google, ...) still come from the registry when the network allows.
+RUN set -eux; \
+    mkdir -p /tmp/mirror /opt/tofu-providers; cd /tmp/mirror; \
+    { echo 'terraform {'; echo '  required_providers {'; \
+      for p in $TOFU_PROVIDERS; do n=${p%%=*}; v=${p#*=}; echo "    $n = { source = \"hashicorp/$n\", version = \"$v\" }"; done; \
+      echo '  }'; echo '}'; } > main.tf; \
+    tofu providers mirror -platform=linux_amd64 /opt/tofu-providers; \
+    cd /; rm -rf /tmp/mirror; chmod -R a+rX /opt/tofu-providers; \
+    inc=$(for p in $TOFU_PROVIDERS; do printf '"registry.opentofu.org/hashicorp/%s", ' "${p%%=*}"; done); \
+    printf 'provider_installation {\n  filesystem_mirror {\n    path    = "/opt/tofu-providers"\n    include = [%s]\n  }\n  direct {\n    exclude = [%s]\n  }\n}\n' "${inc%, }" "${inc%, }" > /usr/local/etc/tofu.rc
+ENV TF_CLI_CONFIG_FILE=/usr/local/etc/tofu.rc \
+    TF_IN_AUTOMATION=1 \
+    TF_INPUT=0 \
+    CHECKPOINT_DISABLE=1 \
+    TRIVY_CACHE_DIR=/opt/trivy-cache \
+    TRIVY_NO_PROGRESS=true \
+    HARNESS_K8S_SCHEMAS=/opt/k8s-schemas
+
+RUN set -eux; \
+    mkdir -p /opt/trivy-cache; \
+    if [ "$TRIVY_DB" = 1 ]; then trivy image --download-db-only; trivy fs --download-java-db-only || true; fi; \
+    chmod -R a+rwX /opt/trivy-cache
+
+# An SSH client for deploys to an ssh:// DOCKER_HOST (from Debian's signed archive).
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends openssh-client; \
+    rm -rf /var/lib/apt/lists/*
+
+# Every tool runs (the build fails otherwise).
+RUN set -eux; \
+    ssh -V; \
+    tofu version; kubectl version --client; helm version --short; kind version; kubeconform -v; \
+    hadolint --version; shellcheck --version; trivy --version; actionlint -version; \
+    yamllint --version; ansible --version; docker --version; docker compose version
+
+WORKDIR /workspace
+CMD ["sleep", "infinity"]
