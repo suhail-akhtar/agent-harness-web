@@ -1,0 +1,11 @@
+{
+ "configs": [
+  { "name": "baseline", "description": "the harness as shipped" },
+  { "name": "no-code-mode", "codeMode": false },
+  { "name": "compact-early", "settings": { "compactAt": 60000 } },
+  { "name": "no-memory", "memory": "off" },
+  { "name": "injection-scan", "injectionScan": true },
+  { "name": "high-effort", "effort": "high" },
+  { "name": "lean-plugins", "plugins": ["sdlc", "quality-gates"] }
+ ]
+}

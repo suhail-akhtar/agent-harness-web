@@ -1,13 +1,15 @@
 // npm run eval -- [--packs sdlc,documents] [--cases name,...] [--models a,b] [--repeat 2] [--concurrency 3] [--out dir]
+//                  [--configs evals/ablations.json] [--config baseline --config 'nocode={"codeMode":false}']
 // npm run eval -- --rejudge <out dir>   (run the checks again on finished runs; no model spend)
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getModel } from '../core/models.ts';
-import { loadCases, rejudge, runEvals } from './runner.ts';
+import { type HarnessConfig, loadCases, parseConfigs, parseInlineConfig, rejudge, runEvals } from './runner.ts';
 
 const arg = (n: string, d?: string) => { const i = process.argv.indexOf(`--${n}`); return i > 0 ? process.argv[i + 1] : d; };
+const all = (n: string) => process.argv.flatMap((a, i) => (a === `--${n}` && i + 1 < process.argv.length ? [process.argv[i + 1]!] : []));
 const list = (v?: string) => (v ? v.split(',').map((x) => x.trim()).filter(Boolean) : undefined);
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -25,10 +27,17 @@ for (const m of models) getModel(m); // unknown ids fail before anything runs
 const out = path.resolve(arg('out', path.join(os.tmpdir(), `harness-eval-${new Date().toISOString().replace(/[:.]/g, '-')}`))!);
 await fs.mkdir(out, { recursive: true });
 const repeats = Number(arg('repeat', '1'));
-console.log(`${cases.length} case(s) x ${models.length} model(s) x ${repeats} -> ${out}`);
+// Harness configurations (ablations): from a file, and/or one per --config; the first is the baseline.
+const configsFile = arg('configs');
+const configs: HarnessConfig[] = [
+  ...(configsFile ? parseConfigs(JSON.parse(await fs.readFile(path.resolve(configsFile), 'utf8'))) : []),
+  ...all('config').map(parseInlineConfig),
+];
+if (configs.length) parseConfigs(configs); // names unique across the file and the flags
+console.log(`${cases.length} case(s) x ${models.length} model(s) x ${repeats}${configs.length ? ` x ${configs.length} config(s) (${configs.map((c) => c.name).join(', ')})` : ''} -> ${out}`);
 const runs = await runEvals({
   cases, models, repeats, out, concurrency: Number(arg('concurrency', '3')),
-  plugins,
+  plugins, configs,
   shipped: [path.join(appRoot, 'plugins')],
   log: (s) => console.log(s),
 });
