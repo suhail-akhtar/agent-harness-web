@@ -1,4 +1,5 @@
 import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import readline from 'node:readline';
@@ -45,6 +46,41 @@ export interface DockerOptions {
   onEgress?: (e: EgressEvent) => void;
   /** allowlist: API credentials the proxy adds to requests through it; the sandbox only sees base URLs and placeholders. */
   credentials?: SandboxCredential[];
+  /**
+   * A setup script: run once when the sandbox is created, as root with the network
+   * open, in a throwaway container with the workspace mounted. What it installs
+   * outside the workspace is kept as a snapshot image (by base image and script) and
+   * reused for SNAPSHOT_DAYS; the script runs again on top of it (idempotent installs
+   * are then quick). The session's own container starts from the result.
+   */
+  setup?: { script: string; onLog?: (line: string) => void };
+}
+
+const SNAPSHOT_DAYS = Number(process.env.HARNESS_SNAPSHOT_DAYS ?? 7);
+const SETUP_TIMEOUT_MS = Number(process.env.HARNESS_SETUP_TIMEOUT_S ?? 900) * 1000;
+
+/** The snapshot image for a base image and a setup script. */
+export function snapshotTag(image: string, script: string): string {
+  return `harness-env:${crypto.createHash('sha256').update(`${image}\n${script}`).digest('hex').slice(0, 16)}`;
+}
+
+/** When an image was made (its label), or undefined if it does not exist. */
+async function imageMadeAt(tag: string): Promise<number | undefined> {
+  const r = await run('docker', ['image', 'inspect', tag, '--format', '{{index .Config.Labels "harness-env.created"}}'], { timeoutMs: 15_000 });
+  return r.code === 0 ? Number(r.stdout.trim()) || 0 : undefined;
+}
+
+/** Removes snapshots past their age (they are rebuilt on next use). */
+export async function pruneSnapshots(now = Date.now()): Promise<string[]> {
+  const r = await run('docker', ['images', 'harness-env', '--format', '{{.Repository}}:{{.Tag}}'], { timeoutMs: 15_000 });
+  const gone: string[] = [];
+  for (const tag of r.stdout.split('\n').map((s) => s.trim()).filter(Boolean)) {
+    const at = await imageMadeAt(tag);
+    if (at !== undefined && now - at > SNAPSHOT_DAYS * 86_400_000) {
+      if ((await run('docker', ['rmi', tag], { timeoutMs: 60_000 })).code === 0) gone.push(tag);
+    }
+  }
+  return gone;
 }
 
 export const dockerDefaults = (): DockerOptions => ({
@@ -167,6 +203,7 @@ export class DockerHost implements ToolHost {
     }
     const uid = process.getuid?.() ?? 1000;
     const gid = process.getgid?.() ?? 1000;
+    const image = this.opts.setup?.script.trim() ? await this.runSetup(uid, gid) : this.opts.image;
     const allowlist = this.opts.network === 'allowlist';
     const proxyEnv = allowlist
       ? ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy'].flatMap((k) => ['-e', `${k}=http://egress:3128`]).concat(['-e', 'NO_PROXY=localhost,127.0.0.1,egress', '-e', 'no_proxy=localhost,127.0.0.1,egress', '-e', 'NODE_USE_ENV_PROXY=1'])
@@ -183,12 +220,58 @@ export class DockerHost implements ToolHost {
       '-e', 'HOME=/tmp/home', '-e', 'CI=1',
       '-v', `${this.root}:/workspace`, '-w', '/workspace',
       '--label', 'harness-web=1',
-      this.opts.image, 'sleep', 'infinity',
+      image, 'sleep', 'infinity',
     ];
     const r = await run('docker', args, { timeoutMs: 120_000 });
     if (r.code !== 0) throw new Error(`could not start the sandbox container: ${(r.stderr || r.stdout).trim()}`);
     await run('docker', ['exec', this.name, 'mkdir', '-p', '/tmp/home'], { timeoutMs: 15_000 });
   }
+
+  /**
+   * Runs the setup script and returns the image the session starts from: the
+   * refreshed snapshot when it succeeded, else the base image (the session still
+   * works; the failure is in the log the agent can read). The log goes to
+   * .harness/setup.log in the workspace.
+   */
+  private async runSetup(uid: number, gid: number): Promise<string> {
+    const script = this.opts.setup!.script;
+    const tag = snapshotTag(this.opts.image, script);
+    const log = (l: string) => this.opts.setup!.onLog?.(l);
+    void pruneSnapshots().catch(() => {});
+    const made = await imageMadeAt(tag);
+    const fresh = made !== undefined && Date.now() - made <= SNAPSHOT_DAYS * 86_400_000;
+    const from = fresh ? tag : this.opts.image;
+    log(fresh ? `setup: starting from the snapshot ${tag}` : 'setup: no snapshot yet, starting from the base image');
+    const name = `harness-setup-${this.name.replace(/^harness-/, '')}`;
+    await run('docker', ['rm', '-f', name], { timeoutMs: 15_000 });
+    // As root with the network open, as cloud harnesses run setup; then the workspace
+    // is handed back to the session's user, whatever the script did.
+    const wrapped = `set -o pipefail; (${script}\n) 2>&1; rc=$?; chown -R ${uid}:${gid} /workspace /tmp/home 2>/dev/null; exit $rc`;
+    const r = await run('docker', [
+      'run', '--name', name, '--network', 'bridge', '--user', '0:0', '--security-opt', 'no-new-privileges',
+      '--memory', this.opts.memory, '--cpus', this.opts.cpus, '--pids-limit', '1024',
+      '-e', 'HOME=/tmp/home', '-e', 'CI=1', '-e', 'DEBIAN_FRONTEND=noninteractive',
+      '-v', `${this.root}:/workspace`, '-w', '/workspace', '--label', 'harness-web=1',
+      from, 'bash', '-lc', `mkdir -p /tmp/home; ${wrapped}`,
+    ], { timeoutMs: SETUP_TIMEOUT_MS });
+    const out = (r.stdout + r.stderr).trim();
+    await fs.mkdir(path.join(this.root, '.harness'), { recursive: true }).catch(() => {});
+    await fs.writeFile(path.join(this.root, '.harness', 'setup.log'), `${out}\n\nexit ${r.code}${r.timedOut ? ' (timed out)' : ''}\n`).catch(() => {});
+    let image = from;
+    if (r.code === 0) {
+      const c = await run('docker', ['commit', '--change', `LABEL harness-env.created=${Date.now()}`, '--change', 'USER root', name, tag], { timeoutMs: 300_000 });
+      if (c.code === 0) image = tag;
+      log(c.code === 0 ? `setup: done; snapshot ${tag} saved` : `setup: done, but the snapshot could not be saved: ${c.stderr.trim().slice(0, 300)}`);
+    } else {
+      log(`setup: the script failed (exit ${r.code}${r.timedOut ? ', timed out' : ''}); the session starts without it. See .harness/setup.log`);
+    }
+    await run('docker', ['rm', '-f', name], { timeoutMs: 30_000 });
+    this.setupResult = { ok: r.code === 0, image };
+    return image;
+  }
+
+  /** How setup went, once the sandbox has started (for the agent's environment note). */
+  setupResult?: { ok: boolean; image: string };
 
   async exec(cmd: string, opts: ExecOptions): Promise<ExecResult> {
     await this.ensure();
@@ -206,6 +289,9 @@ export class DockerHost implements ToolHost {
     const envArgs = Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
     return spawn('docker', ['exec', '-i', ...envArgs, '-w', '/workspace', this.name, command, ...args], { stdio: ['pipe', 'pipe', 'pipe'] });
   }
+
+  /** For the agent's environment note: a setup script prepares this sandbox. */
+  get hasSetup(): boolean { return !!this.opts.setup?.script.trim(); }
 
   credentialEnv(): { name: string; vars: string[] }[] {
     return this.opts.network === 'allowlist' ? (this.opts.credentials ?? []).map((c) => ({ name: c.name, vars: Object.keys(c.env) })) : [];

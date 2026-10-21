@@ -48,7 +48,7 @@ export interface SessionMeta {
    * (bubblewrap, Seatbelt), Docker with the folder mounted, 'auto' (the best there is)
    * or 'off'. Default: HARNESS_LOCAL_SANDBOX, else off.
    */
-  runtime: { kind: RuntimeKind; network: 'none' | 'full' | 'allowlist'; companionId?: string; path?: string; sandbox?: LocalSandbox | 'auto' };
+  runtime: { kind: RuntimeKind; network: 'none' | 'full' | 'allowlist'; companionId?: string; path?: string; sandbox?: LocalSandbox | 'auto'; /** Docker: a setup script run as root with network before the session starts (snapshot-cached). */ setup?: string };
   createdAt: number;
   updatedAt: number;
   usage: Usage;
@@ -307,8 +307,13 @@ export class Session {
     if (this.host) return this.host;
     const r = this.meta.runtime;
     const blocked = new Set<string>();
+    // The session's own setup script, else the repository's .harness/setup.sh when the operator allows
+    // repositories to set themselves up (it runs repository code as root with the network open).
+    const repoSetup = process.env.HARNESS_REPO_SETUP === '1' ? await fs.readFile(path.join(this.workspace, '.harness', 'setup.sh'), 'utf8').catch(() => '') : '';
+    const setupScript = r.setup?.trim() || repoSetup.trim();
     const docker = () => new DockerHost(this.meta.id, this.workspace, {
       ...dockerDefaults(), network: r.network, policyFile: this.policyFile(), credentials: this.deps.sandboxCredentials,
+      ...(setupScript ? { setup: { script: setupScript, onLog: (text: string) => this.emit({ kind: 'notice', level: /failed|could not/.test(text) ? 'warn' : 'info', text }) } } : {}),
       onEgress: (e) => {
         if (e.allowed || blocked.has(e.host)) return;
         blocked.add(e.host);

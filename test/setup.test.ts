@@ -1,0 +1,53 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { test } from 'node:test';
+import { DockerHost, dockerAvailable, imageExists, snapshotTag } from '../src/runtime/docker.ts';
+import { run } from '../src/runtime/host.ts';
+import { tempDir } from './helpers.ts';
+
+const hasDocker = (await dockerAvailable()) && (await imageExists('harness-sandbox:latest'));
+
+test('setup scripts: run as root with network, snapshotted, reused; the session starts from the result with its own policy', { skip: !hasDocker && 'no docker or sandbox image' }, async (t) => {
+  // A system package (needs root and the network) and a file in the workspace.
+  const script = `apt-get update -qq >/dev/null && apt-get install -y -qq cowsay >/dev/null && echo installed > /workspace/setup-ran.txt && echo SETUP-OK # ${Date.now()}`;
+  const tag = snapshotTag('harness-sandbox:latest', script);
+  t.after(() => run('docker', ['rmi', '-f', tag], { timeoutMs: 60_000 }));
+  const opts = (logs: string[]) => ({ image: 'harness-sandbox:latest', network: 'none' as const, memory: '1g', cpus: '1', setup: { script, onLog: (l: string) => logs.push(l) } });
+  const ws1 = await tempDir();
+  const logs1: string[] = [];
+  const a = new DockerHost(`s1${Date.now().toString(16)}`, ws1, opts(logs1));
+  try {
+    let r = await a.exec('/usr/games/cowsay moo | head -2; cat setup-ran.txt; echo more >> setup-ran.txt && echo WRITABLE; (getent hosts example.com || echo NO-NET)', { timeoutMs: 600_000 });
+    assert.match(r.stdout, /moo/, r.stdout + r.stderr);
+    assert.match(r.stdout, /installed/);
+    assert.match(r.stdout, /WRITABLE/, 'the workspace is handed back to the session\'s user');
+    assert.match(r.stdout, /NO-NET/, 'the session itself keeps its own network policy');
+    assert.match(await fs.readFile(path.join(ws1, '.harness', 'setup.log'), 'utf8'), /SETUP-OK[\s\S]*exit 0/);
+    assert.ok(logs1.some((l) => /no snapshot yet/.test(l)) && logs1.some((l) => /snapshot .* saved/.test(l)), logs1.join('\n'));
+    assert.ok(await imageExists(tag));
+    r = await a.exec('id -u', { timeoutMs: 30_000 });
+    assert.notEqual(r.stdout.trim(), '0', 'the session does not run as root');
+  } finally { await a.close(); }
+  // A second session with the same script starts from the snapshot.
+  const logs2: string[] = [];
+  const b = new DockerHost(`s2${Date.now().toString(16)}`, await tempDir(), opts(logs2));
+  try {
+    const r = await b.exec('/usr/games/cowsay again | head -2', { timeoutMs: 600_000 });
+    assert.match(r.stdout, /again/);
+    assert.ok(logs2.some((l) => /starting from the snapshot/.test(l)), logs2.join('\n'));
+  } finally { await b.close(); }
+});
+
+test('a failing setup script does not stop the session: it starts from the base image and the log says why', { skip: !hasDocker && 'no docker or sandbox image' }, async () => {
+  const ws = await tempDir();
+  const logs: string[] = [];
+  const h = new DockerHost(`s3${Date.now().toString(16)}`, ws, { image: 'harness-sandbox:latest', network: 'none', memory: '512m', cpus: '1', setup: { script: 'echo trying; exit 3', onLog: (l) => logs.push(l) } });
+  try {
+    const r = await h.exec('echo alive', { timeoutMs: 120_000 });
+    assert.equal(r.stdout.trim(), 'alive');
+    assert.ok(logs.some((l) => /script failed \(exit 3\)/.test(l)), logs.join('\n'));
+    assert.match(await fs.readFile(path.join(ws, '.harness', 'setup.log'), 'utf8'), /trying[\s\S]*exit 3/);
+    assert.equal(h.setupResult?.ok, false);
+  } finally { await h.close(); }
+});

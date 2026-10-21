@@ -322,7 +322,15 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       const b = await readJson(req);
       const model = String(b.model ?? registry.listModels().find((m) => m.available)?.id ?? '');
       const kind = b.runtime === 'local' || b.runtime === 'companion' ? b.runtime : 'docker';
-      const runtime: SessionMeta['runtime'] = { kind, network: b.network === 'full' ? 'full' : b.network === 'allowlist' && kind === 'docker' ? 'allowlist' : 'none' };
+      const sandbox = kind === 'local' && ['auto', 'bwrap', 'seatbelt', 'docker', 'off'].includes(String(b.sandbox)) ? b.sandbox as SessionMeta['runtime']['sandbox'] : undefined;
+      // An allowlist needs the egress proxy: a Docker sandbox (including a server folder mounted into one).
+      const proxied = kind === 'docker' || sandbox === 'docker';
+      const runtime: SessionMeta['runtime'] = { kind, network: b.network === 'full' ? 'full' : b.network === 'allowlist' && proxied ? 'allowlist' : 'none', ...(sandbox ? { sandbox } : {}) };
+      if (typeof b.setup === 'string' && b.setup.trim()) {
+        if (!proxied) throw new HttpError(400, 'A setup script runs in a Docker sandbox: choose the Docker runtime (or the Docker sandbox for a server folder).');
+        if (b.setup.length > 20_000) throw new HttpError(400, 'The setup script is limited to 20,000 characters.');
+        runtime.setup = b.setup;
+      }
       if (kind === 'docker') {
         if (!await dockerAvailable()) throw new HttpError(400, 'Docker is not available on the server. Choose a companion or local workspace.');
         if (!await imageExists(dockerDefaults().image)) throw new HttpError(400, `Sandbox image ${dockerDefaults().image} is missing. Build it with: npm run sandbox:image`);
