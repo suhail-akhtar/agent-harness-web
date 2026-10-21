@@ -1,6 +1,7 @@
 import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
@@ -44,6 +45,51 @@ export function cleanAllowEntry(entry: string): string | undefined {
 }
 
 const HTTP_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE', 'TRACE']);
+
+/** What the docker CLI keeps of the server's environment when it runs a command: where the daemon is, and system paths. */
+const CLI_ENV = new Set([
+  'PATH', 'PATHEXT', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'PROGRAMDATA', 'PROGRAMFILES', 'PROGRAMFILES(X86)', 'SYSTEMROOT', 'WINDIR', 'SYSTEMDRIVE', 'COMSPEC',
+  'TEMP', 'TMP', 'TMPDIR', 'XDG_RUNTIME_DIR', 'XDG_CONFIG_HOME', 'LANG', 'LC_ALL', 'USER', 'LOGNAME',
+  'DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_CONFIG', 'DOCKER_CERT_PATH', 'DOCKER_TLS_VERIFY', 'DOCKER_API_VERSION',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY',
+]);
+
+/** The docker CLI's environment for a command: the operator's settings above, nothing a session supplied. */
+export function dockerCliEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(env)) if (v !== undefined && CLI_ENV.has(k.toUpperCase())) out[k] = v;
+  return out;
+}
+
+/** A value docker's env-file format carries as is: one line, valid in a 64 KB line, no NUL. */
+const PLAIN_VALUE = (v: string) => !/[\r\n\0]/.test(v) && v.length < 16 * 1024;
+const CHUNK = 16 * 1024;
+
+/**
+ * Vault values as a docker `--env-file` in a private temporary folder (0700, the file
+ * 0600; the caller removes it). A multi-line (or long) value cannot be one env-file
+ * line: it travels base64-encoded in numbered variables, and `prelude` (variable names
+ * only, no value) decodes it into its name inside the container.
+ */
+export async function secretEnvFile(secrets: Record<string, string>): Promise<{ dir: string; file: string; prelude: string }> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'harness-secrets-'));
+  const lines = ['# harness: vault values for one command'];
+  const prelude: string[] = [];
+  let i = 0;
+  for (const [k, v] of Object.entries(secrets)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(k)) { await fs.rm(dir, { recursive: true, force: true }); throw new Error(`"${k}" is not a valid environment variable name`); }
+    if (PLAIN_VALUE(v)) { lines.push(`${k}=${v}`); continue; }
+    const b64 = Buffer.from(v.replace(/\0/g, ''), 'utf8').toString('base64');
+    const parts: string[] = [];
+    for (let j = 0; j * CHUNK < b64.length; j++) { const n = `__HW_SECRET_${i}_${j}`; parts.push(n); lines.push(`${n}=${b64.slice(j * CHUNK, (j + 1) * CHUNK)}`); }
+    // printf x keeps trailing newlines that $(...) would drop.
+    prelude.push(`${k}="$(printf %s ${parts.map((n) => `"$${n}"`).join('')} | base64 -d; printf x)"; ${k}="\${${k}%x}"; export ${k}; unset ${parts.join(' ')}`);
+    i++;
+  }
+  const file = path.join(dir, 'env');
+  await fs.writeFile(file, lines.join('\n') + '\n', { mode: 0o600 });
+  return { dir, file, prelude: prelude.join('\n') };
+}
 
 /**
  * A stronger isolation runtime for sandbox containers (HARNESS_SANDBOX_RUNTIME):
@@ -404,13 +450,19 @@ export class DockerHost implements ToolHost {
     const workdir = opts.cwd ?? '/workspace';
     // `timeout` inside the container kills the command itself; killing the
     // docker CLI alone would leave it running.
-    // Vault values: `-e NAME` with no value makes the docker CLI copy it from its own environment,
-    // so a value is never in a process's arguments (ps on the server shows those).
-    const secretArgs = Object.keys(opts.secretEnv ?? {}).flatMap((k) => ['-e', k]);
-    const env = opts.secretEnv && Object.keys(opts.secretEnv).length ? { ...(opts.env ?? process.env), ...opts.secretEnv } : opts.env;
-    const r = await run('docker', ['exec', '-i', ...secretArgs, '-w', workdir, this.name, 'timeout', '-k', '5', String(secs), 'bash', '-lc', cmd], { ...opts, env, timeoutMs: opts.timeoutMs + 15_000 });
-    if (r.code === 124) r.timedOut = true;
-    return r;
+    // Vault values reach the container through an env file (owner-only, deleted after), never
+    // the docker CLI's own environment (a secret named DOCKER_HOST would point the CLI, and
+    // every other secret of the command, at another daemon) nor its arguments (ps shows those).
+    // The CLI gets a fixed environment: the server's own Docker settings and system paths.
+    const secret = opts.secretEnv && Object.keys(opts.secretEnv).length ? await secretEnvFile(opts.secretEnv) : undefined;
+    try {
+      const script = secret?.prelude ? `${secret.prelude}\n${cmd}` : cmd;
+      const r = await run('docker', ['exec', '-i', ...(secret ? ['--env-file', secret.file] : []), '-w', workdir, this.name, 'timeout', '-k', '5', String(secs), 'bash', '-lc', script], { ...opts, env: dockerCliEnv(), timeoutMs: opts.timeoutMs + 15_000 });
+      if (r.code === 124) r.timedOut = true;
+      return r;
+    } finally {
+      if (secret) await fs.rm(secret.dir, { recursive: true, force: true }).catch(() => {});
+    }
   }
 
   async spawnStream(command: string, args: string[], env: Record<string, string>): Promise<ChildProcessWithoutNullStreams> {

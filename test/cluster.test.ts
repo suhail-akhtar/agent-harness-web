@@ -1,15 +1,16 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import http from 'node:http';
 import path from 'node:path';
 import { test } from 'node:test';
 import { SessionElsewhereError } from '../src/core/session.ts';
 import type { Message } from '../src/core/types.ts';
 import { createHarness } from '../src/kernel/harness.ts';
 import type { Provider, ProviderRequest, ProviderResponse } from '../src/providers/types.ts';
-import { createApp } from '../src/server/app.ts';
+import { clusterAuthHeader, createApp, verifyClusterAuth } from '../src/server/app.ts';
 import { BrowserSessions } from '../src/server/oidc.ts';
 import { SpendLedger, UserStore } from '../src/server/users.ts';
-import { Leases } from '../src/util/lease.ts';
+import { Leases, leaseUrlSig } from '../src/util/lease.ts';
 import { withFileLock, writeFileAtomic } from '../src/util/shared-file.ts';
 import { tempDir } from './helpers.ts';
 import { freePort } from './real-services.ts';
@@ -20,6 +21,8 @@ import { freePort } from './real-services.ts';
 process.env.HARNESS_SYNC_MS = '0';
 const OPERATOR = 'operator-token-for-cluster-tests';
 const TTL = 1500;
+/** HARNESS_CLUSTER_SECRET: servers pass requests to each other only with it. */
+const SECRET = 'cluster-secret-for-tests-0123456789abcdef';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** A provider whose answers wait until the test lets them go, recording what it was sent. */
@@ -44,12 +47,12 @@ class GatedProvider implements Provider {
   release(): void { for (const g of this.gates.splice(0)) g(); }
 }
 
-async function node(data: string, id: string, opts: { url?: boolean } = {}) {
+async function node(data: string, id: string, opts: { url?: boolean; secret?: string | null; peers?: string[] } = {}) {
   const port = await freePort();
   const base = `http://127.0.0.1:${port}`;
   const users = await new UserStore(data).load();
   const spend = await new SpendLedger(data).load();
-  const harness = await createHarness({ dataDir: data, search: null, memory: 'off', spend, cluster: { id, url: opts.url === false ? undefined : base, leaseTtlMs: TTL } });
+  const harness = await createHarness({ dataDir: data, search: null, memory: 'off', spend, cluster: { id, url: opts.url === false ? undefined : base, leaseTtlMs: TTL, ...(opts.secret === null ? {} : { secret: opts.secret ?? SECRET }), ...(opts.peers ? { peers: opts.peers } : {}) } });
   const provider = new GatedProvider();
   harness.registry.setProviderInstance('deepseek', provider);
   const { server } = createApp({ harness, token: OPERATOR, loopback: true, localRoots: [], uiDir: path.join(data, 'ui'), appRoot: data, users, spend });
@@ -73,7 +76,8 @@ async function node(data: string, id: string, opts: { url?: boolean } = {}) {
 }
 
 const textOf = (m: Message | undefined) => (m?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
-const waitFor = async (what: string, ok: () => boolean | Promise<boolean>, ms = 10_000) => {
+// Generous: a loaded machine (the full suite on Windows) can be many times slower than a quiet one.
+const waitFor = async (what: string, ok: () => boolean | Promise<boolean>, ms = 60_000) => {
   const end = Date.now() + ms;
   while (Date.now() < end) { if (await ok()) return; await sleep(50); }
   assert.fail(`timed out waiting for ${what}`);
@@ -338,4 +342,174 @@ test('shared-file primitives: atomic writes never show part of a file; the lock 
   assert.equal(await la.renew('s2'), false);
   assert.equal(lost, true, 'the old holder is told');
   assert.equal((await lb.holder('s2'))?.owner, 'b');
+});
+
+/** A raw request (fetch would normalise a request line like `//host/path`). */
+function rawRequest(base: string, method: string, requestPath: string, headers: Record<string, string>): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
+  const u = new URL(base);
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: u.hostname, port: Number(u.port), method, path: requestPath, headers }, (res) => {
+      let body = '';
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+test('passing requests on: only to a verified peer, at its own origin (the request line cannot name another host), without the person\'s token or cookie; the peer maps the signed principal back', async () => {
+  const data = await tempDir();
+  // Any other host on the network: records whatever reaches it.
+  const reached: { url: string; headers: http.IncomingHttpHeaders }[] = [];
+  const other = http.createServer((req, res) => { reached.push({ url: req.url!, headers: req.headers }); res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"other":true}'); });
+  await new Promise<void>((r) => other.listen(0, '127.0.0.1', r));
+  const otherUrl = `http://127.0.0.1:${(other.address() as { port: number }).port}`;
+  const a = await node(data, 'node-a');
+  const b = await node(data, 'node-b');
+  const c = await node(data, 'node-c', { peers: [otherUrl] });
+  const d = await node(data, 'node-d', { secret: null });
+  try {
+    const mia = await a.users.add('mia');
+    const s = await a.harness.sessions.create({ model: 'deepseek-flash', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: await tempDir() }, owner: mia.user.id });
+    const asMia = { authorization: `Bearer ${mia.token}`, cookie: `hw_token=${mia.token}` };
+    assert.equal((await a.call('POST', `/api/sessions/${s.meta.id}/messages`, { text: 'work on A' }, { authorization: `Bearer ${mia.token}` })).status, 202);
+    await waitFor('A to call its model', () => a.provider.requests.length === 1);
+    const lease = await a.harness.cluster!.leases.holder(`session-${s.meta.id}`);
+    assert.ok(lease?.sig, 'the lease\'s address is signed with the cluster secret');
+
+    // The request line names another host: B still passes it to A's own origin, path and query only.
+    const viaB = await rawRequest(b.base, 'GET', `//127.0.0.1:${new URL(otherUrl).port}/api/sessions/${s.meta.id}?x=1`, asMia);
+    assert.equal(viaB.status, 200, viaB.body);
+    assert.equal(viaB.headers['x-harness-served-by'], 'node-a', 'A answered, as the member (mapped back from the signed header)');
+    assert.equal(reached.length, 0, 'nothing reached the host the request line named');
+
+    // A lease file anyone with write access to the shared folder could edit: an address that is
+    // not signed (or signed with another secret, or plain http off loopback) is not passed to.
+    const idle = await a.harness.sessions.create({ model: 'deepseek-flash', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: await tempDir() }, owner: mia.user.id });
+    const forge = (url: string, sig?: string) => writeFileAtomic(path.join(data, 'leases', `session-${idle.meta.id}.lease`), JSON.stringify({ owner: 'node-x', url, ...(sig ? { sig } : {}), host: 'x', pid: 1, since: Date.now(), beat: Date.now() + 600_000, token: 't' }));
+    const forged: [string, string | undefined][] = [[otherUrl, undefined], [otherUrl, leaseUrlSig('another-secret-0123456789abcdef0123', 'node-x', otherUrl)], ['http://10.255.255.1:9', leaseUrlSig(SECRET, 'node-x', 'http://10.255.255.1:9')]];
+    for (const [url, sig] of forged) {
+      await forge(url, sig);
+      const r = await b.call('GET', `/api/sessions/${idle.meta.id}`, undefined, { authorization: `Bearer ${mia.token}` });
+      assert.equal(r.status, 409, `${url} ${sig ? 'signed' : 'unsigned'}: ${JSON.stringify(r.body)}`);
+      assert.equal(r.body.url, undefined, 'an unverified address is not even named');
+    }
+    assert.equal(reached.length, 0);
+    // Without a cluster secret a server passes nothing on (A's own, signed, lease included).
+    assert.equal((await d.call('GET', `/api/sessions/${s.meta.id}`, undefined, { authorization: `Bearer ${mia.token}` })).status, 409);
+
+    // C lists the stand-in as a peer: the request goes there, without the person's token or cookie,
+    // with a cluster header signed for exactly this method, path and query.
+    await forge(otherUrl);
+    const viaC = await rawRequest(c.base, 'GET', `/api/sessions/${idle.meta.id}/events?after=3`, asMia);
+    assert.equal(viaC.status, 200, viaC.body);
+    assert.equal(reached.length, 1);
+    const got = reached[0]!;
+    assert.equal(got.url, `/api/sessions/${idle.meta.id}/events?after=3`);
+    assert.equal(got.headers.authorization, undefined);
+    assert.equal(got.headers.cookie, undefined);
+    assert.equal(got.headers['x-harness-forwarded'], 'node-c');
+    const header = String(got.headers['x-harness-cluster-auth']);
+    const p = `/api/sessions/${idle.meta.id}/events`;
+    assert.equal(verifyClusterAuth(SECRET, header, 'GET', `${p}?after=3`)?.id, mia.user.id);
+    assert.equal(verifyClusterAuth(SECRET, header, 'GET', p), undefined, 'bound to the query');
+    assert.equal(verifyClusterAuth(SECRET, header, 'DELETE', `${p}?after=3`), undefined, 'bound to the method');
+    assert.equal(verifyClusterAuth(SECRET, header, 'GET', `${p}?after=3`, Date.now() + 120_000), undefined, 'expires');
+
+    // The receiving side: only a valid signature speaks for a person, and as the account is now.
+    const me = '/api/me';
+    const at = (h: string) => fetch(a.base + me, { headers: { 'x-harness-cluster-auth': h } });
+    const mias = { id: mia.user.id, name: 'mia', role: 'member' as const };
+    assert.equal((await at(clusterAuthHeader(SECRET, mias, 'GET', me, 'node-b'))).status, 200);
+    assert.equal(((await (await at(clusterAuthHeader(SECRET, { ...mias, role: 'admin' }, 'GET', me, 'node-b'))).json()) as { role: string }).role, 'member', 'the role is the receiving server\'s, not a claim');
+    assert.equal((await at(clusterAuthHeader('wrong-secret-0123456789abcdef0123456', mias, 'GET', me, 'node-b'))).status, 401);
+    assert.equal((await at(clusterAuthHeader(SECRET, mias, 'GET', '/api/sessions', 'node-b'))).status, 401, 'signed for another path');
+    assert.equal((await at('v1.1.e30.xxx')).status, 401);
+    await a.users.setDisabled(mia.user.id, true);
+    assert.equal((await at(clusterAuthHeader(SECRET, mias, 'GET', me, 'node-b'))).status, 401, 'a disabled account');
+    await a.users.setDisabled(mia.user.id, false);
+  } finally {
+    a.provider.open = true;
+    a.provider.release();
+    for (const n of [a, b, c, d]) await n.close();
+    other.close();
+  }
+});
+
+test('lease races: a heartbeat never overwrites a takeover that lands between its read and its write, nor brings back a lease just released', async () => {
+  const dir = path.join(await tempDir(), 'leases');
+  const now = 1_000_000;
+  const la = new Leases(dir, { owner: 'a', ttlMs: 1000, now: () => now });
+  // B's clock is ahead: A's heartbeat looks stale to it, so B takes the lease over.
+  const lb = new Leases(dir, { owner: 'b', ttlMs: 1000, now: () => now + 5000 });
+  // Holds one read of a lease file (the heartbeat's) after it read the file and before it can
+  // write, while something else happens.
+  const realRead = fs.readFile;
+  let hook: { file: string; run: () => Promise<void> } | undefined;
+  (fs as { readFile: unknown }).readFile = async (...args: unknown[]) => {
+    const got = await (realRead as (...a: unknown[]) => Promise<unknown>).apply(fs, args);
+    const h = hook;
+    if (h && String(args[0]).endsWith(h.file)) { hook = undefined; await h.run(); }
+    return got;
+  };
+  try {
+    assert.equal((await la.acquire('race-takeover')).ok, true);
+    let takeover!: ReturnType<Leases['acquire']>;
+    hook = { file: 'race-takeover.lease', run: async () => { takeover = lb.acquire('race-takeover'); await sleep(300); } };
+    await la.renew('race-takeover');
+    const tb = await takeover;
+    assert.equal(tb.ok, true, 'B took over (A is stale on B\'s clock)');
+    assert.equal((await la.read('race-takeover'))?.owner, 'b', 'B\'s takeover stands: A\'s heartbeat did not write over it');
+    assert.equal(await la.renew('race-takeover'), false, 'A learns it lost');
+    assert.equal(lb.holds('race-takeover'), true);
+
+    assert.equal((await la.acquire('race-release')).ok, true);
+    let releasing!: Promise<void>;
+    hook = { file: 'race-release.lease', run: async () => { releasing = la.release('race-release'); await sleep(300); } };
+    await la.renew('race-release');
+    await releasing;
+    assert.equal(await la.read('race-release'), undefined, 'released: the heartbeat in flight did not bring the file back');
+    assert.equal(la.holds('race-release'), false);
+    assert.equal((await lb.acquire('race-release')).ok, true, 'free for another server at once');
+  } finally {
+    (fs as { readFile: unknown }).readFile = realRead;
+  }
+});
+
+test('vault names in cluster mode: values another server revealed are hidden here after a reload; a name added here is not lost to a reload or another server\'s save', async () => {
+  const data = await tempDir();
+  const a = await node(data, 'node-a');
+  const b = await node(data, 'node-b');
+  type Svc = { vaultService(main: boolean): import('../src/vault/store.ts').VaultService };
+  const metaNames = async (id: string) => (JSON.parse(await fs.readFile(path.join(data, 'sessions', id, 'meta.json'), 'utf8')) as { vaultNames?: string[] }).vaultNames ?? [];
+  try {
+    await a.harness.vault!.put({}, { name: 'db-a', value: 'value-from-a-123' });
+    await a.harness.vault!.put({}, { name: 'db-b', value: 'value-from-b-456' });
+    const sA = await a.harness.sessions.create({ model: 'deepseek-flash', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: await tempDir() } });
+    await b.harness.sessions.sync(true);
+    const sB = b.harness.sessions.get(sA.meta.id)!;
+    await sB.loadSecrets(); // B has loaded the (empty) list once
+    // A's session is given a value (a command with secrets), and saves.
+    await (sA as unknown as Svc).vaultService(true).envFor({ X: 'db-a' }, 'test');
+    await sA.saveMeta();
+    assert.equal(await sB.syncFromDisk(), true);
+    assert.equal((await sB.loadSecrets()).redact('x value-from-a-123'), 'x [vault:db-a]', 'B hides what A revealed');
+    // B is given one too; before B saves, A writes the session again and B reads it: B keeps its name.
+    await (sB as unknown as Svc).vaultService(true).envFor({ Y: 'db-b' }, 'test');
+    sA.meta.title = 'changed on A';
+    await sA.saveMeta();
+    assert.equal(await sB.syncFromDisk(), true);
+    assert.deepEqual([...sB.meta.vaultNames!].sort(), ['db-a', 'db-b']);
+    await sB.saveMeta();
+    assert.deepEqual((await metaNames(sA.meta.id)).sort(), ['db-a', 'db-b']);
+    // A saves from its older copy (no db-b): the names on disk are kept (a union), and A hides db-b now.
+    sA.meta.title = 'again on A';
+    await sA.saveMeta();
+    assert.deepEqual((await metaNames(sA.meta.id)).sort(), ['db-a', 'db-b']);
+    assert.equal((await sA.loadSecrets()).redact('value-from-b-456'), '[vault:db-b]');
+  } finally {
+    await a.close();
+    await b.close();
+  }
 });

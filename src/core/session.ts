@@ -43,7 +43,8 @@ import { applyUserSettings, loadProjectSettings, loadUserInstructions, loadUserS
 import type { HarnessEvent, Message, PermissionMode, SessionStatus, Todo, ToolUseBlock, TurnEndReason, Usage, WorkflowRunView } from './types.ts';
 import { addUsage, emptyUsage } from './types.ts';
 import type { LeaseRecord, Leases } from '../util/lease.ts';
-import { writeFileAtomic } from '../util/shared-file.ts';
+import { readJson, withFileLock, writeFileAtomic } from '../util/shared-file.ts';
+import { seal, serverKey, unseal } from '../util/sealed.ts';
 
 export type RuntimeKind = 'docker' | 'local' | 'companion';
 
@@ -289,11 +290,16 @@ export class Session {
    * vault call): events, trace, hooks, the history, exports and command output pass
    * through it, so a value shows only as [vault:name].
    */
-  readonly redactor = new Redactor((name) => {
+  readonly redactor = new Redactor((name, value) => {
     const names = (this.meta.vaultNames ??= []);
     if (!names.includes(name)) { names.push(name); this.scheduleSave(); }
+    this.rememberSeen(name, value);
   });
   private secretsLoaded?: Promise<void>;
+  /** name\0value of every value already in vault-seen.json (read or written here). */
+  private seenKnown = new Set<string>();
+  private seenWrite: Promise<void> = Promise.resolve();
+  private seenWarned = false;
 
   constructor(meta: SessionMeta, deps: SessionDeps) {
     this.meta = meta;
@@ -470,7 +476,13 @@ export class Session {
       }
     } catch { /* none yet */ }
     if (!stillOk()) return false;
+    // Vault names only grow: one this server added (not saved yet) stays, and the values of
+    // names another server added are loaded at the next loadSecrets.
+    const localNames = this.meta.vaultNames ?? [];
     this.meta = disk;
+    const merged = [...new Set([...(disk.vaultNames ?? []), ...localNames])];
+    if (merged.length) this.meta.vaultNames = merged;
+    this.secretsLoaded = undefined;
     this.history = history;
     this.diskStamp = disk.updatedAt;
     // The conversation is rebuilt from the history at the next turn; file stamps are stale.
@@ -512,6 +524,11 @@ export class Session {
   /** Writes meta.json atomically. Saves queue: two at once once shared a temp file and one rename failed. */
   saveMeta(): Promise<void> {
     const next = this.metaWrite.catch(() => {}).then(async () => {
+      // Vault names another server wrote (it revealed values in this session) are kept: the
+      // list is the union with what is on disk, and their values are loaded again here.
+      const onDisk = await fs.readFile(path.join(this.dir, 'meta.json'), 'utf8').then((t) => (JSON.parse(t) as SessionMeta).vaultNames ?? [], () => [] as string[]);
+      const missing = onDisk.filter((n) => typeof n === 'string' && !(this.meta.vaultNames ?? []).includes(n));
+      if (missing.length) { (this.meta.vaultNames ??= []).push(...missing); this.secretsLoaded = undefined; }
       // Strictly increasing, so another server always sees a change (two saves can share a millisecond).
       this.meta.updatedAt = Math.max(Date.now(), this.meta.updatedAt + 1);
       await writeFileAtomic(path.join(this.dir, 'meta.json'), JSON.stringify(this.meta, null, 1));
@@ -735,6 +752,19 @@ export class Session {
    */
   async loadSecrets(): Promise<Redactor> {
     this.secretsLoaded ??= (async () => {
+      // Every value this session ever saw, sealed in its own folder: still hidden after the
+      // entry was deleted, rotated past the kept versions, or its access withdrawn.
+      const seen = await readJson<{ values?: { name: string; sealed: string }[] }>(this.seenFile(), {});
+      if (seen.values?.length) {
+        const s = await this.sealer().catch(() => undefined);
+        for (const x of s ? seen.values : []) {
+          try {
+            const v = await s!.unseal(x.sealed);
+            this.seenKnown.add(`${x.name}\0${v}`);
+            this.redactor.add(x.name, v);
+          } catch { /* another server key: cannot be read */ }
+        }
+      }
       const store = this.deps.vault;
       if (!store) return;
       for (const name of [...(this.meta.vaultNames ?? [])]) {
@@ -745,6 +775,36 @@ export class Session {
     return this.redactor;
   }
 
+  private seenFile(): string { return path.join(this.dir, 'vault-seen.json'); }
+
+  /** Seals with the server key (the vault's, when it is on). */
+  private async sealer(): Promise<{ seal(t: string): Promise<string>; unseal(t: string): Promise<string> }> {
+    if (this.deps.vault) return this.deps.vault;
+    const key = await serverKey(this.deps.dataDir);
+    return { seal: async (t) => seal(key, t), unseal: async (t) => unseal(key, t) };
+  }
+
+  /** Keeps a value this session was given (or wrote), sealed in vault-seen.json (owner-only). */
+  private rememberSeen(name: string, value: string): void {
+    const key = `${name}\0${value}`;
+    if (this.seenKnown.has(key)) return;
+    this.seenKnown.add(key);
+    this.seenWrite = this.seenWrite.catch(() => {}).then(async () => {
+      // A deleted session's folder is not made again.
+      if (!(await fs.stat(path.join(this.dir, 'meta.json')).then(() => true, () => false))) return;
+      const sealed = await (await this.sealer()).seal(value);
+      const file = this.seenFile();
+      await withFileLock(file, async () => {
+        const cur = await readJson<{ values?: { name: string; sealed: string }[] }>(file, {});
+        await writeFileAtomic(file, JSON.stringify({ version: 1, values: [...(cur.values ?? []), { name, sealed }] }), { mode: 0o600 });
+      }, { waitMs: 15_000 });
+    }).catch((e: Error) => {
+      if (this.seenWarned) return;
+      this.seenWarned = true;
+      this.emit({ kind: 'notice', level: 'warn', text: `Key vault: could not keep a record of a value this session saw (${e.message}); after a restart it is hidden only while the vault still has it.` });
+    });
+  }
+
   /** The key vault as this session's tools see it, when its owner may use it. */
   private vaultService(main: boolean): VaultService | undefined {
     const store = this.deps.vault;
@@ -753,6 +813,8 @@ export class Session {
       account: this.meta.owner, session: this.meta.id, main,
       remember: (name, values) => { for (const v of values) this.redactor.add(name, v); },
       grantsFor: (plugin) => this.deps.registry.plugins.find((p) => p.name === plugin)?.permissions?.vault ?? [],
+      // A companion session's commands run on the user's own computer: no value is handed out.
+      host: this.meta.runtime.kind,
     });
   }
 

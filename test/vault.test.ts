@@ -62,6 +62,14 @@ test('the redactor hides a value and its base64 (at any alignment), URL-encoded,
   assert.equal(JSON.stringify(clean.raw).includes(v), false);
   const same = { a: 'ok' };
   assert.equal(r.redactDeep(same), same);
+  // Only the providers' real shapes are skipped: a tool input the model gave an extra `signature`
+  // (or `encrypted_content`) field is redacted like any other, at any depth.
+  const sneaky = { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'bash', input: { command: `echo ${v}`, signature: 'x' } }, { note: v, encrypted_content: 'y', nested: { signature: 's', text: v } }] };
+  assert.deepEqual(leaks(JSON.stringify(r.redactDeep(sneaky)), v), []);
+  for (const signed of [{ type: 'redacted_thinking', data: v }, { type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: v }]) assert.equal(r.redactDeep(signed), signed);
+  // A reasoning block of our own (display text, no encrypted content) is redacted.
+  assert.ok(!JSON.stringify(r.redactDeep({ type: 'reasoning', text: v })).includes(v));
+  assert.ok(!JSON.stringify(r.redactDeep({ type: 'thinking', thinking: v, signature: 5 })).includes(v), 'not the provider shape (no string signature)');
   // Bytes: a binary file keeps its other bytes.
   const bin = Buffer.concat([Buffer.from([0, 255, 1]), Buffer.from(v), Buffer.from([0xfe])]);
   const red = r.redactBytes(bin);
@@ -125,7 +133,7 @@ test('access: operator scope is written by administrators only, an account never
   const admin = { admin: true, label: 'operator' };
   const alice = { account: 'usr_alice' };
   const bob = { account: 'usr_bob' };
-  await v.put(admin, { name: 'shared-ci', value: 'operator-value-1', scope: 'operator' });
+  await v.put(admin, { name: 'shared-ci', value: 'operator-value-1', scope: 'operator', allow: ['members'] });
   await assert.rejects(v.put(alice, { name: 'x', value: 'member-value-1', scope: 'operator' }), /only administrators/);
   await assert.rejects(v.put({ ...admin, session: 's1' }, { name: 'x', value: 'from-a-session', scope: 'operator' }), /only administrators/);
   await v.put(alice, { name: 'alice-token', value: 'alice-secret-1' });
@@ -159,6 +167,81 @@ test('access: operator scope is written by administrators only, an account never
   for (const s of ['operator-value-1', 'alice-secret-1', 'session-only-1']) assert.ok(!text.includes(s));
   assert.ok(audit.some((a) => a.action === 'reveal' && a.name === 'alice-token' && a.result === 'denied' && a.session === 'sb'));
   assert.ok(audit.some((a) => a.action === 'reveal' && a.name === 'shared-ci' && a.result === 'ok' && a.purpose === 'test'));
+});
+
+test('operator scope is for administrators unless the operator lists members or accounts (allow), checked in list, reveal, envFor and the restart reload', async () => {
+  const dataDir = await tempDir();
+  const admins = new Set(['usr_admin']);
+  const v = await new VaultStore({ dataDir, env: KEY_A, isAdmin: (a) => a === undefined || admins.has(a) }).load();
+  const op = { admin: true, label: 'operator' };
+  // New operator entries: administrators only, by default.
+  const made = await v.put(op, { name: 'prod-db', value: 'prod-db-password-1', scope: 'operator' });
+  assert.deepEqual(made.allow, ['admins']);
+  await v.put(op, { name: 'ci-token', value: 'ci-token-value-1', scope: 'operator', allow: ['usr_alice'] });
+  const svc = (account: string | undefined) => v.service({ account, session: `s-${account}`, main: true, remember: () => {} });
+  const alice = svc('usr_alice');
+  const bob = svc('usr_bob');
+  const boss = svc('usr_admin');
+  // A member's session: neither listed nor usable - no way to `echo $X | rev` it.
+  assert.deepEqual((await bob.list()).map((e) => e.name), []);
+  await assert.rejects(bob.reveal('prod-db', 'test'), /no vault entry named "prod-db"/);
+  await assert.rejects(bob.envFor({ X: 'prod-db' }, 'test'), /no vault entry named "prod-db"/);
+  await assert.rejects(bob.envFor({ X: 'ci-token' }, 'test'), /no vault entry named "ci-token"/);
+  assert.deepEqual(await v.allValues({ account: 'usr_bob', session: 's-usr_bob' }, 'prod-db'), []);
+  // The account the entry names uses it; an administrator's session uses every one; so does the single-user server.
+  assert.deepEqual((await alice.list()).map((e) => e.name), ['ci-token']);
+  assert.equal((await alice.envFor({ T: 'ci-token' }, 'test')).T, 'ci-token-value-1');
+  await assert.rejects(alice.reveal('prod-db', 'test'), /no vault entry/);
+  assert.equal(await boss.reveal('prod-db', 'test'), 'prod-db-password-1');
+  assert.equal(await svc(undefined).reveal('prod-db', 'test'), 'prod-db-password-1');
+  assert.equal((await alice.list())[0]!.allow, undefined, 'members do not see who else may use it');
+  assert.deepEqual(v.list(op).find((e) => e.name === 'ci-token')!.allow, ['admins', 'usr_alice']);
+  // An entry from before allow existed is administrators-only too.
+  const file = path.join(dataDir, 'vault', 'entries.json');
+  const j = JSON.parse(await fs.readFile(file, 'utf8'));
+  for (const e of j.entries) delete e.allow;
+  await fs.writeFile(file, JSON.stringify(j));
+  await assert.rejects(alice.reveal('ci-token', 'test'), /no vault entry/);
+  // The operator opens one to every member (and only administrators may).
+  await assert.rejects(v.setAllow({ account: 'usr_alice' }, 'prod-db', ['members']), /only administrators/);
+  await assert.rejects(v.setAllow({ ...op, session: 'x' }, 'prod-db', ['members']), /only administrators/);
+  await assert.rejects(v.setAllow(op, 'prod-db', ['bad name!']), /not "admins", "members" or an account id/);
+  await v.setAllow(op, 'prod-db', ['members']);
+  assert.equal(await bob.reveal('prod-db', 'test'), 'prod-db-password-1');
+  await v.setAllow(op, 'prod-db', []);
+  await assert.rejects(bob.reveal('prod-db', 'test'), /no vault entry/);
+  await assert.rejects(v.put({ account: 'usr_alice' }, { name: 'mine', value: 'my-value-123', allow: ['members'] }), /allow is for operator-scope entries/);
+  assert.ok((await v.audit()).some((a) => a.action === 'allow' && a.name === 'prod-db' && a.result === 'ok'));
+});
+
+test('a secret cannot become a variable that steers the shell, a runtime or the Docker CLI; a companion session gets no value at all', async () => {
+  const v = await new VaultStore({ dataDir: await tempDir(), env: KEY_A }).load();
+  await v.put({}, { name: 'evil-host', value: 'tcp://evil.example:2375' });
+  const s = v.service({ session: 's1', main: true, remember: () => {} });
+  for (const k of ['DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_CONFIG', 'DOCKER_CERT_PATH', 'HTTP_PROXY', 'https_proxy', 'ALL_PROXY', 'NO_PROXY', 'LD_PRELOAD', 'NODE_OPTIONS', 'PYTHONPATH', 'BASH_ENV', 'GIT_SSH_COMMAND', 'SSL_CERT_FILE', 'Path']) {
+    await assert.rejects(s.envFor({ [k]: 'evil-host' }, 'test'), /changes how commands run/, k);
+  }
+  for (const k of ['DB_PASSWORD', 'NODE_AUTH_TOKEN', 'GOOGLE_API_KEY', 'NPM_TOKEN', 'PYTHON_KEY']) assert.equal((await s.envFor({ [k]: 'evil-host' }, 'test'))[k], 'tcp://evil.example:2375', k);
+  // A companion session: refused for any caller (a plugin's server-side code too), and audited.
+  const remembered: string[] = [];
+  const c = v.service({ session: 'sc', main: true, remember: (n) => remembered.push(n), host: 'companion' });
+  await assert.rejects(c.reveal('evil-host', 'test'), /not used in a companion session/);
+  await assert.rejects(c.envFor({ X: 'evil-host' }, 'test'), /not used in a companion session/);
+  await assert.rejects(c.reveal('evil-host', 'test', { plugin: 'aiops', grants: ['*'] }), /not used in a companion session/);
+  assert.deepEqual(remembered, []);
+  assert.ok((await v.audit()).some((a) => a.session === 'sc' && a.result === 'denied' && /companion/.test(a.reason ?? '')));
+  assert.equal((await c.list()).length, 1, 'names are still listed');
+
+  // The session hands its runtime to the vault: a companion session's tools (plugins included) get nothing.
+  const h = await createHarness({ dataDir: await tempDir(), search: null, memory: 'off', scheduler: false, vault: { env: KEY_A } });
+  try {
+    await h.vault!.put({}, { name: 'gh', value: 'gh-secret-value-1' });
+    const cs = await h.sessions.create({ model: 'deepseek-flash', mode: 'default', runtime: { kind: 'companion', network: 'none', companionId: 'cmp_none' } });
+    const svc = (cs as unknown as { vaultService(main: boolean): import('../src/vault/store.ts').VaultService }).vaultService(true);
+    await assert.rejects(svc.reveal('gh', 'plugin use', { plugin: 'devops', grants: ['gh'] }), /not used in a companion session/);
+    const ls = await h.sessions.create({ model: 'deepseek-flash', mode: 'default', runtime: { kind: 'local', network: 'none', path: await tempDir() } });
+    assert.equal(await (ls as unknown as { vaultService(main: boolean): import('../src/vault/store.ts').VaultService }).vaultService(true).reveal('gh', 'test'), 'gh-secret-value-1');
+  } finally { await h.close(); }
 });
 
 test('permissions: a command with secrets is asked about unless a rule names them; dontAsk refuses; after untrusted content only the operator\'s rules hold', () => {
@@ -381,11 +464,23 @@ test('the REST API: values go in and never come out; members are kept to their o
     assert.equal(gen.status, 201);
     assert.equal(gen.body.kind, 'password');
 
+    // An operator entry is for administrators until the operator names who else may use it.
+    const aliceId = users.list().find((u) => u.name === 'Alice')!.id;
+    assert.deepEqual((await call(alice, 'GET', '/api/vault/entries')).body.entries.map((e: { name: string }) => e.name).sort(), ['gh-token', 'pw']);
+    const root = await users.add('Root', 'admin');
+    assert.equal(await harness.vault!.reveal({ account: root.user.id, session: 'sess-root' }, 'ops', 'test'), 'operator-only', 'an administrator account\'s session uses it');
+    await assert.rejects(harness.vault!.reveal({ account: aliceId, session: 'sess-alice' }, 'ops', 'test'), /no vault entry/);
+    assert.equal((await call(alice, 'POST', '/api/vault/entries/ops/allow', { allow: [aliceId] })).status, 403);
+    const opened = await call('op-token', 'POST', '/api/vault/entries/ops/allow', { allow: [aliceId] });
+    assert.equal(opened.status, 200, opened.text);
+    assert.deepEqual(opened.body.allow, ['admins', aliceId]);
+    assert.equal((await call('op-token', 'POST', '/api/vault/entries', { name: 'ops-all', value: 'for-everyone-1', scope: 'operator', allow: ['members'] })).body.allow.join(), 'admins,members');
+
     const mine = await call(alice, 'GET', '/api/vault/entries');
-    assert.deepEqual(mine.body.entries.map((e: { name: string }) => e.name).sort(), ['gh-token', 'ops', 'pw']);
+    assert.deepEqual(mine.body.entries.map((e: { name: string }) => e.name).sort(), ['gh-token', 'ops', 'ops-all', 'pw']);
     assert.ok(!mine.text.includes('ghp_alice') && !mine.text.includes('handle') && !mine.text.includes('aes256gcm'));
     const theirs = await call(bob, 'GET', '/api/vault/entries');
-    assert.deepEqual(theirs.body.entries.map((e: { name: string }) => e.name), ['ops']);
+    assert.deepEqual(theirs.body.entries.map((e: { name: string }) => e.name), ['ops-all']);
     assert.equal((await call(bob, 'DELETE', '/api/vault/entries/gh-token')).status, 404);
     assert.equal((await call(bob, 'POST', '/api/vault/entries/gh-token/rotate')).status, 404);
 
@@ -403,7 +498,7 @@ test('the REST API: values go in and never come out; members are kept to their o
     assert.ok(audit.body.length >= 6);
     assert.ok(!audit.text.includes('ghp_alice_secret') && !audit.text.includes('operator-only'));
     assert.equal((await call(alice, 'DELETE', '/api/vault/entries/gh-token')).status, 200);
-    assert.equal((await call(alice, 'GET', '/api/vault/entries')).body.entries.length, 2);
+    assert.equal((await call(alice, 'GET', '/api/vault/entries')).body.entries.length, 3);
   } finally { await new Promise<void>((r) => server.close(() => r())); await harness.close(); }
 });
 
@@ -633,6 +728,13 @@ test('in the loop: a rule lets a command with secrets run; after untrusted conte
     assert.ok(!inspect.stdout.includes('ci-secret-value-7'), 'not part of the container');
     const later = await host.exec('printf %s "${T:-unset}"', { timeoutMs: 60_000 });
     assert.equal(later.stdout, 'unset', 'only that command had it');
+    // A secret named like a Docker setting is the command's variable, never the docker CLI's: it
+    // does not point the exec (and its other secrets) at another daemon. (envFor refuses such names
+    // anyway; this is the host's own guarantee.) A multi-line value arrives whole, trailing newlines too.
+    const pem = '-----BEGIN KEY-----\nline two\r\nline three\n\n';
+    const steer = await host.exec('printf %s "$DOCKER_HOST|$K|${__HW_SECRET_0_0:-gone}"', { timeoutMs: 120_000, secretEnv: { DOCKER_HOST: 'tcp://127.0.0.1:1', K: pem } });
+    assert.equal(steer.code, 0, steer.stderr);
+    assert.equal(steer.stdout, `tcp://127.0.0.1:1|${pem}|gone`);
     const inDocker = await agentWith([{ calls: [call] }, { text: 'done' }], 'default', host);
     const r4 = await go(inDocker);
     assert.match(r4.content, /token: \[vault:ci-token\]/, r4.content);
@@ -658,4 +760,95 @@ test('two servers on one data folder change the vault at the same time: no chang
   await b.remove(actor, 'entry-4');
   await a.sync();
   assert.ok(!a.list(actor).some((e) => e.name === 'entry-4'));
+});
+
+test('a value backend write runs outside the lock on entries.json: another server\'s change is not held up by a slow backend', async () => {
+  const dataDir = await tempDir();
+  const [a, b] = await Promise.all([new VaultStore({ dataDir, env: KEY_A }).load(), new VaultStore({ dataDir, env: KEY_A }).load()]);
+  const lock = path.join(dataDir, 'vault', 'entries.json.lock');
+  const local = a.backends.get('local')!;
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  let lockedDuringWrite: boolean | undefined;
+  let writing!: () => void;
+  const started = new Promise<void>((r) => { writing = r; });
+  // A backend whose write takes as long as the test says (a slow HashiCorp/Azure/AWS call).
+  a.backends.set('slow', {
+    name: 'slow', type: 'hashicorp', refFor: (k) => `${k.scope}/${k.owner}/${k.name}`,
+    async write(ref, value) { writing(); lockedDuringWrite = await fs.stat(lock).then(() => true, () => false); await gate; return local.write(ref, value); },
+    read: (ref, handle) => local.read(ref, handle), remove: async () => {},
+  });
+  // (B is configured with the same backend, without the delay.)
+  b.backends.set('slow', { name: 'slow', type: 'hashicorp', refFor: (k) => `${k.scope}/${k.owner}/${k.name}`, write: (ref, value) => local.write(ref, value), read: (ref, handle) => local.read(ref, handle), remove: async () => {} });
+  const me = { account: 'usr_1' };
+  await a.put(me, { name: 'first', value: 'first-value-1' });
+  const slow = a.put(me, { name: 'remote', value: 'remote-value-1', backend: 'slow' });
+  await started;
+  // While A waits on its backend, B changes the vault (it would wait for the lock until the write ended).
+  const quick = await Promise.race([b.put(me, { name: 'other', value: 'other-value-1' }).then(() => 'done'), new Promise((r) => setTimeout(() => r('blocked'), 5000))]);
+  assert.equal(quick, 'done', 'B was not held up by A\'s backend call');
+  assert.equal(lockedDuringWrite, false, 'no lock held during the backend write');
+  release();
+  await slow;
+  await a.sync();
+  assert.deepEqual(a.list(me).map((e) => e.name).sort(), ['first', 'other', 'remote']);
+  assert.equal(await a.reveal(me, 'remote', 'test'), 'remote-value-1');
+  // A new version of an entry deleted meanwhile is refused, not half-applied.
+  let go!: () => void;
+  const gate2 = new Promise<void>((r) => { go = r; });
+  a.backends.set('slow', { name: 'slow', type: 'hashicorp', refFor: (k) => `${k.scope}/${k.owner}/${k.name}`, async write(ref, value) { await gate2; return local.write(ref, value); }, read: (ref, handle) => local.read(ref, handle), remove: async () => {} });
+  const v2 = a.put(me, { name: 'remote', value: 'remote-value-2' });
+  await new Promise((r) => setTimeout(r, 50));
+  await b.remove(me, 'remote');
+  go();
+  await assert.rejects(v2, /changed or deleted at the same moment elsewhere/);
+});
+
+test('a restarted session still hides every value it was given: after the entry was deleted, or rotated past the kept versions', async () => {
+  const dataDir = await tempDir();
+  const open = () => createHarness({ dataDir, search: null, memory: 'off', scheduler: false, vault: { env: KEY_A } });
+  type Svc = { vaultService(main: boolean): import('../src/vault/store.ts').VaultService; seenWrite: Promise<void> };
+  let h = await open();
+  let id: string;
+  try {
+    await h.vault!.put({}, { name: 'gone-soon', value: 'deleted-value-123' });
+    await h.vault!.put({}, { name: 'rotated', value: 'first-version-456' });
+    const s = await h.sessions.create({ model: 'deepseek-flash', mode: 'default', runtime: { kind: 'local', network: 'none', path: await tempDir() } });
+    id = s.meta.id;
+    const svc = (s as unknown as Svc).vaultService(true);
+    await svc.envFor({ A: 'gone-soon', B: 'rotated' }, 'test');
+    // The model stored one itself too.
+    s.redactor.add('typed', 'model-typed-789');
+    await (s as unknown as Svc).seenWrite;
+    await s.saveMeta();
+    // Kept sealed in the session's own folder, never in clear.
+    const seen = await fs.readFile(path.join(dataDir, 'sessions', id, 'vault-seen.json'), 'utf8');
+    for (const v of ['deleted-value-123', 'first-version-456', 'model-typed-789']) assert.ok(!seen.includes(v) && !seen.includes(Buffer.from(v).toString('base64')));
+    await h.vault!.remove({}, 'gone-soon');
+    for (let i = 0; i < KEEP_VERSIONS + 2; i++) await h.vault!.rotate({}, 'rotated');
+    assert.ok(!(await h.vault!.allValues({}, 'rotated')).includes('first-version-456'), 'the vault no longer has the first version');
+  } finally { await h.close(); }
+  // A restart: the session hides them again, though the vault cannot give them back.
+  h = await open();
+  try {
+    const s = h.sessions.get(id)!;
+    const r = await s.loadSecrets();
+    assert.equal(r.redact('a deleted-value-123 b first-version-456 c model-typed-789'), 'a [vault:gone-soon] b [vault:rotated] c [vault:typed]');
+  } finally { await h.close(); }
+});
+
+test('the docker CLI gets a fixed environment and the secrets an owner-only env file (multi-line values encoded)', async () => {
+  const { dockerCliEnv, secretEnvFile } = await import('../src/runtime/docker.ts');
+  const env = dockerCliEnv({ PATH: '/bin', DOCKER_HOST: 'unix:///var/run/docker.sock', HARNESS_TOKEN: 'op', ANTHROPIC_API_KEY: 'k', DB_PASSWORD: 'x', SystemRoot: 'C:\\Windows' });
+  assert.deepEqual(Object.keys(env).sort(), ['DOCKER_HOST', 'PATH', 'SystemRoot']);
+  const f = await secretEnvFile({ ONE: 'one-line value', PEM: 'a\nb\n' });
+  try {
+    const text = await fs.readFile(f.file, 'utf8');
+    assert.match(text, /^ONE=one-line value$/m);
+    assert.ok(!text.includes('a\nb'), 'a multi-line value is not split over env-file lines');
+    assert.match(f.prelude, /^PEM="\$\(printf %s "\$__HW_SECRET_0_0" \| base64 -d; printf x\)"/);
+    assert.ok(!f.prelude.includes(Buffer.from('a\nb\n').toString('base64')), 'the prelude names variables, never a value');
+    if (process.platform !== 'win32') assert.equal((await fs.stat(f.file)).mode & 0o777, 0o600);
+  } finally { await fs.rm(f.dir, { recursive: true, force: true }); }
+  await assert.rejects(secretEnvFile({ 'BAD NAME': 'x' }), /not a valid environment variable name/);
 });
