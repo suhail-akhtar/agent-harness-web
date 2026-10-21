@@ -92,7 +92,7 @@ test('docker allowlist sandbox: only the proxy is reachable, and it admits only 
   const events: { host: string; allowed: boolean }[] = [];
   const id = `t${Date.now().toString(16)}`;
   const host = new DockerHost(id, ws, { image: 'harness-sandbox:latest', network: 'allowlist', memory: '512m', cpus: '1', policyFile: policy, onEgress: (e) => events.push(e) });
-  // The host as the proxy container sees it: the bridge gateway on Linux; Docker Desktop (Windows, macOS) names it.
+  // The host as containers see it: the bridge gateway on Linux; Docker Desktop (Windows, macOS) runs a VM and names the host instead.
   const gw = process.platform === 'linux' ? '172.17.0.1' : 'host.docker.internal';
   const fetchCmd = (url: string, extra = '') => `${extra} node -e "fetch('${url}').then(async r=>console.log('STATUS',r.status,await r.text())).catch(e=>console.log('ERR',e.cause?.code||e.cause?.message||e.message))"`;
   try {
@@ -105,7 +105,7 @@ test('docker allowlist sandbox: only the proxy is reachable, and it admits only 
     assert.match(r.stdout, /STATUS 200 host service/, r.stdout + r.stderr);
     // Without the proxy there is no way out: not to the host, not to the internet.
     r = await host.exec(fetchCmd(`http://${gw}:${port}/`, 'NODE_USE_ENV_PROXY=0'), { timeoutMs: 60_000 });
-    // (By name on Docker Desktop: the sandbox's network has no DNS for it either.)
+    // (By name, on Docker Desktop, it fails one step earlier: the internal network has no DNS.)
     assert.match(r.stdout, /ERR (ENETUNREACH|EHOSTUNREACH|ECONNREFUSED|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|EAI_AGAIN|ENOTFOUND)/, r.stdout + r.stderr);
     r = await host.exec(fetchCmd('https://example.com/', 'NODE_USE_ENV_PROXY=0'), { timeoutMs: 60_000 });
     assert.match(r.stdout, /ERR /, r.stdout);

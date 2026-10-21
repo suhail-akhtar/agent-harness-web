@@ -13,7 +13,7 @@ import type { McpManager, McpStatus } from '../mcp/manager.ts';
 import { deferredTools, MCP_INLINE_MAX, type McpEntry, mcpTool } from '../mcp/tools.ts';
 import type { AgentDef } from '../plugins/api.ts';
 import type { CompanionHub } from '../runtime/companion.ts';
-import { defaultAllowHosts, DockerHost, dockerAvailable, dockerDefaults, imageExists } from '../runtime/docker.ts';
+import { defaultAllowHosts, DockerHost, dockerAvailable, dockerDefaults, imageExists, sessionImage } from '../runtime/docker.ts';
 import { chooseSandbox, detectOsSandbox, type LocalSandbox } from '../runtime/os-sandbox.ts';
 import type { ToolHost } from '../runtime/host.ts';
 import { LocalHost, run } from '../runtime/host.ts';
@@ -46,9 +46,10 @@ export interface SessionMeta {
   /**
    * Where commands run. For 'local', `sandbox` contains them: the OS sandbox
    * (bubblewrap, Seatbelt), Docker with the folder mounted, 'auto' (the best there is)
-   * or 'off'. Default: HARNESS_LOCAL_SANDBOX, else off.
+   * or 'off'. Default: HARNESS_LOCAL_SANDBOX, else off. `image`: a Docker sandbox's
+   * image, one the operator allows (default: HARNESS_SANDBOX_IMAGE).
    */
-  runtime: { kind: RuntimeKind; network: 'none' | 'full' | 'allowlist'; companionId?: string; path?: string; sandbox?: LocalSandbox | 'auto'; /** Docker: a setup script run as root with network before the session starts (snapshot-cached). */ setup?: string };
+  runtime: { kind: RuntimeKind; network: 'none' | 'full' | 'allowlist'; companionId?: string; path?: string; sandbox?: LocalSandbox | 'auto'; image?: string; /** Docker: a setup script run as root with network before the session starts (snapshot-cached). */ setup?: string };
   createdAt: number;
   updatedAt: number;
   usage: Usage;
@@ -311,8 +312,10 @@ export class Session {
     // repositories to set themselves up (it runs repository code as root with the network open).
     const repoSetup = process.env.HARNESS_REPO_SETUP === '1' ? await fs.readFile(path.join(this.workspace, '.harness', 'setup.sh'), 'utf8').catch(() => '') : '';
     const setupScript = r.setup?.trim() || repoSetup.trim();
+    // The image is checked again here: the operator's list may have changed since the session was made.
+    const image = sessionImage(r.image);
     const docker = () => new DockerHost(this.meta.id, this.workspace, {
-      ...dockerDefaults(), network: r.network, policyFile: this.policyFile(), credentials: this.deps.sandboxCredentials,
+      ...dockerDefaults(), image, network: r.network, policyFile: this.policyFile(), credentials: this.deps.sandboxCredentials,
       ...(setupScript ? { setup: { script: setupScript, onLog: (text: string) => this.emit({ kind: 'notice', level: /failed|could not/.test(text) ? 'warn' : 'info', text }) } } : {}),
       onEgress: (e) => {
         if (e.allowed || blocked.has(e.host)) return;
@@ -324,7 +327,7 @@ export class Session {
     else if (r.kind === 'local') {
       const want = r.sandbox ?? (process.env.HARNESS_LOCAL_SANDBOX as LocalSandbox | 'auto' | undefined) ?? 'off';
       const os = want === 'off' || want === 'docker' ? null : detectOsSandbox();
-      const dockerOk = (want === 'docker' || (want === 'auto' && !os)) && await dockerAvailable() && await imageExists(dockerDefaults().image);
+      const dockerOk = (want === 'docker' || (want === 'auto' && !os)) && await dockerAvailable() && await imageExists(image);
       const choice = chooseSandbox(want, { os, docker: dockerOk });
       if (choice.kind === 'docker') this.host = docker();
       else if (choice.kind === 'off') this.host = new LocalHost(this.workspace);

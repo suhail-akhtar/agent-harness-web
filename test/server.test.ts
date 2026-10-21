@@ -3,6 +3,7 @@ import type http from 'node:http';
 import path from 'node:path';
 import { test } from 'node:test';
 import { createHarness } from '../src/kernel/harness.ts';
+import { allowedImages, dockerAvailable, dockerDefaults, imageExists, sessionImage } from '../src/runtime/docker.ts';
 import { createApp } from '../src/server/app.ts';
 import { RateLimiter, SpendLedger, UserStore } from '../src/server/users.ts';
 import { FakeProvider, tempDir } from './helpers.ts';
@@ -173,4 +174,32 @@ test('network API: an allowlist session\'s hosts are read and changed by its own
   const plain = await t.harness.sessions.create({ model: 'deepseek-flash', runtime: { kind: 'local', network: 'none', path: t.work } });
   assert.equal((await t.call(OPERATOR, 'PUT', `/api/sessions/${plain.meta.id}/network`, { hosts: ['a.io'] })).status, 409);
   await t.close();
+});
+
+test('sandbox images: a session picks only an image the operator allows (HARNESS_SANDBOX_IMAGES)', async () => {
+  assert.deepEqual(allowedImages({}), ['harness-sandbox:latest']);
+  const env = { HARNESS_SANDBOX_IMAGE: 'base:1', HARNESS_SANDBOX_IMAGES: 'harness-sandbox-3d:latest, base:1,' };
+  assert.deepEqual(allowedImages(env), ['base:1', 'harness-sandbox-3d:latest']);
+  assert.equal(sessionImage(undefined, env), 'base:1');
+  assert.equal(sessionImage('harness-sandbox-3d:latest', env), 'harness-sandbox-3d:latest');
+  assert.throws(() => sessionImage('alpine:latest', env), /not allowed on this server.*HARNESS_SANDBOX_IMAGES/);
+  if (!(await dockerAvailable())) return;
+  const saved = process.env.HARNESS_SANDBOX_IMAGES;
+  const t = await setup();
+  try {
+    delete process.env.HARNESS_SANDBOX_IMAGES;
+    const bad = await t.call(OPERATOR, 'POST', '/api/sessions', { runtime: 'docker', image: 'alpine:latest', model: 'deepseek-flash' });
+    assert.equal(bad.status, 400);
+    assert.match(JSON.stringify(bad.body), /not allowed/);
+    process.env.HARNESS_SANDBOX_IMAGES = 'harness-sandbox-3d:latest';
+    if (!(await imageExists('harness-sandbox-3d:latest')) || !(await imageExists(dockerDefaults().image))) return;
+    const cfg = (await t.call(OPERATOR, 'GET', '/api/config')).body;
+    assert.ok(cfg.runtimes.dockerImages.includes('harness-sandbox-3d:latest'));
+    const ok = await t.call(OPERATOR, 'POST', '/api/sessions', { runtime: 'docker', image: 'harness-sandbox-3d:latest', model: 'deepseek-flash', network: 'none' });
+    assert.equal(ok.status, 201, JSON.stringify(ok.body));
+    assert.equal(ok.body.runtime.image, 'harness-sandbox-3d:latest');
+  } finally {
+    if (saved === undefined) delete process.env.HARNESS_SANDBOX_IMAGES; else process.env.HARNESS_SANDBOX_IMAGES = saved;
+    await t.close();
+  }
 });

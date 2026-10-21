@@ -34,7 +34,7 @@ export interface ModelInfo { id: string; label: string; provider: string; contex
 export interface CompanionInfo { id: string; name: string; online: boolean; info: { platform: string; root: string } | null }
 export interface Config {
   models: ModelInfo[];
-  runtimes: { docker: boolean; dockerImage: string | null; local: boolean; localRoots: string[] };
+  runtimes: { docker: boolean; dockerImage: string | null; dockerImages?: string[]; local: boolean; localRoots: string[] };
   companions: CompanionInfo[];
   plugins?: { name: string; version: string; description: string; contributes: string[]; signature?: string; permissions?: { network?: string[]; secrets?: string[] } }[];
   search?: string | null;
@@ -44,7 +44,7 @@ export interface Usage { input: number; cacheRead: number; cacheWrite: number; o
 export interface Todo { content: string; status: 'pending' | 'in_progress' | 'completed' }
 export interface SessionMeta {
   id: string; title: string; model: string; effort: Effort; mode: Mode;
-  runtime: { kind: 'docker' | 'local' | 'companion'; network: 'none' | 'full' | 'allowlist'; companionId?: string; path?: string };
+  runtime: { kind: 'docker' | 'local' | 'companion'; network: 'none' | 'full' | 'allowlist'; companionId?: string; path?: string; image?: string };
   createdAt: number; updatedAt: number; usage: Usage; cost: number; todos: Todo[];
   byModel: Record<string, { usage: Usage; cost: number; requests: number }>;
   contextStart: number; compactions: number; lastPromptTokens: number; status?: string;
