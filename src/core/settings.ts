@@ -45,6 +45,10 @@ export interface Settings {
   subagentModel?: string;
   /** Model that checks calls in auto mode; defaults to the sub-agent model. */
   autoModel?: string;
+  /** How deep sub-agents may start their own (1: they cannot; at most 3, as Claude Code). */
+  maxSubagentDepth: number;
+  /** Sub-agents running at once in a session; more wait their turn. */
+  maxParallelSubagents: number;
   /** Run blocking quality gates when the agent tries to finish, and send it back if any fail. */
   gatesOnStop?: boolean;
 }
@@ -54,6 +58,8 @@ export const defaultSettings = (): Settings => ({
   hooks: {},
   maxSteps: Number(process.env.HARNESS_MAX_STEPS ?? 150),
   maxCostUsd: Number(process.env.HARNESS_MAX_COST_USD ?? 5),
+  maxSubagentDepth: Math.min(3, Math.max(1, Number(process.env.HARNESS_SUBAGENT_DEPTH ?? 1) || 1)),
+  maxParallelSubagents: Math.min(20, Math.max(1, Number(process.env.HARNESS_SUBAGENTS_PARALLEL ?? 10) || 10)),
   ...(process.env.HARNESS_COMPACT_AT ? { compactAt: Number(process.env.HARNESS_COMPACT_AT) } : {}),
   ...(process.env.HARNESS_SUBAGENT_MODEL ? { subagentModel: process.env.HARNESS_SUBAGENT_MODEL } : {}),
   ...(process.env.HARNESS_AUTO_MODEL ? { autoModel: process.env.HARNESS_AUTO_MODEL } : {}),
@@ -80,6 +86,8 @@ export async function operatorSettings(env: NodeJS.ProcessEnv = process.env): Pr
   }
   if (typeof j.maxSteps === 'number') base.maxSteps = j.maxSteps;
   if (typeof j.maxCostUsd === 'number') base.maxCostUsd = j.maxCostUsd;
+  if (typeof j.maxSubagentDepth === 'number') base.maxSubagentDepth = Math.min(3, Math.max(1, Math.floor(j.maxSubagentDepth)));
+  if (typeof j.maxParallelSubagents === 'number') base.maxParallelSubagents = Math.min(20, Math.max(1, Math.floor(j.maxParallelSubagents)));
   if (typeof j.compactAt === 'number') base.compactAt = j.compactAt;
   if (typeof j.subagentModel === 'string') base.subagentModel = j.subagentModel;
   if (typeof j.autoModel === 'string') base.autoModel = j.autoModel;

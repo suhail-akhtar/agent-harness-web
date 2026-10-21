@@ -14,7 +14,7 @@ import { clip, num, str } from './types.ts';
 const RUNNER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'code-runner.mjs');
 const MAX_CALLS = 200;
 /** Tools a script may not call: interactive ones, itself, and delegation. */
-const NOT_FROM_SCRIPTS = new Set(['run_script', 'ask_user', 'exit_plan_mode', 'todo_write', 'agent', 'publish_branch']);
+const NOT_FROM_SCRIPTS = new Set(['run_script', 'ask_user', 'exit_plan_mode', 'todo_write', 'agent', 'publish_branch', 'schedule']);
 
 let netIsolation: boolean | undefined;
 /** Linux namespaces: the script process has no network and sees no other process (it cannot signal the server). */

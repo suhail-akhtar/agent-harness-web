@@ -21,6 +21,14 @@ export interface ToolServices {
   publish?(input: import('../git/publish.ts').PublishInput, signal: AbortSignal): Promise<import('../git/publish.ts').PublishResult>;
   /** Spend a tool incurred outside the model loop (a paid search), added to the session's cost. */
   charge?(what: string, cost: number): void;
+  /** This session's scheduled prompts (the main agent only). */
+  schedules?: {
+    create(spec: { prompt: string; cron?: string; inMinutes?: number; at?: number }): Promise<import('../core/scheduler.ts').Schedule>;
+    list(): Promise<import('../core/scheduler.ts').Schedule[]>;
+    remove(id: string): Promise<boolean>;
+  };
+  /** Tells the user now: the session, and the Notification hooks. */
+  notify?(message: string): Promise<void>;
 }
 
 export interface ToolContext {

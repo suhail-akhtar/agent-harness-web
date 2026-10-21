@@ -9,7 +9,8 @@ import { runScriptTool } from './code.ts';
 import { webFetchTool, webSearchTool } from './web.ts';
 
 /** Built-in tools. The `agent`, `skill` and MCP tools are made per session from what is registered. */
-export const BUILTIN_TOOLS: Tool[] = [askUserTool, bashTool, editTool, exitPlanTool, globTool, grepTool, memoryTool, publishTool, readTool, runScriptTool, todoTool, webFetchTool, webSearchTool, writeTool];
+import { notifyTool, scheduleTool } from './schedule.ts';
+export const BUILTIN_TOOLS: Tool[] = [askUserTool, bashTool, editTool, exitPlanTool, globTool, grepTool, memoryTool, notifyTool, publishTool, readTool, runScriptTool, scheduleTool, todoTool, webFetchTool, webSearchTool, writeTool];
 
 export function toolByName(name: string): Tool | undefined {
   return BUILTIN_TOOLS.find((t) => t.spec.name === name);

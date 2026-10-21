@@ -13,6 +13,7 @@ import { loadTrustedKeys, SIG_FILE, verifyPlugin } from '../plugins/signing.ts';
 import { OtelExporter, parseHeaders } from './otel.ts';
 import { BUILTIN_PROVIDERS } from '../providers/index.ts';
 import { CompanionHub } from '../runtime/companion.ts';
+import { Scheduler } from '../core/scheduler.ts';
 import { sandboxCredentials as sandboxCredentials_ } from '../runtime/credentials.ts';
 import { BUILTIN_TOOLS } from '../tools/index.ts';
 import { BUILTIN_SEARCH, makeSearchService, type SearchService } from '../research/search.ts';
@@ -69,6 +70,8 @@ export interface HarnessOptions {
    * on when a token or a repository list is set. null turns it off.
    */
   publish?: SessionDeps['publish'] | null;
+  /** Scheduled prompts (the schedule tool, the schedules API). Default on; false turns them off. */
+  scheduler?: boolean;
   /** API credentials allowlist sandboxes use through the egress proxy. Default: HARNESS_SANDBOX_CREDENTIALS. */
   sandboxCredentials?: SessionDeps['sandboxCredentials'];
   log?: (message: string) => void;
@@ -95,6 +98,8 @@ export interface Harness {
   search?: string;
   companions: CompanionHub;
   mcp: McpManager;
+  /** Scheduled prompts (absent when turned off). */
+  scheduler?: Scheduler;
   dataDir: string;
   /** Signed plugins available to install (empty without a catalogue). */
   catalogue(): Promise<CatalogueEntry[]>;
@@ -175,13 +180,31 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     if (c.credentials.length) log(`sandbox credentials (added by the egress proxy): ${c.credentials.map((x) => x.name).join(', ')}`);
     sandboxCredentials = c.credentials;
   }
+  // A scheduled prompt goes to its session, or to a new one made for the run. A new session runs
+  // unattended, so by default it never waits on a question nobody is there to answer (dontAsk).
+  let sessionsRef: SessionManager | undefined;
+  const scheduler = opts.scheduler === false ? undefined : new Scheduler(opts.dataDir, {
+    async run(s) {
+      const mgr = sessionsRef!;
+      let session = s.sessionId ? mgr.get(s.sessionId) : undefined;
+      if (s.sessionId && !session) return { result: 'not run: its session no longer exists' };
+      if (!session && s.newSession) session = await mgr.create({ title: `Scheduled: ${s.title}`, model: s.newSession.model, runtime: s.newSession.runtime, mode: s.newSession.mode ?? 'dontAsk', owner: s.owner });
+      if (!session) return { result: 'not run: no session' };
+      if (session.status !== 'idle') return { sessionId: session.meta.id, result: 'skipped: the session was busy' };
+      await session.send(`(Scheduled task "${s.title}", run ${s.runs + 1}.)\n\n${s.prompt}`);
+      return { sessionId: session.meta.id, result: 'started' };
+    },
+  }, log);
+  await scheduler?.load();
   const sessions = new SessionManager({
     dataDir: opts.dataDir, companions, registry, mcp, onSpan: otel ? (sid, span) => otel.record(sid, span) : undefined,
     memory: { root: path.resolve(opts.memoryDir ?? path.join(opts.dataDir, 'memory')), mode: memoryMode }, search, spend: opts.spend,
     publish: opts.publish === null ? undefined : opts.publish ?? publishFromEnv(),
-    sandboxCredentials,
+    sandboxCredentials, scheduler,
   });
+  sessionsRef = sessions;
   await sessions.load();
+  scheduler?.start();
   /** Downloads, checks the hash, unpacks, verifies the signature, then installs like a folder plugin. */
   async function installRemote(name: string): Promise<LoadedPlugin> {
     if (!/^[a-z0-9][a-z0-9._-]*$/i.test(name)) throw new Error(`Bad plugin name "${name}".`);
@@ -215,7 +238,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   }
 
   return {
-    registry, sessions, companions, mcp, dataDir: opts.dataDir, search: search?.backend,
+    registry, sessions, companions, mcp, scheduler, dataDir: opts.dataDir, search: search?.backend,
     async catalogue() {
       const out: CatalogueEntry[] = [];
       if (remoteCatalogue) {
@@ -259,6 +282,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       }
     },
     async close() {
+      scheduler?.stop();
       await sessions.close();
       await otel?.close();
       await mcp.closeAll();

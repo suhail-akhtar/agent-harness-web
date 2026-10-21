@@ -373,6 +373,47 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       return send(res, 201, s.meta);
     }
 
+    // ---- schedules: prompts that run later, each person's own ----
+    if (p === '/api/schedules' || p.startsWith('/api/schedules/')) {
+      const scheduler = harness.scheduler;
+      if (!scheduler) throw new HttpError(404, 'Scheduling is turned off on this server.');
+      const mine = (s: { owner?: string }) => mayUse(me, s.owner);
+      if (p === '/api/schedules' && method === 'GET') return send(res, 200, scheduler.list().filter(mine));
+      if (p === '/api/schedules' && method === 'POST') {
+        const b = await readJson(req);
+        const sessionId = typeof b.sessionId === 'string' ? b.sessionId : undefined;
+        if (sessionId) {
+          const target = sessions.get(sessionId);
+          if (!target || !mayUse(me, target.meta.owner)) throw new HttpError(404, 'No such session.');
+        }
+        // A new session each run: the same choices as making one by hand, checked the same way when it runs.
+        const ns = !sessionId && b.newSession && typeof b.newSession === 'object' ? b.newSession as Record<string, unknown> : undefined;
+        if (ns && ns.runtime !== 'docker' && !admin) throw new HttpError(403, 'Scheduled sessions outside a sandbox are for administrators.');
+        if (ns && ns.runtime === 'local') {
+          if (!o.localRoots.length) throw new HttpError(400, 'Local workspaces are disabled. Set HARNESS_LOCAL_ROOTS on the server.');
+          const real = typeof ns.path === 'string' && ns.path ? path.resolve(ns.path) : '';
+          if (real && !o.localRoots.some((r) => real === r || real.startsWith(r + path.sep))) throw new HttpError(400, 'That folder is not under HARNESS_LOCAL_ROOTS.');
+          if (real) ns.path = real;
+        }
+        const newSession = ns ? {
+          model: String(ns.model ?? registry.listModels().find((m) => m.available)?.id ?? ''),
+          runtime: { kind: (ns.runtime === 'local' ? 'local' : 'docker') as SessionMeta['runtime']['kind'], network: (ns.network === 'full' ? 'full' : ns.network === 'allowlist' ? 'allowlist' : 'none') as SessionMeta['runtime']['network'], ...(typeof ns.path === 'string' && ns.path ? { path: ns.path } : {}) },
+          mode: MODES.includes(ns.mode as PermissionMode) ? ns.mode as PermissionMode : 'dontAsk' as PermissionMode,
+        } : undefined;
+        try {
+          const s = await scheduler.create({ owner: me.id, title: typeof b.title === 'string' ? b.title : undefined, prompt: String(b.prompt ?? ''), cron: typeof b.cron === 'string' && b.cron ? b.cron : undefined, at: typeof b.at === 'string' ? Date.parse(b.at) : typeof b.at === 'number' ? b.at : undefined, inMinutes: typeof b.inMinutes === 'number' ? b.inMinutes : undefined, sessionId, newSession });
+          return send(res, 201, s);
+        } catch (e) { throw new HttpError(400, (e as Error).message); }
+      }
+      const m = /^\/api\/schedules\/([0-9a-f]+)(\/run|\/enable|\/disable)?$/.exec(p);
+      const s = m ? scheduler.get(m[1]!) : undefined;
+      if (!s || !mine(s)) throw new HttpError(404, 'No such schedule.');
+      if (!m![2] && method === 'DELETE') return send(res, 200, { ok: await scheduler.remove(s.id) });
+      if (m![2] === '/run' && method === 'POST') return send(res, 200, await scheduler.runNow(s.id));
+      if ((m![2] === '/enable' || m![2] === '/disable') && method === 'POST') return send(res, 200, await scheduler.setEnabled(s.id, m![2] === '/enable'));
+      throw new HttpError(405, 'method not allowed');
+    }
+
     // ---- memory: what the agent remembers, readable and editable by its owner ----
     if (p === '/api/memory' && method === 'GET') {
       const mem = await memoryOf(me, url);

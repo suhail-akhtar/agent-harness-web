@@ -97,6 +97,8 @@ export interface SessionDeps {
   publish?: import('../git/publish.ts').PublishConfig;
   /** Spend per account: recorded on every charge, and a cap that stops turns. */
   spend?: { add(owner: string | undefined, usd: number): void; over(owner: string | undefined): string | undefined };
+  /** Scheduled prompts (absent: no scheduling). */
+  scheduler?: import('./scheduler.ts').Scheduler;
   /** API credentials an allowlist sandbox may use through the egress proxy (the keys stay outside). */
   sandboxCredentials?: import('../runtime/credentials.ts').SandboxCredential[];
 }
@@ -510,6 +512,15 @@ export class Session {
           },
         });
       } : undefined,
+      ...(main && this.deps.scheduler ? { schedules: {
+        create: (spec: { prompt: string; cron?: string; inMinutes?: number; at?: number }) => this.deps.scheduler!.create({ ...spec, owner: this.meta.owner, sessionId: this.meta.id }),
+        list: async () => this.deps.scheduler!.list().filter((x) => x.sessionId === this.meta.id),
+        remove: async (id: string) => this.deps.scheduler!.get(id)?.sessionId === this.meta.id && this.deps.scheduler!.remove(id),
+      } } : {}),
+      notify: async (message: string) => {
+        this.emit({ kind: 'notice', level: 'info', text: `The agent says: ${message}` });
+        fireHooks(this.settings, this.host, 'Notification', { type: 'agent', session: this.meta.id, title: this.meta.title, message }, this.deps.registry.hooks, (m) => this.emit({ kind: 'notice', level: 'warn', text: m }));
+      },
       charge: (what, cost) => {
         this.meta.cost += cost;
         this.deps.spend?.add(this.meta.owner, cost);
@@ -531,7 +542,7 @@ export class Session {
     const reg = this.deps.registry;
     const memory = await this.memoryStore();
     // Tools for services that are off are left out: a tool that can only fail is noise in every request.
-    const tools: Tool[] = [...reg.tools.values()].filter((t) => !(t.spec.name === 'memory' && !memory) && !(t.spec.name === 'web_search' && !this.deps.search) && !(t.spec.name === 'publish_branch' && !this.canPublish()));
+    const tools: Tool[] = [...reg.tools.values()].filter((t) => !(t.spec.name === 'memory' && !memory) && !(t.spec.name === 'web_search' && !this.deps.search) && !(t.spec.name === 'publish_branch' && !this.canPublish()) && !(t.spec.name === 'schedule' && !this.deps.scheduler));
 
     // Skills: operator plugins first, then the workspace's (a name is taken once).
     const skills: Skill[] = [];
@@ -724,30 +735,46 @@ export class Session {
     }];
   }
 
-  private async runSubagent(a: { description: string; prompt: string; type: string }): Promise<string> {
-    const r = await this.runAgent({ agent: a.type, description: a.description, prompt: a.prompt, signal: this.abortCtl?.signal ?? new AbortController().signal });
+  private async runSubagent(a: { description: string; prompt: string; type: string }, depth = 1, parent?: Agent): Promise<string> {
+    const r = await this.runAgent({ agent: a.type, description: a.description, prompt: a.prompt, signal: this.abortCtl?.signal ?? new AbortController().signal, depth, parent });
     return r.report;
+  }
+
+  /** Sub-agents running now, and those waiting for a slot (settings.maxParallelSubagents). */
+  private running = 0;
+  private waiting: (() => void)[] = [];
+  private async slot(max: number): Promise<() => void> {
+    while (this.running >= max) await new Promise<void>((r) => this.waiting.push(r));
+    this.running++;
+    return () => { this.running--; this.waiting.shift()?.(); };
   }
 
   /**
    * Runs a named agent in a fresh context: a chat sub-agent, or a workflow's
    * agent node. One cache key per agent kind, so sibling runs share a prefix.
    */
-  async runAgent(a: { agent: string; prompt: string; signal: AbortSignal; label?: string; description?: string; model?: string; effort?: Effort; maxSteps?: number; allowTodos?: boolean }): Promise<{ report: string; reason: string; cost: number }> {
+  async runAgent(a: { agent: string; prompt: string; signal: AbortSignal; label?: string; description?: string; model?: string; effort?: Effort; maxSteps?: number; allowTodos?: boolean; /** 1 for a sub-agent of the main agent, 2 for one of its own, ... */ depth?: number; /** The agent that started it (it is tainted with it). */ parent?: Agent }): Promise<{ report: string; reason: string; cost: number }> {
     const host = await this.getHost();
     const settings = await this.getSettings(host);
     const tb = await this.getToolbox(host);
+    const depth = a.depth ?? 1;
+    // Deeper sub-agents only as far as the operator allows; at most maxParallelSubagents at once.
+    const nests = depth < settings.maxSubagentDepth;
+    const release = await this.slot(settings.maxParallelSubagents);
+    try {
     const def = tb.agents.find((x) => x.name === a.agent) ?? tb.agents.find((x) => x.name === 'general')!;
     const n = ++this.subagents;
     const name = a.label ?? `${def.name}-${n}`;
     const model = this.subagentModel({ ...def, model: a.model ?? def.model }, settings);
-    const banned = a.allowTodos ? INTERACTIVE_TOOLS.filter((t) => t !== 'todo_write') : INTERACTIVE_TOOLS;
-    const tools = tb.tools.filter((t) => (def.tools ? def.tools.includes(t.spec.name) || (a.allowTodos && t.spec.name === 'todo_write') : !banned.includes(t.spec.name)) && t.spec.name !== 'agent');
+    const banned = INTERACTIVE_TOOLS.filter((t) => !(a.allowTodos && t === 'todo_write') && !(nests && t === 'agent'));
+    const tools = tb.tools.filter((t) => (def.tools ? def.tools.includes(t.spec.name) || (a.allowTodos && t.spec.name === 'todo_write') : !banned.includes(t.spec.name)) && (t.spec.name !== 'agent' || nests));
     const wanted = a.effort ?? def.effort;
     const effort = wanted && model.efforts.includes(wanted) ? wanted : (model.efforts.includes(this.meta.effort) ? this.meta.effort : model.effort);
     let cost = 0;
+    const self: { agent?: Agent } = {};
     const sub = new Agent({
       name, model, provider: this.deps.registry.provider(model), effort,
+      ...(nests ? { runSubagent: (x: { description: string; prompt: string; type: string }) => this.runSubagent(x, depth + 1, self.agent) } : {}),
       system: SUBAGENT_PROMPT, tools, host, settings,
       cacheKey: `hw-${this.meta.id}-${def.name}`, maxSteps: Math.min(a.maxSteps ?? (a.allowTodos ? 150 : 60), settings.maxSteps), readFiles: new Map<string, FileStamp>(),
       inProcessHooks: this.deps.registry.hooks,
@@ -756,6 +783,7 @@ export class Session {
       beforeWrite: this.checkpoints ? (p: string) => this.checkpoints!.before(p) : undefined,
       services: await this.services(false),
     }, this.hooksFor(name, (c) => { cost += c; }));
+    self.agent = sub;
     const env = await this.preamble(host, false);
     // SubagentStart hooks can add context the sub-agent starts with.
     const start = await runHooks(settings, host, 'SubagentStart', { agent: name, type: def.name, description: a.description ?? '' }, def.name, a.signal, this.deps.registry.hooks);
@@ -765,7 +793,7 @@ export class Session {
     this.emit({ kind: 'notice', level: 'info', text: `Started ${name} (${def.name}, ${model.id})${a.description ? `: ${a.description}` : ''}`, agent: name });
     const reason = await sub.run(a.signal);
     // Its report carries whatever it read: the delegating agent is now tainted too.
-    if (sub.tainted && this.agent) this.agent.markTainted();
+    if (sub.tainted) (a.parent ?? this.agent)?.markTainted();
     this.emit({ kind: 'turn_end', reason, agent: name });
     const last = [...sub.messages].reverse().find((m) => m.role === 'assistant');
     const text = last?.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n').trim() ?? '';
@@ -773,6 +801,7 @@ export class Session {
     const clean = sub.tainted ? stripInvisible(text).text : text;
     const report = clean ? (clean.length > 16_000 ? clean.slice(0, 16_000) + '\n[report truncated]' : clean) : 'The agent finished without a report.';
     return { report: reason === 'done' ? report : `${report}\n\n(The agent stopped early: ${reason}.)`, reason, cost };
+    } finally { release(); }
   }
 
   // ---------- workflows ----------
