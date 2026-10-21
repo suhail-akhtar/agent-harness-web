@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { ExecOptions, ExecResult, ToolHost, ToolOutcome } from './host.ts';
+import { FileWatch, readJson, withFileLock, writeFileAtomic } from '../util/shared-file.ts';
 
 // The companion is a small process the user runs on their own machine. It
 // connects OUT to this server (long-poll over HTTPS: no inbound port, works
@@ -91,7 +92,10 @@ export class CompanionHub {
     this.lifetimeMs = (opts.tokenDays ?? envNum(process.env.HARNESS_COMPANION_TOKEN_DAYS, 30)) * DAY;
     this.graceMs = opts.graceMs ?? envNum(process.env.HARNESS_COMPANION_TOKEN_GRACE_MIN, 60) * 60_000;
     this.now = opts.now ?? Date.now;
+    this.watch = new FileWatch(this.file);
   }
+
+  private watch: FileWatch;
 
   /**
    * A server-side copy of a companion session's folder for tools that run on
@@ -145,23 +149,39 @@ export class CompanionHub {
   }
 
   async load(): Promise<void> {
-    try {
-      const list = JSON.parse(await fs.readFile(this.file, 'utf8')) as CompanionRecord[];
-      // Tokens from before expiry existed get a full lifetime from now (then rotate as usual).
-      for (const r of list) this.records.set(r.id, { ...r, expiresAt: r.expiresAt ?? this.now() + this.lifetimeMs });
-    } catch { /* first run */ }
+    await this.reload();
   }
 
-  private async save(): Promise<void> {
-    await fs.mkdir(path.dirname(this.file), { recursive: true });
-    await fs.writeFile(this.file, JSON.stringify([...this.records.values()], null, 2), { mode: 0o600 });
+  private async reload(): Promise<void> {
+    const list = await readJson<CompanionRecord[]>(this.file, []);
+    this.records = new Map();
+    // Tokens from before expiry existed get a full lifetime from now (then rotate as usual).
+    for (const r of Array.isArray(list) ? list : []) this.records.set(r.id, { ...r, expiresAt: r.expiresAt ?? this.now() + this.lifetimeMs });
+    await this.watch.mark();
+  }
+
+  /** Reads the companions again when another server sharing the data folder added, renewed or removed one (at most once a second). */
+  async refresh(): Promise<void> {
+    if (await this.watch.changed()) await this.reload();
+  }
+
+  /** A change under the file's lock, to the records as they are on disk now, written atomically. */
+  private async mutate<T>(fn: () => T): Promise<T> {
+    return withFileLock(this.file, async () => {
+      await this.reload();
+      const r = fn();
+      await writeFileAtomic(this.file, JSON.stringify([...this.records.values()], null, 2), { mode: 0o600 });
+      await this.watch.mark();
+      return r;
+    });
   }
 
   async create(name: string, owner?: string): Promise<{ id: string; token: string }> {
     const id = `cmp_${crypto.randomBytes(6).toString('hex')}`;
     const token = `hwc_${crypto.randomBytes(24).toString('base64url')}`;
-    this.records.set(id, { id, name: name.slice(0, 60) || 'My computer', tokenHash: hash(token), createdAt: this.now(), expiresAt: this.now() + this.lifetimeMs, ...(owner ? { owner } : {}) });
-    await this.save();
+    await this.mutate(() => {
+      this.records.set(id, { id, name: name.slice(0, 60) || 'My computer', tokenHash: hash(token), createdAt: this.now(), expiresAt: this.now() + this.lifetimeMs, ...(owner ? { owner } : {}) });
+    });
     return { id, token };
   }
 
@@ -174,37 +194,40 @@ export class CompanionHub {
    * the grace period. Undefined when none is due.
    */
   async renew(id: string, usedPrevious = false): Promise<string | undefined> {
-    const r = this.records.get(id);
-    if (!r) return undefined;
-    const now = this.now();
-    if (!usedPrevious && (r.expiresAt ?? 0) - now > this.lifetimeMs / 2) return undefined;
-    const token = CompanionHub.newToken();
-    // A companion still on the previous token never had the current one: that one is dropped, the previous keeps its grace.
-    if (!usedPrevious) { r.prevTokenHash = r.tokenHash; r.prevValidUntil = now + this.graceMs; }
-    r.tokenHash = hash(token);
-    r.expiresAt = now + this.lifetimeMs;
-    await this.save();
-    return token;
+    const due = (r: CompanionRecord | undefined) => !!r && (usedPrevious || (r.expiresAt ?? 0) - this.now() <= this.lifetimeMs / 2);
+    if (!due(this.records.get(id))) return undefined;
+    return this.mutate(() => {
+      const r = this.records.get(id);
+      // Renewed by another server meanwhile (or removed): nothing to do here.
+      if (!r || !due(r)) return undefined;
+      const now = this.now();
+      const token = CompanionHub.newToken();
+      // A companion still on the previous token never had the current one: that one is dropped, the previous keeps its grace.
+      if (!usedPrevious) { r.prevTokenHash = r.tokenHash; r.prevValidUntil = now + this.graceMs; }
+      r.tokenHash = hash(token);
+      r.expiresAt = now + this.lifetimeMs;
+      return token;
+    });
   }
 
   /** A new token now (the old one, and any previous one, stop working at once). */
   async rotate(id: string): Promise<string> {
-    const r = this.records.get(id);
-    if (!r) throw new Error('no such companion');
-    const token = CompanionHub.newToken();
-    r.tokenHash = hash(token);
-    r.expiresAt = this.now() + this.lifetimeMs;
-    delete r.prevTokenHash; delete r.prevValidUntil;
-    await this.save();
-    return token;
+    return this.mutate(() => {
+      const r = this.records.get(id);
+      if (!r) throw new Error('no such companion');
+      const token = CompanionHub.newToken();
+      r.tokenHash = hash(token);
+      r.expiresAt = this.now() + this.lifetimeMs;
+      delete r.prevTokenHash; delete r.prevValidUntil;
+      return token;
+    });
   }
 
   async remove(id: string): Promise<void> {
-    this.records.delete(id);
+    await this.mutate(() => { this.records.delete(id); });
     const l = this.live.get(id);
     if (l) { l.waiter?.(null); for (const p of l.pending.values()) p.reject(new Error('companion removed')); }
     this.live.delete(id);
-    await this.save();
   }
 
   list() {

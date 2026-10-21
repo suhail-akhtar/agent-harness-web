@@ -40,6 +40,8 @@ import { environmentBlock, firstMessageText, resolveOutputStyle, SUBAGENT_PROMPT
 import { applyUserSettings, loadProjectSettings, loadUserInstructions, loadUserSettings, mergeSettings, operatorSettings, type Settings } from './settings.ts';
 import type { HarnessEvent, Message, PermissionMode, SessionStatus, Todo, ToolUseBlock, TurnEndReason, Usage, WorkflowRunView } from './types.ts';
 import { addUsage, emptyUsage } from './types.ts';
+import type { LeaseRecord, Leases } from '../util/lease.ts';
+import { writeFileAtomic } from '../util/shared-file.ts';
 
 export type RuntimeKind = 'docker' | 'local' | 'companion';
 
@@ -161,6 +163,18 @@ export interface SessionDeps {
   scheduler?: import('./scheduler.ts').Scheduler;
   /** API credentials an allowlist sandbox may use through the egress proxy (the keys stay outside). */
   sandboxCredentials?: import('../runtime/credentials.ts').SandboxCredential[];
+  /** Several servers on one data folder: a session is driven by the server holding its lease. */
+  leases?: Leases;
+}
+
+/** The session is being worked on by another server (it holds the session's lease). */
+export class SessionElsewhereError extends Error {
+  readonly holder: LeaseRecord;
+  constructor(holder: LeaseRecord) {
+    super(`This session is being worked on by another server (${holder.owner}${holder.url ? `, ${holder.url}` : ''}). Try again there, or when it is done.`);
+    this.name = 'SessionElsewhereError';
+    this.holder = holder;
+  }
 }
 
 /** What one session can use, assembled once (the tool list never changes mid-session: it would break the cache). */
@@ -253,7 +267,7 @@ export class Session {
   private memory?: Promise<MemoryStore | undefined>;
   readonly sources: SourceStore;
   /** Background work: shells, sub-agents, workflow runs, monitors (in memory; a restart forgets it). */
-  readonly tasks = new TaskRegistry((task, phase) => this.emit({ kind: 'task', phase, task }));
+  readonly tasks = new TaskRegistry((task, phase) => { this.emit({ kind: 'task', phase, task }); if (phase === 'finished') this.releaseSoon(); });
   /** Stops background agents, workflows and monitors (the user's Stop); replaced after each use. */
   private bg = new AbortController();
   /** Sub-agents kept for send_message: running ones, and the last KEEP_AGENTS finished. */
@@ -336,6 +350,7 @@ export class Session {
     const dir = path.join(deps.dataDir, 'sessions', id);
     const meta = JSON.parse(await fs.readFile(path.join(dir, 'meta.json'), 'utf8')) as SessionMeta;
     const s = new Session(meta, deps);
+    s.diskStamp = meta.updatedAt;
     try {
       const lines = (await fs.readFile(path.join(dir, 'history.jsonl'), 'utf8')).split('\n').filter(Boolean);
       for (const l of lines) { try { s.history.push(JSON.parse(l)); } catch { /* torn last line */ } }
@@ -368,6 +383,84 @@ export class Session {
   private setStatus(s: SessionStatus): void {
     this.status = s;
     this.emit({ kind: 'status', status: s });
+    if (s === 'idle') this.releaseSoon();
+  }
+
+  // ---------- several servers on one data folder ----------
+
+  private get leaseName(): string { return `session-${this.meta.id}`; }
+
+  /**
+   * Before work starts here (a turn, a workflow, a rewind): take the session's lease
+   * when servers share the data folder, and read the session again if another server
+   * changed it since this one last did. Throws SessionElsewhereError when another
+   * live server holds it.
+   */
+  private async takeLease(): Promise<void> {
+    const leases = this.deps.leases;
+    if (!leases) return;
+    const r = await leases.acquire(this.leaseName, () => {
+      // This server stopped beating long enough for another to take over: stop here.
+      this.abort();
+      this.emit({ kind: 'notice', level: 'warn', text: 'Another server took this session over; the work here stopped.' });
+    });
+    if (!r.ok) throw new SessionElsewhereError(r.holder);
+    if (r.fresh && !this.abortCtl) {
+      await this.reloadIfChanged();
+      // Taken over from a server that stopped mid-turn: close its turn out, as after a restart.
+      if (this.meta.running) await this.recoverInterrupted();
+    }
+  }
+
+  /**
+   * Gives the lease up once nothing runs here (no turn, no background work, no open
+   * question) and what this server wrote is on disk. Deferred a tick, so a save the
+   * caller makes right after going idle is written before another server can take over.
+   */
+  private releaseSoon(): void {
+    const leases = this.deps.leases;
+    if (!leases?.holds(this.leaseName)) return;
+    const quiet = () => this.status === 'idle' && !this.abortCtl && !this.tasks.running().length;
+    setTimeout(() => {
+      if (!quiet()) return;
+      clearTimeout(this.saveTimer);
+      this.saveMeta().catch(() => {}).then(() => this.traceWrite).then(async () => {
+        if (quiet()) await leases.release(this.leaseName);
+      }).catch(() => {});
+    }, 0);
+  }
+
+  /** meta.updatedAt as this server last wrote or read it: a different value on disk means another server changed the session. */
+  private diskStamp = 0;
+
+  /**
+   * Reads meta and history again when another server changed them (servers sharing a
+   * data folder). Only while nothing runs here. Returns whether it changed.
+   */
+  async syncFromDisk(): Promise<boolean> {
+    if (this.status !== 'idle' || this.abortCtl) return false;
+    return this.reloadIfChanged(() => this.status === 'idle' && !this.abortCtl);
+  }
+
+  private async reloadIfChanged(stillOk: () => boolean = () => true): Promise<boolean> {
+    let disk: SessionMeta;
+    try { disk = JSON.parse(await fs.readFile(path.join(this.dir, 'meta.json'), 'utf8')) as SessionMeta; } catch { return false; }
+    if (disk.updatedAt === this.diskStamp) return false;
+    const history: Message[] = [];
+    try {
+      for (const l of (await fs.readFile(path.join(this.dir, 'history.jsonl'), 'utf8')).split('\n')) {
+        if (!l) continue;
+        try { history.push(JSON.parse(l)); } catch { /* torn last line */ }
+      }
+    } catch { /* none yet */ }
+    if (!stillOk()) return false;
+    this.meta = disk;
+    this.history = history;
+    this.diskStamp = disk.updatedAt;
+    // The conversation is rebuilt from the history at the next turn; file stamps are stale.
+    this.agent = undefined;
+    this.readFiles.clear();
+    return true;
   }
 
   // ---------- persistence ----------
@@ -403,11 +496,10 @@ export class Session {
   /** Writes meta.json atomically. Saves queue: two at once once shared a temp file and one rename failed. */
   saveMeta(): Promise<void> {
     const next = this.metaWrite.catch(() => {}).then(async () => {
-      this.meta.updatedAt = Date.now();
-      await fs.mkdir(this.dir, { recursive: true });
-      const tmp = path.join(this.dir, 'meta.json.tmp');
-      await fs.writeFile(tmp, JSON.stringify(this.meta, null, 1));
-      await fs.rename(tmp, path.join(this.dir, 'meta.json'));
+      // Strictly increasing, so another server always sees a change (two saves can share a millisecond).
+      this.meta.updatedAt = Math.max(Date.now(), this.meta.updatedAt + 1);
+      await writeFileAtomic(path.join(this.dir, 'meta.json'), JSON.stringify(this.meta, null, 1));
+      this.diskStamp = this.meta.updatedAt;
     });
     this.metaWrite = next;
     return next;
@@ -577,6 +669,7 @@ export class Session {
     clearTimeout(this.saveTimer);
     await Promise.all([this.traceWrite, this.metaWrite.catch(() => {})]);
     await fs.rm(this.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await this.deps.leases?.release(this.leaseName).catch(() => {});
     if (this.meta.runtime.kind === 'docker' || (this.meta.runtime.kind === 'local' && !this.meta.runtime.path)) {
       await fs.rm(path.join(this.deps.dataDir, 'workspaces', this.meta.id), { recursive: true, force: true });
     }
@@ -1381,7 +1474,7 @@ export class Session {
   private async claimed<T>(busy: string, f: () => Promise<T>): Promise<T> {
     if (this.status !== 'idle') throw new Error(busy);
     this.setStatus('running');
-    try { return await f(); } catch (e) { this.setStatus('idle'); throw e; }
+    try { await this.takeLease(); return await f(); } catch (e) { this.setStatus('idle'); throw e; }
   }
 
   async startWorkflow(name: string, input: Record<string, string>): Promise<WorkflowRunView> {
@@ -1491,9 +1584,13 @@ export class Session {
   /** Puts files back as they were before `turn`. The conversation is not edited; the agent is told. */
   async rewind(turn: number): Promise<string[]> {
     if (this.status !== 'idle') throw new Error('Stop the agent before rewinding.');
-    await this.getHost();
-    if (!this.checkpoints) throw new Error('Checkpoints are not available for this workspace.');
-    const files = await this.checkpoints.rewind(turn);
+    await this.takeLease();
+    let files: string[];
+    try {
+      await this.getHost();
+      if (!this.checkpoints) throw new Error('Checkpoints are not available for this workspace.');
+      files = await this.checkpoints.rewind(turn);
+    } finally { this.releaseSoon(); }
     this.readFiles.clear();
     if (files.length) {
       this.queued.push(`<system-reminder>The user rewound these files to how they were before turn ${turn}: ${files.join(', ')}. Your earlier changes to them are gone; read them again before editing.</system-reminder>`);
@@ -1631,6 +1728,11 @@ export class Session {
       this.latestPrompt = t;
       this.emit({ kind: 'notice', level: 'info', text: 'Message queued; the agent will see it at its next step.' });
       return 'queued';
+    }
+    // Several servers: only the one holding the lease drives the session (it may read it again first).
+    if (this.deps.leases && !bgOnly) {
+      this.setStatus('running');
+      try { await this.takeLease(); } catch (e) { this.setStatus('idle'); throw e; }
     }
     this.latestPrompt = t;
     if (this.meta.title === 'New session') this.meta.title = t.replace(/\s+/g, ' ').slice(0, 60);

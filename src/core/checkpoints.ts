@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { writeFileAtomic } from '../util/shared-file.ts';
 
 // File checkpoints: before a tool first changes a file in a turn, its previous
 // content is saved. Rewinding to turn N puts every file touched in turns >= N
@@ -92,10 +93,7 @@ export class Checkpoints {
       entry = { existed: false };
     }
     this.manifest.files[rel] = entry;
-    await fs.mkdir(td, { recursive: true });
-    const f = path.join(td, 'manifest.json');
-    await fs.writeFile(`${f}.tmp`, JSON.stringify(this.manifest));
-    await fs.rename(`${f}.tmp`, f);
+    await writeFileAtomic(path.join(td, 'manifest.json'), JSON.stringify(this.manifest));
   }
 
   async list(): Promise<CheckpointTurn[]> {

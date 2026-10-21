@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { Rules } from './permissions.ts';
+import { writeFileAtomic } from '../util/shared-file.ts';
 
 /**
  * Lifecycle points a hook can run at (the matcher, where there is one, is a tool or
@@ -184,11 +185,7 @@ export async function loadUserSettings(dataDir: string, owner: string | undefine
 
 export async function saveUserSettings(dataDir: string, owner: string | undefined, raw: unknown): Promise<UserSettings> {
   const clean = cleanUserSettings(raw);
-  const dir = accountDir(dataDir, owner);
-  await fs.mkdir(dir, { recursive: true });
-  const tmp = path.join(dir, `settings.json.${process.pid}.tmp`);
-  await fs.writeFile(tmp, JSON.stringify(clean, null, 1));
-  await fs.rename(tmp, path.join(dir, 'settings.json'));
+  await writeFileAtomic(path.join(accountDir(dataDir, owner), 'settings.json'), JSON.stringify(clean, null, 1));
   return clean;
 }
 
@@ -199,9 +196,7 @@ export async function loadUserInstructions(dataDir: string, owner: string | unde
 }
 export async function saveUserInstructions(dataDir: string, owner: string | undefined, text: string): Promise<void> {
   if (text.length > USER_INSTRUCTIONS_MAX) throw new Error(`instructions are limited to ${USER_INSTRUCTIONS_MAX} characters`);
-  const dir = accountDir(dataDir, owner);
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, 'instructions.md'), text);
+  await writeFileAtomic(path.join(accountDir(dataDir, owner), 'instructions.md'), text);
 }
 
 /**

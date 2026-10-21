@@ -69,7 +69,8 @@ test(`compat provider against real Ollama (${MODEL}): a plain answer, then a rea
       assert.ok(events.some((e) => e.kind === 'text_delta'), 'the answer was streamed');
       const usage = events.find((e) => e.kind === 'usage') as Extract<HarnessEvent, { kind: 'usage' }> | undefined;
       assert.ok(usage && usage.usage.input + usage.usage.cacheRead > 1000, `real prompt tokens counted (${JSON.stringify(usage?.usage)})`);
-      assert.equal(events.some((e) => e.kind === 'error'), false, JSON.stringify(events.filter((e) => e.kind === 'error')));
+      const errors = events.filter((e) => e.kind === 'notice' && e.level === 'error');
+      assert.equal(errors.length, 0, JSON.stringify(errors));
 
       // 2. A tool call: the model asks for read, the loop runs it, the result goes back.
       // A new session: a 0.5B model tends to repeat its previous answer.

@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
-import fs from 'node:fs/promises';
 import path from 'node:path';
+import { FileWatch, readJson, withFileLock, writeFileAtomic } from '../util/shared-file.ts';
 
 // Accounts for a shared server. Without any accounts the server is
 // single-user, as before: whoever holds HARNESS_TOKEN. With accounts, each
@@ -21,21 +21,43 @@ export class UserStore {
   private file: string;
   private users = new Map<string, User>();
   private byHash = new Map<string, string>();
+  private watch: FileWatch;
 
-  constructor(dataDir: string) { this.file = path.join(dataDir, 'users.json'); }
+  constructor(dataDir: string) { this.file = path.join(dataDir, 'users.json'); this.watch = new FileWatch(this.file); }
 
   async load(): Promise<this> {
-    try {
-      for (const u of JSON.parse(await fs.readFile(this.file, 'utf8')) as User[]) { this.users.set(u.id, u); this.byHash.set(u.tokenHash, u.id); }
-    } catch { /* none yet */ }
+    await this.reload();
     return this;
   }
 
-  private async save(): Promise<void> {
-    await fs.mkdir(path.dirname(this.file), { recursive: true });
-    const tmp = `${this.file}.${crypto.randomUUID().slice(0, 8)}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify([...this.users.values()], null, 1), { mode: 0o600 });
-    await fs.rename(tmp, this.file);
+  private async reload(): Promise<void> {
+    const list = await readJson<User[]>(this.file, []);
+    this.users = new Map();
+    this.byHash = new Map();
+    for (const u of Array.isArray(list) ? list : []) { this.users.set(u.id, u); this.byHash.set(u.tokenHash, u.id); }
+    await this.watch.mark();
+  }
+
+  /**
+   * Reads the accounts again when the file changed on disk: another server sharing the
+   * data folder (or `npm run users`) added, disabled or removed one. At most once a second.
+   */
+  async refresh(): Promise<void> {
+    if (await this.watch.changed()) await this.reload();
+  }
+
+  /**
+   * A change made under the file's lock, to the accounts as they are on disk now, then
+   * written atomically: changes from several servers never overwrite each other.
+   */
+  private async mutate<T>(fn: () => T): Promise<T> {
+    return withFileLock(this.file, async () => {
+      await this.reload();
+      const r = fn();
+      await writeFileAtomic(this.file, JSON.stringify([...this.users.values()], null, 1), { mode: 0o600 });
+      await this.watch.mark();
+      return r;
+    });
   }
 
   get size(): number { return this.users.size; }
@@ -61,62 +83,71 @@ export class UserStore {
 
   /** Finds or creates the account of a verified identity, keeping its e-mail address and role current. */
   async signInSso(id: SsoIdentity, role: Role): Promise<PublicUser> {
-    const found = [...this.users.values()].find((u) => u.sso?.iss === id.iss && u.sso.sub === id.sub);
-    if (found) {
-      if (found.role !== role || found.sso!.email !== id.email) { found.role = role; found.sso = { ...id }; await this.save(); }
-      return this.get(found.id)!;
-    }
-    let name = id.email.slice(0, 60);
-    for (let n = 2; this.taken(name); n++) name = `${id.email.slice(0, 54)} (${n})`;
-    // No personal token: the hash is of a random value nobody is given. An administrator can still rotate one.
-    const u: User = { id: `usr_${crypto.randomBytes(6).toString('hex')}`, name, role, tokenHash: hash(`sso_${crypto.randomBytes(24).toString('base64url')}`), createdAt: Date.now(), sso: { ...id } };
-    this.users.set(u.id, u);
-    this.byHash.set(u.tokenHash, u.id);
-    await this.save();
-    return this.get(u.id)!;
+    const known = [...this.users.values()].find((u) => u.sso?.iss === id.iss && u.sso.sub === id.sub);
+    if (known && known.role === role && known.sso!.email === id.email) return this.get(known.id)!;
+    return this.mutate(() => {
+      const found = [...this.users.values()].find((u) => u.sso?.iss === id.iss && u.sso.sub === id.sub);
+      if (found) {
+        found.role = role;
+        found.sso = { ...id };
+        return this.get(found.id)!;
+      }
+      let name = id.email.slice(0, 60);
+      for (let n = 2; this.taken(name); n++) name = `${id.email.slice(0, 54)} (${n})`;
+      // No personal token: the hash is of a random value nobody is given. An administrator can still rotate one.
+      const u: User = { id: `usr_${crypto.randomBytes(6).toString('hex')}`, name, role, tokenHash: hash(`sso_${crypto.randomBytes(24).toString('base64url')}`), createdAt: Date.now(), sso: { ...id } };
+      this.users.set(u.id, u);
+      this.byHash.set(u.tokenHash, u.id);
+      return this.get(u.id)!;
+    });
   }
 
   /** Creates an account; the token is returned once and never stored. */
   async add(name: string, role: Role = 'member'): Promise<{ user: PublicUser; token: string }> {
     const clean = name.trim().slice(0, 60);
     if (!clean) throw new Error('a name is required');
-    if (this.taken(clean)) throw new Error(`an account named "${clean}" exists`);
-    const id = `usr_${crypto.randomBytes(6).toString('hex')}`;
-    const token = `hwu_${crypto.randomBytes(24).toString('base64url')}`;
-    const u: User = { id, name: clean, role, tokenHash: hash(token), createdAt: Date.now() };
-    this.users.set(id, u);
-    this.byHash.set(u.tokenHash, id);
-    await this.save();
-    return { user: this.get(id)!, token };
+    return this.mutate(() => {
+      if (this.taken(clean)) throw new Error(`an account named "${clean}" exists`);
+      const id = `usr_${crypto.randomBytes(6).toString('hex')}`;
+      const token = `hwu_${crypto.randomBytes(24).toString('base64url')}`;
+      const u: User = { id, name: clean, role, tokenHash: hash(token), createdAt: Date.now() };
+      this.users.set(id, u);
+      this.byHash.set(u.tokenHash, id);
+      return { user: this.get(id)!, token };
+    });
   }
 
   /** A new token for an account (the old one stops working). */
   async rotate(id: string): Promise<string> {
-    const u = this.users.get(id);
-    if (!u) throw new Error('no such account');
-    this.byHash.delete(u.tokenHash);
-    const token = `hwu_${crypto.randomBytes(24).toString('base64url')}`;
-    u.tokenHash = hash(token);
-    this.byHash.set(u.tokenHash, id);
-    await this.save();
-    return token;
+    return this.mutate(() => {
+      const u = this.users.get(id);
+      if (!u) throw new Error('no such account');
+      this.byHash.delete(u.tokenHash);
+      const token = `hwu_${crypto.randomBytes(24).toString('base64url')}`;
+      u.tokenHash = hash(token);
+      this.byHash.set(u.tokenHash, id);
+      return token;
+    });
   }
 
   async setDisabled(id: string, disabled: boolean): Promise<void> {
     const u = this.users.get(id);
-    if (!u) throw new Error('no such account');
-    if (!disabled && u.disabled === undefined) return;
-    if (disabled) u.disabled = true; else delete u.disabled;
-    await this.save();
+    if (u && !disabled && u.disabled === undefined) return;
+    await this.mutate(() => {
+      const v = this.users.get(id);
+      if (!v) throw new Error('no such account');
+      if (disabled) v.disabled = true; else delete v.disabled;
+    });
   }
 
   async remove(id: string): Promise<boolean> {
-    const u = this.users.get(id);
-    if (!u) return false;
-    this.users.delete(id);
-    this.byHash.delete(u.tokenHash);
-    await this.save();
-    return true;
+    return this.mutate(() => {
+      const u = this.users.get(id);
+      if (!u) return false;
+      this.users.delete(id);
+      this.byHash.delete(u.tokenHash);
+      return true;
+    });
   }
 
   /** The account a token belongs to (disabled accounts are refused). */
@@ -180,26 +211,66 @@ export function concurrencyRefusal(what: 'running' | 'sandboxes', owner: string 
 /** Spend per account per day (UTC), kept on disk; a daily cap stops new and running turns. */
 export class SpendLedger {
   private file: string;
+  /** As last read from disk. */
   private days: Record<string, Record<string, number>> = {};
+  /** Spent here and not written yet: added to what is on disk then (servers sharing the file each add theirs). */
+  private pending: Record<string, Record<string, number>> = {};
   private timer?: NodeJS.Timeout;
+  private writing: Promise<void> = Promise.resolve();
   private dailyCapUsd?: number;
-  constructor(dataDir: string, dailyCapUsd?: number) { this.file = path.join(dataDir, 'spend.json'); this.dailyCapUsd = dailyCapUsd; }
+  private watch: FileWatch;
+  constructor(dataDir: string, dailyCapUsd?: number) { this.file = path.join(dataDir, 'spend.json'); this.dailyCapUsd = dailyCapUsd; this.watch = new FileWatch(this.file); }
   async load(): Promise<this> {
-    try { this.days = JSON.parse(await fs.readFile(this.file, 'utf8')); } catch { /* first run */ }
+    this.days = await readJson(this.file, {});
+    await this.watch.mark();
     return this;
   }
   private today(at = new Date()): string { return at.toISOString().slice(0, 10); }
   add(owner: string | undefined, usd: number): void {
     if (!owner || !(usd > 0)) return;
-    const d = (this.days[owner] ??= {});
+    const d = (this.pending[owner] ??= {});
     const t = this.today();
     d[t] = (d[t] ?? 0) + usd;
-    for (const k of Object.keys(d)) if (k < this.today(new Date(Date.now() - 31 * 86_400_000))) delete d[k];
     clearTimeout(this.timer);
-    this.timer = setTimeout(() => { fs.writeFile(this.file, JSON.stringify(this.days)).catch(() => {}); }, 500);
+    this.timer = setTimeout(() => { void this.flush(); }, 500);
     this.timer.unref?.();
   }
-  spentToday(owner: string | undefined): number { return owner ? this.days[owner]?.[this.today()] ?? 0 : 0; }
+  /** Writes what was spent here: under the file's lock, added to what is on disk now. */
+  flush(): Promise<void> {
+    clearTimeout(this.timer);
+    this.writing = this.writing.then(async () => {
+      if (!Object.keys(this.pending).length) return;
+      const add = this.pending;
+      this.pending = {};
+      try {
+        await withFileLock(this.file, async () => {
+          const disk = await readJson<Record<string, Record<string, number>>>(this.file, {});
+          const cutoff = this.today(new Date(Date.now() - 31 * 86_400_000));
+          for (const [owner, byDay] of Object.entries(add)) {
+            const d = (disk[owner] ??= {});
+            for (const [day, usd] of Object.entries(byDay)) d[day] = (d[day] ?? 0) + usd;
+          }
+          for (const d of Object.values(disk)) for (const k of Object.keys(d)) if (k < cutoff) delete d[k];
+          await writeFileAtomic(this.file, JSON.stringify(disk));
+          this.days = disk;
+          await this.watch.mark();
+        });
+      } catch {
+        // Not written: kept for the next try.
+        for (const [owner, byDay] of Object.entries(add)) for (const [day, usd] of Object.entries(byDay)) { const d = (this.pending[owner] ??= {}); d[day] = (d[day] ?? 0) + usd; }
+      }
+    });
+    return this.writing;
+  }
+  /** Reads the file again when another server sharing it wrote its spend (at most once a second). */
+  async refresh(): Promise<void> {
+    if (await this.watch.changed()) { this.days = await readJson(this.file, {}); await this.watch.mark(); }
+  }
+  spentToday(owner: string | undefined): number {
+    if (!owner) return 0;
+    const t = this.today();
+    return (this.days[owner]?.[t] ?? 0) + (this.pending[owner]?.[t] ?? 0);
+  }
   /** A message when the owner has reached today's cap, else undefined. */
   over(owner: string | undefined): string | undefined {
     if (!owner || !this.dailyCapUsd) return undefined;

@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
-import fs from 'node:fs/promises';
 import path from 'node:path';
+import { FileWatch, readJson, withFileLock, writeFileAtomic } from '../util/shared-file.ts';
 
 // Single sign-on with OpenID Connect: the authorization code flow with PKCE
 // (S256), state and nonce; id_tokens verified against the provider's JWKS;
@@ -301,6 +301,9 @@ export class BrowserSessions {
   private recs = new Map<string, BrowserSession>();
   private writing: Promise<void> = Promise.resolve();
   private timer?: NodeJS.Timeout;
+  /** Changes not written yet; each save applies them to the file as it is on disk then (other servers may share it). */
+  private ops: ((recs: Map<string, BrowserSession>) => void)[] = [];
+  private watch: FileWatch;
   readonly idleMs: number;
   readonly maxMs: number;
   private now: () => number;
@@ -310,34 +313,73 @@ export class BrowserSessions {
     this.idleMs = opts.idleMs ?? 12 * 3_600_000;
     this.maxMs = opts.maxMs ?? 7 * 86_400_000;
     this.now = opts.now ?? Date.now;
+    this.watch = new FileWatch(this.file);
+  }
+
+  private async read(): Promise<Map<string, BrowserSession>> {
+    const recs = new Map(Object.entries(await readJson<Record<string, BrowserSession>>(this.file, {})));
+    for (const [k, r] of recs) if (this.expired(r)) recs.delete(k);
+    return recs;
   }
 
   async load(): Promise<this> {
-    try { this.recs = new Map(Object.entries(JSON.parse(await fs.readFile(this.file, 'utf8')) as Record<string, BrowserSession>)); } catch { /* none yet */ }
-    for (const [k, r] of this.recs) if (this.expired(r)) this.recs.delete(k);
+    this.recs = await this.read();
+    await this.watch.mark();
     return this;
+  }
+
+  /** Reads the file again when another server sharing the data folder signed someone in or out (at most once a second). */
+  async refresh(): Promise<void> {
+    if (!(await this.watch.changed())) return;
+    const recs = await this.read();
+    for (const op of this.ops) op(recs);
+    this.recs = recs;
+    await this.watch.mark();
   }
 
   private expired(r: BrowserSession): boolean { const t = this.now(); return t - r.seen > this.idleMs || t - r.created > this.maxMs; }
 
-  /** Writes one at a time, each with the latest state, so an older snapshot never lands last. */
+  /** A change, now in memory and at the next save on disk. */
+  private change(op: (recs: Map<string, BrowserSession>) => void): void {
+    op(this.recs);
+    this.ops.push(op);
+  }
+
+  /**
+   * Writes one at a time: under the file's lock, the pending changes are applied to the
+   * file as it is on disk now, so sign-ins on other servers sharing it are kept.
+   */
   private save(): Promise<void> {
     clearTimeout(this.timer);
+    this.timer = undefined;
     this.writing = this.writing.then(async () => {
-      await fs.mkdir(path.dirname(this.file), { recursive: true });
-      const tmp = `${this.file}.${crypto.randomUUID().slice(0, 8)}.tmp`;
-      await fs.writeFile(tmp, JSON.stringify(Object.fromEntries(this.recs)), { mode: 0o600 });
-      await fs.rename(tmp, this.file);
-    }).catch((e) => { console.error(`browser sessions not saved: ${(e as Error).message}`); });
+      if (!this.ops.length) return;
+      const ops = this.ops;
+      this.ops = [];
+      try {
+        await withFileLock(this.file, async () => {
+          const recs = await this.read();
+          for (const op of ops) op(recs);
+          await writeFileAtomic(this.file, JSON.stringify(Object.fromEntries(recs)), { mode: 0o600 });
+          for (const op of this.ops) op(recs);
+          this.recs = recs;
+          await this.watch.mark();
+        });
+      } catch (e) {
+        this.ops.unshift(...ops);
+        console.error(`browser sessions not saved: ${(e as Error).message}`);
+      }
+    });
     return this.writing;
   }
 
   async create(user: string, idToken?: string): Promise<string> {
-    for (const [k, r] of this.recs) if (this.expired(r)) this.recs.delete(k);
     const id = rand(32);
     const t = this.now();
     // A very large token is not worth keeping (the hint is optional).
-    this.recs.set(sha(id), { user, created: t, seen: t, ...(idToken && idToken.length <= 8192 ? { idt: idToken } : {}) });
+    const rec: BrowserSession = { user, created: t, seen: t, ...(idToken && idToken.length <= 8192 ? { idt: idToken } : {}) };
+    const k = sha(id);
+    this.change((recs) => { recs.set(k, { ...rec }); });
     await this.save();
     return id;
   }
@@ -348,10 +390,10 @@ export class BrowserSessions {
     const k = sha(id);
     const r = this.recs.get(k);
     if (!r) return undefined;
-    if (this.expired(r)) { this.recs.delete(k); void this.save(); return undefined; }
+    if (this.expired(r)) { this.change((recs) => { recs.delete(k); }); void this.save(); return undefined; }
     const t = this.now();
     if (t - r.seen > 60_000) {
-      r.seen = t;
+      this.change((recs) => { const x = recs.get(k); if (x) x.seen = Math.max(x.seen, t); });
       // Sliding is saved lazily: a minute's precision is enough for a 12-hour window.
       clearTimeout(this.timer);
       this.timer = setTimeout(() => { void this.save(); }, 1000);
@@ -366,9 +408,13 @@ export class BrowserSessions {
   }
 
   async delete(id: string | undefined): Promise<void> {
-    if (id && this.recs.delete(sha(id))) await this.save();
+    if (!id) return;
+    const k = sha(id);
+    if (!this.recs.has(k)) return;
+    this.change((recs) => { recs.delete(k); });
+    await this.save();
   }
 
   /** Waits for pending writes (for a clean shutdown). */
-  async flush(): Promise<void> { if (this.timer) await this.save(); else await this.writing; }
+  async flush(): Promise<void> { if (this.timer || this.ops.length) await this.save(); else await this.writing; }
 }

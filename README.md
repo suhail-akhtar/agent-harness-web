@@ -2,7 +2,7 @@
 
 An agent harness that is also a framework. You give it requirements and it works in a workspace until the job is done: it plans, edits, runs, tests, fixes what fails and reports. It remembers what matters across sessions, researches the web with citations it checks, builds long projects feature by feature, and can publish its work as a pull request. You extend what it can do with **plugins**: tools, models, providers, sub-agents, skills, MCP services, quality gates, workflows, search backends and hooks. All of it goes through the same registry the built-ins use.
 
-It is tuned and tested on three cost-efficient models: **Claude Haiku 5.5**, **DeepSeek V4.1 Flash** (`deepseek-flash`) and **GPT-6 Luna**. Plugins can add more.
+It is tuned and tested on three cost-efficient models: **Claude Haiku 5.5**, **DeepSeek V4.1 Flash** (`deepseek-flash`) and **GPT-6 Luna**. The operator can add any model behind an OpenAI-compatible server (Ollama, vLLM, LM Studio, OpenRouter, Together, Groq, Azure OpenAI, Gemini) without code (see [Models and providers](#models-and-providers)), and plugins can add more.
 
 **Picking the project up?** Read [docs/HANDOFF.md](docs/HANDOFF.md): its purpose, what is built, the results, how to run it on your own machine, and the next steps.
 
@@ -11,7 +11,7 @@ It is tuned and tested on three cost-efficient models: **Claude Haiku 5.5**, **D
               │                                                                               │
  Registry ◀── built-ins + plugins (tools · models · providers · agents · skills · MCP · gates · hooks)
               │                                                                               │
- Session ──▶ Agent loop ──▶ Provider (Claude / OpenAI / DeepSeek, cache-first)                │
+ Session ──▶ Agent loop ──▶ Provider (Claude / OpenAI / DeepSeek / OpenAI-compatible)         │
               │   └─▶ tools ──▶ Host: Docker sandbox · server folder · your computer (companion)
               └── history (append-only) · checkpoints · trace · recovery after restart        │
 ```
@@ -88,6 +88,53 @@ const s = await h.sessions.create({ model: 'claude-haiku-5-5', runtime: { kind: 
 s.subscribe(0, ({ event }) => { if (event.kind === 'text_delta') process.stdout.write(event.text); });
 await s.send('Fix the failing tests');
 ```
+
+## Models and providers
+
+Three providers are built in: Anthropic (Messages API, server-side compaction and context editing), OpenAI (Responses API) and DeepSeek (Chat Completions). A model whose provider has no key on the server is shown greyed out.
+
+**Any OpenAI-compatible server, configured by the operator.** List the models in `HARNESS_MODELS_JSON` (a JSON array, or `{ "models": [...] }`) or in a file named by `HARNESS_MODELS_FILE`; each appears in the model picker and works with every tool, sub-agent and workflow. Keys stay in the server's environment: an entry names the variable that holds its key (`apiKeyEnv`), never the key. A malformed entry stops the server at start with what is wrong.
+
+```json
+{ "models": [
+  { "id": "local-qwen", "label": "Qwen 2.5 7B (Ollama)", "preset": "ollama", "model": "qwen2.5:7b", "contextWindow": 32768, "maxOutput": 4096 },
+  { "id": "vllm-llama", "preset": "vllm", "baseUrl": "http://gpu-box:8000/v1", "model": "meta-llama/Llama-3.3-70B-Instruct", "contextWindow": 131072 },
+  { "id": "lmstudio", "preset": "lmstudio", "model": "qwen2.5-coder-14b-instruct" },
+  { "id": "or-sonnet", "preset": "openrouter", "model": "anthropic/claude-sonnet-4.5", "images": true, "prices": { "input": 3, "output": 15, "cacheRead": 0.3 }, "headers": { "HTTP-Referer": "https://harness.example.com" } },
+  { "id": "together-qwen", "preset": "together", "model": "Qwen/Qwen2.5-72B-Instruct-Turbo", "prices": { "input": 1.2, "output": 1.2 } },
+  { "id": "groq-llama", "preset": "groq", "model": "llama-3.3-70b-versatile", "contextWindow": 131072, "prices": { "input": 0.59, "output": 0.79 } },
+  { "id": "azure-gpt", "preset": "azure", "baseUrl": "https://my-resource.openai.azure.com", "azure": { "deployment": "gpt-4o-prod", "apiVersion": "2024-10-21" }, "images": true },
+  { "id": "gemini-flash", "preset": "gemini", "model": "gemini-2.5-flash", "contextWindow": 1048576, "images": true, "prices": { "input": 0.3, "output": 2.5 } }
+] }
+```
+
+| Field | Default | |
+|---|---|---|
+| `id` | (required) | The harness's id for the model (what sessions pick). |
+| `model` | `id` | The name sent to the server (Azure: the deployment). |
+| `label` | `id` | Shown in the picker. |
+| `preset` | | `ollama`, `vllm`, `lmstudio`, `openrouter`, `together`, `groq`, `azure`, `gemini` or `openai`: fills in the base URL, key variable and the quirks below; every field can still be given. |
+| `baseUrl` | from the preset | The API root before `/chat/completions` (`http://localhost:11434/v1`). Azure: the resource URL. |
+| `apiKeyEnv` | from the preset | The environment variable with the key (`OPENROUTER_API_KEY`, `TOGETHER_API_KEY`, `GROQ_API_KEY`, `AZURE_OPENAI_API_KEY`, `GEMINI_API_KEY`). None: a local server that needs no key (the model is available without one). |
+| `contextWindow` / `maxOutput` / `compactAt` | 32768 / 4096 / 60% of the window | Tokens. |
+| `prices` | 0 | USD per million tokens: `input`, `output`, `cacheRead` and `cacheWrite` (both default to `input`). Spend caps and the cost shown use them. |
+| `tools` | `true` | `false` for a model or server without function calling: it is sent no tools and answers without acting. |
+| `images` | `false` | The model accepts images (screenshots, renders) as `image_url` parts. |
+| `maxTokensField` | `max_tokens` | `max_completion_tokens` (OpenAI's newer models, Azure, Groq) or `none`. |
+| `auth` | `bearer` | A header name instead, e.g. `api-key` (Azure). |
+| `azure` | | `{ "deployment", "apiVersion" }`: Azure's deployment URL form `{baseUrl}/openai/deployments/{deployment}/chat/completions?api-version=...`. For Azure's v1 form use `baseUrl` `https://<resource>.openai.azure.com/openai/v1` with `query`. |
+| `query` / `headers` / `body` | | Added to every request's URL / headers / JSON body (e.g. `temperature`, OpenRouter's `provider` routing). |
+| `promptCacheKey` | off (on for `openai`, `azure`) | Send the session's `prompt_cache_key` (servers that route caches by key). Off by default: some servers reject fields they do not know. |
+| `streamUsage` | `true` | Ask for token usage in the stream (`stream_options`); turn off for a server that refuses it. |
+| `reasoningEffort` | off (on for `openai`, `gemini`) | Send the session's effort as `reasoning_effort`. |
+| `replayReasoning` | off | Send a reply's reasoning back with its tool calls as `reasoning_content` (servers that require it). |
+| `stream` | `true` | `false` reads one JSON answer instead of a stream. |
+| `parallelToolCalls` | off | Send `parallel_tool_calls: true`. |
+
+What the provider handles: streamed text and tool calls (arguments split across many chunks, calls without an `index`, every call numbered 0 with its own id, a `stop` finish that carries calls); reasoning in `reasoning_content`, in `reasoning` (OpenRouter, Ollama) or inline as `<think>...</think>` (shown as reasoning, kept out of the answer); usage with cached tokens (`prompt_tokens_details.cached_tokens`, DeepSeek-style `prompt_cache_hit_tokens`, cache writes where reported), and, when a server reports no usage, an estimate (about 4 characters a token) so compaction still happens in time. A server that refuses `tools` gets one clear error naming the model and the fix (`"tools": false`), not a retry loop; a refused key names the variable to check; a 404 names the URL and model; 429 and 5xx are retried like the built-in providers.
+
+- **Ollama:** its default context is small; start it with `OLLAMA_CONTEXT_LENGTH` at least the `contextWindow` you configure (the harness's system prompt and tool schemas alone are several thousand tokens). Pick a model with tool support (`ollama show <model>` lists `tools` under capabilities).
+- **Tested** against local stand-ins for each variation (Azure's URL and header, no usage, split tool-call deltas, a server that rejects tools, non-streaming, reasoning in all three forms) and **against a real Ollama** in Docker (`test/compat-ollama.test.ts`): a whole harness session on `qwen2.5:0.5b` (a 400 MB model, temperature 0) streamed a plain answer with real token counts, then called `read` on a file, the loop ran it, and the model answered with the code word from the file. The test runs when Docker has the `ollama/ollama` image (`HARNESS_TEST_OLLAMA=1` pulls it, several GB; `HARNESS_TEST_OLLAMA_URL` uses a running server; `HARNESS_TEST_OLLAMA_MODEL` picks another model) and removes its container and model volume afterwards.
 
 ## The loop
 
@@ -378,12 +425,12 @@ The agent operates a desktop through screenshots, mouse and keyboard, in the sha
 - Built from what ships with each OS, no native modules:
   - **Windows**: PowerShell with user32 through `Add-Type` (`SendInput` for buttons, wheel, keys and Unicode text; `SetCursorPos`, `GetCursorPos`), `SetProcessDPIAware` so coordinates are real pixels on a scaled display, and System.Drawing's `CopyFromScreen` for PNG screenshots. Windows of programs running as administrator, the lock screen and UAC prompts cannot be controlled (Windows blocks it), and the error says so.
   - **macOS**: `osascript -l JavaScript` with CoreGraphics mouse events and System Events keys, `screencapture -x` and `sips`. Coordinates are points (a Retina capture is scaled to them). The terminal running the companion needs Accessibility and Screen Recording in System Settings. Not run on a Mac: tested as generated script text.
-  - **Linux**: X11 with xdotool and ImageMagick (`import`, or `xwd` and `convert`), as in the sandbox; a missing tool is named with the package to install. Wayland is not supported and says so.
+  - **Linux**: X11 with xdotool and ImageMagick (`import`, or `xwd` and `convert`), as in the sandbox; a missing tool is named with the package to install. Wayland is not supported and says so. Run for real end to end (below).
   - `launch` starts the command detached in the companion's folder (Windows through `cmd /c`, so `start msedge https://example.com` works; macOS and Linux through `sh`). It runs on your computer outside the companion's sandbox: a desktop app has to draw on your screen.
 - **Asked, every time.** Your desktop is not contained by anything, so on a companion every action except reading the pointer and `wait` is treated like an action on an outside service: asked in default, accept-edits and auto mode (auto's checking model sees it first), refused in plan and never-ask (`dontAsk`) mode, free only in bypass. "Always allow" offers a rule for that one action, e.g. `computer(screenshot)` (rules take `computer(screenshot|zoom)` lists), so allowing screenshots never allows clicks. In the Docker sandbox nothing changes: there the tool is a command, free.
 - **Untrusted, always.** Every result from your screen is marked untrusted (mail, chats and web pages are on it), so the untrusted-content guard applies from the first screenshot: actions that can click or type are then confirmed by a person even under a session allow rule; screenshots and zoom are not ways out and are not re-confirmed.
 - **No secrets typed.** `type` refuses text that looks like a credential (API keys, tokens, private keys, `password=...`) on your screen. Typed text is never written at full length in permission prompts or notices (the length and the first 40 characters), and the companion's own log shows only how many characters were typed; a `launch` command is shown in full.
-- Tested: the generated PowerShell, JavaScript and xdotool text for every action; permissions in every mode; the refusal without `--allow-desktop`; a session driving a stand-in desktop through an in-process companion. **On a real Windows 11 machine** (opt-in, `HARNESS_TEST_REAL_DESKTOP=1`, never in a normal run): a 2560x1600 screen gave a 1280x800 PNG that is not blank, and the pointer moved to a point read back exactly; nothing was clicked or typed.
+- Tested: the generated PowerShell, JavaScript and xdotool text for every action; permissions in every mode; the refusal without `--allow-desktop`; a session driving a stand-in desktop through an in-process companion. **On a real Linux X11 desktop** (`test/desktop-linux.test.ts`, runs whenever Docker has the desktop image): the desktop image runs Xvfb at 1920x1200 and fluxbox, and the companion itself (this repository mounted read-only, `--allow-desktop`) connects back over HTTP to a harness server in the test, so every job takes the real path (tool, hub, long poll, companion, xdotool and ImageMagick, and back). A screenshot is a 1280x800 PNG of the display; a move to [400, 300] puts the pointer at (600, 450) on the screen and reads back as [400, 300]; `launch` opens xterm, a click lands in it, typed text and `Return` run a command that writes a file; the screen then shows the terminal (over a thousand colours); `zoom` returns the region enlarged. It found a real bug: `launch` hung until its time limit, because the whole `cd && app &` list went to the background in a subshell that kept the script's output pipe open while the app ran; now only the app goes to the background (the sandbox's `launch` had the same pattern and is fixed too). **On a real Windows 11 machine** (opt-in, `HARNESS_TEST_REAL_DESKTOP=1`, never in a normal run): a 2560x1600 screen gave a 1280x800 PNG that is not blank, and the pointer moved to a point read back exactly; nothing was clicked or typed.
 
 ## Permissions
 
@@ -543,7 +590,7 @@ HARNESS_OIDC_ADMINS=lead@example.com
 
 - **Microsoft Entra ID:** App registrations, New registration, platform "Web", redirect URI `https://harness.example.com/auth/callback`; add a client secret under Certificates & secrets. The issuer is `https://login.microsoftonline.com/<tenant-id>/v2.0` (its discovery document is that URL plus `/.well-known/openid-configuration`). Use a single-tenant registration: the multi-tenant `common` endpoint does not have one fixed issuer. Entra may leave out `email` for accounts without a mailbox; add the optional `email` claim to the ID token in Token configuration.
 - **Google:** issuer `https://accounts.google.com`; create an OAuth client ID of type "Web application" with the same redirect URI.
-- **Okta / Keycloak:** issuer `https://<org>.okta.com/oauth2/default` or `https://<host>/realms/<realm>`.
+- **Okta / Keycloak:** issuer `https://<org>.okta.com/oauth2/default` or `https://<host>/realms/<realm>`. In Keycloak: a client with Client authentication on (confidential), Standard flow, "PKCE Method" S256, the redirect URI above, and "Valid post logout redirect URIs" `https://harness.example.com/`.
 
 The server prints the redirect URI to register when it starts. How it works:
 
@@ -551,10 +598,35 @@ The server prints the redirect URI to register when it starts. How it works:
 - **The id_token is checked:** signature (RS256/384/512, PS256/384/512, ES256/384/512 or EdDSA; never `none` or HMAC), issuer exactly, audience contains the client id (and `azp` is the client id when there are several audiences), `exp`/`iat`/`nbf` with one minute of clock skew, the nonce, and `email_verified` must not be false.
 - **Who gets in:** only addresses in `HARNESS_OIDC_ALLOWED_EMAILS` or in a domain of `HARNESS_OIDC_ALLOWED_DOMAINS` (exact domain; subdomains are not included). With neither set, every sign-in is refused with a message saying so.
 - **Accounts:** the first sign-in creates an account (named after the e-mail address) keyed by the provider's issuer and subject, so a reassigned e-mail address never inherits someone's account. Later sign-ins reuse it. It is a member, or an administrator when its address is in `HARNESS_OIDC_ADMINS` (checked on every request, so removing an address takes effect at once). Ownership, rate limits and spend caps apply as for token accounts; `npm run users -- disable <id>` works the same and ends the person's sessions at once, as does removing them from the allowlist.
-- **Browser sessions:** the cookie `hw_sid` holds only a random id (`HttpOnly`, `SameSite=Lax`, `Path=/`, `Secure` on https). The server keeps its hash, the account and the last use in `browser-sessions.json` in the data folder, so a restart keeps people signed in. A session ends after 12 idle hours, or 7 days after sign-in, or at **Sign out** (`POST /auth/logout`), which deletes it on the server. Signing out does not sign you out of the provider.
+- **Browser sessions:** the cookie `hw_sid` holds only a random id (`HttpOnly`, `SameSite=Lax`, `Path=/`, `Secure` on https). The server keeps its hash, the account and the last use in `browser-sessions.json` in the data folder, so a restart keeps people signed in. A session ends after 12 idle hours, or 7 days after sign-in, or at **Sign out** (`POST /auth/logout`), which deletes it on the server.
+- **Signing out at the provider:** where the provider publishes an `end_session_endpoint` (Keycloak, Entra ID, Okta; not Google), **Sign out** then sends the browser there (RP-initiated logout) with `client_id`, the `id_token_hint` (the id_token of that sign-in, kept with the browser session; it lets the provider end the right session without asking "Do you want to log out?") and `post_logout_redirect_uri` (`HARNESS_PUBLIC_URL/`), so the provider's own session ends too and the next sign-in asks for the password again.
+- **Tested against a real Keycloak** (`test/oidc-keycloak.test.ts`, Keycloak 26.7 in Docker, dev mode): the realm, a confidential client with PKCE S256 and three users are made through Keycloak's admin REST API, and a scripted browser (fetch with a cookie jar) signs in through Keycloak's own login form. A verified member gets an account keyed by Keycloak's subject; the address in `HARNESS_OIDC_ADMINS` is an administrator; a user whose address Keycloak has not verified is refused (no account made); a second sign-in in the same browser goes through Keycloak's session without a password and reuses the account; sign-out ends the harness session, Keycloak's end_session endpoint ends Keycloak's session and redirects back (no confirmation page), and the login form is shown again; after the realm's signing key is replaced through the admin API (new key, old one deleted), the next sign-in fetches the new JWKS and works. It runs when Docker has a Keycloak image (`HARNESS_TEST_KEYCLOAK_IMAGE`, else `keycloak/keycloak:26.7.4` or `quay.io/keycloak/keycloak:26.7.4`; `HARNESS_TEST_KEYCLOAK=1` pulls the latter) and removes its container afterwards. What the real provider showed: without an `id_token_hint` Keycloak stops at a confirmation page on sign-out, so the hint is now sent.
 - **Cross-site requests:** every API write needs the `x-harness: 1` header, which the UI sends and another site cannot (a cross-site page cannot set it without a CORS preflight this server never allows); for a single sign-on session the `Origin`, when the browser sends one, must also be `HARNESS_PUBLIC_URL`'s. The event stream is a GET and works with the cookie.
 - `HARNESS_OIDC_ONLY=1` refuses personal tokens everywhere (Bearer, cookie and `/api/login`). The operator token (`HARNESS_TOKEN`) still works, for scripts and as the way in if the provider is down; companions keep their own tokens.
 - `GET /auth/config` tells the UI whether single sign-on is on.
+
+## Running several servers
+
+Two or more harness servers can share one data folder (NFS, SMB, a shared Docker or Kubernetes volume) behind a load balancer, for capacity or so one can be restarted while the others serve. Turn it on on every server:
+
+```bash
+HARNESS_CLUSTER=1
+HARNESS_DATA=/mnt/harness-data             # the same shared folder on every server
+HARNESS_NODE_ID=harness-1                  # unique per server
+HARNESS_NODE_URL=http://10.0.0.11:4310     # where the other servers reach this one directly (optional)
+HARNESS_PUBLIC_URL=https://harness.example.com   # the load balancer's address (the same on all)
+HARNESS_HOST=0.0.0.0
+```
+
+- **One server drives a session at a time.** A session has a lease: a file in `<data>/leases`, created atomically (O_EXCL), naming the server that holds it, its `HARNESS_NODE_URL` and a heartbeat it rewrites every third of the lease time (`HARNESS_LEASE_SECONDS`, 30). A server takes the lease when a turn, a workflow run, a resume or a rewind starts there, and gives it up when the session is idle again (no turn, no background work, no open question) and what it wrote is on disk.
+- **The other servers pass requests on.** A request to a server that does not hold a session's lease (a message, an approval, Stop, the event stream, reading the session) is streamed to the holder when it advertises `HARNESS_NODE_URL` (the answer says `x-harness-served-by`); without an address, or for a request already passed on once, the answer is `409` with the holder's id and address (`x-harness-session-server`). A scheduled run for a session busy elsewhere is skipped and says on which server.
+- **A crashed server's sessions are taken over.** A lease whose heartbeat is older than the lease time belongs to a server that stopped; the next server to start work on the session takes it over, reads the session from disk and closes the interrupted turn the way a restart does (each unfinished tool call gets a result saying it did not complete). A server that finds it lost a lease stops its work there. Clocks are compared across servers: keep them in sync (NTP).
+- **Everyone sees everything.** Sessions are listed from the folder, not from one server's memory: a session made, changed or deleted on one server shows on the others (checked at most once a second, `HARNESS_SYNC_MS`). Accounts, single sign-on browser sessions, companions, schedules and spend are files the servers re-read when they change on disk.
+- **No write is lost or half-seen.** Every state file in the data folder (session meta, workflow runs, checkpoint manifests, schedules, accounts, browser sessions, companions, spend, settings, instructions, memory, leases) is written to a temp file next to it (unique per host, process and write) and renamed over it; a session's logs (history, trace) are only appended to, by the lease holder. Files several servers change (accounts, browser sessions, companions, schedules, spend) are changed under a short lock (`<file>.lock`, created atomically, broken after 30 seconds if its holder died) on the version on disk at that moment, so two servers adding an account at once keep both; spend is added as each server's increment, so two servers' charges add up. A session's history and meta are written only by the lease holder.
+- **Schedules fire once.** Only the server holding the scheduler lease fires schedules (another takes over after the lease time if it stops). Each run is claimed on disk (its next time moved on) before it starts, so a change of leader cannot fire it twice.
+- **Deploy with sticky sessions.** Configure the load balancer to keep a browser on one server (a cookie or source-IP affinity): an event stream then stays where its session runs, and forwarding is the exception (after a failover, or two people on one session). Health checks can use `GET /auth/config`. Each server needs the same configuration, keys, plugins and sandbox images; Docker sandboxes run on the Docker host of the server driving the session (the workspace is in the shared folder, so another server starts its own sandbox on it).
+- **Companions** keep a long poll open to one server, and jobs for a companion session are sent from the server driving it: point a companion at one server's own address (its `HARNESS_NODE_URL`), or route `/api/companion/*` to one server at the load balancer.
+- **Tested** with two servers in one process on one temporary folder (`test/cluster.test.ts`): a session made on one is listed and read on the other; while one runs a turn, the other's own attempt is refused, a message sent to it is passed on to the holder and joins its turn, its event stream is the holder's, and a request already passed on gets the 409; after the turn the other server takes its turn and its model is sent the first server's history; a deleted session disappears from both; a holder that stops beating loses the session to the other after the lease time, which closes the interrupted turn and answers; with both servers' timers due at the same moment a schedule fires once, and after the leader stops the other fires the next; accounts made on both at once, spend charged on both, sign-ins and companions made on one are all seen by the other; three writers' atomic writes are never read half-written, 40 overlapping locked read-change-writes lose nothing, and a lock left by a crash is broken.
 
 ## Durability, checkpoints, trace
 
@@ -675,6 +747,10 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 | Variable | Default | |
 |---|---|---|
 | `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` / `GW_ANTHROPIC_API_KEY` | | Models without a key are greyed out. |
+| `HARNESS_MODELS_JSON` / `HARNESS_MODELS_FILE` | | The operator's OpenAI-compatible models (Ollama, vLLM, LM Studio, OpenRouter, Together, Groq, Azure OpenAI, Gemini, ...): a JSON array or `{ "models": [...] }`, inline / in a file. See Models and providers. Their keys are in the variables the entries name (`apiKeyEnv`). |
+| `HARNESS_CLUSTER` | off | `1`: this server shares its data folder with others (see Running several servers). |
+| `HARNESS_NODE_ID` / `HARNESS_NODE_URL` | host name and port / none | This server's unique id among them / the address the others pass a session's requests to (without it they answer 409). |
+| `HARNESS_LEASE_SECONDS` / `HARNESS_SYNC_MS` | 30 / 1000 | How long a stopped server keeps its sessions and the scheduler before another takes over / how often a server re-reads what the others changed. |
 | `HARNESS_PLUGINS` | | Plugin folders (`:`-separated). Trusted. |
 | `HARNESS_MCP_CONFIG` | | Operator MCP servers, `.mcp.json` format. |
 | `HARNESS_HOST` / `HARNESS_PORT` | `127.0.0.1` / `4310` | |
@@ -732,6 +808,8 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 | `HARNESS_DESKTOP_SIZE` | `1280x800` | The `computer` tool's display in a sandbox (`WxH`, 640x480 to 3840x2160). Screenshots larger than 1280x800 are scaled down to fit. A companion's real screen keeps its own size, scaled the same way. |
 | companion `--allow-desktop` | off | The `computer` tool on the user's real screen, mouse and keyboard through that companion (each action approved; see Computer use). |
 | `HARNESS_TEST_REAL_DESKTOP` | off | `1`: the desktop test takes a real screenshot and moves the pointer on the machine running the tests (never in a normal run). |
+| `HARNESS_TEST_OLLAMA`, `_URL`, `_MODEL`, `_IMAGE` | runs if the image is present | The real Ollama test: `1` pulls `ollama/ollama` (several GB) / use a running server / the model (`qwen2.5:0.5b`) / the image. |
+| `HARNESS_TEST_KEYCLOAK`, `_IMAGE`, `_URL`, `_ADMIN_PASSWORD` | runs if an image is present | The real Keycloak test: `1` pulls `quay.io/keycloak/keycloak:26.7.4` / another image / a running dev-mode Keycloak and its admin password. |
 | `HARNESS_PRICING_JSON` | | Override prices per model. |
 | `HARNESS_SETTINGS` | | The operator's settings file (JSON: `permissions`, `hooks` of every kind, `maxSteps`, `maxCostUsd`, `maxTurnMinutes`, `compactAt`, `subagentModel`, `autoModel`, `gatesOnStop`, `maxSubagentDepth`, `maxParallelSubagents`). |
 | `HARNESS_AUTO_MODEL` | sub-agent model | The model that checks calls in auto mode. |
@@ -763,4 +841,5 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
   - The egress proxy does no TLS interception: over HTTPS it decides by host (and port) only. Method limits hold for plain `http://` and for the credential gateway; a host given a method list is refused over an HTTPS tunnel rather than opened unchecked.
   - Secrets at rest are encrypted with a key the server itself can read (`HARNESS_SECRET_KEY` or `<data>/secret.key`): that protects a copied data folder or a backup without the key, not the server's account. A headless server has no OS keychain to hold the key.
   - Companion tokens are short-lived and replaced in the background, but a companion that stays offline past expiry needs a new token from the web app.
-- **Not tested here:** Seatbelt on a real Mac and Docker Desktop for macOS (no Mac was available: the Seatbelt profiles, including the allowlist one, are tested as generated text); desktop control on a real Mac or a Linux X11 desktop (tested as generated script text; on Windows a real screenshot and pointer move were run, clicks and typing only against a stand-in); bubblewrap (and its allowlist bridge) ran for real inside a Linux container, not on a Linux desktop; gVisor and Kata (not installed: the runtime option is tested with a missing runtime and with `runc` named explicitly); Godot on Windows or macOS outside the sandbox (only discovery is tested there), and Godot installed on a user's computer behind a companion (screenshots ran with real Godot in a companion whose commands run in the 3D image); prices, which come from the providers' pages on 2026-10-19 and can change.
+  - Several servers on one folder: a crashed server's sessions wait for the lease time (30 s) before another takes them over; an event stream a browser already had open on a server stays quiet when another server takes the session (a reload, or sticky sessions, fixes it); a companion serves the server it polls; the shared filesystem must support atomic exclusive create and rename (local disks, NFSv3+, SMB do) and the servers' clocks must agree to well within the lease time. On Windows a file read in a tight loop can hold off a rename over it for seconds (retried up to about ten).
+- **Not tested here:** Seatbelt on a real Mac and Docker Desktop for macOS (no Mac was available: the Seatbelt profiles, including the allowlist one, are tested as generated text); desktop control on a real Mac (tested as generated script text; on Windows a real screenshot and pointer move were run, clicks and typing only against a stand-in; on Linux the whole set ran on a real X server in Docker, not on a physical Linux desktop with a desktop environment); bubblewrap (and its allowlist bridge) ran for real inside a Linux container, not on a Linux desktop; gVisor and Kata (not installed: the runtime option is tested with a missing runtime and with `runc` named explicitly); Godot on Windows or macOS outside the sandbox (only discovery is tested there), and Godot installed on a user's computer behind a companion (screenshots ran with real Godot in a companion whose commands run in the 3D image); prices, which come from the providers' pages on 2026-10-19 and can change.
