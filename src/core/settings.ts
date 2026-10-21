@@ -19,7 +19,7 @@ export type HookEvent = typeof HOOK_EVENTS[number];
  * judges the event against an instruction and answers ok or not.
  */
 export interface HookSpec {
-  type?: 'command' | 'http' | 'prompt';
+  type?: 'command' | 'http' | 'prompt' | 'mcp_tool' | 'agent';
   matcher?: string;
   command?: string;
   url?: string;
@@ -29,6 +29,12 @@ export interface HookSpec {
   prompt?: string;
   /** prompt: the model that judges (default: the session's sub-agent model). */
   model?: string;
+  /** mcp_tool: the connected MCP server and its tool, called with the event (plus `arguments`). */
+  server?: string;
+  tool?: string;
+  arguments?: Record<string, unknown>;
+  /** agent: which agent verifies (default: explore, read-only); `prompt` is its instruction. */
+  agent?: string;
   timeoutMs?: number;
 }
 

@@ -17,7 +17,7 @@ let runnerText: string | undefined;
 const runnerSource = () => (runnerText ??= readFileSync(RUNNER, 'utf8'));
 const MAX_CALLS = 200;
 /** Tools a script may not call: interactive ones, itself, and delegation. */
-const NOT_FROM_SCRIPTS = new Set(['run_script', 'ask_user', 'exit_plan_mode', 'todo_write', 'agent', 'publish_branch', 'schedule']);
+const NOT_FROM_SCRIPTS = new Set(['run_script', 'ask_user', 'exit_plan_mode', 'todo_write', 'agent', 'publish_branch', 'schedule', 'workflow']);
 
 let netIsolation: boolean | undefined;
 /** Linux namespaces: the script process has no network and sees no other process (it cannot signal the server). */

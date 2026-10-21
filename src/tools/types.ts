@@ -29,6 +29,11 @@ export interface ToolServices {
   };
   /** Tells the user now: the session, and the Notification hooks. */
   notify?(message: string): Promise<void>;
+  /** The session's workflows, run inside the main agent's turn. */
+  workflows?: {
+    list(): Promise<{ name: string; description: string; inputs: string[] }[]>;
+    run(name: string, input: Record<string, string>, signal: AbortSignal): Promise<{ status: string; summary: string; cost: number }>;
+  };
 }
 
 export interface ToolContext {

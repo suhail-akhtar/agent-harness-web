@@ -31,6 +31,13 @@ export interface HookResult {
 /** Asks a model whether an event is acceptable under an instruction (prompt hooks). */
 export type HookJudge = (instruction: string, event: Record<string, unknown>, model?: string, signal?: AbortSignal) => Promise<{ ok: boolean; reason?: string }>;
 
+/** What the session lends hooks that need more than a shell: a judging model, MCP tools, a verifying agent. */
+export interface HookRunners {
+  judge?: HookJudge;
+  mcp?(server: string, tool: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<{ content: string; is_error?: boolean }>;
+  agent?(instruction: string, event: Record<string, unknown>, agentName?: string, signal?: AbortSignal): Promise<{ ok: boolean; reason?: string }>;
+}
+
 function matches(matcher: string | undefined, name: string | undefined, errors: string[]): boolean {
   if (!matcher || name === undefined) return true;
   try { return new RegExp(`^(?:${matcher})$`).test(name); } catch { errors.push(`bad hook matcher ${matcher}`); return false; }
@@ -64,7 +71,8 @@ function apply(result: HookResult, event: HookEvent, a: { decision?: 'allow' | '
   } else if (why) result.feedback += why + '\n';
 }
 
-async function runOne(h: HookSpec, event: HookEvent, payload: Record<string, unknown>, host: ToolHost, signal: AbortSignal | undefined, judge: HookJudge | undefined, result: HookResult): Promise<void> {
+async function runOne(h: HookSpec, event: HookEvent, payload: Record<string, unknown>, host: ToolHost, signal: AbortSignal | undefined, runners: HookRunners, result: HookResult): Promise<void> {
+  const judge = runners.judge;
   const type = h.type ?? 'command';
   const body = JSON.stringify({ event, ...payload });
   const timeoutMs = h.timeoutMs ?? 60_000;
@@ -109,6 +117,31 @@ async function runOne(h: HookSpec, event: HookEvent, payload: Record<string, unk
     }
     return;
   }
+  if (type === 'mcp_tool') {
+    if (!h.server || !h.tool) return void result.errors.push(`${event} mcp_tool hook needs server and tool`);
+    if (!runners.mcp) return void result.errors.push(`${event} mcp_tool hook: no MCP servers here`);
+    try {
+      const r = await runners.mcp(h.server, h.tool, { ...(h.arguments ?? {}), event: { event, ...payload } }, signal);
+      if (r.is_error) return void result.errors.push(`${event} hook ${h.server}.${h.tool} failed: ${r.content.slice(0, 300)}`);
+      const a = parseAnswer(r.content);
+      if (a) apply(result, event, a);
+      else if (r.content.trim()) result.feedback += r.content.trim().slice(0, 4000) + '\n';
+    } catch (e) {
+      result.errors.push(`${event} hook ${h.server}.${h.tool} failed: ${(e as Error).message}`);
+    }
+    return;
+  }
+  if (type === 'agent') {
+    if (!h.prompt) return void result.errors.push(`${event} agent hook has no prompt`);
+    if (!runners.agent) return void result.errors.push(`${event} agent hook: no agents here`);
+    try {
+      const v = await runners.agent(h.prompt, { event, ...payload }, h.agent, signal);
+      apply(result, event, { decision: v.ok ? 'allow' : event === 'PermissionRequest' ? 'deny' : 'block', reason: v.reason });
+    } catch (e) {
+      result.errors.push(`${event} agent hook failed: ${(e as Error).message}`);
+    }
+    return;
+  }
   result.errors.push(`${event} hook has an unknown type "${type}"`);
 }
 
@@ -120,13 +153,14 @@ export async function runHooks(
   matchName?: string,
   signal?: AbortSignal,
   inProcess: InProcessHook[] = [],
-  judge?: HookJudge,
+  runners?: HookRunners | HookJudge,
 ): Promise<HookResult> {
+  const r0: HookRunners = typeof runners === 'function' ? { judge: runners } : runners ?? {};
   const specs: HookSpec[] = settings.hooks[event] ?? [];
   const result: HookResult = { blocked: false, feedback: '', errors: [] };
   for (const h of specs) {
     if (!h || typeof h !== 'object' || !matches(h.matcher, matchName, result.errors)) continue;
-    await runOne(h, event, payload, host, signal, judge, result);
+    await runOne(h, event, payload, host, signal, r0, result);
   }
   for (const h of inProcess) {
     if (h.event !== event || !matches(h.matcher, matchName, result.errors)) continue;

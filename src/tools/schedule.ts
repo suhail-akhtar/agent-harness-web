@@ -50,6 +50,42 @@ export const scheduleTool: Tool = {
   },
 };
 
+export const workflowTool: Tool = {
+  // Its steps are agents and gates whose every call is checked; starting one decides nothing by itself.
+  kind: 'meta', parallelSafe: false, remoteable: false,
+  sendsOut: false,
+  spec: {
+    name: 'workflow',
+    description: 'Run one of this session\'s workflows now - a fixed graph of agent steps, quality gates and approvals (e.g. build-feature: requirements, plan, test-first build, review; long-task: a project built feature by feature) - and get its outcome. Use it when the user asks for that process or a big job matches one; for ordinary work do it yourself. "list" shows the workflows and their inputs.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['list', 'run'] },
+        name: { type: 'string' },
+        input: { type: 'object', description: 'The workflow\'s inputs, as strings', additionalProperties: { type: 'string' } },
+      },
+      required: ['action'],
+    },
+  },
+  summarize: (i) => str(i.action) === 'run' ? `workflow ${str(i.name)}` : 'workflow list',
+  async run(input, ctx) {
+    const wf = ctx.services?.workflows;
+    if (!wf) return { content: 'Workflows are not available here (sub-agents and scripts cannot start them).', is_error: true };
+    if (str(input.action) === 'list') {
+      const all = await wf.list();
+      return { content: all.length ? all.map((w) => `- ${w.name}${w.inputs.length ? ` (inputs: ${w.inputs.join(', ')})` : ''}: ${w.description}`).join('\n') : 'No workflows are installed.' };
+    }
+    const raw = input.input && typeof input.input === 'object' ? input.input as Record<string, unknown> : {};
+    const values = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)]));
+    try {
+      const r = await wf.run(str(input.name), values, ctx.signal);
+      return { content: `Workflow ${str(input.name)} ${r.status} ($${r.cost.toFixed(4)}).\n${r.summary}`, is_error: r.status !== 'succeeded' };
+    } catch (e) {
+      return { content: (e as Error).message, is_error: true };
+    }
+  },
+};
+
 export const notifyTool: Tool = {
   kind: 'meta', parallelSafe: true, remoteable: false,
   sendsOut: false,
