@@ -329,7 +329,7 @@ In plan mode the agent researches read-only, then presents its plan for approval
 - **saving to memory or scheduling a prompt** needs a yes, so a page cannot plant instructions for later;
 - **hidden text never reaches the model**: Unicode tag characters (ASCII smuggling), zero-width characters, bidi controls and smuggling variation selectors are stripped from outside content, with a note saying how many; elements a person never sees on a page (`hidden`, `display:none`, `visibility:hidden`, zero font size, `aria-hidden`, hidden inputs) are dropped from fetched pages.
 
-`HARNESS_TAINT_GUARD=off` turns the confirmation off (not recommended).
+`HARNESS_TAINT_GUARD=off` turns the confirmation off (not recommended). With `HARNESS_INJECTION_SCAN=on`, a small model also reads each outside result for text that tries to instruct the agent (to ignore its task, run something, send data out) and adds a warning to it, like the probes Anthropic runs on web content for Claude in Chrome; one cheap call per outside result. Checked live on DeepSeek: an injected HTML comment flagged, ordinary release notes passed.
 
 **Fetching outside URLs checks the address twice**: before the request, and again on the exact address the connection uses (a pinned DNS lookup), so a name that resolves publicly for the check and to `127.0.0.1` a moment later (DNS rebinding) is refused. Plugin fetches get the same.
 
@@ -337,13 +337,15 @@ In plan mode the agent researches read-only, then presents its plan for approval
 
 ## Hooks
 
-Deterministic steps the model cannot skip, at 14 points: `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact`, `Stop`, `StopFailure`. Three kinds:
+Deterministic steps the model cannot skip, at 14 points: `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact`, `Stop`, `StopFailure`. Five kinds, as in Claude Code:
 
 | Kind | How | Answers |
 |---|---|---|
 | `command` | runs on the session's host with the event as JSON on stdin | exit 0 proceeds (stdout is feedback, or JSON `{"decision":"allow"\|"deny"\|"block","reason"}`); exit 2 blocks with stderr as the reason |
 | `http` | POSTs the event as JSON; `headers` may read server variables as `${VAR}` | a 2xx with the same JSON, or nothing |
 | `prompt` | a small model judges the event against `prompt` (an instruction) | ok allows, not ok blocks (denies, for `PermissionRequest`) |
+| `mcp_tool` | calls `tool` on a connected MCP `server` with the event (plus `arguments`) | its text, read like a command hook's stdout |
+| `agent` | a verifying agent (`agent`, default the read-only `explore`) checks the event against `prompt`, looking at the workspace as it needs | ok allows, not ok blocks; it runs without hooks of its own |
 
 - `PreToolUse` runs before anyone is asked: it can block a call or allow it without a prompt. `PermissionRequest` can answer a prompt instead of a person (a policy service, a judging model); deny wins over allow. `PreCompact`'s feedback is added to what the summary must keep. `SubagentStart` adds context to a sub-agent's brief; `SubagentStop` can send a sub-agent back, like `Stop` for the main agent. `Notification` fires whenever the agent waits for a person (and on `notify_user`), so an `http` hook can reach a chat channel or a phone.
 - **Who may configure what.** The operator's settings file (`HARNESS_SETTINGS`, JSON with `permissions`, `hooks` and limits; a file that cannot be read stops the server rather than dropping its rules) and plugin manifests take every kind; a plugin's `http` hook goes only to its declared hosts and reads only its declared secrets. A repository's `.harness/settings.json` adds only `command` hooks, which run in its sandbox: an `http` hook would run on the server.
@@ -429,7 +431,11 @@ The server prints the redirect URI to register when it starts. How it works:
 ## Scheduled work and sub-agents
 
 - **Scheduled prompts.** The agent's `schedule` tool sets up work for later in its own session - once (`in_minutes`, `at`) or on a five-field cron - and `/api/schedules` does the same for people, to an existing session or a new one per run (`dontAsk` by default: nobody is there to answer). Missed runs fire once after a restart, a busy session is skipped, and every run goes through the same permissions and spend limits as a typed message. `notify_user` tells the person something now, through the session and the `Notification` hooks.
+- **Triggers.** `POST /api/schedules {trigger: true, prompt, ...}` returns a secret URL (shown once, stored hashed) that starts the prompt when something POSTs to it: a Slack slash command (its form's `text`), a GitHub webhook, a phone shortcut, `curl`. What it sends goes with the prompt, fenced as data from outside, and the session counts as having read untrusted content.
 - **Sub-agents** run in parallel (at most `HARNESS_SUBAGENTS_PARALLEL` at once, default 10, at most 20) and may start their own up to `HARNESS_SUBAGENT_DEPTH` levels (default 1: they cannot; at most 3, as Claude Code). A sub-agent that read outside content taints every agent above it.
+- **The `workflow` tool** lets the main agent run one of the session's workflows inside its turn (a fixed graph of agent steps, gates and approvals, such as `build-feature` or `long-task`) and get the outcome, like Claude Code's Workflow tool.
+- **Slash commands.** `/<skill> [task]` in a message loads that skill with it (custom commands are skills, as in Claude Code); `/compact` compacts the context now.
+- **MCP bundles** (`.mcpb`, Claude Desktop's one-click "Desktop Extensions"): an administrator installs one (`POST /api/mcpb` with the file and the values its manifest asks for); it is unpacked under the data folder (paths outside it and links refused), its server registered for every new session, and kept across restarts.
 
 ## Evaluations
 
@@ -561,6 +567,7 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 | `HARNESS_SUBAGENT_DEPTH` / `HARNESS_SUBAGENTS_PARALLEL` | 1 / 10 | How deep sub-agents may nest (at most 3) / how many run at once (at most 20). |
 | `HARNESS_MAX_SCHEDULES` | 50 | Scheduled prompts per person. |
 | `HARNESS_EXPORT_MAX_MB` / `HARNESS_IMPORT_MAX_MB` | 50 / 80 | Workspace files in an exported session / the largest import. |
+| `HARNESS_INJECTION_SCAN` | off | `on`: a small model checks each outside result for instructions aimed at the agent. |
 | `.env` | | `npm start` (and every npm launcher) reads a `.env` file where it runs; variables already set win. |
 
 ## Honest limits
