@@ -1,6 +1,6 @@
 {
   "name": "ops-advisor",
-  "description": "A prioritised recommendations report on the estate in the ops inventory, with evidence: reliability (missing monitoring, single points of failure, noisy alerts, SLOs), capacity (trends and forecasts), security posture (ports, ssh, packages, certificates, root containers, secrets in env) and cost (idle and oversized resources) - each analysed in parallel by its specialist, then merged into .harness/ops/reports/ops-advisor.md. Read-only: it changes nothing.",
+  "description": "A prioritised recommendations report on the estate in the ops inventory, with evidence: reliability (missing monitoring, single points of failure, noisy alerts, SLOs), capacity (trends and forecasts), security posture (ports, ssh, packages, certificates, root containers, secrets in env) and cost (idle and oversized resources) - each analysed in parallel by its specialist, then merged into .harness/ops/reports/ops-advisor.md. Read-only: it changes nothing (on hosts it works as their read-only account).",
   "inputs": {
     "focus": { "description": "Anything to look at especially (optional).", "default": "the whole estate" }
   },
@@ -12,7 +12,7 @@
   "nodes": {
     "survey": {
       "type": "agent", "title": "Survey the estate", "agent": "sre",
-      "prompt": "Survey the estate, read-only: ops_inventory validate and list, docker_status, ops_check (include_ok), and prometheus_query count by (job) (up) to see what is scraped. Focus: {{input.focus}}\n\nReport: the hosts, services, what is monitored and what is not, and anything that looked wrong - short.",
+      "prompt": "Survey the estate, read-only: ops_inventory validate and list, docker_status, ops_check (include_ok), and prometheus_query count by (job) (up) to see what is scraped; on hosts, host_stats and ssh_exec as the host's read-only account (the default; never as: \"operator\" - this workflow changes nothing). Focus: {{input.focus}}\n\nReport: the hosts, services, what is monitored and what is not, and anything that looked wrong - short.",
       "outputs": ["estate"],
       "next": "analyse"
     },
@@ -30,7 +30,7 @@
     },
     "security": {
       "type": "agent", "title": "Security posture", "agent": "security-auditor",
-      "prompt": "Estate: {{state.estate}}\nAnalyse SECURITY POSTURE with read-only checks only, and write .harness/ops/reports/advisor/security.md: TLS certificates of every service with a TLS endpoint (probe type tls: expired, expiring, self-signed, name mismatch), containers running as root or privileged and secret-looking environment variables (docker_status - names only, never values), and on hosts reachable over ssh: listening ports (ss -tlnp), sshd settings (sshd -T: PasswordAuthentication, PermitRootLogin), outdated packages.\nEvery recommendation in the format: Title, Priority, Finding, Evidence, Impact, Effort, Change, Risk.\n\nReport: the recommendations' titles with priorities."
+      "prompt": "Estate: {{state.estate}}\nAnalyse SECURITY POSTURE with read-only checks only, and write .harness/ops/reports/advisor/security.md: TLS certificates of every service with a TLS endpoint (probe type tls: expired, expiring, self-signed, name mismatch), containers running as root or privileged and secret-looking environment variables (docker_status - names only, never values), and on hosts reachable over ssh: listening ports (ss -tlnp), sshd settings (sshd -T: PasswordAuthentication, PermitRootLogin; or the config file where the reader cannot run it), outdated packages. ssh_exec runs as the host's read-only account by default - use only that; never as: \"operator\" (this workflow changes nothing).\nEvery recommendation in the format: Title, Priority, Finding, Evidence, Impact, Effort, Change, Risk.\n\nReport: the recommendations' titles with priorities."
     },
     "cost": {
       "type": "agent", "title": "Cost", "agent": "cost-optimizer",

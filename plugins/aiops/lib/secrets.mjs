@@ -43,6 +43,16 @@ export async function revealCredential(name, { services, secret, patterns, purpo
   return value;
 }
 
+/** Names (never values) in the operator's HARNESS_OPS_SECRETS stand-in; empty when it is not set or unreadable. */
+export async function fallbackNames(secret) {
+  const raw = secret('HARNESS_OPS_SECRETS');
+  if (!raw) return [];
+  try {
+    const obj = JSON.parse(raw.startsWith('@') ? await fs.readFile(raw.slice(1), 'utf8') : raw);
+    return obj && typeof obj === 'object' ? Object.keys(obj).filter((k) => typeof obj[k] === 'string' && obj[k]) : [];
+  } catch { return []; }
+}
+
 /** Names of the credentials the vault holds that this plugin may read (no values). */
 export async function listCredentials(services, patterns) {
   const vault = services?.vault;

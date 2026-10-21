@@ -1,8 +1,8 @@
 # The operator's half of the AIOps test stack's inventory (HARNESS_OPS_INVENTORY):
 # the hosts and the monitoring endpoints, with the Key Vault credentials attached
-# to them. Only an operator's inventory may attach credentials; the workspace's
-# (evals/aiops/fixtures/.harness/ops/inventory.yaml) names services, alerts and
-# maintenance windows. Run the pack with
+# to them. Only an operator's inventory may attach credentials, or give a host a
+# read-only account; the workspace's (evals/aiops/fixtures/.harness/ops/inventory.yaml)
+# names services, alerts and maintenance windows. Run the pack with
 #   HARNESS_OPS_INVENTORY=evals/aiops/stack/operator-inventory.yaml
 #   HARNESS_OPS_LOCAL_DOCKER=1 HARNESS_OPS_LOCAL_DOCKER_ALLOW=hwtest-aiops-*
 monitoring:
@@ -15,8 +15,10 @@ hosts:
   - name: db-1
     address: 127.0.0.1
     port: 12222
-    user: ops
+    user: ops                            # owns the shop's data, has sudo: changes, asked about
     credential: ops-db-1-key
+    readUser: reader                     # no sudo, not in ops' group, cannot write /data:
+    readCredential: ops-db-1-reader-key  # investigation runs as it, not asked about
     role: database
     env: prod
     tags: [db, linux]

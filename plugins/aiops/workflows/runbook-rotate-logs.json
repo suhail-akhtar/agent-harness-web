@@ -10,7 +10,7 @@
   "nodes": {
     "report": {
       "type": "agent", "title": "Find large logs", "agent": "sre", "maxSteps": 25,
-      "prompt": "Host {{input.host}}, logs under {{input.path}}. Read-only (ssh_exec read-only commands): the biggest files (du -xsk, find -size +50M), which process has each open (lsof if present), and whether logrotate has a rule for it (cat /etc/logrotate.conf /etc/logrotate.d/*). Plan, per file: logrotate -f <its config> when configured, otherwise cp <file> <file>.<date> && gzip the copy && truncate -s 0 <file> (keeps the open file handle). Nothing changes now.\n\nReport: the files with sizes, the exact rotation command for each, and the space it frees.",
+      "prompt": "Host {{input.host}}, logs under {{input.path}}. Read-only (ssh_exec runs as the host's read-only account by default): the biggest files (du -xsk, find -size +50M), which process has each open (lsof if present), and whether logrotate has a rule for it (cat /etc/logrotate.conf /etc/logrotate.d/*). Plan, per file: logrotate -f <its config> when configured, otherwise cp <file> <file>.<date> && gzip the copy && truncate -s 0 <file> (keeps the open file handle). Nothing changes now.\n\nReport: the files with sizes, the exact rotation command for each, and the space it frees.",
       "next": "approve"
     },
     "approve": {
@@ -20,7 +20,7 @@
     },
     "rotate": {
       "type": "agent", "title": "Rotate", "agent": "sre", "change": true, "maxSteps": 20,
-      "prompt": "A person approved this rotation on {{input.host}}:\n{{state.report}}\n\nRun exactly those rotation commands with ssh_exec, one file at a time, and nothing else.\n\nReport: each command and its result.",
+      "prompt": "A person approved this rotation on {{input.host}}:\n{{state.report}}\n\nRun exactly those rotation commands with ssh_exec as: \"operator\", one file at a time, and nothing else.\n\nReport: each command and its result.",
       "next": "verify"
     },
     "verify": {

@@ -28,7 +28,7 @@
     },
     "renew-certs": {
       "type": "agent", "title": "Renew", "agent": "sre", "change": true, "maxSteps": 15,
-      "prompt": "A person approved renewing the certificates in .harness/ops/reports/certificates.md. Run exactly the renewal commands listed there (ssh_exec), and reload the service only if the command does not (as listed).\n\nReport: each command and its result.",
+      "prompt": "A person approved renewing the certificates in .harness/ops/reports/certificates.md. Run exactly the renewal commands listed there (ssh_exec as: \"operator\"), and reload the service only if the command does not (as listed).\n\nReport: each command and its result.",
       "next": "verify"
     },
     "verify": {

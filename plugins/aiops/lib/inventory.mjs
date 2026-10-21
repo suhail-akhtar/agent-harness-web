@@ -9,6 +9,9 @@
 // - credentials (a host's `credential`, monitoring's `prometheus_credential` and
 //   `loki_credential`) are attached only by the operator's file: a workspace
 //   entry may name a host or an endpoint, never a vault entry to send to it;
+// - a host's read-only account (readUser + readCredential: an OS user the
+//   operator restricted, whose commands are not asked about) likewise comes
+//   only from the operator's file;
 // - when the operator has a file, hosts and monitoring endpoints come from it
 //   only; without one, the workspace's are used, without credentials.
 // An entry that fails validation is dropped (its error is reported): nothing
@@ -165,12 +168,25 @@ export function validateInventory(doc, { source = 'workspace', vaultPatterns = [
       if (!SAFE.credential.test(String(credential))) errors.push(`${where}: credential "${credential}" is not a vault name`);
       else if (!credOk(String(credential))) errors.push(`${where}: credential "${credential}" is outside what this plugin may read from the vault (${vaultPatterns.join(', ')})`);
     }
+    // The read-only account: an OS user the operator restricted (no sudo, read-only groups), used for
+    // investigation without asking. Only the operator's file may declare one: a workspace that could would
+    // make commands run unasked.
+    let reader;
+    if (h.readUser !== undefined || h.readCredential !== undefined) {
+      if (source !== 'operator') warnings.push(`${where}: its read-only account (readUser, readCredential) is ignored: only the operator's inventory (HARNESS_OPS_INVENTORY) declares one`);
+      else if (h.readUser === undefined || h.readCredential === undefined) errors.push(`${where}: a read-only account needs both readUser and readCredential`);
+      else if (!SAFE.user.test(String(h.readUser))) errors.push(`${where}: readUser "${h.readUser}" is not a valid user name`);
+      else if (!SAFE.credential.test(String(h.readCredential))) errors.push(`${where}: readCredential "${h.readCredential}" is not a vault name`);
+      else if (!credOk(String(h.readCredential))) errors.push(`${where}: readCredential "${h.readCredential}" is outside what this plugin may read from the vault (${vaultPatterns.join(', ')})`);
+      else if (String(h.readUser) === String(h.user ?? 'root')) warnings.push(`${where}: readUser "${h.readUser}" is the operator account itself: no read-only account (commands are asked as operator commands)`);
+      else reader = { readUser: String(h.readUser), readCredential: String(h.readCredential) };
+    }
     checkEnv(where, h.env);
     if (errors.length > before) { errors.push(`${where}: left out of the inventory until fixed`); return; }
     hostNames.add(h.name);
     if (h.address !== undefined && credential === undefined) warnings.push(`${where}: no credential, so ssh_exec and host_stats cannot reach it`);
-    const { credential: _drop, ...rest } = h;
-    inv.hosts.push({ ...rest, ...(credential !== undefined ? { credential: String(credential) } : {}), port, user: String(h.user ?? 'root'), tags: asList(h.tags).map(String), source });
+    const { credential: _drop, readUser: _ru, readCredential: _rc, ...rest } = h;
+    inv.hosts.push({ ...rest, ...(credential !== undefined ? { credential: String(credential) } : {}), ...(reader ?? {}), port, user: String(h.user ?? 'root'), tags: asList(h.tags).map(String), source });
   });
 
   const svcNames = new Set(); const svcSeen = new Set();
@@ -186,6 +202,8 @@ export function validateInventory(doc, { source = 'workspace', vaultPatterns = [
     if (s.tls !== undefined && !isUrl(s.tls, ['https:']) && !/^[a-zA-Z0-9.-]+:\d+$/.test(String(s.tls))) errors.push(`${where}: tls "${s.tls}" is not an https URL or host:port`);
     if (s.container !== undefined && !SAFE.container.test(String(s.container))) errors.push(`${where}: container "${s.container}" is not a container name`);
     if (s.unit !== undefined && !SAFE.unit.test(String(s.unit))) errors.push(`${where}: unit "${s.unit}" is not a systemd unit name`);
+    // What the service needs (its database host, another service): where to look when it is slow or failing.
+    for (const d of asList(s.depends_on)) if (typeof d !== 'string' || !NAME.test(d)) errors.push(`${where}: depends_on "${d}" is not a host or service name`);
     if (s.logs !== undefined) {
       const l = s.logs;
       const ok = l && typeof l === 'object' && (typeof l.docker === 'string' || typeof l.loki === 'string' || typeof l.file === 'string');
@@ -209,7 +227,7 @@ export function validateInventory(doc, { source = 'workspace', vaultPatterns = [
     if (errors.length > before) { errors.push(`${where}: left out of the inventory until fixed`); return; }
     svcNames.add(s.name);
     if (!s.health && !s.metrics_job) warnings.push(`${where}: no health URL and no metrics job: nothing would notice it failing`);
-    inv.services.push({ ...s, tags: asList(s.tags).map(String), slos, source });
+    inv.services.push({ ...s, tags: asList(s.tags).map(String), ...(s.depends_on !== undefined ? { depends_on: asList(s.depends_on).map(String) } : {}), slos, source });
   });
 
   asList(doc.maintenance).forEach((w, i) => {
@@ -340,6 +358,7 @@ export async function loadInventory({ host, resolve, env = process.env, vaultPat
     out.errors.push(`services.${s.name}: host "${s.host}" is not in the inventory's hosts (left out until fixed)`);
     return false;
   });
+  for (const s of out.services) for (const d of s.depends_on ?? []) if (d !== 'local' && !out.hosts.some((h) => h.name === d) && !out.services.some((x) => x.name === d)) out.warnings.push(`services.${s.name}: depends_on "${d}" is neither a host nor a service in the inventory`);
   out.warnings.push(...notes);
   out.present = docs.length > 0 || !!out.monitoring.prometheus;
   return out;

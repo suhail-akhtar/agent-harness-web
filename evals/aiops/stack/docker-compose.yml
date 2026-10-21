@@ -3,7 +3,9 @@
 # sharing the shop's data volume. Started and reset by stack.mjs:
 #   node evals/aiops/stack/stack.mjs up | reset | break <slow|leak|crash|disk> | status | down
 # Host ports (127.0.0.1 only): Prometheus 19090, shop HTTP 19180, shop HTTPS
-# 19443 (an expired certificate), ssh 12222 (user ops: key or password, both in .state/).
+# 19443 (an expired certificate), ssh 12222 (user ops: key or password, both in
+# .state/; user reader: a key only, read-only - stack.mjs creates it on every up,
+# makes /data owned by ops and not writable by others, and starts billing-worker).
 name: hwtest-aiops
 
 services:

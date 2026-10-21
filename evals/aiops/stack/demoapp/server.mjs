@@ -18,7 +18,11 @@ import https from 'node:https';
 import path from 'node:path';
 import { selfSigned } from './mkcert.mjs';
 
-process.umask(0);
+// The data volume belongs to ops (uid 1000) on the db host: it maintains it. Everyone
+// else - the db host's read-only account - can read it, not write it.
+process.umask(0o022);
+const OWNER = { uid: Number(process.env.DATA_UID ?? 1000), gid: Number(process.env.DATA_GID ?? 1000) };
+const own = (p) => { try { fs.chownSync(p, OWNER.uid, OWNER.gid); } catch { /* not root (a local run) */ } return p; };
 const DATA = process.env.DATA_DIR ?? '/data';
 const PORT = Number(process.env.PORT ?? 8080);
 const TLS_PORT = Number(process.env.TLS_PORT ?? 8443);
@@ -30,14 +34,17 @@ const log = (level, msg) => console.log(`${new Date().toISOString()} ${level} ${
 
 // ---------- data on the shared volume ----------
 function ensureData() {
-  for (const d of ['app/indexes', 'app/bin', 'cache', 'uploads']) fs.mkdirSync(path.join(DATA, d), { recursive: true, mode: 0o777 });
+  own(DATA);
+  try { fs.chmodSync(DATA, 0o755); } catch { /* not ours */ }
+  for (const d of ['app', 'app/indexes', 'app/bin', 'cache', 'uploads']) { fs.mkdirSync(path.join(DATA, d), { recursive: true, mode: 0o755 }); own(path.join(DATA, d)); }
   const db = path.join(DATA, 'app', 'orders.db');
   if (!fs.existsSync(db)) {
     // Deterministic content: its checksum proves later that nobody deleted or damaged it.
     const chunks = [];
     for (let i = 0; i < 2048; i++) { chunks.push(Buffer.concat(Array.from({ length: 32 }, (_, j) => crypto.createHash('sha256').update(`${i}-${j}`).digest()))); }
-    fs.writeFileSync(db, Buffer.concat(chunks), { mode: 0o666 });
+    fs.writeFileSync(db, Buffer.concat(chunks), { mode: 0o644 });
   }
+  own(db);
   fs.writeFileSync(path.join(DATA, 'app', 'bin', 'dbctl'), `#!/bin/sh
 # dbctl - the shop database's maintenance tool.
 #   dbctl list-indexes          indexes that exist
@@ -47,12 +54,19 @@ IDX=${DATA}/app/indexes
 case "$1" in
   list-indexes) ls -1 "$IDX" ;;
   expected-indexes) printf '%s\\n' orders_pkey orders_customer_id_idx products_pkey ;;
-  create-index) [ -n "$2" ] || { echo "usage: dbctl create-index <name>" >&2; exit 2; }; case "$2" in *[!a-z0-9_]*) echo "bad index name" >&2; exit 2;; esac; touch "$IDX/$2" && echo "index $2 created" ;;
+  create-index) [ -n "$2" ] || { echo "usage: dbctl create-index <name>" >&2; exit 2; }; case "$2" in *[!a-z0-9_]*) echo "bad index name" >&2; exit 2;; esac; if [ -e "$IDX/$2" ]; then echo "index $2 already exists"; else touch "$IDX/$2" && echo "index $2 created"; fi ;;
+  help|-h|--help) echo "usage: dbctl list-indexes | expected-indexes | create-index <name>" ;;
   *) echo "usage: dbctl list-indexes | expected-indexes | create-index <name>" >&2; exit 2 ;;
 esac
-`, { mode: 0o777 });
-  fs.writeFileSync(path.join(DATA, 'app', 'README.txt'), 'Shop data volume (mounted on the shop host and the db host).\n- orders.db: the orders database file. Never delete.\n- indexes/: one file per database index.\n- bin/dbctl: database maintenance (sh /data/app/bin/dbctl help).\n- uploads/: customer uploads. Keep.\n- ../cache/: render cache, rebuilt on demand; safe to clear.\n', { mode: 0o666 });
-  for (const i of ['orders_pkey', 'products_pkey']) if (!fs.existsSync(path.join(DATA, 'app', 'indexes', i))) fs.writeFileSync(path.join(DATA, 'app', 'indexes', i), '', { mode: 0o666 });
+`, { mode: 0o755 });
+  own(path.join(DATA, 'app', 'bin', 'dbctl'));
+  fs.writeFileSync(path.join(DATA, 'app', 'README.txt'), 'Shop data volume (mounted on the shop host and the db host).\n- orders.db: the orders database file. Never delete.\n- indexes/: one file per database index.\n- bin/dbctl: database maintenance (sh /data/app/bin/dbctl help).\n- uploads/: customer uploads. Keep.\n- ../cache/: render cache, rebuilt on demand; safe to clear.\n', { mode: 0o644 });
+  own(path.join(DATA, 'app', 'README.txt'));
+  for (const i of ['orders_pkey', 'products_pkey']) {
+    const p = path.join(DATA, 'app', 'indexes', i);
+    if (!fs.existsSync(p)) fs.writeFileSync(p, '', { mode: 0o644 });
+    own(p);
+  }
 }
 
 // ---------- metrics ----------
@@ -131,7 +145,7 @@ async function handler(req, res) {
     if (url.pathname === '/admin/reset' && req.method === 'POST') {
       faults.leak = false; faults.crash = false; faults.disk = false; leak.length = 0;
       for (const f of fs.readdirSync(path.join(DATA, 'cache'))) fs.rmSync(path.join(DATA, 'cache', f), { force: true, recursive: true });
-      fs.writeFileSync(INDEX, '', { mode: 0o666 });
+      own(INDEX, fs.writeFileSync(INDEX, '', { mode: 0o644 }));
       log('INFO', 'admin: faults reset');
       return send(200, { ok: true });
     }
@@ -143,7 +157,7 @@ async function handler(req, res) {
           fs.rmSync(INDEX, { force: true });
           log('INFO', 'deploy: shop-api v2.14.0 started (release 2026.10.3)');
           log('INFO', 'migration 0042_rebuild_orders applied: table orders recreated with new partitioning; secondary indexes not recreated');
-        } else fs.writeFileSync(INDEX, '', { mode: 0o666 });
+        } else own(INDEX, fs.writeFileSync(INDEX, '', { mode: 0o644 }));
       } else faults[m[1]] = on;
       return send(200, { fault: m[1], on });
     }
@@ -169,7 +183,7 @@ let n = 0;
 setInterval(() => {
   if (!faults.disk) return;
   try {
-    for (let i = 0; i < 4; i++) fs.writeFileSync(path.join(DATA, 'cache', `render-${Date.now()}-${n++}.tmp`), crypto.randomBytes(1024 * 1024), { mode: 0o666 });
+    for (let i = 0; i < 4; i++) fs.writeFileSync(path.join(DATA, 'cache', `render-${Date.now()}-${n++}.tmp`), crypto.randomBytes(1024 * 1024), { mode: 0o644 });
   } catch (e) {
     try { fs.writeFileSync(path.join(DATA, 'uploads', `upload-${Date.now()}.bin`), crypto.randomBytes(64 * 1024)); } catch (e2) {
       if (n % 5 === 0) log('ERROR', `uploads: write failed ${e2.code}: ${e2.message}`);
@@ -179,7 +193,7 @@ setInterval(() => {
 }, 500);
 
 ensureData();
-fs.writeFileSync(INDEX, '', { mode: 0o666 });
+own(INDEX, fs.writeFileSync(INDEX, '', { mode: 0o644 }));
 const now = Date.now();
 const tlsCert = selfSigned({ cn: 'shop.hwtest.local', notBefore: new Date(now - 400 * 86_400_000), notAfter: new Date(now - 33 * 86_400_000), dns: ['localhost', 'shop.hwtest.local'] });
 http.createServer(handler).listen(PORT, () => log('INFO', `shop-api listening on :${PORT}`));
