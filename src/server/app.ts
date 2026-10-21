@@ -10,6 +10,7 @@ import { MemoryError, MemoryStore } from '../memory/store.ts';
 import { allowedImages, dockerAvailable, dockerDefaults, imageExists, sessionImage } from '../runtime/docker.ts';
 import { COMPANION_RESULT_LIMIT } from '../runtime/companion.ts';
 import { BundleError, exportSession, importSession } from '../core/portable.ts';
+import { McpbError } from '../mcp/mcpb.ts';
 import { resolveIn, walk } from '../tools/paths.ts';
 import { type BrowserSessions, isSsoAdmin, NOBODY_ALLOWED, type OidcClient, OidcError, refusal } from './oidc.ts';
 import { RateLimiter, type Role, type SpendLedger, type UserStore } from './users.ts';
@@ -406,6 +407,23 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         worktree: kind === 'local' && !!runtime.path && b.worktree === true,
       }).catch((e: Error) => { throw e.name === 'WorktreeError' || e.constructor.name === 'WorktreeError' ? new HttpError(400, e.message) : e; });
       return send(res, 201, s.meta);
+    }
+
+    // ---- MCP bundles (.mcpb, Desktop Extensions): servers the operator installs for everyone ----
+    if (p === '/api/mcpb' || p.startsWith('/api/mcpb/')) {
+      if (!admin) throw new HttpError(403, 'Installing MCP servers is for administrators: they run on the server.');
+      if (p === '/api/mcpb' && method === 'GET') return send(res, 200, (await harness.mcpb.list()).map((b) => ({ name: b.name, version: b.version, description: b.description, installedAt: b.installedAt })));
+      if (p === '/api/mcpb' && method === 'POST') {
+        const b = await readJson(req, 150 * 1024 * 1024);
+        if (typeof b.bundle !== 'string') throw new HttpError(400, 'bundle (the .mcpb file, base64) is required');
+        try {
+          const done = await harness.mcpb.install(Buffer.from(b.bundle, 'base64'), b.userConfig && typeof b.userConfig === 'object' ? b.userConfig as Record<string, unknown> : {});
+          return send(res, 201, { name: done.name, version: done.version, description: done.description });
+        } catch (e) { throw e instanceof McpbError ? new HttpError(400, e.message) : e; }
+      }
+      const name = decodeURIComponent(p.slice('/api/mcpb/'.length));
+      if (method === 'DELETE') return send(res, (await harness.mcpb.remove(name)) ? 200 : 404, { ok: true });
+      throw new HttpError(405, 'method not allowed');
     }
 
     // ---- import a session bundle (from another server, or the desktop app) ----

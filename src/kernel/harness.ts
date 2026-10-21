@@ -14,6 +14,7 @@ import { OtelExporter, parseHeaders } from './otel.ts';
 import { BUILTIN_PROVIDERS } from '../providers/index.ts';
 import { CompanionHub } from '../runtime/companion.ts';
 import { Scheduler } from '../core/scheduler.ts';
+import { type InstalledMcpb, installedMcpb, installMcpb, McpbError, saveInstalled } from '../mcp/mcpb.ts';
 import { sandboxCredentials as sandboxCredentials_ } from '../runtime/credentials.ts';
 import { BUILTIN_TOOLS } from '../tools/index.ts';
 import { BUILTIN_SEARCH, makeSearchService, type SearchService } from '../research/search.ts';
@@ -100,6 +101,12 @@ export interface Harness {
   mcp: McpManager;
   /** Scheduled prompts (absent when turned off). */
   scheduler?: Scheduler;
+  /** MCP bundles (.mcpb, Desktop Extensions) installed on this server; new sessions get their tools. */
+  mcpb: {
+    list(): Promise<InstalledMcpb[]>;
+    install(bundle: Buffer, userConfig?: Record<string, unknown>): Promise<InstalledMcpb>;
+    remove(name: string): Promise<boolean>;
+  };
   dataDir: string;
   /** Signed plugins available to install (empty without a catalogue). */
   catalogue(): Promise<CatalogueEntry[]>;
@@ -164,6 +171,10 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     for (const [name, cfg] of Object.entries(servers)) registry.mcpServers.set(name, { ...cfg, plugin: 'config', operator: true } as never);
   }
   await fs.mkdir(opts.dataDir, { recursive: true });
+  // Installed MCP bundles are the operator's servers too (only administrators install them).
+  const mcpbRoot = path.join(opts.dataDir, 'mcpb');
+  const registerBundle = (b: InstalledMcpb) => registry.mcpServers.set(b.name, { ...b.config, plugin: 'mcpb', operator: true } as never);
+  for (const b of await installedMcpb(mcpbRoot)) { if (!registry.mcpServers.has(b.name)) registerBundle(b); }
   const companions = new CompanionHub(opts.dataDir);
   await companions.load();
   const mcp = new McpManager();
@@ -242,6 +253,29 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
 
   return {
     registry, sessions, companions, mcp, scheduler, dataDir: opts.dataDir, search: search?.backend,
+    mcpb: {
+      list: () => installedMcpb(mcpbRoot),
+      async install(bundle, userConfig) {
+        const b = await installMcpb(bundle, mcpbRoot, userConfig);
+        const known = registry.mcpServers.get(b.name);
+        if (known && known.plugin !== 'mcpb') { await fs.rm(b.dir, { recursive: true, force: true }); throw new McpbError(`an MCP server named "${b.name}" already comes from ${known.plugin}`); }
+        await saveInstalled(mcpbRoot, [...(await installedMcpb(mcpbRoot)).filter((x) => x.name !== b.name), b]);
+        registerBundle(b);
+        await mcp.forget(b.name);
+        return b;
+      },
+      async remove(name) {
+        const list = await installedMcpb(mcpbRoot);
+        const b = list.find((x) => x.name === name);
+        if (!b) return false;
+        await saveInstalled(mcpbRoot, list.filter((x) => x.name !== name));
+        if (registry.mcpServers.get(name)?.plugin === 'mcpb') registry.mcpServers.delete(name);
+        await mcp.forget(name);
+        // Its server process may still be exiting (Windows will not remove a folder a process runs in).
+        await fs.rm(b.dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+        return true;
+      },
+    },
     async catalogue() {
       const out: CatalogueEntry[] = [];
       if (remoteCatalogue) {

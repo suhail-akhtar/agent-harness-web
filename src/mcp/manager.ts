@@ -178,6 +178,13 @@ export class McpManager {
     return { entries, status, close };
   }
 
+  /** Drops one server's shared connection (its config changed or it was removed); the next session connects afresh. */
+  async forget(name: string): Promise<void> {
+    const p = this.shared.get(name);
+    this.shared.delete(name);
+    try { (await p)?.client.close(); } catch { /* never connected */ }
+  }
+
   async closeAll(): Promise<void> {
     for (const p of this.shared.values()) { try { (await p).client.close(); } catch { /* never connected */ } }
     this.shared.clear();
