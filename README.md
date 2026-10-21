@@ -858,6 +858,7 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 | `HARNESS_GATES_ON_STOP` | off | Refuse to end a turn while a blocking quality gate fails. |
 | `HARNESS_BUNDLED_PLUGINS` | on | `off` skips the bundled `plugins/` (quality gates, SDLC, visual, documents, games3d, computer, devops). |
 | `HARNESS_PLUGIN_KEYS` | | Trusted public keys; when set, every non-bundled plugin must be signed. |
+| `HARNESS_PLUGIN_NETWORK` | | Hosts the operator grants a plugin beyond its manifest's `permissions.network`, as JSON: `{"devops": ["github.acme.internal"], "aiops": ["prometheus.internal:9090"]}` (a GitHub Enterprise or internal monitoring address). Only the operator can widen a plugin's reach. |
 | `HARNESS_PLUGIN_CATALOGUE` | | Signed plugins to install from the UI/API: a folder, or the https URL of an `index.json`. |
 | `HARNESS_MEMORY` | on | `read` (load, never change) or `off`. |
 | `HARNESS_SEARCH` | first available | `brave`, `tavily`, `exa`, `searxng`, `deepseek`, `anthropic`, `openai` or `off`; keys `BRAVE_API_KEY`, `TAVILY_API_KEY`, `EXA_API_KEY`, `HARNESS_SEARXNG_URL`. |

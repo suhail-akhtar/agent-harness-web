@@ -80,7 +80,9 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void): P
   if (m.workflows) {
     for (const w of await loadWorkflowDir(within(m.workflows), m.name)) { reg.workflows.set(w.name, w); contributes.push(`workflow:${w.name}`); }
   }
-  const declared = { network: (m.permissions?.network ?? []).map(String), secrets: (m.permissions?.secrets ?? []).map(String), vault: (m.permissions?.vault ?? []).map(String).filter((g) => g.trim()) };
+  // The operator may add hosts to a plugin's own list (HARNESS_PLUGIN_NETWORK, e.g. a GitHub
+  // Enterprise or internal Prometheus address): never the plugin itself.
+  const declared = { network: [...(m.permissions?.network ?? []).map(String), ...operatorHosts(m.name)], secrets: (m.permissions?.secrets ?? []).map(String), vault: (m.permissions?.vault ?? []).map(String).filter((g) => g.trim()) };
   for (const [name, cfg] of Object.entries(m.mcpServers ?? {})) {
     reg.mcpServers.set(name, { ...cfg, plugin: m.name, secrets: declared.secrets, operator: false } as never);
     contributes.push(`mcp:${name}`);
@@ -204,6 +206,17 @@ export function hostAllowed(host: string, patterns: string[]): boolean {
     const d = p.toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
     return d.startsWith('*.') ? h.endsWith(d.slice(1)) && h !== d.slice(2) : h === d;
   });
+}
+
+/** Hosts the operator grants a plugin beyond its manifest: HARNESS_PLUGIN_NETWORK = {"plugin": ["host", ...]}. */
+function operatorHosts(plugin: string): string[] {
+  const raw = process.env.HARNESS_PLUGIN_NETWORK?.trim();
+  if (!raw) return [];
+  try {
+    const j = JSON.parse(raw) as Record<string, unknown>;
+    const v = j[plugin];
+    return Array.isArray(v) ? v.map(String).filter((h) => /^[\w.*:[\]-]+$/.test(h)) : [];
+  } catch { throw new Error('HARNESS_PLUGIN_NETWORK is not JSON of the form {"plugin": ["host", ...]}'); }
 }
 
 /**
