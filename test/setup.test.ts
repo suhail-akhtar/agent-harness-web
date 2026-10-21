@@ -10,7 +10,8 @@ const hasDocker = (await dockerAvailable()) && (await imageExists('harness-sandb
 
 test('setup scripts: run as root with network, snapshotted, reused; the session starts from the result with its own policy', { skip: !hasDocker && 'no docker or sandbox image' }, async (t) => {
   // A system package (needs root and the network) and a file in the workspace.
-  const script = `apt-get update -qq >/dev/null && apt-get install -y -qq cowsay >/dev/null && echo installed > /workspace/setup-ran.txt && echo SETUP-OK # ${Date.now()}`;
+  // (the package mirror can be slow or drop a request on a busy machine: up to three tries)
+  const script = `for i in 1 2 3; do apt-get update -qq >/dev/null && apt-get install -y -qq cowsay >/dev/null && break; sleep 5; done && test -x /usr/games/cowsay && echo installed > /workspace/setup-ran.txt && echo SETUP-OK # ${Date.now()}`;
   const tag = snapshotTag('harness-sandbox:latest', script);
   t.after(() => run('docker', ['rmi', '-f', tag], { timeoutMs: 60_000 }));
   const opts = (logs: string[]) => ({ image: 'harness-sandbox:latest', network: 'none' as const, memory: '1g', cpus: '1', setup: { script, onLog: (l: string) => logs.push(l) } });
