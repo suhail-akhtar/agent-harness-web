@@ -54,7 +54,8 @@ export function addUsage(a: Usage, b: Usage): Usage {
 /** Total prompt size of one request: what the context window actually holds. */
 export const promptTokens = (u: Usage): number => u.input + u.cacheRead + u.cacheWrite;
 
-export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'bypass';
+/** default asks; acceptEdits allows edits; auto: a model checks each call against the request; dontAsk: what would be asked is denied (unattended runs); plan: read only; bypass: no checks. */
+export type PermissionMode = 'default' | 'acceptEdits' | 'auto' | 'dontAsk' | 'plan' | 'bypass';
 
 export interface Todo { content: string; status: 'pending' | 'in_progress' | 'completed' }
 

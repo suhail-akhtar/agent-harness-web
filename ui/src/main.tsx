@@ -7,7 +7,7 @@ import { apply, fromHistory, type Live } from './timeline.ts';
 import { ApprovalPrompt, RunsPanel, WorkflowDialog } from './workflow.tsx';
 import { type AuthConfig, signInChoices } from './auth.ts';
 
-const MODE_LABEL: Record<Mode, string> = { default: 'Ask before edits', acceptEdits: 'Auto-accept edits', plan: 'Plan mode', bypass: 'Bypass permissions' };
+const MODE_LABEL: Record<Mode, string> = { default: 'Ask before edits', acceptEdits: 'Auto-accept edits', auto: 'Auto (checked by a model)', dontAsk: 'Never ask (deny the rest)', plan: 'Plan mode', bypass: 'Bypass permissions' };
 const RUNTIME_LABEL = { docker: 'Sandbox', local: 'Server folder', companion: 'My computer' } as const;
 
 function useHash(): [string, (h: string) => void] {

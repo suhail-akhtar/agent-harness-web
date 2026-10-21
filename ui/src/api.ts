@@ -28,7 +28,7 @@ export const api = {
 };
 
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-export type Mode = 'default' | 'acceptEdits' | 'plan' | 'bypass';
+export type Mode = 'default' | 'acceptEdits' | 'auto' | 'dontAsk' | 'plan' | 'bypass';
 
 export interface ModelInfo { id: string; label: string; provider: string; contextWindow: number; compactAt: number; effort: Effort; efforts: Effort[]; available: boolean; vision?: boolean; notes?: string }
 export interface CompanionInfo { id: string; name: string; online: boolean; info: { platform: string; root: string } | null }

@@ -85,21 +85,26 @@ export function isReadOnlyCommand(cmd: string): boolean {
 export function decide(tool: Tool, input: Record<string, unknown>, ctx: PermissionContext): Decision {
   const { rules, mode } = ctx;
   if (rules.deny.some((r) => ruleMatches(r, tool, input))) return { action: 'deny', reason: 'blocked by a deny rule' };
-  if (rules.ask.some((r) => ruleMatches(r, tool, input))) return mode === 'bypass' ? { action: 'allow', reason: 'bypass mode' } : { action: 'ask', reason: 'matches an ask rule' };
+  if (rules.ask.some((r) => ruleMatches(r, tool, input))) return mode === 'bypass' ? { action: 'allow', reason: 'bypass mode' } : dontAsk({ action: 'ask', reason: 'matches an ask rule' }, mode);
   if (rules.allow.some((r) => ruleMatches(r, tool, input))) return { action: 'allow', reason: 'allowed by a rule' };
   // Anything that outlives the session (memory) is confirmed once untrusted
   // content is in the context: a page must not be able to plant instructions
   // for every future session.
-  if (ctx.tainted && tool.persists?.(input) && mode !== 'bypass') return { action: 'ask', reason: 'this is saved for future sessions, and the agent has read untrusted content (web pages or service results) in this session' };
+  if (ctx.tainted && tool.persists?.(input) && mode !== 'bypass') return dontAsk({ action: 'ask', reason: 'this is saved for future sessions, and the agent has read untrusted content (web pages or service results) in this session' }, mode);
   // After untrusted content, every way out is confirmed, whatever the mode would
   // otherwise allow: the content may be steering the agent to leak what it can read.
   if (ctx.tainted && mode !== 'bypass' && process.env.HARNESS_TAINT_GUARD !== 'off' && sendsOut(tool, input, ctx.network)) {
     const d = decideKindsOf(tool, input, ctx);
     if (d.action === 'deny') return d;
-    return { action: 'ask', reason: 'the agent has read untrusted content (web pages or service results) in this session, and this call can send data out of it' };
+    return dontAsk({ action: 'ask', reason: 'the agent has read untrusted content (web pages or service results) in this session, and this call can send data out of it' }, mode);
   }
 
-  return decideKindsOf(tool, input, ctx);
+  return dontAsk(decideKindsOf(tool, input, ctx), mode);
+}
+
+/** dontAsk: nobody is there to answer, so what would be asked is refused (allow rules still apply). */
+function dontAsk(d: Decision, mode: PermissionContext['mode']): Decision {
+  return mode === 'dontAsk' && d.action === 'ask' ? { action: 'deny', reason: `${d.reason}, and this session never asks (dontAsk mode): add an allow rule for it` } : d;
 }
 
 /** A call can need more than its tool's kind (render with export writes a file): every kind it needs is decided, and the strictest answer wins. */
@@ -110,7 +115,8 @@ function decideKindsOf(tool: Tool, input: Record<string, unknown>, ctx: Permissi
 }
 
 function decideKind(kind: Tool['kind'], input: Record<string, unknown>, ctx: PermissionContext): Decision {
-  const { mode } = ctx;
+  // auto is acceptEdits for edits; what it would ask about goes to its checking model first (in the agent).
+  const mode = ctx.mode === 'auto' ? 'acceptEdits' : ctx.mode === 'dontAsk' ? 'default' : ctx.mode;
   switch (kind) {
     case 'read':
     case 'meta':

@@ -72,6 +72,8 @@ export interface AgentConfig {
   inProcessHooks?: InProcessHook[];
   /** Answers prompt hooks (a small model judging an event). */
   hookJudge?: HookJudge;
+  /** auto mode: whether a call that would be asked about fits what the user asked for. */
+  autoCheck?: (call: { tool: string; summary: string; input: Record<string, unknown>; reason: string; request?: string; untrustedContentSeen: boolean }, signal: AbortSignal) => Promise<{ ok: boolean; reason?: string }>;
   runSubagent?: ToolContext['runSubagent'];
   askUser?: ToolContext['askUser'];
   proposePlan?: ToolContext['proposePlan'];
@@ -342,13 +344,23 @@ export class Agent {
     for (const e of pre.errors) this.hooks.emit({ kind: 'notice', level: 'warn', text: e, agent });
     if (pre.blocked) return finish(`A PreToolUse hook blocked this call: ${pre.feedback}`, true, undefined, undefined, name);
 
+    // auto mode: a model checks the call against what the user asked; a clear yes runs it, anything else goes on to be asked.
+    let autoNo: string | undefined;
+    if (decision.action === 'ask' && pre.decision !== 'allow' && this.hooks.getMode() === 'auto' && this.cfg.autoCheck) {
+      const v = await this.cfg.autoCheck({ tool: name, summary: tool.summarize(input), input, reason: decision.reason, request: this.hooks.latestUserPrompt(), untrustedContentSeen: this.tainted }, signal).catch((e: Error) => ({ ok: false, reason: `the check failed: ${e.message}` }));
+      if (v.ok) {
+        this.hooks.emit({ kind: 'notice', level: 'info', text: `Auto mode allowed ${tool.summarize(input).slice(0, 120)}`, agent });
+        decision.action = 'allow';
+      } else autoNo = v.reason;
+    }
+
     if (decision.action === 'ask' && pre.decision !== 'allow') {
       // A PermissionRequest hook may answer before a person is asked (a policy service, a judging model).
       const ph = await this.hookRun('PermissionRequest', { tool: name, input, reason: decision.reason }, name, signal);
       for (const e of ph.errors) this.hooks.emit({ kind: 'notice', level: 'warn', text: e, agent });
       if (ph.decision === 'deny' || ph.blocked) return finish(`A PermissionRequest hook denied this call${ph.feedback ? `: ${ph.feedback}` : '.'}`, true, undefined, undefined, name);
       if (ph.decision !== 'allow') {
-        const answer = await this.hooks.requestPermission(tool, input, tool.summarize(input), suggestRule(tool, input), agent);
+        const answer = await this.hooks.requestPermission(tool, input, autoNo ? `${tool.summarize(input)} (auto mode's check: ${autoNo})` : tool.summarize(input), suggestRule(tool, input), agent);
         if (!answer.allow) return finish(`The user denied this call.${answer.feedback ? ` They said: ${answer.feedback}` : ' Do not retry it unchanged; ask or take another approach.'}`, true, undefined, undefined, name);
       }
     }

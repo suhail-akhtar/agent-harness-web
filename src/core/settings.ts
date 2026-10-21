@@ -43,6 +43,8 @@ export interface Settings {
   compactAt?: number;
   /** Model for sub-agents; defaults to the session's model. */
   subagentModel?: string;
+  /** Model that checks calls in auto mode; defaults to the sub-agent model. */
+  autoModel?: string;
   /** Run blocking quality gates when the agent tries to finish, and send it back if any fail. */
   gatesOnStop?: boolean;
 }
@@ -54,6 +56,7 @@ export const defaultSettings = (): Settings => ({
   maxCostUsd: Number(process.env.HARNESS_MAX_COST_USD ?? 5),
   ...(process.env.HARNESS_COMPACT_AT ? { compactAt: Number(process.env.HARNESS_COMPACT_AT) } : {}),
   ...(process.env.HARNESS_SUBAGENT_MODEL ? { subagentModel: process.env.HARNESS_SUBAGENT_MODEL } : {}),
+  ...(process.env.HARNESS_AUTO_MODEL ? { autoModel: process.env.HARNESS_AUTO_MODEL } : {}),
   ...(process.env.HARNESS_GATES_ON_STOP === '1' ? { gatesOnStop: true } : {}),
 });
 
@@ -79,6 +82,7 @@ export async function operatorSettings(env: NodeJS.ProcessEnv = process.env): Pr
   if (typeof j.maxCostUsd === 'number') base.maxCostUsd = j.maxCostUsd;
   if (typeof j.compactAt === 'number') base.compactAt = j.compactAt;
   if (typeof j.subagentModel === 'string') base.subagentModel = j.subagentModel;
+  if (typeof j.autoModel === 'string') base.autoModel = j.autoModel;
   if (typeof j.gatesOnStop === 'boolean') base.gatesOnStop = j.gatesOnStop;
   return base;
 }

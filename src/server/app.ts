@@ -86,7 +86,7 @@ export function safeEqual(a: string, b: string): boolean {
 
 const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.mjs': 'text/javascript; charset=utf-8', '.map': 'application/json' };
 const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
-const MODES: PermissionMode[] = ['default', 'acceptEdits', 'plan', 'bypass'];
+const MODES: PermissionMode[] = ['default', 'acceptEdits', 'auto', 'dontAsk', 'plan', 'bypass'];
 
 export function createApp(o: AppOptions): { server: http.Server; handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> } {
   const { harness } = o;

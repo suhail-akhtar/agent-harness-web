@@ -36,7 +36,7 @@ export function printEvent(e: HarnessEvent, quiet = false): void {
 async function main() {
   const prompt = process.argv.slice(2).filter((a, i, all) => !a.startsWith('--') && !all[i - 1]?.startsWith('--')).join(' ');
   const workflow = arg('workflow');
-  if (!prompt && !workflow && !arg('resume')) { console.error('usage: npm run cli -- [--model id] [--runtime docker|local] [--dir path] [--mode default|acceptEdits|plan|bypass] "task"'); process.exit(2); }
+  if (!prompt && !workflow && !arg('resume')) { console.error('usage: npm run cli -- [--model id] [--runtime docker|local] [--dir path] [--mode default|acceptEdits|auto|dontAsk|plan|bypass] "task"'); process.exit(2); }
   const dataDir = path.resolve(arg('data', path.join(os.tmpdir(), 'harness-cli'))!);
   const runtime = (arg('runtime', 'local') === 'docker' ? 'docker' : 'local') as 'docker' | 'local';
   const dir = arg('dir');
