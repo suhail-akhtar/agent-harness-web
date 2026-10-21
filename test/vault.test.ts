@@ -638,3 +638,24 @@ test('in the loop: a rule lets a command with secrets run; after untrusted conte
     assert.match(r4.content, /token: \[vault:ci-token\]/, r4.content);
   } finally { await host.close(); }
 });
+
+test('two servers on one data folder change the vault at the same time: no change is lost, and each sees the other\'s', async () => {
+  const { VaultStore } = await import('../src/vault/store.ts');
+  const dataDir = await (await import('./helpers.ts')).tempDir();
+  const env = { HARNESS_SECRET_KEY: crypto.randomBytes(32).toString('base64') } as NodeJS.ProcessEnv;
+  const [a, b] = await Promise.all([new VaultStore({ dataDir, env }).load(), new VaultStore({ dataDir, env }).load()]);
+  const actor = { account: 'usr_1' };
+  // Twenty entries written at once, half through each server.
+  await Promise.all(Array.from({ length: 20 }, (_, i) => (i % 2 ? a : b).put(actor, { name: `entry-${i}`, value: `secret-value-${i}-${'x'.repeat(8)}` })));
+  for (const s of [a, b]) {
+    await s.sync();
+    assert.equal(s.list(actor).length, 20, 'every entry from both servers is there');
+  }
+  // A value written on one server is read on the other.
+  await a.put(actor, { name: 'entry-3', value: 'changed-on-a-12345' });
+  assert.equal(await b.reveal(actor, 'entry-3', 'test'), 'changed-on-a-12345');
+  // A delete on one is seen by the other.
+  await b.remove(actor, 'entry-4');
+  await a.sync();
+  assert.ok(!a.list(actor).some((e) => e.name === 'entry-4'));
+});

@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { SealError, serverKey } from '../util/sealed.ts';
+import { FileWatch, withFileLock, writeFileAtomic } from '../util/shared-file.ts';
 import { type Backend, backendsFrom } from './backends.ts';
 import { MIN_SECRET_LENGTH } from './redact.ts';
 
@@ -163,6 +164,7 @@ export class VaultStore {
   private auditFile: string;
   private entries: StoredEntry[] = [];
   private writes: Promise<void> = Promise.resolve();
+  private watch: FileWatch;
   private auditWrites: Promise<void> = Promise.resolve();
   private key?: Promise<Buffer>;
   readonly backends: Map<string, Backend>;
@@ -175,6 +177,7 @@ export class VaultStore {
     this.dir = path.join(opts.dataDir, 'vault');
     this.file = path.join(this.dir, 'entries.json');
     this.auditFile = path.join(this.dir, 'audit.jsonl');
+    this.watch = new FileWatch(this.file);
     const env = opts.env ?? process.env;
     const b = backendsFrom(opts.backends ?? env.HARNESS_VAULT_BACKENDS, env, () => (this.key ??= serverKey(opts.dataDir, env).catch((e) => { this.key = undefined; throw e; })));
     this.backends = b.backends;
@@ -189,18 +192,33 @@ export class VaultStore {
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw new VaultError(`${this.file} cannot be read: ${(e as Error).message}`, 500);
     }
+    await this.watch.mark();
     return this;
   }
 
-  private save(): Promise<void> {
-    const body = JSON.stringify({ version: 1, entries: this.entries }, null, 1);
-    this.writes = this.writes.catch(() => {}).then(async () => {
+  /** Another server on the same data folder may have changed the entries: read them again when the file changed. */
+  async sync(): Promise<void> {
+    // Every time (a stat): a secret changed on another server must not be read stale.
+    if (await this.watch.changed(true)) await this.load();
+  }
+
+  /**
+   * A change: under a lock on the file that every server on the data folder honours, the
+   * entries are read again, `fn` changes them, and they are written back atomically - so
+   * two servers changing the vault at once never lose one of the changes.
+   */
+  private locked<T>(fn: () => Promise<T>): Promise<T> {
+    const run = () => withFileLock(this.file, async () => {
       await fs.mkdir(this.dir, { recursive: true, mode: 0o700 });
-      const tmp = `${this.file}.${crypto.randomUUID().slice(0, 8)}.tmp`;
-      await fs.writeFile(tmp, body, { mode: 0o600 });
-      await fs.rename(tmp, this.file);
+      await this.load();
+      const r = await fn();
+      await writeFileAtomic(this.file, JSON.stringify({ version: 1, entries: this.entries }, null, 1), { mode: 0o600 });
+      await this.watch.mark();
+      return r;
     });
-    return this.writes;
+    const p = this.writes.catch(() => {}).then(run);
+    this.writes = p.then(() => {}, () => {});
+    return p;
   }
 
   private record(a: VaultActor, action: string, name: string, result: AuditRecord['result'], extra: { scope?: VaultScope; purpose?: string; reason?: string } = {}): void {
@@ -285,6 +303,7 @@ export class VaultStore {
       if (spec.ref && (a.session || !a.admin)) throw new VaultError('only administrators point an entry at an existing backend path (ref)', 403);
       this.mayWrite(a, scope);
       const owner = scope === 'operator' ? '' : scope === 'user' ? acct(a.account) : a.session!;
+      return await this.locked(async () => {
       const existing = this.entries.find((e) => e.name === spec.name && e.scope === scope && e.owner === owner);
       if (existing && spec.create) throw new VaultError(`a ${scope}-scope entry named "${spec.name}" already exists (set it to add a version)`, 409);
       const now = Date.now();
@@ -300,7 +319,6 @@ export class VaultStore {
         if (spec.description !== undefined) existing.description = String(spec.description).slice(0, 500) || undefined;
         existing.rotateEveryDays = every || undefined;
         existing.rotateBy = rotateBy;
-        await this.save();
         this.record(a, 'set', spec.name, 'ok', { scope });
         return this.info(existing);
       }
@@ -316,9 +334,9 @@ export class VaultStore {
         current: { version: 1, handle, createdAt: now, by: this.by(a) }, history: [],
       };
       this.entries.push(e);
-      await this.save();
       this.record(a, 'create', spec.name, 'ok', { scope });
       return this.info(e);
+      });
     } catch (err) {
       this.record(a, 'set', String(spec.name ?? ''), err instanceof VaultError && err.status === 403 ? 'denied' : 'error', { scope, reason: (err as Error).message });
       throw err;
@@ -351,6 +369,7 @@ export class VaultStore {
 
   /** The value (or an earlier version's), audited with why it is needed. */
   async reveal(a: VaultActor, name: string, purpose: string, o: { scope?: VaultScope; version?: number } = {}): Promise<string> {
+    await this.sync();
     const e = this.found(a, 'reveal', name, o.scope);
     const v = o.version === undefined || o.version === e.current.version ? e.current : e.history.find((h) => h.version === o.version);
     if (!v) throw new VaultError(`"${name}" has no version ${o.version} (kept: ${[e.current, ...e.history].map((h) => h.version).join(', ')})`, 404);
@@ -366,6 +385,7 @@ export class VaultStore {
 
   /** Every kept version's value (current first): what a restarted session hides again. */
   async allValues(a: VaultActor, name: string): Promise<string[]> {
+    await this.sync();
     const e = this.resolve(a, name);
     if (!e) return [];
     const out: string[] = [];
@@ -385,6 +405,7 @@ export class VaultStore {
    * stays readable for a rollback.
    */
   async rotate(a: VaultActor, name: string, o: { scope?: VaultScope; value?: string; grantsFor?: (plugin: string) => string[] } = {}): Promise<VaultEntryInfo> {
+    await this.sync();
     const e = this.found(a, 'rotate', name, o.scope);
     this.mayWrite(a, e.scope, e);
     let value = o.value;
@@ -407,13 +428,19 @@ export class VaultStore {
     }
     await this.put({ ...a, ...(e.scope === 'session' ? { session: e.owner } : {}) }, { name: e.name, scope: e.scope, value });
     // A rotation with no schedule clears a reminder that was due (one with a schedule moved it on).
-    if (!e.rotateEveryDays && e.rotateBy && e.rotateBy < Date.now()) { delete e.rotateBy; await this.save(); }
+    // (by name: put read the entries again, so `e` may be an older copy)
+    const now = await this.locked(async () => {
+      const cur = this.entries.find((x) => x.name === e.name && x.scope === e.scope && x.owner === e.owner) ?? e;
+      if (!cur.rotateEveryDays && cur.rotateBy && cur.rotateBy < Date.now()) delete cur.rotateBy;
+      return cur;
+    });
     this.record(a, 'rotate', name, 'ok', { scope: e.scope });
-    return this.info(e);
+    return this.info(now);
   }
 
   /** Makes an earlier version current again (as a new version: nothing is lost). */
   async rollback(a: VaultActor, name: string, version: number, scope?: VaultScope): Promise<VaultEntryInfo> {
+    await this.sync();
     const e = this.found(a, 'rollback', name, scope);
     this.mayWrite(a, e.scope, e);
     const v = e.history.find((h) => h.version === version);
@@ -425,11 +452,11 @@ export class VaultStore {
   }
 
   async remove(a: VaultActor, name: string, scope?: VaultScope): Promise<boolean> {
+    await this.sync();
     const e = this.found(a, 'delete', name, scope);
     try { this.mayWrite(a, e.scope, e); } catch (err) { this.record(a, 'delete', name, 'denied', { scope: e.scope, reason: (err as Error).message }); throw err; }
     await this.backend(e.backend).remove(e.ref);
-    this.entries = this.entries.filter((x) => x !== e);
-    await this.save();
+    await this.locked(async () => { this.entries = this.entries.filter((x) => !(x.name === e.name && x.scope === e.scope && x.owner === e.owner)); });
     this.record(a, 'delete', name, 'ok', { scope: e.scope });
     return true;
   }
@@ -458,7 +485,7 @@ export class VaultStore {
       return v;
     };
     const svc: VaultService = {
-      list: async () => this.list(base),
+      list: async () => { await this.sync(); return this.list(base); },
       reveal,
       envFor: async (map, purpose, by) => {
         const env: Record<string, string> = {};

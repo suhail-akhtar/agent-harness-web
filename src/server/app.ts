@@ -534,7 +534,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         ref: typeof b.ref === 'string' && b.ref ? b.ref : undefined,
       });
       try {
-        if (p === '/api/vault/entries' && method === 'GET') return send(res, 200, { entries: vault.list(actor), backends: [...vault.backends.keys()], defaultBackend: vault.defaultBackend });
+        if (p === '/api/vault/entries' && method === 'GET') { await vault.sync(); return send(res, 200, { entries: vault.list(actor), backends: [...vault.backends.keys()], defaultBackend: vault.defaultBackend }); }
         const em = /^\/api\/vault\/entries(?:\/([^/]+)(?:\/(rotate|rollback|history))?)?$/.exec(p);
         if (!em) throw new HttpError(404, 'not found');
         const b = method === 'GET' || method === 'DELETE' ? {} : await readJson(req, 200_000);
