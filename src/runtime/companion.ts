@@ -11,6 +11,7 @@ import type { ExecOptions, ExecResult, ToolHost, ToolOutcome } from './host.ts';
 
 export type { CompanionJob } from '../companion/handler.ts';
 import type { CompanionJob } from '../companion/handler.ts';
+import type { DesktopRequest, DesktopResult } from '../companion/desktop.ts';
 
 /** How much a companion folder may hold for server-side tools (render, browser). */
 const MIRROR_MAX = Number(process.env.HARNESS_MIRROR_MAX_MB ?? 100) * 1024 * 1024;
@@ -48,7 +49,7 @@ interface CompanionRecord {
 
 interface Live {
   lastSeen: number;
-  info: { platform: string; shell: string; root: string; version?: string; /** How the companion contains commands ('off' or absent: not at all). */ sandbox?: string; network?: 'none' | 'full'; /** The user started it with --trust-project: the project's MCP servers may start there. */ trustProject?: boolean };
+  info: { platform: string; shell: string; root: string; version?: string; /** How the companion contains commands ('off' or absent: not at all). */ sandbox?: string; network?: 'none' | 'full'; /** The user started it with --trust-project: the project's MCP servers may start there. */ trustProject?: boolean; /** Started with --allow-desktop: the computer tool may use its real screen. */ desktop?: boolean };
   queue: CompanionJob[];
   waiter?: (job: CompanionJob | null) => void;
   pending: Map<string, Pending>;
@@ -234,6 +235,8 @@ export class CompanionHub {
       mirror: (signal?: AbortSignal) => hub.mirror(id, sessionId, signal),
       pushFile: (rel: string, data: Buffer, signal?: AbortSignal) => hub.push(id, sessionId, rel, data, signal),
       get trustProject() { return l.info.trustProject === true; },
+      get desktop() { return l.info.desktop === true; },
+      desktopAction: (request: DesktopRequest, signal?: AbortSignal) => hub.dispatch<DesktopResult>(id, { kind: 'desktop', sessionId, request }, signal, request.timeoutMs + 30_000),
       async readFile(rel: string, signal?: AbortSignal): Promise<Buffer | null> {
         const r = await hub.dispatch<{ data: string | null }>(id, { kind: 'file', sessionId, op: 'get', path: rel }, signal, 5 * 60_000);
         return r.data === null ? null : Buffer.from(r.data, 'base64');

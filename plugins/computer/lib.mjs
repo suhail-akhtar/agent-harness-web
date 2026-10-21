@@ -71,9 +71,12 @@ export function toShot([x, y], screen, shot) {
 const BUTTON = { left_click: 1, middle_click: 2, right_click: 3, double_click: 1 };
 const SCROLL_BUTTON = { up: 4, down: 5, left: 6, right: 7 };
 
+const BUTTON_NAME = { left_click: 'left', middle_click: 'middle', right_click: 'right', double_click: 'left' };
+
 /**
- * One call as a plan: { xdo: xdotool command (or ''), shot: take a screenshot,
- * settleMs, waitMs, crop, launch, say: what was done, timeoutMs }.
+ * One call as a plan: { xdo: xdotool command (or ''), steps: the same as
+ * OS-neutral steps in screen pixels (for a companion's real desktop), shot: take
+ * a screenshot, settleMs, waitMs, crop, launch, say: what was done, timeoutMs }.
  * Throws an Error with a message for the model when the arguments are wrong.
  */
 export function plan(input, screen) {
@@ -82,7 +85,7 @@ export function plan(input, screen) {
   if (!ACTIONS.includes(action)) throw new Error(`Unknown action "${action}". One of: ${ACTIONS.join(', ')}`);
   const at = (v, name = 'coordinate') => toScreen(point(v, name, shot), screen, shot);
   const text = typeof input.text === 'string' ? input.text : '';
-  const out = { action, xdo: '', shot: true, settleMs: 300, timeoutMs: 30_000, say: '' };
+  const out = { action, xdo: '', steps: [], shot: true, settleMs: 300, timeoutMs: 30_000, say: '' };
   switch (action) {
     case 'screenshot':
       out.settleMs = 0;
@@ -91,12 +94,15 @@ export function plan(input, screen) {
     case 'left_click': case 'right_click': case 'middle_click': case 'double_click': {
       const b = BUTTON[action];
       const click = action === 'double_click' ? `click --repeat 2 --delay 100 ${b}` : `click ${b}`;
+      const press = { t: 'click', button: BUTTON_NAME[action], count: action === 'double_click' ? 2 : 1 };
       if (input.coordinate !== undefined) {
         const [x, y] = at(input.coordinate);
         out.xdo = `xdotool mousemove ${x} ${y} ${click}`;
+        out.steps = [{ t: 'move', x, y }, press];
         out.say = `${action.replace('_', ' ')} at [${input.coordinate.map(Math.round).join(', ')}]`;
       } else {
         out.xdo = `xdotool ${click}`;
+        out.steps = [press];
         out.say = `${action.replace('_', ' ')} at the pointer`;
       }
       break;
@@ -105,6 +111,7 @@ export function plan(input, screen) {
       if (input.coordinate === undefined) throw new Error('mouse_move needs coordinate [x, y]');
       const [x, y] = at(input.coordinate);
       out.xdo = `xdotool mousemove ${x} ${y}`;
+      out.steps = [{ t: 'move', x, y }];
       out.say = `Moved the pointer to [${input.coordinate.map(Math.round).join(', ')}]`;
       break;
     }
@@ -113,6 +120,8 @@ export function plan(input, screen) {
       const [sx, sy] = at(input.start_coordinate, 'start_coordinate');
       const [x, y] = at(input.coordinate);
       out.xdo = `xdotool mousemove ${sx} ${sy} mousedown 1 sleep 0.1 mousemove ${x} ${y} sleep 0.1 mouseup 1`;
+      // Halfway first: some apps start a drag only after the pointer has moved while held.
+      out.steps = [{ t: 'move', x: sx, y: sy }, { t: 'down', button: 'left' }, { t: 'sleep', ms: 100 }, { t: 'move', x: Math.round((sx + x) / 2), y: Math.round((sy + y) / 2) }, { t: 'sleep', ms: 50 }, { t: 'move', x, y }, { t: 'sleep', ms: 100 }, { t: 'up', button: 'left' }];
       out.say = `Dragged from [${input.start_coordinate.map(Math.round).join(', ')}] to [${input.coordinate.map(Math.round).join(', ')}]`;
       break;
     }
@@ -122,6 +131,7 @@ export function plan(input, screen) {
       // In chunks, as Anthropic's reference does: long xdotool type runs drop characters.
       const chunks = text.match(/[\s\S]{1,50}/g) ?? [];
       out.xdo = chunks.map((c) => `xdotool type --delay 12 -- ${q(c)}`).join(' && ');
+      out.steps = [{ t: 'type', text }];
       out.timeoutMs = 30_000 + text.length * 40;
       out.say = `Typed ${text.length} character(s)`;
       break;
@@ -129,6 +139,7 @@ export function plan(input, screen) {
     case 'key': {
       const k = keys(text);
       out.xdo = `xdotool key --delay 50 -- ${k.map(q).join(' ')}`;
+      out.steps = [{ t: 'key', combos: k }];
       out.say = `Pressed ${k.join(' ')}`;
       break;
     }
@@ -137,8 +148,10 @@ export function plan(input, screen) {
       if (!(dir in SCROLL_BUTTON)) throw new Error('scroll needs scroll_direction: up, down, left or right');
       const n = input.scroll_amount === undefined ? 3 : Number(input.scroll_amount);
       if (!Number.isInteger(n) || n < 1 || n > 30) throw new Error('scroll_amount must be a whole number from 1 to 30');
-      const move = input.coordinate !== undefined ? `mousemove ${at(input.coordinate).join(' ')} ` : '';
+      const where = input.coordinate !== undefined ? at(input.coordinate) : undefined;
+      const move = where ? `mousemove ${where.join(' ')} ` : '';
       out.xdo = `xdotool ${move}click --repeat ${n} --delay 50 ${SCROLL_BUTTON[dir]}`;
+      out.steps = [...(where ? [{ t: 'move', x: where[0], y: where[1] }] : []), { t: 'scroll', dir, amount: n }];
       out.say = `Scrolled ${dir} ${n}${input.coordinate ? ` at [${input.coordinate.map(Math.round).join(', ')}]` : ''}`;
       break;
     }
@@ -153,6 +166,7 @@ export function plan(input, screen) {
     case 'cursor_position':
       out.shot = false;
       out.xdo = 'xdotool getmouselocation --shell';
+      out.steps = [{ t: 'cursor' }];
       out.say = 'Pointer position';
       break;
     case 'zoom': {
@@ -161,7 +175,10 @@ export function plan(input, screen) {
       const [x1, y1] = at([r[0], r[1]], 'region start');
       const [x2, y2] = at([Math.max(0, r[2] - 1), Math.max(0, r[3] - 1)], 'region end');
       if (x2 <= x1 || y2 <= y1) throw new Error('zoom: region must be [x1, y1, x2, y2] with x2 > x1 and y2 > y1');
-      out.crop = { x: x1, y: y1, w: x2 - x1 + 1, h: y2 - y1 + 1 };
+      // The region's far edge, scaled as an edge (not as its last pixel): the whole region on a scaled screen.
+      const ex = Math.min(screen.w, Math.max(x2 + 1, Math.round((r[2] * screen.w) / shot.w)));
+      const ey = Math.min(screen.h, Math.max(y2 + 1, Math.round((r[3] * screen.h) / shot.h)));
+      out.crop = { x: x1, y: y1, w: ex - x1, h: ey - y1 };
       out.settleMs = 0;
       out.say = `Zoomed into [${r.map(Math.round).join(', ')}]`;
       break;
@@ -177,6 +194,26 @@ export function plan(input, screen) {
     }
   }
   return out;
+}
+
+/**
+ * A plan as the companion's `desktop` job: OS-neutral steps in screen pixels,
+ * and `screen`, the size the coordinates were read for (the companion acts only
+ * when its screen is still that size, so a click never lands somewhere else).
+ */
+export function desktopRequest(p, screen) {
+  const moves = p.steps.some((s) => s.t === 'move') || !!p.crop;
+  return {
+    action: p.action,
+    steps: p.steps,
+    ...(moves && screen ? { screen } : {}),
+    shot: p.shot,
+    ...(p.crop ? { crop: p.crop } : {}),
+    max: { ...MAX_SHOT },
+    settleMs: p.shot && (p.steps.length || p.launch) ? p.settleMs : 0,
+    ...(p.launch ? { launch: p.launch } : {}),
+    timeoutMs: p.timeoutMs,
+  };
 }
 
 /** Starts Xvfb and the window manager when the display is not up (they outlive the call: setsid, nohup). */

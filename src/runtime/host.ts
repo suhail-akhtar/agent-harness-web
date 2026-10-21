@@ -96,6 +96,10 @@ export interface ToolHost {
   hasCommands?(names: string[]): Promise<boolean>;
   /** Companion: the user started it trusting the project (its MCP servers may run there unsandboxed). */
   trustProject?: boolean;
+  /** Companion: started with --allow-desktop, so the computer tool may use the user's real screen. */
+  desktop?: boolean;
+  /** Companion: one computer-tool action on the user's real screen. */
+  desktopAction?(request: import('../companion/desktop.ts').DesktopRequest, signal?: AbortSignal): Promise<import('../companion/desktop.ts').DesktopResult>;
   close?(): Promise<void>;
 }
 

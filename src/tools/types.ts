@@ -75,8 +75,8 @@ export interface Tool {
   untrusted?: boolean;
   /** The file a call changes (write, edit): checkpointed before it runs where the tool runs remotely (a companion). */
   writesPath?(input: Record<string, unknown>): string | undefined;
-  /** Whether a call can carry data out of the session (default: from its kinds); confirmed after untrusted input. */
-  sendsOut?: boolean | ((input: Record<string, unknown>) => boolean);
+  /** Whether a call can carry data out of the session (default: from its kinds; a function may answer undefined for that); confirmed after untrusted input. */
+  sendsOut?: boolean | ((input: Record<string, unknown>, where?: { hostKind?: string }) => boolean | undefined);
   /** The permission kinds this call needs, when they depend on the input (default: [kind]). */
   kindsFor?(input: Record<string, unknown>, where?: { hostKind?: string }): ToolKind[];
   /** Whether a session on this host gets the tool at all (default: yes). A tool that can only fail there is left out of every request. */
