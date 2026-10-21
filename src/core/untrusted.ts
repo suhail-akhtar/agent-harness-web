@@ -17,8 +17,26 @@ export function stripInvisible(text: string): { text: string; removed: number } 
   return { text: out, removed };
 }
 
-/** The text with invisible characters removed, and a note saying so when there were any. */
+/**
+ * HTML comments (<!-- ... -->) in content that is not a fetched page (an MCP
+ * result, a Markdown file, an issue body): a renderer hides them from the person,
+ * the model reads them. GitHub strips them from issue bodies before its agent
+ * sees them. Only closed comments: an unclosed "<!--" in code is left alone.
+ */
+const HTML_COMMENT = /<!--[\s\S]*?-->/g;
+
+export function stripHtmlComments(text: string): { text: string; removed: number } {
+  if (!text.includes('<!--')) return { text, removed: 0 };
+  let removed = 0;
+  const out = text.replace(HTML_COMMENT, () => { removed++; return ''; });
+  return { text: out, removed };
+}
+
+/** The text with invisible characters and HTML comments removed, and a note saying so when there were any. */
 export function sanitizeUntrusted(text: string): string {
-  const { text: out, removed } = stripInvisible(text);
-  return removed ? `${out}\n[harness: removed ${removed} invisible character(s) from this content: hidden text is not shown to the model]` : out;
+  const inv = stripInvisible(text);
+  const com = stripHtmlComments(inv.text);
+  if (!inv.removed && !com.removed) return text;
+  const what = [inv.removed ? `${inv.removed} invisible character(s)` : '', com.removed ? `${com.removed} HTML comment(s)` : ''].filter(Boolean).join(' and ');
+  return `${com.text}\n[harness: removed ${what} from this content: hidden text is not shown to the model]`;
 }

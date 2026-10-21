@@ -30,6 +30,8 @@ export class Registry {
   readonly tools = new Map<string, Tool>();
   readonly agents = new Map<string, AgentDef>();
   readonly skillDirs: { dir: string; source: string }[] = [];
+  /** Folders of output styles (<name>.md) a session may pick when it is made. */
+  readonly outputStyleDirs: { dir: string; source: string }[] = [];
   readonly mcpServers = new Map<string, McpServerConfig & { plugin: string; secrets?: string[]; operator?: boolean }>();
   readonly gates = new Map<string, QualityGate & { plugin: string }>();
   readonly workflows = new Map<string, WorkflowDef>();
@@ -45,7 +47,7 @@ export class Registry {
   /** Saves the registry's contents; the function returned puts them back (a failed plugin load). */
   snapshot(): () => void {
     const maps: Map<string, unknown>[] = [this.models, this.providers, this.tools, this.agents, this.mcpServers, this.gates, this.workflows, this.searchBackends, this.instances];
-    const lists: unknown[][] = [this.skillDirs, this.hooks, this.plugins, this.closers];
+    const lists: unknown[][] = [this.skillDirs, this.outputStyleDirs, this.hooks, this.plugins, this.closers];
     const savedMaps = maps.map((m) => new Map(m));
     const savedLists = lists.map((l) => l.slice());
     const savedShell = Object.fromEntries(Object.entries(this.shellHooks).map(([k, v]) => [k, v?.slice()]));

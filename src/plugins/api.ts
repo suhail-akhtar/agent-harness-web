@@ -140,6 +140,8 @@ export interface PluginManifest {
   skills?: string;
   /** Directory of agent definitions (markdown with frontmatter). */
   agents?: string;
+  /** Directory of output styles: <name>.md, the body an instruction on how to reply. */
+  outputStyles?: string;
   mcpServers?: Record<string, McpServerConfig>;
   hooks?: Partial<Record<HookEvent, import('../core/settings.ts').HookSpec[]>>;
   /** Directory of workflow definitions (*.json). */

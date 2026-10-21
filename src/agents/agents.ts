@@ -12,7 +12,7 @@ import { asList, parseFrontmatter } from '../util/frontmatter.ts';
 
 export const READ_ONLY_TOOLS = ['glob', 'grep', 'read', 'skill', 'tool_search', 'web_fetch'];
 /** Tools a sub-agent never gets: they talk to the user or spawn more agents. */
-export const INTERACTIVE_TOOLS = ['agent', 'ask_user', 'exit_plan_mode', 'todo_write'];
+export const INTERACTIVE_TOOLS = ['agent', 'ask_user', 'enter_plan_mode', 'exit_plan_mode', 'todo_write'];
 
 export const BUILTIN_AGENTS: AgentDef[] = [
   {

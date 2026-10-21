@@ -82,7 +82,8 @@ export type HarnessEvent =
   | { kind: 'turn_end'; reason: TurnEndReason; agent?: string }
   | { kind: 'status'; status: SessionStatus };
 
-export type TurnEndReason = 'done' | 'aborted' | 'max_steps' | 'budget' | 'refusal' | 'error' | 'max_tokens';
+/** time: the turn ran past settings.maxTurnMinutes (HARNESS_MAX_TURN_MINUTES). */
+export type TurnEndReason = 'done' | 'aborted' | 'max_steps' | 'budget' | 'time' | 'refusal' | 'error' | 'max_tokens';
 export type SessionStatus = 'idle' | 'running' | 'waiting';
 
 /** What the UI renders for a tool result (never sent to the model). */

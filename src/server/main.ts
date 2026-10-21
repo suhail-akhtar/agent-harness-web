@@ -54,6 +54,19 @@ async function main() {
     console.log(`plugins: ${harness.registry.plugins.map((x) => x.name).join(', ') || 'none'}`);
     console.log(`web search: ${harness.search ?? 'off'}`);
   });
+  // A clean stop: turns end, SessionEnd hooks run (reason "shutdown"), MCP servers and plugins close.
+  // A second signal, or 15 seconds, exits at once.
+  let stopping = false;
+  const stop = (sig: string) => {
+    if (stopping) process.exit(1);
+    stopping = true;
+    console.log(`${sig}: shutting down`);
+    setTimeout(() => process.exit(1), 15_000).unref();
+    server.close();
+    harness.close().catch((e: Error) => console.error(e.message)).finally(() => process.exit(0));
+  };
+  process.on('SIGINT', () => stop('SIGINT'));
+  process.on('SIGTERM', () => stop('SIGTERM'));
 }
 
 main().catch((err) => { console.error(err); process.exit(1); });

@@ -50,7 +50,7 @@ const turn = (s: { send(t: string): Promise<unknown>; subscribe(n: number, f: (x
 };
 
 test('every lifecycle event has a name, and an operator settings file with an unknown one is refused', async () => {
-  assert.deepEqual([...HOOK_EVENTS].sort(), ['Notification', 'PermissionRequest', 'PostCompact', 'PostToolUse', 'PostToolUseFailure', 'PreCompact', 'PreToolUse', 'SessionEnd', 'SessionStart', 'Stop', 'StopFailure', 'SubagentStart', 'SubagentStop', 'UserPromptSubmit']);
+  assert.deepEqual([...HOOK_EVENTS].sort(), ['ConfigChange', 'FileChanged', 'InstructionsLoaded', 'Notification', 'PermissionRequest', 'PostCompact', 'PostToolUse', 'PostToolUseFailure', 'PreCompact', 'PreToolUse', 'SessionEnd', 'SessionStart', 'Stop', 'StopFailure', 'SubagentStart', 'SubagentStop', 'TaskCompleted', 'TaskCreated', 'UserPromptSubmit', 'WorktreeCreate', 'WorktreeRemove']);
   const file = path.join(await tempDir(), 's.json');
   await fs.writeFile(file, JSON.stringify({ hooks: { BeforeEverything: [] } }));
   await assert.rejects(operatorSettings({ HARNESS_SETTINGS: file }), /unknown hook event "BeforeEverything"/);

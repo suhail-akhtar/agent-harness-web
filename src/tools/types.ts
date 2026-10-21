@@ -50,6 +50,8 @@ export interface ToolContext {
   askUser?(question: string, options: string[]): Promise<string>;
   proposePlan?(plan: string): Promise<{ approved: boolean; feedback?: string }>;
   isPlanMode?(): boolean;
+  /** Switches the session into plan mode (the main agent only); refused where nobody could approve a plan. */
+  enterPlanMode?(reason: string): { ok: boolean; reason?: string };
   services?: ToolServices;
   /** Runs another tool as this agent would (permissions, hooks, events): for run_script. */
   callTool?(name: string, input: Record<string, unknown>): Promise<{ content: string; is_error?: boolean }>;

@@ -65,8 +65,15 @@ export class SessionManager {
     return true;
   }
 
+  /** Live sessions an account owns (undefined: the single-user server's, or the operator's). */
+  ownedBy(owner: string | undefined): Session[] {
+    return [...this.sessions.values()].filter((s) => s.meta.owner === owner);
+  }
+
+  /** Server shutdown: stop every turn, then SessionEnd hooks (reason "shutdown") for sessions that ran. */
   async close(): Promise<void> {
     clearInterval(this.idleTimer);
     for (const s of this.sessions.values()) s.abort();
+    await Promise.all([...this.sessions.values()].map((s) => s.end('shutdown').catch(() => {})));
   }
 }

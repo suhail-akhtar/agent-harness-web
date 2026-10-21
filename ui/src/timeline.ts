@@ -20,7 +20,7 @@ const key = () => `k${++n}`;
 export function visibleUserText(text: string): string {
   return text
     .replace(/<environment>[\s\S]*?<\/environment>/g, '')
-    .replace(/<project_instructions[\s\S]*?<\/project_instructions>/g, '')
+    .replace(/<(managed|user|project|local)_instructions[\s\S]*?<\/\1_instructions>/g, '')
     .replace(/<memory>[\s\S]*?<\/memory>/g, '')
     .replace(/<skills>[\s\S]*?<\/skills>/g, '')
     .replace(/<session_start_context>[\s\S]*?<\/session_start_context>/g, '')
