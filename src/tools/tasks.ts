@@ -109,7 +109,8 @@ export async function watchTask(t: TaskEntry, pattern: RegExp | undefined, timeo
     await t.refresh?.();
     const r = await t.read(pos);
     pos = Math.max(pos, r.size);
-    const lines = (partial + r.text).split('\n');
+    // Windows programs end lines with CR LF: the CR goes, so "$" in a pattern means the end of the line.
+    const lines = (partial + r.text).split('\n').map((l, i, all) => (i < all.length - 1 ? l.replace(/\r$/, '') : l));
     // The last piece may be a line still being written: it is tested once the task ends.
     partial = t.status === 'running' ? lines.pop() ?? '' : '';
     for (const l of lines) {

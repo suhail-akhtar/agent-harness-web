@@ -11,5 +11,8 @@ RUN set -eux; \
     git config --system init.defaultBranch main; \
     git config --system --add safe.directory '*'
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
+# The Python quality gates' tools (python-lint runs ruff, python-test runs pytest), so they
+# judge Python work here instead of only warning that the tool is missing.
+RUN pip3 install --no-cache-dir ruff pytest
 WORKDIR /workspace
 CMD ["sleep", "infinity"]

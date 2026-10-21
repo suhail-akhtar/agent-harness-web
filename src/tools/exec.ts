@@ -80,7 +80,10 @@ async function background(command: string, ctx: ToolContext, description: string
   const log = `.harness/bg/${id}.log`;
   const exitFile = `.harness/bg/${id}.exit`;
   // The command runs in a child shell, so its exit code is recorded whatever it does (exit, exec, cd).
-  const inner = `bash -c ${shq(command)}; echo $? > ${exitFile}`;
+  // Its output goes to a file, where programs buffer it in blocks: a server's "listening" line could
+  // sit unseen until it exits, and monitor could never wait for it. Python and C stdio (stdbuf, where
+  // there is one) are told to write line by line; Node writes to files as it goes.
+  const inner = `export PYTHONUNBUFFERED=1; if command -v stdbuf >/dev/null 2>&1; then stdbuf -oL -eL bash -c ${shq(command)}; else bash -c ${shq(command)}; fi; echo $? > ${exitFile}`;
   // setsid gives it its own session (and process group) where it exists; Git Bash on Windows has only nohup.
   const detach = `(command -v setsid >/dev/null 2>&1 && exec setsid nohup bash -c ${shq(inner)} || exec nohup bash -c ${shq(inner)})`;
   const script = `mkdir -p .harness/bg && (${detach} > ${log} 2>&1 < /dev/null & echo $!)`;

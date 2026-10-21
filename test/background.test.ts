@@ -282,3 +282,27 @@ test('background shells are tasks: listed, read, watched for a line or their end
     assert.match(json(t.s.history[12]), new RegExp(`Background shell ${job} .*exited with code 3`), 'its end is reported to the agent');
   } finally { await t.close(); }
 });
+
+test('a background program that buffers its output (Python) still shows its lines as it prints them, so monitor sees them', { skip: (new LocalHost(process.cwd()).shell === 'powershell' && 'needs bash') || false, timeout: 60_000 }, async () => {
+  const { execFileSync } = await import('node:child_process');
+  const py = ['python3', 'python'].find((p) => { try { execFileSync(p, ['-c', 'print(1)'], { stdio: 'ignore' }); return true; } catch { return false; } });
+  if (!py) return;
+  const lastResults = (req: ProviderRequest) => json(req.messages.at(-1));
+  let server = '';
+  const t = await setup({
+    main: [
+      // Prints its ready line once, without flushing, then keeps running: block-buffered, that line would stay unseen.
+      { calls: [{ name: 'bash', input: { command: `${py} -c "import time; print('SERVING on 8000'); time.sleep(40)"`, run_in_background: true } }] },
+      (req) => {
+        server = /task (shell-\w+)/.exec(lastResults(req))?.[1] ?? '';
+        return { calls: [{ name: 'monitor', input: { task_id: server, pattern: 'SERVING on [0-9]+$', include_existing: true, timeout_ms: 15_000 } }] };
+      },
+      () => ({ calls: [{ name: 'task_stop', input: { task_id: server } }] }),
+      { text: 'done' },
+    ],
+  });
+  try {
+    await t.turn('go');
+    assert.match(results(t.s.history[4])[0]!.content, /printed a line matching[\s\S]*SERVING on 8000/);
+  } finally { await t.close(); }
+});

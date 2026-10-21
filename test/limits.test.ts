@@ -62,10 +62,11 @@ test('per-account limits: a second running session, or one sandbox too many, is 
     // The operator's own sessions are not counted against anyone.
     const opSession = await harness.sessions.create({ model: 'deepseek-flash', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: work } });
     assert.equal((await call('op', 'POST', `/api/sessions/${opSession.meta.id}/messages`, { text: 'hi' })).status, 202);
-    gated.release();
-    await new Promise((r) => setTimeout(r, 300));
-    gated.release();
-    await new Promise((r) => setTimeout(r, 300));
+    // Let every waiting request through until Alice's first session is done (not a fixed wait: a loaded machine is slow).
+    for (const t0 = Date.now(); harness.sessions.statusOf(a.meta.id) !== 'idle' && Date.now() - t0 < 20_000;) {
+      gated.release();
+      await new Promise((r) => setTimeout(r, 50));
+    }
     assert.equal(harness.sessions.statusOf(a.meta.id), 'idle');
     assert.equal((await call(alice.token, 'POST', `/api/sessions/${b.meta.id}/messages`, { text: 'now' })).status, 202, 'once the first is done');
     gated.release();

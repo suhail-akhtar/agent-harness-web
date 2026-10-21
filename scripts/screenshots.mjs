@@ -40,7 +40,7 @@ const open = async (id) => { await page.goto(`${BASE}/#${id}`); await page.reloa
 
 try {
   if (want('home')) {
-    await page.goto(BASE); await page.waitForLoadState('domcontentloaded');
+    await page.goto(BASE); await page.getByRole('button', { name: '+ New session' }).waitFor();
     await shot('01-home');
   }
   if (want('new-session')) {

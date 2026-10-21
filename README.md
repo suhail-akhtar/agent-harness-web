@@ -16,6 +16,8 @@ It is tuned and tested on three cost-efficient models: **Claude Haiku 5.5**, **D
               └── history (append-only) · checkpoints · trace · recovery after restart        │
 ```
 
+Screenshots of real sessions (a sandbox task with tests and gates, approvals, computer use, background work, workflows) are in [docs/screenshots](docs/screenshots); `node scripts/screenshots.mjs` makes them again against a running server.
+
 ## Quick start
 
 ```bash
