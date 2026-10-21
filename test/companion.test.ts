@@ -81,8 +81,14 @@ test('mirror: a companion that sends paths outside the folder cannot write outsi
   } finally { stop(); }
   // What Windows would read as a path out of the copy.
   const root = path.join(data, 'mirrors', 's1');
-  for (const p of ['..\\..\\users.json', 'a\\..\\..\\x', 'C:x', 'C:\\x', '\\\\server\\share', 'a//b', 'a/../b', '', 'a\0b']) assert.equal(mirrorPath(root, p), undefined, p);
+  for (const p of ['..\\..\\users.json', 'a\\..\\..\\x', 'C:x', 'C:\\x', '\\\\server\\share']) assert.equal(mirrorPath(root, p, 'win32'), undefined, p);
+  for (const p of ['a//b', 'a/../b', '', 'a\0b', '/etc/x']) assert.equal(mirrorPath(root, p), undefined, p);
   assert.equal(mirrorPath(root, 'docs/a.md'), path.join(root, 'docs', 'a.md'));
+  // On a Linux or macOS server ":" and "\" are ordinary name characters (a Mac's "10:00.png"), and stay inside.
+  assert.equal(mirrorPath(root, 'shots/10:00.png', 'linux'), path.join(root, 'shots', '10:00.png'));
+  if (process.platform !== 'win32') assert.equal(mirrorPath(root, '..\\..\\users.json'), path.join(root, '..\\..\\users.json'));
+  // Whatever the rules say, the result is never outside the copy.
+  assert.equal(mirrorPath(root, '..\\..\\users.json', process.platform === 'win32' ? 'linux' : 'win32'), undefined);
 });
 
 test('mirror: a large folder comes over in several replies; secrets stay on the computer; the copy goes with the session', async () => {
@@ -119,6 +125,9 @@ test('visual gates on a companion decide from a listing, and an offline companio
     assert.equal(await gate('playtest').applies!(host('levels/playtest.json') as never, sig), false, 'only the one at the root');
     assert.equal(await gate('documents-render').applies!(host('No files match **/*.pdf.') as never, sig), false);
     assert.equal(await gate('documents-render').applies!(host(new Error('companion offline')) as never, sig), false);
+    // Only documents the gate's own walk would find: not too deep, not in skipped folders, not Office lock files.
+    assert.equal(await gate('documents-render').applies!(host('docs/a/b/c/d/e/report.pdf\n~$deck.pptx\n.cache/x.pdf\nnode_modules/p/doc.pdf') as never, sig), false);
+    assert.equal(await gate('documents-render').applies!(host('~$deck.pptx\ndocs\\q3\\deck.pptx') as never, sig), true, 'a Windows companion lists with backslashes');
     assert.equal(mirrored, 0, 'deciding copied nothing');
   } finally { await h.close(); }
 });

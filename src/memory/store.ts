@@ -43,14 +43,21 @@ export class MemoryError extends Error {}
 export interface MemoryFile { scope: MemoryScope; path: string; size: number; modified: number }
 export interface MemoryChange { at: number; session?: string; op: string; path: string; to?: string }
 
-/** Folders a session's memory lives in. `project` is absent when the workspace has no stable identity. */
-export interface MemoryDirs { user: string; project?: string; projectLabel?: string }
+/**
+ * Folders a session's memory lives in. `project` is absent when the workspace has no stable identity.
+ * `projectShared` is where project memory lived before it was kept per account: read until the
+ * account's own folder exists, and copied into it on the first change.
+ */
+export interface MemoryDirs { user: string; project?: string; projectLabel?: string; projectShared?: string }
 
 export class MemoryStore {
   readonly dirs: MemoryDirs;
   readonly readOnly: boolean;
   private session?: string;
   private queue: Promise<unknown> = Promise.resolve();
+  /** The project folder in use: the shared one until this account writes. */
+  private projectInUse?: string;
+  private writing = false;
 
   constructor(dirs: MemoryDirs, opts: { readOnly?: boolean; session?: string } = {}) {
     this.dirs = dirs;
@@ -61,6 +68,21 @@ export class MemoryStore {
   /** The same memory, without the commands that change it (for sub-agents). */
   reader(): MemoryStore {
     return new MemoryStore(this.dirs, { readOnly: true, session: this.session });
+  }
+
+  private dir(scope: MemoryScope): string | undefined {
+    return scope === 'project' ? this.projectInUse ?? this.dirs.project : this.dirs[scope];
+  }
+
+  /** Picks the project folder: the account's own, else the shared one (copied over, without links, before a change). */
+  private async settle(write: boolean): Promise<void> {
+    const { project: own, projectShared: shared } = this.dirs;
+    this.projectInUse = undefined;
+    if (!own || !shared || await fs.lstat(own).catch(() => null)) return;
+    const st = await fs.lstat(shared).catch(() => null);
+    if (!st?.isDirectory()) return;
+    if (!write) { this.projectInUse = shared; return; }
+    await fs.cp(shared, own, { recursive: true, filter: async (src) => !(await fs.lstat(src)).isSymbolicLink() });
   }
 
   scopes(): MemoryScope[] {
@@ -75,7 +97,7 @@ export class MemoryStore {
     if (!parts.length) return { rel: '' };
     const scope = parts.shift() as MemoryScope;
     if (scope !== 'user' && scope !== 'project') throw new MemoryError(`unknown memory scope "${scope}": use ${MEMORY_ROOT}/user or ${MEMORY_ROOT}/project`);
-    const dir = this.dirs[scope];
+    const dir = this.dir(scope);
     if (!dir) throw new MemoryError('this workspace has no project memory (it is not a git repository or a named folder); use /memories/user');
     for (const part of parts) if (!NAME.test(part) || part === '..' || part === '.') throw new MemoryError(`bad name "${part}": use letters, digits, spaces, dots, dashes and underscores`);
     if (!parts.length && !allowScopeRoot) return { scope, rel: '', real: dir };
@@ -93,9 +115,10 @@ export class MemoryStore {
   }
 
   async list(scope?: MemoryScope): Promise<MemoryFile[]> {
+    if (!this.writing) await this.settle(false);
     const out: MemoryFile[] = [];
     for (const s of scope ? [scope] : this.scopes()) {
-      const root = this.dirs[s];
+      const root = this.dir(s);
       if (!root) continue;
       const walk = async (dir: string, rel: string) => {
         let entries: import('node:fs').Dirent[];
@@ -116,9 +139,10 @@ export class MemoryStore {
   }
 
   async read(vpath: string): Promise<string> {
+    if (!this.writing) await this.settle(false);
     const { real, rel, scope } = this.resolve(vpath);
     if (!real || !rel) throw new MemoryError(`${vpath} is a directory`);
-    await this.assertNotLink(real, this.dirs[scope!]!);
+    await this.assertNotLink(real, this.dir(scope!)!);
     try { return await fs.readFile(real, 'utf8'); } catch { throw new MemoryError(`${vpath} does not exist`); }
   }
 
@@ -135,7 +159,11 @@ export class MemoryStore {
 
   /** Writes are queued: two tools in one turn must not interleave a read-modify-write. */
   private serial<T>(f: () => Promise<T>): Promise<T> {
-    const next = this.queue.catch(() => {}).then(f);
+    const next = this.queue.catch(() => {}).then(async () => {
+      if (!this.readOnly) await this.settle(true);
+      this.writing = true;
+      try { return await f(); } finally { this.writing = false; }
+    });
     this.queue = next;
     return next;
   }
@@ -151,22 +179,23 @@ export class MemoryStore {
   private async put(scope: MemoryScope, real: string, text: string): Promise<void> {
     await this.checkScopeSize(scope, real, Buffer.byteLength(text));
     // Check before mkdir too: mkdir follows a planted link and creates folders outside memory.
-    await this.assertNotLink(real, this.dirs[scope]!);
+    await this.assertNotLink(real, this.dir(scope)!);
     await fs.mkdir(path.dirname(real), { recursive: true });
-    await this.assertNotLink(real, this.dirs[scope]!);
+    await this.assertNotLink(real, this.dir(scope)!);
     const tmp = `${real}.${crypto.randomUUID().slice(0, 8)}.tmp`;
     await fs.writeFile(tmp, text);
     await fs.rename(tmp, real);
   }
 
   private async log(scope: MemoryScope, change: Omit<MemoryChange, 'at' | 'session'>): Promise<void> {
-    const dir = this.dirs[scope]!;
+    const dir = this.dir(scope)!;
     await fs.mkdir(dir, { recursive: true });
     await fs.appendFile(path.join(dir, '.changes.jsonl'), JSON.stringify({ at: Date.now(), session: this.session, ...change }) + '\n');
   }
 
   async changes(scope: MemoryScope, limit = 50): Promise<MemoryChange[]> {
-    const dir = this.dirs[scope];
+    await this.settle(false);
+    const dir = this.dir(scope);
     if (!dir) return [];
     try {
       return (await fs.readFile(path.join(dir, '.changes.jsonl'), 'utf8')).split('\n').filter(Boolean).slice(-limit).map((l) => JSON.parse(l));
@@ -211,7 +240,7 @@ export class MemoryStore {
   delete(vpath: string): Promise<void> {
     return this.serial(async () => {
       const { scope, rel, real } = this.guardWrite(vpath);
-      await this.assertNotLink(real, this.dirs[scope]!);
+      await this.assertNotLink(real, this.dir(scope)!);
       const st = await fs.lstat(real).catch(() => null);
       if (!st) throw new MemoryError(`${vpath} does not exist`);
       await fs.rm(real, { recursive: true, force: true });
@@ -223,7 +252,7 @@ export class MemoryStore {
     return this.serial(async () => {
       const a = this.guardWrite(from);
       const b = this.guardWrite(to);
-      await this.assertNotLink(a.real, this.dirs[a.scope]!);
+      await this.assertNotLink(a.real, this.dir(a.scope)!);
       if (!(await fs.lstat(a.real).catch(() => null))) throw new MemoryError(`${from} does not exist`);
       if (await fs.lstat(b.real).catch(() => null)) throw new MemoryError(`${to} already exists`);
       if (a.scope !== b.scope) {

@@ -31,6 +31,12 @@ export async function assertPublicUrl(raw: string): Promise<URL> {
   return u;
 }
 
+/**
+ * Lowercases A-Z only. String.toLowerCase can change the length ("İ" becomes two
+ * code units), and positions found in the lowered copy must hold in the page itself.
+ */
+const asciiLower = (s: string) => s.replace(/[A-Z]+/g, (m) => m.toLowerCase());
+
 const SKIP = new Set(['script', 'style', 'noscript', 'svg', 'head', 'template', 'iframe']);
 const CHROME = new Set(['nav', 'header', 'footer', 'aside', 'form']);
 const BLOCK_END = new Set(['p', 'div', 'section', 'article', 'li', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'pre', 'blockquote', 'table', 'ul', 'ol', 'dl', 'dd', 'dt', 'figcaption']);
@@ -42,7 +48,7 @@ const BLOCK_END = new Set(['p', 'div', 'section', 'article', 'li', 'tr', 'h1', '
  * forward with indexOf, so the cost is linear in the page.
  */
 export function htmlToText(html: string, opts: { dropChrome?: boolean } = {}): string {
-  const lower = html.toLowerCase();
+  const lower = asciiLower(html);
   const out: string[] = [];
   let href: string | undefined;
   let i = 0;
@@ -116,7 +122,7 @@ function sections(html: string, lower: string, tag: string): string[] {
  * model reading menus on every fetch.
  */
 export function readable(html: string): { title?: string; text: string } {
-  const lower = html.toLowerCase();
+  const lower = asciiLower(html);
   const t = sections(html, lower, 'title')[0];
   const title = t ? htmlToText(t).replace(/\s+/g, ' ').trim() || undefined : undefined;
   const full = htmlToText(html, { dropChrome: true });

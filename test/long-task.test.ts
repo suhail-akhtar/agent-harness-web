@@ -123,3 +123,23 @@ test('long-task: approving "stuck" retries at most three times, so an unattended
   assert.equal(path_.filter((x) => x === 'build:done').length, 12, path_.join(' > '));
   assert.equal(path_.filter((x) => x.startsWith('unstick:')).at(-1), 'unstick:fail');
 });
+
+test('long-task: the retry cap counts retries of one stall; a feature passing resets it', async () => {
+  const ws = await tempDir();
+  const host = new LocalHost(ws);
+  const check = (wf.nodes.check as { command: string }).command;
+  const unstick = (wf.nodes.unstick as { command: string }).command;
+  const d = path.join(ws, '.harness', 'long-task');
+  await fs.mkdir(d, { recursive: true });
+  const list = (n: number) => [feature('F01', n > 0), feature('F02', n > 1), feature('F03')];
+  await fs.writeFile(path.join(d, 'features.json'), JSON.stringify(list(0)));
+  await host.exec(check, { timeoutMs: 20_000 });
+  for (let i = 0; i < 3; i++) assert.equal((await host.exec(unstick, { timeoutMs: 20_000 })).code, 0, `retry ${i + 1} of the first stall`);
+  // Progress, then a later stall gets its own three retries.
+  await fs.writeFile(path.join(d, 'features.json'), JSON.stringify(list(1)));
+  await host.exec(check, { timeoutMs: 20_000 });
+  for (let i = 0; i < 3; i++) assert.equal((await host.exec(unstick, { timeoutMs: 20_000 })).code, 0, `retry ${i + 1} of the second stall`);
+  const r = await host.exec(unstick, { timeoutMs: 20_000 });
+  assert.equal(r.code, 1, 'a fourth retry of the same stall stops');
+  assert.match(r.stdout, /Stuck four times/);
+});

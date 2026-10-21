@@ -70,6 +70,12 @@ test('readable pages: the article without menus, footers and scripts; a title', 
 test('html to text: links, entities and lists; hostile pages take linear time', () => {
   assert.equal(htmlToText('<ul><li>One <a href="https://x.dev/a">docs</a></li><li>Two &amp;lt; &#x41; &#99999999; &bogus;</li></ul>'), '- One docs (https://x.dev/a)\n- Two &lt; A &#99999999;', 'an out-of-range code point stays as text (it used to throw)');
   assert.equal(htmlToText('a < b and <!-- note --> c'), 'a < b and  c');
+  // Characters whose lowercase is longer ("İ" is two code units lowered) must not shift positions.
+  const tr = 'İstanbul İzmir '.repeat(20);
+  assert.equal(htmlToText(`<p>${tr}</p><SCRIPT>var leak = 1;</SCRIPT><p>after</p>`), `${tr.trimEnd()}\nafter`);
+  const page = readable(`<title>İİ Title</title><body>${tr}<main>${'Real article text. '.repeat(30)}</main></body>`);
+  assert.equal(page.title, 'İİ Title');
+  assert.match(page.text, /^Real article text\./);
   for (const [name, html] of [
     ['unclosed scripts', '<script>'.repeat(40_000)],
     ['unclosed comments', '<!--x'.repeat(40_000)],

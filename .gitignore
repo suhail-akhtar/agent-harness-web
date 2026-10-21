@@ -4,3 +4,8 @@ dist/
 .harness-data/
 .harness/bg/
 .work/
+
+# Local secrets
+.env
+.env.*
+!.env.example

@@ -20,11 +20,13 @@ export const COMPANION_RESULT_LIMIT = 48_000_000;
 
 /**
  * A path from a companion as a path inside `root`, or undefined. A companion is
- * someone's computer: on Windows "..\\x" or "C:x" are paths too, so anything but
- * plain forward-slash segments is refused, and the result is checked to be inside.
+ * someone's computer: on a Windows server "..\\x" or "C:x" are paths too, so there
+ * anything but plain forward-slash segments is refused. Elsewhere ":" and "\\" are
+ * ordinary characters in a file name (a Mac's "10:00.png"). The result is checked to be inside.
  */
-export function mirrorPath(root: string, p: unknown): string | undefined {
-  if (typeof p !== 'string' || !p || p.length > 1000 || /[\\:\0]/.test(p) || p.startsWith('/')) return undefined;
+export function mirrorPath(root: string, p: unknown, platform: string = process.platform): string | undefined {
+  const bad = platform === 'win32' ? /[\\:\0]/ : /\0/;
+  if (typeof p !== 'string' || !p || p.length > 1000 || bad.test(p) || p.startsWith('/')) return undefined;
   const parts = p.split('/');
   if (parts.some((s) => !s || s === '.' || s === '..')) return undefined;
   const target = path.resolve(root, ...parts);

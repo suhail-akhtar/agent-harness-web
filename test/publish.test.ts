@@ -185,3 +185,28 @@ test('publish: a .git that is a link, a gitfile or borrows another repository is
   await fs.writeFile(path.join(ws, '.git', 'objects', 'info', 'alternates'), `${elsewhere}/objects\n`);
   await assert.rejects(publish({ workspace: ws, input: { branch: 'b', title: 't' }, cfg: { repos: [remote] } }), /points at another repository/);
 });
+
+test('publish: links inside .git (objects, refs, HEAD) that could reach another repository are refused', async () => {
+  const other = await repos();
+  for (const entry of ['objects', path.join('refs', 'heads'), 'HEAD', 'packed-refs']) {
+    const { remote, ws } = await repos();
+    const target = path.join(other.ws, '.git', entry);
+    await fs.rm(path.join(ws, '.git', entry), { recursive: true, force: true });
+    if (entry === 'packed-refs') await fs.writeFile(path.join(other.ws, '.git', 'packed-refs'), '');
+    await fs.symlink(target, path.join(ws, '.git', entry), (await fs.stat(target)).isDirectory() ? 'dir' : 'file');
+    await assert.rejects(publish({ workspace: ws, input: { branch: 'b', title: 't' }, cfg: { repos: [remote] } }), /has a link/, entry);
+  }
+});
+
+test('publish from a sandbox: .git is moved out of reach for the fetch and always put back', async () => {
+  const { remote, ws } = await repos();
+  await fs.writeFile(path.join(ws, 'a.txt'), 'a');
+  const r = await publish({ workspace: ws, input: { branch: 'sandboxed', title: 't', commitMessage: 'Add a' }, cfg: { repos: [remote] }, commit: commitIn(ws), isolate: true });
+  assert.equal(g(remote, 'rev-parse', 'sandboxed'), r.commit);
+  assert.equal(g(ws, 'log', '--format=%s', '-1'), 'Add a', '.git is back where it was');
+  assert.deepEqual((await fs.readdir(path.dirname(ws))).filter((f) => f.startsWith('.publish-')), [], 'nothing left beside the workspace');
+  // A failing fetch (HEAD names no commit) puts it back too.
+  await fs.writeFile(path.join(ws, '.git', 'HEAD'), 'ref: refs/heads/nothing-here\n');
+  await assert.rejects(publish({ workspace: ws, input: { branch: 'x', title: 't' }, cfg: { repos: [remote] }, isolate: true }), /fetch failed/);
+  assert.ok((await fs.stat(path.join(ws, '.git'))).isDirectory());
+});

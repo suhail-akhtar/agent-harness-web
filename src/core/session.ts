@@ -386,7 +386,11 @@ export class Session {
       // must not read (or plant instructions in) each other's notes. Without
       // accounts there is one person, and the shared folder stays where it was.
       const projects = this.meta.owner ? path.join(m.root, 'users', user, 'projects') : path.join(m.root, 'projects');
-      return new MemoryStore({ user: path.join(m.root, 'users', user), project: project && path.join(projects, project.key), projectLabel: project?.label }, { readOnly: m.mode === 'read', session: this.meta.id });
+      // Notes saved before that are read from the shared folder until the account first changes them.
+      return new MemoryStore({
+        user: path.join(m.root, 'users', user), project: project && path.join(projects, project.key), projectLabel: project?.label,
+        ...(this.meta.owner && project ? { projectShared: path.join(m.root, 'projects', project.key) } : {}),
+      }, { readOnly: m.mode === 'read', session: this.meta.id });
     })();
     return this.memory;
   }
@@ -409,6 +413,7 @@ export class Session {
         const host = await this.getHost();
         return publish({
           workspace: this.workspace, sessionGitUrl: this.meta.gitUrl, input, cfg, signal,
+          isolate: this.meta.runtime.kind === 'docker',
           commit: async (message, author) => {
             const r = await host.exec(`git add -A && (git diff --cached --quiet || git -c user.name=${shq(author.name)} -c user.email=${shq(author.email)} -c commit.gpgsign=false commit -q -m ${shq(message)})`, { timeoutMs: 120_000, signal });
             if (r.code !== 0) throw new PublishError(`git commit failed: ${(r.stderr || r.stdout).trim().slice(0, 400)}`);

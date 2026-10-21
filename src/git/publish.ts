@@ -51,18 +51,42 @@ export function tokenMayGoTo(url: string, cfg: PublishConfig): boolean {
   return hosts.has(host);
 }
 
-/** The workspace's .git must be a real folder inside it - not a link or a gitfile pointing elsewhere on the server. */
-async function ownGitDir(workspace: string): Promise<string> {
-  const dir = path.join(workspace, '.git');
+/**
+ * A .git folder the server may fetch from: a real folder, not a link or a gitfile,
+ * with nothing that makes git read objects or refs from another repository on
+ * this machine - a commondir, alternates, or a link anywhere git reads them through.
+ */
+async function checkGitDir(dir: string): Promise<void> {
   const st = await fs.lstat(dir).catch(() => null);
   if (!st) throw new PublishError('The workspace is not a git repository.');
   if (st.isSymbolicLink() || !st.isDirectory()) throw new PublishError('The workspace\'s .git is not a plain folder (a link or a gitfile), so it is not published from.');
+  for (const f of ['commondir', path.join('objects', 'info', 'alternates')]) {
+    if (await fs.lstat(path.join(dir, f)).catch(() => null)) throw new PublishError(`The workspace's .git has ${f.replace(/\\/g, '/')}, which points at another repository; it is not published from.`);
+  }
+  const linked = async (rel: string): Promise<string | undefined> => {
+    const s = await fs.lstat(path.join(dir, rel)).catch(() => null);
+    if (!s) return undefined;
+    if (s.isSymbolicLink()) return rel;
+    if (!s.isDirectory()) return undefined;
+    for (const e of await fs.readdir(path.join(dir, rel), { withFileTypes: true })) {
+      const r = path.join(rel, e.name);
+      if (e.isSymbolicLink()) return r;
+      if (e.isDirectory()) { const hit = await linked(r); if (hit) return hit; }
+    }
+    return undefined;
+  };
+  for (const f of ['HEAD', 'packed-refs', 'shallow', 'config', 'objects', 'refs']) {
+    const hit = await linked(f);
+    if (hit) throw new PublishError(`The workspace's .git has a link (${hit.replace(/\\/g, '/')}), which could point at another repository; it is not published from.`);
+  }
+}
+
+/** The workspace's .git, checked, and resolving to a folder inside the workspace. */
+async function ownGitDir(workspace: string): Promise<string> {
+  const dir = path.join(workspace, '.git');
+  await checkGitDir(dir);
   const [real, root] = await Promise.all([fs.realpath(dir), fs.realpath(workspace)]);
   if (path.dirname(real) !== root) throw new PublishError('The workspace\'s .git resolves outside the workspace.');
-  // Pointers that make git read objects or refs from another repository on this machine.
-  for (const f of ['commondir', path.join('objects', 'info', 'alternates')]) {
-    if (await fs.lstat(path.join(real, f)).catch(() => null)) throw new PublishError(`The workspace's .git has ${f.replace(/\\/g, '/')}, which points at another repository; it is not published from.`);
-  }
   return real;
 }
 
@@ -135,6 +159,8 @@ export async function publish(o: {
   workspace: string; sessionGitUrl?: string; repo?: string; input: PublishInput; cfg: PublishConfig; signal?: AbortSignal; fetchImpl?: typeof fetch;
   /** Runs `git add -A && git commit` where the session's commands run (the sandbox), never on the server. */
   commit?: (message: string, author: { name: string; email: string }) => Promise<void>;
+  /** The workspace is a sandbox's: move .git out of its reach while fetching from it. */
+  isolate?: boolean;
 }): Promise<PublishResult> {
   const { input, cfg } = o;
   if (!validBranch(input.branch)) throw new PublishError(`"${input.branch}" is not a valid branch name (letters, digits, . _ / -).`);
@@ -156,7 +182,24 @@ export async function publish(o: {
   try {
     await git(['init', '-q', '--bare', clean], os.tmpdir(), o.signal);
     // Fetching from a local path runs upload-pack against the workspace; its config cannot add hooks to a fetch.
-    await git(['-c', 'protocol.file.allow=always', 'fetch', '-q', '--no-tags', gitDir, `+HEAD:refs/heads/${input.branch}`], clean, o.signal);
+    const fetchFrom = (dir: string) => git(['-c', 'protocol.file.allow=always', 'fetch', '-q', '--no-tags', dir, `+HEAD:refs/heads/${input.branch}`], clean, o.signal);
+    if (o.isolate) {
+      // A sandbox may still be running the agent's processes, which could swap .git
+      // between the check and the fetch. Move it out of the sandbox's reach first
+      // (a rename takes the entry itself, link or not), check it there, and put it back.
+      const held = path.join(path.dirname(o.workspace), `.publish-${path.basename(o.workspace)}-${crypto.randomUUID().slice(0, 8)}`);
+      await fs.rename(path.join(o.workspace, '.git'), held);
+      try {
+        await checkGitDir(held);
+        await fetchFrom(held);
+      } finally {
+        await fs.rename(held, path.join(o.workspace, '.git'))
+          .catch(() => fs.rename(held, path.join(o.workspace, `.git-publish-${crypto.randomUUID().slice(0, 8)}`)))
+          .catch(() => {});
+      }
+    } else {
+      await fetchFrom(gitDir);
+    }
     const commit = await git(['rev-parse', `refs/heads/${input.branch}`], clean, o.signal);
 
     // 3. Push from there, with the token in a header for this one command - and only

@@ -41,7 +41,7 @@ async function hasFiles(h, signal, { glob, want = () => true, local }) {
     if (h.kind === 'companion') {
       if (!h.remoteTool) return false;
       const r = await h.remoteTool('glob', { pattern: glob }, signal);
-      return !r.is_error && !/^No files match/.test(r.content) && r.content.split('\n').some((l) => want(l.trim()));
+      return !r.is_error && !/^No files match/.test(r.content) && r.content.split('\n').some((l) => want(l.trim().replace(/\\/g, '/')));
     }
     return await local(h.root);
   } catch { return false; }
@@ -50,6 +50,14 @@ async function hasFiles(h, signal, { glob, want = () => true, local }) {
 async function workspacePath(host, p) {
   const real = await resolveIn(host, p);
   return path.relative(await fsp.realpath(host.root), real) || '.';
+}
+
+/** Whether walk() would find this relative path: the same depth, skipped folders and lock files. */
+function walkable(rel, exts, depth = 4) {
+  const parts = rel.split('/');
+  const name = parts.pop();
+  return parts.length <= depth && parts.every((d) => d && !EXCLUDE.has(d) && !d.startsWith('.'))
+    && exts.includes(path.extname(name).toLowerCase()) && !name.startsWith('~$');
 }
 
 async function walk(root, exts, max = 12, depth = 4, rel = '') {
@@ -212,7 +220,7 @@ export default {
     api.registerGate({
       name: 'documents-render',
       description: 'Every document in the workspace (docx, pptx, xlsx, odt, odp, pdf) opens and renders, and no slide has text cut off at its edge.',
-      applies: (h, signal) => hasFiles(h, signal, { glob: `**/*.{${[...OFFICE, '.pdf'].map((e) => e.slice(1)).join(',')}}`, local: async (root) => (await walk(root, [...OFFICE, '.pdf'], 1)).length > 0 }),
+      applies: (h, signal) => hasFiles(h, signal, { glob: `**/*.{${[...OFFICE, '.pdf'].map((e) => e.slice(1)).join(',')}}`, want: (l) => walkable(l, [...OFFICE, '.pdf']), local: async (root) => (await walk(root, [...OFFICE, '.pdf'], 1)).length > 0 }),
       async run({ host: h, signal }) {
         const host = (await siteOf(h, signal)).host;
         const files = await walk(host.root, [...OFFICE, '.pdf'], 8);

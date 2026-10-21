@@ -36,7 +36,7 @@
     "check": {
       "type": "shell",
       "title": "Features left?",
-      "command": "node -e \"const fs=require('fs');const d='.harness/long-task/';let a,b;try{a=JSON.parse(fs.readFileSync(d+'features.json','utf8'))}catch(e){console.log('features.json is missing or not valid JSON: '+e.message);process.exit(2)}if(!Array.isArray(a)||!a.length){console.log('features.json must be a non-empty JSON array');process.exit(2)}try{b=JSON.parse(fs.readFileSync(d+'features.lock.json','utf8'))}catch{b=null}const strip=x=>JSON.stringify(x.map(({passes,...r})=>r));if(b&&strip(a)!==strip(b)){console.log('features.json was changed beyond its passes fields: restore every id, description and step from git and only flip passes');process.exit(3)}const left=a.filter(x=>x.passes!==true);const passing=a.length-left.length;let st={passing:-1,stalls:0};try{st=JSON.parse(fs.readFileSync(d+'.state.json','utf8'))}catch{}st.stalls=left.length&&passing<=st.passing?st.stalls+1:0;st.passing=passing;fs.writeFileSync(d+'.state.json',JSON.stringify(st));console.log(passing+'/'+a.length+' features pass'+(left.length?'. Next: '+left[0].id+' - '+left[0].description:''));if(st.stalls>=3){console.log('No feature has passed in the last 3 sessions.');process.exit(4)}process.exit(left.length?1:0)\"",
+      "command": "node -e \"const fs=require('fs');const d='.harness/long-task/';let a,b;try{a=JSON.parse(fs.readFileSync(d+'features.json','utf8'))}catch(e){console.log('features.json is missing or not valid JSON: '+e.message);process.exit(2)}if(!Array.isArray(a)||!a.length){console.log('features.json must be a non-empty JSON array');process.exit(2)}try{b=JSON.parse(fs.readFileSync(d+'features.lock.json','utf8'))}catch{b=null}const strip=x=>JSON.stringify(x.map(({passes,...r})=>r));if(b&&strip(a)!==strip(b)){console.log('features.json was changed beyond its passes fields: restore every id, description and step from git and only flip passes');process.exit(3)}const left=a.filter(x=>x.passes!==true);const passing=a.length-left.length;let st={passing:-1,stalls:0};try{st=JSON.parse(fs.readFileSync(d+'.state.json','utf8'))}catch{}if(passing>st.passing)st.unsticks=0;st.stalls=left.length&&passing<=st.passing?st.stalls+1:0;st.passing=passing;fs.writeFileSync(d+'.state.json',JSON.stringify(st));console.log(passing+'/'+a.length+' features pass'+(left.length?'. Next: '+left[0].id+' - '+left[0].description:''));if(st.stalls>=3){console.log('No feature has passed in the last 3 sessions.');process.exit(4)}process.exit(left.length?1:0)\"",
       "next": {
         "on": {
           "ok": "final-gates",
@@ -139,7 +139,7 @@
     "stuck": {
       "type": "approval",
       "title": "Stuck: continue?",
-      "message": "No feature has passed in the last three build sessions. Look at .harness/long-task/progress.md for why. Approve to try again (add guidance in the feedback), or reject to stop. After the third retry it stops.\n\n{{state.check}}",
+      "message": "No feature has passed in the last three build sessions. Look at .harness/long-task/progress.md for why. Approve to try again (add guidance in the feedback), or reject to stop. After the third retry without a feature passing, it stops.\n\n{{state.check}}",
       "files": [
         ".harness/long-task/progress.md"
       ],
