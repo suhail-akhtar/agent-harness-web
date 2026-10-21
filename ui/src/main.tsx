@@ -1,6 +1,6 @@
 import { render, type VNode } from 'preact';
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
-import { api, ApiError, type CompanionInfo, type Config, type Effort, type HarnessEvent, type Mode, type SessionDetail, type SessionMeta, type Usage, type WorkflowRunView } from './api.ts';
+import { api, ApiError, type CompanionInfo, type Config, type Effort, type HarnessEvent, type Mode, type SessionDetail, type SessionMeta, type TaskView, type Usage, type WorkflowRunView } from './api.ts';
 import { ContextMeter, fmtCost, Modal, PendingPrompt, Timeline, TodoPanel, UsagePanel } from './components.tsx';
 import { CapabilitiesPanel, CheckpointsPanel, MemoryPanel, NetworkPanel, SourcesPanel, TraceButton } from './panels.tsx';
 import { apply, fromHistory, type Live } from './timeline.ts';
@@ -291,6 +291,7 @@ function SessionView({ id, config, onMeta }: { id: string; config: Config; onMet
   const [showSide, setShowSide] = useState(false);
   const [wfDialog, setWfDialog] = useState(false);
   const [runsKey, setRunsKey] = useState(0);
+  const [tasks, setTasks] = useState<TaskView[]>([]);
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const metaRef = useRef<SessionMeta | null>(null);
@@ -300,6 +301,7 @@ function SessionView({ id, config, onMeta }: { id: string; config: Config; onMet
     let stopped = false;
     setLive({ items: [], contextTokens: 0, contextWindow: 0 });
     setPending([]);
+    setTasks([]);
     api.get<SessionDetail>(`/api/sessions/${id}`).then((d) => {
       if (stopped) return;
       const spec = config.models.find((m) => m.id === d.meta.model);
@@ -307,6 +309,7 @@ function SessionView({ id, config, onMeta }: { id: string; config: Config; onMet
       setMeta(d.meta);
       setStatus(d.status);
       setPending(d.pending);
+      setTasks(d.tasks ?? []);
       setLive({ items: fromHistory(d.history), contextTokens: d.meta.lastPromptTokens, contextWindow: spec?.compactAt ?? 0 });
       // A run still going when the page opens gets its card back (finished ones are in the runs panel).
       api.get<{ runs: WorkflowRunView[] }>(`/api/sessions/${id}/workflows`).then((r) => {
@@ -319,6 +322,7 @@ function SessionView({ id, config, onMeta }: { id: string; config: Config; onMet
         setLive((l) => apply(l, event));
         switch (event.kind) {
           case 'status': setStatus(event.status); break;
+          case 'task': setTasks((ts) => [...ts.filter((t) => t.id !== event.task.id), event.task]); if (event.phase === 'finished') setFilesKey((k) => k + 1); break;
           case 'permission_request': case 'question': case 'plan_proposed': case 'approval_request': setPending((p) => [...p.filter((x) => (x as { requestId: string }).requestId !== event.requestId), event]); break;
           case 'request_resolved': setPending((p) => p.filter((x) => (x as { requestId: string }).requestId !== event.requestId)); break;
           case 'usage': {
@@ -367,6 +371,9 @@ function SessionView({ id, config, onMeta }: { id: string; config: Config; onMet
   if (!meta) return <div class="empty">{err || 'Loading…'}</div>;
   const spec = config.models.find((m) => m.id === meta.model);
   const busy = status !== 'idle';
+  // Background agents, workflows and monitors spend while the session is idle: Stop reaches them too (shells keep running).
+  const background = tasks.filter((t) => t.status === 'running');
+  const stoppable = background.filter((t) => t.kind !== 'shell');
   return (
     <div class="session">
       <div class="chat">
@@ -374,6 +381,7 @@ function SessionView({ id, config, onMeta }: { id: string; config: Config; onMet
           <input class="title-input" value={meta.title} onChange={(e) => patch({ title: (e.target as HTMLInputElement).value })} aria-label="Session title" />
           <span class={`badge rt-${meta.runtime.kind}`}>{RUNTIME_LABEL[meta.runtime.kind]}{meta.runtime.kind === 'docker' ? (meta.runtime.network === 'full' ? ' · net' : meta.runtime.network === 'allowlist' ? ' · allowlist' : ' · offline') : ''}</span>
           <span class={`status status-${status}`}>{status === 'running' ? 'Working' : status === 'waiting' ? 'Needs you' : 'Idle'}</span>
+          {background.length > 0 && <span class="badge" title={background.map((t) => `${t.id} (${t.kind}): ${t.description}`).join('\n')}>{background.length} in background</span>}
           <a class="icon-btn" href={`/api/sessions/${id}/export`} download title="Export this session (to continue it elsewhere)" aria-label="Export session">⇩</a>
           <button class="icon-btn side-toggle" onClick={() => setShowSide(!showSide)} aria-label="Session details">☰</button>
         </div>
@@ -403,6 +411,7 @@ function SessionView({ id, config, onMeta }: { id: string; config: Config; onMet
             <span class="grow" />
             {!busy && <button class="btn" onClick={() => setWfDialog(true)} title="Run a multi-step workflow (e.g. requirements to delivery)">Workflow…</button>}
             {busy && <button class="btn danger" onClick={() => api.post(`/api/sessions/${id}/abort`)}>Stop</button>}
+            {!busy && stoppable.length > 0 && <button class="btn danger" title="Stop background agents, workflows and monitors (background shells keep running)" onClick={() => api.post(`/api/sessions/${id}/abort`)}>Stop background</button>}
             <button class="btn primary" disabled={!text.trim()} onClick={sendMsg}>{busy ? 'Queue' : 'Send'}</button>
           </div>
         </div>

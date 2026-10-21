@@ -432,8 +432,23 @@ The server prints the redirect URI to register when it starts. How it works:
 
 - **Scheduled prompts.** The agent's `schedule` tool sets up work for later in its own session - once (`in_minutes`, `at`) or on a five-field cron - and `/api/schedules` does the same for people, to an existing session or a new one per run (`dontAsk` by default: nobody is there to answer). Missed runs fire once after a restart, a busy session is skipped, and every run goes through the same permissions and spend limits as a typed message. `notify_user` tells the person something now, through the session and the `Notification` hooks.
 - **Triggers.** `POST /api/schedules {trigger: true, prompt, ...}` returns a secret URL (shown once, stored hashed) that starts the prompt when something POSTs to it: a Slack slash command (its form's `text`), a GitHub webhook, a phone shortcut, `curl`. What it sends goes with the prompt, fenced as data from outside, and the session counts as having read untrusted content.
-- **Sub-agents** run in parallel (at most `HARNESS_SUBAGENTS_PARALLEL` at once, default 10, at most 20) and may start their own up to `HARNESS_SUBAGENT_DEPTH` levels (default 1: they cannot; at most 3, as Claude Code). A sub-agent that read outside content taints every agent above it.
+- **Sub-agents** run in parallel (at most `HARNESS_SUBAGENTS_PARALLEL` at once, default 10, at most 20) and may start their own up to `HARNESS_SUBAGENT_DEPTH` levels (default 1: they cannot; at most 3, as Claude Code). A sub-agent that read outside content taints every agent above it, and an agent that read some starts its sub-agents tainted (its brief may carry what it read).
 - **The `workflow` tool** lets the main agent run one of the session's workflows inside its turn (a fixed graph of agent steps, gates and approvals, such as `build-feature` or `long-task`) and get the outcome, like Claude Code's Workflow tool.
+- **Background work**, as in Claude Code: `agent` and `workflow` take `run_in_background: true` and return an id at once (`general-3`, `run_…`); `bash` with `run_in_background` returns a task id (`shell-…`). The main agent keeps working, and when the work ends its report (a workflow's steps, a shell's exit code and last lines) reaches it as a reminder with its next step. Every finished sub-agent is kept with its context, so `send_message` can continue it.
+
+  | Tool | Permission | What it does |
+  |---|---|---|
+  | `agent` / `workflow` with `run_in_background` | meta | Start a sub-agent / a workflow run detached; the run is recorded and in the runs list like any other. |
+  | `send_message` | meta (like `agent`) | Continue a sub-agent you started, with its context intact: a finished one runs again and returns its new report (later, with `run_in_background`); a background one still working sees the message at its next step. |
+  | `task_list` | read | Background shells, sub-agents, workflow runs and monitors: id, kind, status, age, last line of output. |
+  | `task_output` | read | A task's output (a shell's log, an agent's report or latest message, a run's steps), with `tail`, `offset` and a 30,000-character cap. |
+  | `task_stop` | meta | Stop a task: a shell's whole process tree, an agent, a run, a monitor. Stopping what the agent itself started needs no approval. |
+  | `monitor` | read | Wait without model calls until a shell's output has a line matching a regex, or a task ends, or a timeout (60 s default, 10 min max); with `run_in_background` it fires as a reminder instead (up to an hour). |
+
+  - **An idle session is not woken by default.** A result that arrives when no turn runs is queued for the agent, and the user gets a notice (and the `Notification` hooks fire): nothing is spent without them, and their next message carries it. `HARNESS_BACKGROUND_WAKE=1` starts a turn instead, as Claude Code does.
+  - **Limits and stopping.** Background sub-agents take the same slots as foreground ones (`maxParallelSubagents`), are charged to the session, keep taint in both directions, and their permission prompts stay open after the turn that started them ends. The user's **Stop** stops the turn and every background agent, workflow and monitor (the UI shows "Stop background" while only those run); background shells keep running, since they are usually servers, until `task_stop` or the session is deleted.
+  - **Only the main agent starts background work.** Sub-agents get `send_message` only where they may start their own (`HARNESS_SUBAGENT_DEPTH`), and a sub-agent's `run_in_background` runs in the foreground. They may read and watch tasks and stop their own.
+  - **In memory.** The task list and the kept sub-agents (the last 20 finished, least recently used dropped first) live with the session in the server's memory; a restart forgets them (background shells keep running, and their logs stay in `.harness/bg/`). On a companion, `bash` runs on the user's computer, so its background shells are not in the task list.
 - **Slash commands.** `/<skill> [task]` in a message loads that skill with it (custom commands are skills, as in Claude Code); `/compact` compacts the context now.
 - **MCP bundles** (`.mcpb`, Claude Desktop's one-click "Desktop Extensions"): an administrator installs one (`POST /api/mcpb` with the file and the values its manifest asks for); it is unpacked under the data folder (paths outside it and links refused), its server registered for every new session, and kept across restarts.
 
@@ -566,6 +581,7 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 | `HARNESS_SNAPSHOT_DAYS` / `HARNESS_SETUP_TIMEOUT_S` | 7 / 900 | How long setup snapshots are reused / how long a setup script may run. |
 | `HARNESS_SUBAGENT_DEPTH` / `HARNESS_SUBAGENTS_PARALLEL` | 1 / 10 | How deep sub-agents may nest (at most 3) / how many run at once (at most 20). |
 | `HARNESS_MAX_SCHEDULES` | 50 | Scheduled prompts per person. |
+| `HARNESS_BACKGROUND_WAKE` | off | `1`: a background agent, workflow, shell or monitor that finishes while the session is idle starts a turn with its result (default: the user is told, and the agent sees it with their next message). |
 | `HARNESS_EXPORT_MAX_MB` / `HARNESS_IMPORT_MAX_MB` | 50 / 80 | Workspace files in an exported session / the largest import. |
 | `HARNESS_INJECTION_SCAN` | off | `on`: a small model checks each outside result for instructions aimed at the agent. |
 | `.env` | | `npm start` (and every npm launcher) reads a `.env` file where it runs; variables already set win. |

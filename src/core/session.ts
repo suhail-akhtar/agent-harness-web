@@ -2,7 +2,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import { resolveIn } from '../tools/paths.ts';
 import path from 'node:path';
-import { BUILTIN_AGENTS, INTERACTIVE_TOOLS, loadAgentDir, makeAgentTool } from '../agents/agents.ts';
+import { BUILTIN_AGENTS, INTERACTIVE_TOOLS, loadAgentDir, makeAgentTool, NESTING_TOOLS } from '../agents/agents.ts';
+import { stopShellScript } from '../tools/exec.ts';
+import { describeWatch, TASK_TOOLS, type TaskEntry, TaskRegistry, type TaskService, watchTask } from '../tools/tasks.ts';
 import { formatGates, makeGatesTool, runGates } from '../gates/gates.ts';
 import { newRun, WorkflowRunner } from '../graph/runner.ts';
 import type { RunRecord, WorkflowDef, WorkflowHost } from '../graph/types.ts';
@@ -85,6 +87,43 @@ interface PendingRequest {
   kind: 'permission' | 'question' | 'plan' | 'approval';
   resolve(v: { decision: string; feedback?: string; answer?: string }): void;
   event: HarnessEvent;
+  /** Asked by background work: the end of a turn does not answer it. */
+  background?: boolean;
+}
+
+/** A sub-agent kept with its context, so send_message can continue it. */
+interface SubEntry {
+  agent: Agent;
+  /** Who started it ('main' or a sub-agent's name): only they may continue it. */
+  owner: string;
+  running: boolean;
+  /** Messages sent while it works, seen at its next step. */
+  queue: string[];
+  cost: { n: number };
+  /** The agent it reports to (tainted with it); absent: the main agent. */
+  parent?: Agent;
+}
+
+/** Finished sub-agents kept per session for send_message (least recently used go first). */
+const KEEP_AGENTS = 20;
+
+/** The last assistant text of an agent: a sub-agent's report, or what it last said while working. */
+function lastText(agent: Agent | undefined): string {
+  const last = agent && [...agent.messages].reverse().find((m) => m.role === 'assistant' && m.content.some((b) => b.type === 'text'));
+  return last?.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n').trim() ?? '';
+}
+
+/** A file's bytes from `offset` (at most the last 2 MB of them), and its size. */
+async function readFrom(file: string, offset: number, cap = 2_000_000): Promise<{ text: string; size: number }> {
+  let fh: fs.FileHandle;
+  try { fh = await fs.open(file, 'r'); } catch { return { text: '', size: 0 }; }
+  try {
+    const size = (await fh.stat()).size;
+    const start = Math.max(Math.min(offset, size), size - cap);
+    const buf = Buffer.alloc(size - start);
+    if (buf.length) await fh.read(buf, 0, buf.length, start);
+    return { text: `${start > offset ? `[... ${start - offset} bytes omitted ...]\n` : ''}${buf.toString('utf8')}`, size };
+  } finally { await fh.close(); }
 }
 
 export interface SessionDeps {
@@ -141,6 +180,12 @@ export function runView(run: RunRecord, w?: WorkflowDef): WorkflowRunView {
   };
 }
 
+/** A run's steps as the agent reads them: each node's outcome and summary, and the error. */
+function runSummary(run: RunRecord): string {
+  const steps = run.history.map((h) => `- ${h.node} (${h.type}): ${h.outcome ?? h.status}${h.summary ? ` - ${h.summary.replace(/\s+/g, ' ').slice(0, 300)}` : ''}`);
+  return `${steps.join('\n')}${run.error ? `\nError: ${run.error}` : ''}`;
+}
+
 /**
  * Checkpoint files on a companion. A tool names a file as the model sees it (the
  * companion's own path, or relative) or, for server-side tools, inside the
@@ -188,6 +233,18 @@ export class Session {
   private saveTimer?: NodeJS.Timeout;
   private memory?: Promise<MemoryStore | undefined>;
   readonly sources: SourceStore;
+  /** Background work: shells, sub-agents, workflow runs, monitors (in memory; a restart forgets it). */
+  readonly tasks = new TaskRegistry((task, phase) => this.emit({ kind: 'task', phase, task }));
+  /** Stops background agents, workflows and monitors (the user's Stop); replaced after each use. */
+  private bg = new AbortController();
+  /** Sub-agents kept for send_message: running ones, and the last KEEP_AGENTS finished. */
+  private subs = new Map<string, SubEntry>();
+  /** The signal each running sub-agent runs under: a background one's questions outlive the turn. */
+  private agentSignals = new Map<string, AbortSignal>();
+  private shellTimer?: NodeJS.Timeout;
+  private monitors = 0;
+  /** Background results delivered while a turn ran (unread if it ended first). */
+  private lateResults = new Set<string>();
 
   constructor(meta: SessionMeta, deps: SessionDeps) {
     this.meta = meta;
@@ -436,7 +493,8 @@ export class Session {
   }
 
   async stopSandbox(): Promise<void> {
-    if (this.host instanceof DockerHost && this.status === 'idle') {
+    // Background work keeps the sandbox up while it runs.
+    if (this.host instanceof DockerHost && this.status === 'idle' && !this.tasks.running().length) {
       if (this.toolbox) { (await this.toolbox).closeProject().catch(() => {}); this.toolbox = undefined; this.agent = undefined; }
       await this.host.stop();
     }
@@ -444,6 +502,9 @@ export class Session {
 
   async destroy(): Promise<void> {
     this.abort();
+    // Background shells end with their session.
+    clearInterval(this.shellTimer);
+    await Promise.all(this.tasks.running('shell').map((t) => t.stop().catch(() => {})));
     // SessionEnd hooks run while the session's host still exists (a cleanup command, a final report).
     if (this.settings && this.host) {
       const r = await runHooks(this.settings, this.host, 'SessionEnd', { reason: 'deleted', cost: this.meta.cost, turns: this.meta.turns ?? 0 }, undefined, AbortSignal.timeout(60_000), this.deps.registry.hooks).catch(() => undefined);
@@ -524,7 +585,7 @@ export class Session {
   }
 
   /** Harness services for an agent's tools. Sub-agents read memory but do not change it. */
-  private async services(main: boolean): Promise<ToolServices> {
+  private async services(main: boolean, caller = main ? 'main' : 'harness'): Promise<ToolServices> {
     const memory = await this.memoryStore();
     const cfg = this.deps.publish;
     return {
@@ -550,7 +611,9 @@ export class Session {
       ...(main ? { workflows: {
         list: async () => (await this.workflows()).map((w) => ({ name: w.name, description: w.description ?? '', inputs: Object.keys(w.inputs ?? {}) })),
         run: (name: string, input: Record<string, string>, signal: AbortSignal) => this.runWorkflowInline(name, input, signal),
+        start: (name: string, input: Record<string, string>) => this.startWorkflowInBackground(name, input),
       } } : {}),
+      tasks: this.taskService(caller, main),
       notify: async (message: string) => {
         this.emit({ kind: 'notice', level: 'info', text: `The agent says: ${message}` });
         fireHooks(this.settings, this.host, 'Notification', { type: 'agent', session: this.meta.id, title: this.meta.title, message }, this.deps.registry.hooks, (m) => this.emit({ kind: 'notice', level: 'warn', text: m }));
@@ -594,7 +657,7 @@ export class Session {
         for (const a of await loadAgentDir(path.join(host.root, rel), 'project')) if (!BUILTIN_AGENTS.some((b) => b.name === a.name)) agents.set(a.name, a);
       }
     }
-    tools.push(makeAgentTool([...agents.values()]));
+    tools.push(makeAgentTool([...agents.values()]), ...TASK_TOOLS);
     if (reg.gates.size) tools.push(makeGatesTool(reg));
 
     // Workflows: plugins', then the project's (JSON; a shell node runs only where project commands are trusted).
@@ -673,7 +736,8 @@ export class Session {
       getMode: () => this.meta.mode,
       rules: () => this.rules(),
       requestPermission: (tool, input, summary, suggestion, agent) => this.askPermission(tool, input, summary, suggestion, agent),
-      takeQueuedUserText: () => (name === 'main' ? this.queued.splice(0) : []),
+      // The main agent: what the user typed and background results; a sub-agent: what send_message sent it.
+      takeQueuedUserText: () => (name === 'main' ? this.queued.splice(0) : this.subs.get(name)?.queue.splice(0) ?? []),
       todos: () => this.meta.todos,
       setTodos: (t) => { this.meta.todos = t; this.scheduleSave(); },
       preamble: async () => this.preamble(await this.getHost(), name === 'main'),
@@ -694,7 +758,7 @@ export class Session {
       hookRunners: this.hookRunners(),
       autoCheck: this.autoCheck(settings),
       injectionCheck: this.injectionCheck(settings),
-      runSubagent: (a: { description: string; prompt: string; type: string }) => this.runSubagent(a),
+      runSubagent: (a: { description: string; prompt: string; type: string }) => this.runSubagent(a, 1, this.agent),
       askUser: (q: string, o: string[]) => this.ask(q, o),
       proposePlan: (p: string) => this.proposePlan(p),
       beforeWrite: this.checkpoints ? (p: string) => this.checkpoints!.before(p) : undefined,
@@ -820,9 +884,193 @@ export class Session {
     }];
   }
 
-  private async runSubagent(a: { description: string; prompt: string; type: string }, depth = 1, parent?: Agent): Promise<string> {
-    const r = await this.runAgent({ agent: a.type, description: a.description, prompt: a.prompt, signal: this.abortCtl?.signal ?? new AbortController().signal, depth, parent });
-    return r.report;
+  /** The agent tool: a sub-agent of `parent`, under its signal (a background agent's children stop with it), kept for send_message. */
+  private async runSubagent(a: { description: string; prompt: string; type: string }, depth = 1, parent?: Agent, signal?: AbortSignal): Promise<string> {
+    const r = await this.runAgent({ agent: a.type, description: a.description, prompt: a.prompt, signal: signal ?? this.abortCtl?.signal ?? new AbortController().signal, depth, parent, keep: true });
+    return `${r.report}\n\n(agent id: ${r.id})`;
+  }
+
+  // ---------- background work ----------
+
+  /** What the task tools of one agent reach. Starting background work is the main agent's alone. */
+  private taskService(caller: string, main: boolean): TaskService {
+    return {
+      caller,
+      list: async () => {
+        await Promise.all(this.tasks.running().map((t) => t.refresh?.().catch(() => {})));
+        return this.tasks.all();
+      },
+      get: (id) => this.tasks.get(id),
+      stop: async (id) => {
+        const t = this.tasks.get(id);
+        if (!t) throw new Error(`No task ${id}. task_list shows them.`);
+        if (!main && t.owner !== caller) throw new Error(`${id} was not started by you.`);
+        await t.refresh?.();
+        if (t.status !== 'running') return `${id} already ended (${t.status}).`;
+        await t.stop();
+        this.tasks.finish(id, 'stopped');
+        return `Stopped ${id}.`;
+      },
+      addShell: (s) => this.addShell(s, caller),
+      sendMessage: (to, message, background, signal) => this.sendMessage(caller, to, message, main && background, signal),
+      ...(main ? {
+        startAgent: (a: { description: string; prompt: string; type: string }) => this.startBackgroundAgent(a),
+        monitorInBackground: (t: TaskEntry, p: RegExp | undefined, ms: number, existing: boolean) => this.startMonitor(t, p, ms, existing),
+      } : {}),
+    };
+  }
+
+  /** Signal for one piece of background work: its own stop, and the session's (the user's Stop). */
+  private bgSignal(): { ctl: AbortController; signal: AbortSignal } {
+    const ctl = new AbortController();
+    return { ctl, signal: AbortSignal.any([ctl.signal, this.bg.signal]) };
+  }
+
+  /**
+   * Background work has a result for the main agent. It goes in as a reminder at
+   * its next step; an idle session is not woken (that would spend without the
+   * user): the user is told, and the agent sees it with their next message -
+   * unless the operator set HARNESS_BACKGROUND_WAKE=1, which starts a turn.
+   */
+  private deliver(headline: string, body: string, wake = true): void {
+    const reminder = `<system-reminder>${headline}${body ? `\n${body}` : ''}</system-reminder>`;
+    this.queued.push(reminder);
+    const idle = this.status === 'idle';
+    // A turn that ends before its next step leaves it unread: lateBackground handles it then.
+    if (!idle && wake) this.lateResults.add(reminder);
+    const waking = idle && wake && process.env.HARNESS_BACKGROUND_WAKE === '1';
+    this.emit({ kind: 'notice', level: 'info', text: idle && !waking ? `${headline} The agent sees the result with your next message.` : headline });
+    if (!idle) return;
+    fireHooks(this.settings, this.host, 'Notification', { type: 'background', session: this.meta.id, title: this.meta.title, message: headline }, this.deps.registry.hooks, (m) => this.emit({ kind: 'notice', level: 'warn', text: m }));
+    if (waking) this.send('Background work finished: continue with its results.').catch(() => {});
+  }
+
+  /** A shell bash started in the background: its log and exit code are files beside each other in the workspace. */
+  private addShell(s: { id: string; pid: string; log: string; exitFile: string; command: string; description?: string }, owner: string): string {
+    const host = this.host!;
+    const id = `shell-${s.id}`;
+    const file = (rel: string) => path.join(host.root, rel);
+    const entry: TaskEntry = {
+      id, kind: 'shell', description: (s.description || s.command).replace(/\s+/g, ' ').slice(0, 120), status: 'running', startedAt: Date.now(), owner,
+      read: (offset = 0) => readFrom(file(s.log), offset),
+      refresh: async () => {
+        if (entry.status !== 'running') return;
+        const code = await fs.readFile(file(s.exitFile), 'utf8').catch(() => undefined);
+        if (code === undefined) return;
+        const n = Number(code.trim());
+        if (!this.tasks.finish(id, n === 0 ? 'completed' : 'failed') || owner !== 'main') return;
+        const tail = (await entry.read()).text.trimEnd().split('\n').slice(-15).join('\n');
+        this.deliver(`Background shell ${id} (${entry.description}) exited with code ${code.trim()}.`, tail ? `Last output:\n${tail}` : '');
+      },
+      stop: async () => { await host.exec(stopShellScript(s.pid), { timeoutMs: 15_000 }); },
+    };
+    this.tasks.add(entry);
+    // Shells are checked every two seconds while any runs, so their end is reported without anyone asking.
+    this.shellTimer ??= setInterval(() => {
+      const live = this.tasks.running('shell');
+      if (!live.length) { clearInterval(this.shellTimer); this.shellTimer = undefined; return; }
+      for (const t of live) t.refresh?.().catch(() => {});
+    }, 2000);
+    this.shellTimer.unref?.();
+    return id;
+  }
+
+  /** Runs agent work detached as task `id`; its report is delivered when it ends. */
+  private runAgentInBackground(id: string, description: string, work: (signal: AbortSignal) => Promise<{ report: string; reason: string; cost: number }>): void {
+    const { ctl, signal } = this.bgSignal();
+    let report: string | undefined;
+    this.tasks.add({
+      id, kind: 'agent', description, status: 'running', startedAt: Date.now(), owner: 'main',
+      read: async (offset = 0) => { const t = report ?? lastText(this.subs.get(id)?.agent); return { text: t.slice(offset), size: t.length }; },
+      stop: async () => ctl.abort(new Error('stopped')),
+      untrusted: () => !!this.subs.get(id)?.agent.tainted,
+    });
+    this.emit({ kind: 'notice', level: 'info', text: `${id} is working in the background: ${description}` });
+    work(signal).then((r) => {
+      report = r.report;
+      const status = r.reason === 'done' ? 'completed' : signal.aborted ? 'stopped' : 'failed';
+      if (this.tasks.finish(id, status, r.cost)) this.deliver(`Background agent ${id} (${description}) ${status === 'completed' ? 'finished' : status} ($${r.cost.toFixed(4)}). Its report:`, r.report, !signal.aborted);
+    }, (err: Error) => {
+      report = `It failed: ${err.message}`;
+      if (this.tasks.finish(id, signal.aborted ? 'stopped' : 'failed')) this.deliver(`Background agent ${id} (${description}) failed: ${err.message}`, '', !signal.aborted);
+    });
+  }
+
+  private async startBackgroundAgent(a: { description: string; prompt: string; type: string }): Promise<string> {
+    const tb = await this.getToolbox(await this.getHost());
+    const def = tb.agents.find((x) => x.name === a.type) ?? tb.agents.find((x) => x.name === 'general')!;
+    const id = `${def.name}-${++this.subagents}`;
+    const parent = this.agent;
+    this.runAgentInBackground(id, a.description, (signal) => this.runAgent({ agent: def.name, label: id, description: a.description, prompt: a.prompt, signal, depth: 1, parent, keep: true }));
+    return id;
+  }
+
+  /** send_message: continues a kept sub-agent the caller started, or tells a running one. */
+  private async sendMessage(caller: string, to: string, message: string, background: boolean, signal: AbortSignal): Promise<string> {
+    const e = this.subs.get(to);
+    if (!e || e.owner !== caller) {
+      const mine = [...this.subs].filter(([, x]) => x.owner === caller).map(([id]) => id);
+      throw new Error(`No sub-agent ${to} of yours to continue. ${mine.length ? `Yours: ${mine.join(', ')}.` : 'None are kept.'} (The last ${KEEP_AGENTS} finished sub-agents are kept.)`);
+    }
+    if (e.running) {
+      e.queue.push(`<system-reminder>The agent that started you sends:\n${message}</system-reminder>`);
+      return `${to} is still working; it sees your message at its next step${this.tasks.get(to)?.status === 'running' ? ', and its report reaches you when it finishes' : ''}.`;
+    }
+    if (background) {
+      this.runAgentInBackground(to, `continue: ${message.replace(/\s+/g, ' ').slice(0, 60)}`, (sig) => this.continueAgent(e, to, message, sig));
+      return `${to} continues in the background; its new report reaches you when it finishes.`;
+    }
+    const r = await this.continueAgent(e, to, message, signal);
+    return `${r.report}\n\n(agent id: ${to})`;
+  }
+
+  /** Runs a kept sub-agent again with a new message, its context intact. */
+  private async continueAgent(e: SubEntry, id: string, message: string, signal: AbortSignal): Promise<{ report: string; reason: string; cost: number }> {
+    e.running = true;
+    this.subs.delete(id);
+    this.subs.set(id, e);
+    try {
+      const settings = await this.getSettings(await this.getHost());
+      const release = await this.slot(settings.maxParallelSubagents);
+      try {
+        // A message from an agent that read outside content may carry some of it.
+        if ((e.parent ?? this.agent)?.tainted) e.agent.markTainted();
+        e.agent.append({ role: 'user', content: [{ type: 'text', text: message }] });
+        this.agentSignals.set(id, signal);
+        this.emit({ kind: 'notice', level: 'info', text: `Continued ${id}`, agent: id });
+        return await this.drive(e, id, signal);
+      } finally { release(); this.agentSignals.delete(id); }
+    } finally { e.running = false; this.trimSubs(); }
+  }
+
+  /** Keeps the running sub-agents and the last KEEP_AGENTS finished ones. */
+  private trimSubs(): void {
+    const done = [...this.subs].filter(([, x]) => !x.running);
+    for (const [id] of done.slice(0, Math.max(0, done.length - KEEP_AGENTS))) this.subs.delete(id);
+  }
+
+  /** monitor in the background: watches a task without model calls, and reports when it fires. */
+  private async startMonitor(t: TaskEntry, p: RegExp | undefined, ms: number, existing: boolean): Promise<string> {
+    const id = `monitor-${++this.monitors}`;
+    const { ctl, signal } = this.bgSignal();
+    let result = '';
+    this.tasks.add({
+      id, kind: 'monitor', description: `watch ${t.id}${p ? ` for /${p.source}/` : ' until it ends'}`, status: 'running', startedAt: Date.now(), owner: 'main',
+      read: async (offset = 0) => ({ text: result.slice(offset), size: result.length }),
+      stop: async () => ctl.abort(new Error('stopped')),
+    });
+    const from = existing ? 0 : (await t.read(Number.MAX_SAFE_INTEGER)).size;
+    watchTask(t, p, ms, signal, from, 1000).then((r) => {
+      result = describeWatch(t.id, p, r, ms);
+      if (r.fired === 'aborted') { this.tasks.finish(id, 'stopped'); return; }
+      if (!this.tasks.finish(id, 'completed')) return;
+      if (t.untrusted?.()) this.agent?.markTainted();
+      this.deliver(`Monitor ${id} fired.`, result);
+    }, (err: Error) => {
+      result = `failed: ${err.message}`;
+      if (this.tasks.finish(id, 'failed')) this.deliver(`Monitor ${id} failed: ${err.message}`, '');
+    });
+    return id;
   }
 
   /** Sub-agents running now, and those waiting for a slot (settings.maxParallelSubagents). */
@@ -838,7 +1086,7 @@ export class Session {
    * Runs a named agent in a fresh context: a chat sub-agent, or a workflow's
    * agent node. One cache key per agent kind, so sibling runs share a prefix.
    */
-  async runAgent(a: { agent: string; prompt: string; signal: AbortSignal; label?: string; description?: string; model?: string; effort?: Effort; maxSteps?: number; allowTodos?: boolean; /** A hook's verifier: no hooks of its own (they would start it again). */ noHooks?: boolean; /** 1 for a sub-agent of the main agent, 2 for one of its own, ... */ depth?: number; /** The agent that started it (it is tainted with it). */ parent?: Agent }): Promise<{ report: string; reason: string; cost: number }> {
+  async runAgent(a: { agent: string; prompt: string; signal: AbortSignal; label?: string; description?: string; model?: string; effort?: Effort; maxSteps?: number; allowTodos?: boolean; /** A hook's verifier: no hooks of its own (they would start it again). */ noHooks?: boolean; /** 1 for a sub-agent of the main agent, 2 for one of its own, ... */ depth?: number; /** The agent that started it (it is tainted with it, and starts tainted when it is). */ parent?: Agent; /** Kept after it ends, for send_message. */ keep?: boolean }): Promise<{ report: string; reason: string; cost: number; id: string }> {
     const host = await this.getHost();
     const settings = await this.getSettings(host);
     const tb = await this.getToolbox(host);
@@ -846,20 +1094,23 @@ export class Session {
     // Deeper sub-agents only as far as the operator allows; at most maxParallelSubagents at once.
     const nests = depth < settings.maxSubagentDepth;
     const release = await this.slot(settings.maxParallelSubagents);
+    let entry: SubEntry | undefined;
+    let name = '';
     try {
     const def = tb.agents.find((x) => x.name === a.agent) ?? tb.agents.find((x) => x.name === 'general')!;
     const n = ++this.subagents;
-    const name = a.label ?? `${def.name}-${n}`;
+    name = a.label ?? `${def.name}-${n}`;
     const model = this.subagentModel({ ...def, model: a.model ?? def.model }, settings);
-    const banned = INTERACTIVE_TOOLS.filter((t) => !(a.allowTodos && t === 'todo_write') && !(nests && t === 'agent'));
-    const tools = tb.tools.filter((t) => (def.tools ? def.tools.includes(t.spec.name) || (a.allowTodos && t.spec.name === 'todo_write') : !banned.includes(t.spec.name)) && (t.spec.name !== 'agent' || nests));
+    // agent and send_message only where it may start its own; never the user-facing tools.
+    const banned = INTERACTIVE_TOOLS.filter((t) => !(a.allowTodos && t === 'todo_write') && !(nests && NESTING_TOOLS.includes(t)));
+    const tools = tb.tools.filter((t) => (def.tools ? def.tools.includes(t.spec.name) || (a.allowTodos && t.spec.name === 'todo_write') : !banned.includes(t.spec.name)) && (!NESTING_TOOLS.includes(t.spec.name) || nests));
     const wanted = a.effort ?? def.effort;
     const effort = wanted && model.efforts.includes(wanted) ? wanted : (model.efforts.includes(this.meta.effort) ? this.meta.effort : model.effort);
-    let cost = 0;
+    const cost = { n: 0 };
     const self: { agent?: Agent } = {};
     const sub = new Agent({
       name, model, provider: this.deps.registry.provider(model), effort,
-      ...(nests ? { runSubagent: (x: { description: string; prompt: string; type: string }) => this.runSubagent(x, depth + 1, self.agent) } : {}),
+      ...(nests ? { runSubagent: (x: { description: string; prompt: string; type: string }) => this.runSubagent(x, depth + 1, self.agent, a.signal) } : {}),
       system: SUBAGENT_PROMPT, tools, host, settings: a.noHooks ? { ...settings, hooks: {} } : settings,
       cacheKey: `hw-${this.meta.id}-${def.name}`, maxSteps: Math.min(a.maxSteps ?? (a.allowTodos ? 150 : 60), settings.maxSteps), readFiles: new Map<string, FileStamp>(),
       inProcessHooks: a.noHooks ? [] : this.deps.registry.hooks,
@@ -868,9 +1119,14 @@ export class Session {
       autoCheck: this.autoCheck(settings),
       injectionCheck: this.injectionCheck(settings),
       beforeWrite: this.checkpoints ? (p: string) => this.checkpoints!.before(p) : undefined,
-      services: await this.services(false),
-    }, this.hooksFor(name, (c) => { cost += c; }));
+      services: await this.services(false, name),
+    }, this.hooksFor(name, (c) => { cost.n += c; }));
     self.agent = sub;
+    // A brief from an agent that read outside content may carry some of it: the sub-agent starts as tainted.
+    if (a.parent?.tainted) sub.markTainted();
+    entry = { agent: sub, owner: a.parent?.cfg.name ?? 'main', running: true, queue: [], cost, parent: a.parent };
+    if (a.keep) this.subs.set(name, entry);
+    this.agentSignals.set(name, a.signal);
     const env = await this.preamble(host, false);
     // SubagentStart hooks can add context the sub-agent starts with.
     const start = a.noHooks ? { errors: [], feedback: '' } : await runHooks(settings, host, 'SubagentStart', { agent: name, type: def.name, description: a.description ?? '' }, def.name, a.signal, this.deps.registry.hooks, { ...this.hookRunners(), judge: this.hookJudge(settings) });
@@ -878,17 +1134,33 @@ export class Session {
     const extra = start.feedback ? `\n\n<subagent_start_context>\n${start.feedback}\n</subagent_start_context>` : '';
     sub.append({ role: 'user', content: [{ type: 'text', text: `${env}${def.prompt ? `\n\n<role>\n${def.prompt}\n</role>` : ''}${extra}\n\n<brief>\n${a.prompt}\n</brief>` }] });
     this.emit({ kind: 'notice', level: 'info', text: `Started ${name} (${def.name}, ${model.id})${a.description ? `: ${a.description}` : ''}`, agent: name });
-    const reason = await sub.run(a.signal);
+    return { ...await this.drive(entry, name, a.signal), id: name };
+    } finally {
+      release();
+      if (entry) entry.running = false;
+      this.agentSignals.delete(name);
+      this.trimSubs();
+    }
+  }
+
+  /** Runs a sub-agent until it ends (answering messages sent as it finished) and returns its report. */
+  private async drive(e: SubEntry, name: string, signal: AbortSignal): Promise<{ report: string; reason: string; cost: number }> {
+    const sub = e.agent;
+    const before = e.cost.n;
+    let reason = await sub.run(signal);
+    while (reason === 'done' && e.queue.length && !signal.aborted) {
+      sub.append({ role: 'user', content: e.queue.splice(0).map((text) => ({ type: 'text' as const, text })) });
+      reason = await sub.run(signal);
+    }
     // Its report carries whatever it read: the delegating agent is now tainted too.
-    if (sub.tainted) (a.parent ?? this.agent)?.markTainted();
+    if (sub.tainted) (e.parent ?? this.agent)?.markTainted();
     this.emit({ kind: 'turn_end', reason, agent: name });
     const last = [...sub.messages].reverse().find((m) => m.role === 'assistant');
     const text = last?.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n').trim() ?? '';
     // A sub-agent that read outside content may repeat hidden text from it.
     const clean = sub.tainted ? stripInvisible(text).text : text;
     const report = clean ? (clean.length > 16_000 ? clean.slice(0, 16_000) + '\n[report truncated]' : clean) : 'The agent finished without a report.';
-    return { report: reason === 'done' ? report : `${report}\n\n(The agent stopped early: ${reason}.)`, reason, cost };
-    } finally { release(); }
+    return { report: reason === 'done' ? report : `${report}\n\n(The agent stopped early: ${reason}.)`, reason, cost: e.cost.n - before };
   }
 
   // ---------- workflows ----------
@@ -945,10 +1217,11 @@ export class Session {
     }
   }
 
-  private workflowHost(w: WorkflowDef): WorkflowHost {
+  /** `bg`: the signal of a run started in the background (its approvals outlive the turn); `parent`: the agent that started it. */
+  private workflowHost(w: WorkflowDef, bg?: AbortSignal, parent?: Agent): WorkflowHost {
     return {
       host: () => this.getHost(),
-      runAgent: (a) => this.runAgent({ ...a, allowTodos: true }),
+      runAgent: (a) => this.runAgent({ ...a, allowTodos: true, ...(parent ? { parent } : {}) }),
       runGates: async (names, signal) => runGates(this.deps.registry, await this.getHost(), names, signal, await this.services(false)),
       approve: async ({ runId, node, title, message, files }) => {
         const host = await this.getHost();
@@ -960,7 +1233,7 @@ export class Session {
           const content = real ? await fs.readFile(real, 'utf8').catch(() => '') : '';
           if (content) shown.push({ path: f, content: content.slice(0, 30_000) });
         }
-        const r = await this.request('approval', { kind: 'approval_request', requestId: crypto.randomUUID(), runId, node, title, message, files: shown });
+        const r = await this.request('approval', { kind: 'approval_request', requestId: crypto.randomUUID(), runId, node, title, message, files: shown }, bg);
         return { approved: r.decision === 'approve', feedback: r.feedback };
       },
       emit: (e) => this.emit({ kind: 'workflow', phase: e.phase, node: e.node, run: runView(e.run, w) }),
@@ -1013,13 +1286,45 @@ export class Session {
    * outcome - status, each step's summary, cost. The run is recorded like any other.
    */
   async runWorkflowInline(name: string, input: Record<string, string>, signal: AbortSignal): Promise<{ status: string; summary: string; cost: number }> {
+    const { w, run } = await this.newToolRun(name, input);
+    const done = await new WorkflowRunner(w, this.workflowHost(w, undefined, this.agent), run).execute(signal);
+    return { status: done.status, cost: done.cost, summary: runSummary(done) };
+  }
+
+  /** A run the workflow tool starts, recorded before it runs like any other. */
+  private async newToolRun(name: string, input: Record<string, string>): Promise<{ w: WorkflowDef; run: RunRecord }> {
     const w = (await this.workflows()).find((x) => x.name === name);
     if (!w) throw new Error(`No workflow named "${name}". Available: ${(await this.workflows()).map((x) => x.name).join(', ') || 'none'}`);
     const run = newRun(w, this.meta.id, input);
     await this.saveRun(run);
-    const done = await new WorkflowRunner(w, this.workflowHost(w), run).execute(signal);
-    const steps = done.history.map((h) => `- ${h.node} (${h.type}): ${h.outcome ?? h.status}${h.summary ? ` - ${h.summary.replace(/\s+/g, ' ').slice(0, 300)}` : ''}`);
-    return { status: done.status, cost: done.cost, summary: `${steps.join('\n')}${done.error ? `\nError: ${done.error}` : ''}` };
+    return { w, run };
+  }
+
+  /**
+   * The workflow tool with run_in_background: the run starts detached and its id
+   * comes back at once; the outcome reaches the main agent later, as a background
+   * agent's report does. It is in the runs list like any run.
+   */
+  async startWorkflowInBackground(name: string, input: Record<string, string>): Promise<string> {
+    const { w, run } = await this.newToolRun(name, input);
+    const { ctl, signal } = this.bgSignal();
+    this.tasks.add({
+      id: run.id, kind: 'workflow', description: `workflow ${w.name}`, status: 'running', startedAt: Date.now(), owner: 'main',
+      // The runner updates the record in place (reading its file could race its saves; Windows refuses that rename).
+      read: async (offset = 0) => {
+        const t = runSummary(run);
+        return { text: t.slice(offset), size: t.length };
+      },
+      stop: async () => ctl.abort(new Error('stopped')),
+    });
+    this.emit({ kind: 'notice', level: 'info', text: `Workflow ${w.name} (${run.id}) is running in the background.` });
+    new WorkflowRunner(w, this.workflowHost(w, signal, this.agent), run).execute(signal).then((done) => {
+      const status = done.status === 'succeeded' ? 'completed' : signal.aborted ? 'stopped' : 'failed';
+      if (this.tasks.finish(run.id, status, done.cost)) this.deliver(`Background workflow ${w.name} (${run.id}) ${done.status} ($${done.cost.toFixed(4)}). Its steps:`, runSummary(done), !signal.aborted);
+    }, (err: Error) => {
+      if (this.tasks.finish(run.id, signal.aborted ? 'stopped' : 'failed')) this.deliver(`Background workflow ${w.name} (${run.id}) could not run: ${err.message}`, '', !signal.aborted);
+    });
+    return run.id;
   }
 
   private async executeRun(w: WorkflowDef, run: RunRecord): Promise<void> {
@@ -1037,9 +1342,9 @@ export class Session {
       this.emit({ kind: 'notice', level: 'error', text: `Workflow ${w.name} could not run: ${(err as Error).message}` });
     } finally {
       this.abortCtl = undefined;
-      for (const [id] of this.pending) this.respond(id, { decision: 'deny', feedback: 'run ended' });
+      for (const [id, p] of this.pending) if (!p.background) this.respond(id, { decision: 'deny', feedback: 'run ended' });
       this.emit({ kind: 'turn_end', reason: signal.aborted ? 'aborted' : 'done' });
-      this.setStatus('idle');
+      this.setStatus(this.pending.size ? 'waiting' : 'idle');
       await this.saveMeta().catch(() => {});
     }
   }
@@ -1067,16 +1372,21 @@ export class Session {
 
   // ---------- user interaction ----------
 
-  private request(kind: PendingRequest['kind'], event: HarnessEvent & { requestId: string }): Promise<{ decision: string; feedback?: string; answer?: string }> {
+  /** `signal`: what the asking work runs under (default: the turn's); background work's questions outlive the turn. */
+  private request(kind: PendingRequest['kind'], event: HarnessEvent & { requestId: string }, signal?: AbortSignal): Promise<{ decision: string; feedback?: string; answer?: string }> {
     // The agent is waiting for a person: Notification hooks can tell them where they are (chat, phone).
     const e = event as { tool?: string; summary?: string; question?: string; title?: string; message?: string };
     fireHooks(this.settings, this.host, 'Notification', { type: kind, session: this.meta.id, title: this.meta.title, message: e.summary ?? e.question ?? e.message ?? e.title ?? kind, ...(e.tool ? { tool: e.tool } : {}) }, this.deps.registry.hooks, (m) => this.emit({ kind: 'notice', level: 'warn', text: m }));
+    const bound = signal ?? this.abortCtl?.signal;
+    const background = !!signal && signal !== this.abortCtl?.signal;
     return new Promise((resolve) => {
-      this.pending.set(event.requestId, { kind, resolve, event });
+      this.pending.set(event.requestId, { kind, resolve, event, background });
       this.setStatus('waiting');
       this.emit(event);
-      this.abortCtl?.signal.addEventListener('abort', () => {
-        if (this.pending.delete(event.requestId)) resolve({ decision: 'deny', feedback: 'The user interrupted.' });
+      bound?.addEventListener('abort', () => {
+        if (!this.pending.has(event.requestId)) return;
+        if (background) this.respond(event.requestId, { decision: 'deny', feedback: 'The user interrupted.' });
+        else if (this.pending.delete(event.requestId)) resolve({ decision: 'deny', feedback: 'The user interrupted.' });
       }, { once: true });
     });
   }
@@ -1086,14 +1396,24 @@ export class Session {
     if (!p) return false;
     this.pending.delete(requestId);
     this.emit({ kind: 'request_resolved', requestId, decision: r.decision });
-    if (this.pending.size === 0 && this.status === 'waiting') this.setStatus('running');
+    if (this.pending.size === 0 && this.status === 'waiting') {
+      // Background work asked while no turn ran: the session is idle again, and what the user typed meanwhile starts a turn.
+      if (p.background && !this.abortCtl) {
+        this.setStatus('idle');
+        const typed = this.queued.filter((q) => !q.startsWith('<system-reminder>'));
+        if (typed.length) {
+          this.queued = this.queued.filter((q) => q.startsWith('<system-reminder>'));
+          this.send(typed.join('\n\n')).catch(() => {});
+        }
+      } else this.setStatus('running');
+    }
     p.resolve(r);
     return true;
   }
 
   private async askPermission(tool: Tool, input: Record<string, unknown>, summary: string, suggestion: string, agent: string): Promise<PermissionAnswer> {
     const requestId = crypto.randomUUID();
-    const r = await this.request('permission', { kind: 'permission_request', requestId, tool: tool.spec.name, summary, input, suggestion, agent: agent === 'main' ? undefined : agent });
+    const r = await this.request('permission', { kind: 'permission_request', requestId, tool: tool.spec.name, summary, input, suggestion, agent: agent === 'main' ? undefined : agent }, this.agentSignals.get(agent));
     if (r.decision === 'allow_always') {
       if (suggestion === 'edit_all') this.setMode('acceptEdits');
       else if (!this.meta.sessionRules.includes(suggestion)) { this.meta.sessionRules.push(suggestion); this.scheduleSave(); }
@@ -1150,7 +1470,9 @@ export class Session {
   async send(text: string): Promise<'started' | 'queued'> {
     const t = text.trim();
     if (!t) throw new Error('empty message');
-    if (this.status !== 'idle') {
+    // Only background work waiting for an answer: no turn runs, so this message starts one.
+    const bgOnly = this.status === 'waiting' && !this.abortCtl && [...this.pending.values()].every((p) => p.background);
+    if (this.status !== 'idle' && !bgOnly) {
       this.queued.push(t);
       this.latestPrompt = t;
       this.emit({ kind: 'notice', level: 'info', text: 'Message queued; the agent will see it at its next step.' });
@@ -1212,18 +1534,38 @@ export class Session {
     } finally {
       this.abortCtl = undefined;
       this.meta.running = false;
-      for (const [id] of this.pending) this.respond(id, { decision: 'deny', feedback: 'turn ended' });
+      // Background work's questions are not the turn's: they stay open.
+      for (const [id, p] of this.pending) if (!p.background) this.respond(id, { decision: 'deny', feedback: 'turn ended' });
       this.emit({ kind: 'turn_end', reason });
-      this.setStatus('idle');
+      this.setStatus(this.pending.size ? 'waiting' : 'idle');
       await this.saveMeta().catch(() => {});
-      // A message typed after the last step starts the next turn.
-      const rest = this.queued.splice(0).filter((q) => !q.startsWith('<system-reminder>'));
+      // A message typed after the last step starts the next turn; reminders (background results among them) wait for it.
+      const rest = this.queued.filter((q) => !q.startsWith('<system-reminder>'));
+      this.queued = this.queued.filter((q) => q.startsWith('<system-reminder>'));
       if (rest.length && reason !== 'aborted') this.send(rest.join('\n\n')).catch(() => {});
+      else this.lateBackground(reason !== 'aborted');
     }
   }
 
+  /** Background results that arrived after the agent's last step: handled as if the session had been idle. */
+  private lateBackground(wake: boolean): void {
+    const left = this.queued.filter((q) => this.lateResults.has(q));
+    this.lateResults.clear();
+    if (!left.length) return;
+    const waking = wake && process.env.HARNESS_BACKGROUND_WAKE === '1';
+    if (waking) this.send('Background work finished: continue with its results.').catch(() => {});
+    else this.emit({ kind: 'notice', level: 'info', text: 'Background results arrived as the agent finished; it sees them with your next message.' });
+  }
+
+  /**
+   * The user's Stop: the turn, and the background agents, workflows and monitors
+   * (they spend). Background shells keep running (servers the user may still want):
+   * task_stop or deleting the session ends them.
+   */
   abort(): void {
     this.queued = this.queued.filter((q) => q.startsWith('<system-reminder>'));
     this.abortCtl?.abort(new Error('interrupted by the user'));
+    this.bg.abort(new Error('stopped by the user'));
+    this.bg = new AbortController();
   }
 }

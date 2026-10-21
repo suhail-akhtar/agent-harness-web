@@ -180,7 +180,12 @@ export function summarize(name: string, input: Record<string, unknown>): string 
     case 'glob': return s('pattern');
     case 'grep': return `"${s('pattern')}"${s('glob') ? ` in ${s('glob')}` : ''}`;
     case 'web_fetch': return s('url');
-    case 'agent': return s('description');
+    case 'agent': return (input.run_in_background === true ? '[background] ' : '') + s('description');
+    case 'send_message': return `${s('to')}: ${s('message').slice(0, 60)}`;
+    case 'monitor': return s('task_id') + (s('pattern') ? ` /${s('pattern')}/` : ' until it ends');
+    case 'task_output':
+    case 'task_stop': return s('task_id');
+    case 'task_list': return 'background tasks';
     case 'todo_write': return `${Array.isArray(input.todos) ? input.todos.length : 0} items`;
     case 'ask_user': return s('question');
     case 'skill': return s('name') + (s('file') ? `/${s('file')}` : '');

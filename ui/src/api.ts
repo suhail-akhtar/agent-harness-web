@@ -86,9 +86,13 @@ export type HarnessEvent =
   | { kind: 'notice'; level: 'info' | 'warn' | 'error'; text: string; agent?: string }
   | { kind: 'retry'; attempt: number; delayMs: number; reason: string }
   | { kind: 'turn_end'; reason: string; agent?: string }
-  | { kind: 'status'; status: 'idle' | 'running' | 'waiting' };
+  | { kind: 'status'; status: 'idle' | 'running' | 'waiting' }
+  | { kind: 'task'; phase: 'started' | 'finished'; task: TaskView };
 
-export interface SessionDetail { meta: SessionMeta; status: 'idle' | 'running' | 'waiting'; history: Message[]; pending: HarnessEvent[]; lastSeq: number }
+/** Background work: a shell, a sub-agent, a workflow run or a monitor. */
+export interface TaskView { id: string; kind: 'shell' | 'agent' | 'workflow' | 'monitor'; description: string; status: 'running' | 'completed' | 'failed' | 'stopped'; startedAt: number; endedAt?: number; owner: string; cost?: number }
+
+export interface SessionDetail { meta: SessionMeta; status: 'idle' | 'running' | 'waiting'; history: Message[]; pending: HarnessEvent[]; lastSeq: number; tasks?: TaskView[] }
 
 export interface Capabilities {
   tools: { name: string; kind: string }[];

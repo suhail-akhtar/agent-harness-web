@@ -1,5 +1,5 @@
 import type { Tool } from './types.ts';
-import { num, str } from './types.ts';
+import { bool, num, str } from './types.ts';
 
 // schedule: the agent sets up work for later in its own session ("check the
 // deploy in 20 minutes", "every morning, run the flaky test 50 times and report").
@@ -56,18 +56,19 @@ export const workflowTool: Tool = {
   sendsOut: false,
   spec: {
     name: 'workflow',
-    description: 'Run one of this session\'s workflows now - a fixed graph of agent steps, quality gates and approvals (e.g. build-feature: requirements, plan, test-first build, review; long-task: a project built feature by feature) - and get its outcome. Use it when the user asks for that process or a big job matches one; for ordinary work do it yourself. "list" shows the workflows and their inputs.',
+    description: 'Run one of this session\'s workflows now - a fixed graph of agent steps, quality gates and approvals (e.g. build-feature: requirements, plan, test-first build, review; long-task: a project built feature by feature) - and get its outcome. Use it when the user asks for that process or a big job matches one; for ordinary work do it yourself. "list" shows the workflows and their inputs. With run_in_background the run starts and you get its id at once; its outcome reaches you as a reminder when it ends.',
     input_schema: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['list', 'run'] },
         name: { type: 'string' },
         input: { type: 'object', description: 'The workflow\'s inputs, as strings', additionalProperties: { type: 'string' } },
+        run_in_background: { type: 'boolean' },
       },
       required: ['action'],
     },
   },
-  summarize: (i) => str(i.action) === 'run' ? `workflow ${str(i.name)}` : 'workflow list',
+  summarize: (i) => str(i.action) === 'run' ? `${bool(i.run_in_background) ? '[background] ' : ''}workflow ${str(i.name)}` : 'workflow list',
   async run(input, ctx) {
     const wf = ctx.services?.workflows;
     if (!wf) return { content: 'Workflows are not available here (sub-agents and scripts cannot start them).', is_error: true };
@@ -78,6 +79,10 @@ export const workflowTool: Tool = {
     const raw = input.input && typeof input.input === 'object' ? input.input as Record<string, unknown> : {};
     const values = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)]));
     try {
+      if (bool(input.run_in_background) && wf.start) {
+        const id = await wf.start(str(input.name), values);
+        return { content: `Workflow ${str(input.name)} started in the background as ${id}. Keep working; its outcome reaches you as a reminder when it ends. task_output ${id} shows its steps so far, task_stop ${id} stops it.` };
+      }
       const r = await wf.run(str(input.name), values, ctx.signal);
       return { content: `Workflow ${str(input.name)} ${r.status} ($${r.cost.toFixed(4)}).\n${r.summary}`, is_error: r.status !== 'succeeded' };
     } catch (e) {

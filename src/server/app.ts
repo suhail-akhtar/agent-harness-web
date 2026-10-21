@@ -12,6 +12,7 @@ import { COMPANION_RESULT_LIMIT } from '../runtime/companion.ts';
 import { BundleError, exportSession, importSession } from '../core/portable.ts';
 import { McpbError } from '../mcp/mcpb.ts';
 import { resolveIn, walk } from '../tools/paths.ts';
+import { view } from '../tools/tasks.ts';
 import { type BrowserSessions, isSsoAdmin, NOBODY_ALLOWED, type OidcClient, OidcError, refusal } from './oidc.ts';
 import { RateLimiter, type Role, type SpendLedger, type UserStore } from './users.ts';
 
@@ -530,7 +531,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     if (m) {
       const s = sessionFor(me, m[1]!);
       const action = m[2];
-      if (!action && method === 'GET') return send(res, 200, { meta: s.meta, status: s.status, history: s.history, pending: s.pendingRequests(), lastSeq: s.lastSeq });
+      if (!action && method === 'GET') return send(res, 200, { meta: s.meta, status: s.status, history: s.history, pending: s.pendingRequests(), lastSeq: s.lastSeq, tasks: s.tasks.all().map(view) });
       if (!action && method === 'DELETE') { await sessions.remove(s.meta.id); return send(res, 200, { ok: true }); }
       if (!action && method === 'PATCH') {
         const b = await readJson(req);
