@@ -48,7 +48,7 @@ test('an MCP bundle (.mcpb) installs as an operator server: its tools reach new 
   await assert.rejects(h.mcpb.install(bundle, {}), /needs "Tool count"/);
   const done = await h.mcpb.install(bundle, { tool_count: 5 });
   assert.equal(done.name, 'notes-ext');
-  assert.equal(done.config.command === 'node' || /node/i.test(done.config.command), true);
+  assert.equal((done.config as { command: string }).command, 'node', 'the manifest\'s own command');
   await h.close();
   // A new process: installed bundles are registered at start.
   h = await createHarness({ dataDir: data, search: null, memory: 'off' });

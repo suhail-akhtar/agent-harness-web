@@ -46,3 +46,22 @@ test('evaluation: cases run per model and repeat; hidden checks judge them; the 
   assert.match(report, /hidden: shouts: exit 1/);
   await assert.rejects(fs.writeFile(path.join(dir, 'eval.json'), '{"name":"x","checks":[]}').then(() => loadCases(path.join(root, 'evals'))), /needs "workflow" or "prompt"/);
 });
+
+test('checks run on Windows too: case and workspace paths reach the shell with forward slashes, quoted', async () => {
+  const root = await tempDir('hw test spaces ');
+  const dir = path.join(root, 'evals', 'demo', 'paths');
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, 'check.mjs'), "import fs from 'node:fs'; process.exit(fs.existsSync(process.argv[2] + '/x.txt') ? 0 : 1);");
+  await fs.writeFile(path.join(dir, 'eval.json'), JSON.stringify({ name: 'paths', prompt: 'x', checks: [{ name: 'own checker', run: 'node {{case}}/check.mjs {{ws}}' }] }));
+  const [c] = await loadCases(path.join(root, 'evals'));
+  const ws = path.join(root, 'work space');
+  await fs.mkdir(ws);
+  await fs.writeFile(path.join(ws, 'x.txt'), 'x');
+  const { createHarness } = await import('../src/kernel/harness.ts');
+  const { runChecks } = await import('../src/eval/runner.ts');
+  const h = await createHarness({ dataDir: await tempDir(), search: null, memory: 'off', scheduler: false });
+  try {
+    const [r] = await runChecks(h, c!, ws, new AbortController().signal);
+    assert.equal(r!.pass, true, r!.detail);
+  } finally { await h.close(); }
+});

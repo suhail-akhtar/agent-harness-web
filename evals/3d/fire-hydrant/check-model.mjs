@@ -1,8 +1,8 @@
 // Hidden check: the exported hydrant is about the right size and within budget.
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
-const { inspectGltf, describeGltf } = await import(path.join(here, '..', '..', '..', 'plugins', 'games3d', 'lib-gltf.mjs'));
+const { inspectGltf, describeGltf } = await import(pathToFileURL(path.join(here, '..', '..', '..', 'plugins', 'games3d', 'lib-gltf.mjs')).href);
 const g = await inspectGltf(path.resolve(process.argv[2] ?? 'model.glb'));
 console.log(describeGltf(process.argv[2] ?? 'model.glb', g));
 const problems = [];

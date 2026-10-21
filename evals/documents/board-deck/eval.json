@@ -27,7 +27,7 @@
     },
     {
       "name": "slide count and key numbers",
-      "run": "bash {{case}}/check-deck.sh"
+      "run": "node {{case}}/check-deck.mjs"
     }
   ]
 }

@@ -76,7 +76,9 @@ export async function runChecks(h: Harness, c: EvalCase, ws: string, signal: Abo
     try {
       if (ch.run) {
         // {{port}}: a free port for this check, so runs in parallel never collide.
-        const cmd = ch.run.replaceAll('{{case}}', c.dir).replaceAll('{{ws}}', ws).replaceAll('{{port}}', String(await freePort()));
+        // Paths go into a shell command: forward slashes (bash on Windows eats backslashes) and quoted (spaces).
+        const shellPath = (p: string) => `'${p.split(path.sep).join('/').replace(/'/g, `'\\''`)}'`;
+        const cmd = ch.run.replaceAll('{{case}}', shellPath(c.dir)).replaceAll('{{ws}}', shellPath(ws)).replaceAll('{{port}}', String(await freePort()));
         const r = await host.exec(cmd, { timeoutMs: (ch.timeoutSec ?? 300) * 1000, signal });
         const out = `${r.stdout}\n${r.stderr}`.trim().split('\n').slice(-6).join('\n');
         results.push({ name: ch.name, pass: r.code === 0 && !r.timedOut, detail: r.timedOut ? 'timed out' : `exit ${r.code}${out ? `: ${out.slice(-600)}` : ''}` });
@@ -156,6 +158,36 @@ export async function runOne(c: EvalCase, model: string, repeat: number, out: st
   opts.log?.(`${run.pass ? 'PASS' : 'FAIL'} ${c.pack}/${c.name} ${model} #${repeat}: ${run.status}, ${run.checks.filter((x) => x.pass).length}/${run.checks.length} checks, $${run.cost.toFixed(4)}, ${run.seconds}s`);
   await fs.writeFile(path.join(base, 'result.json'), JSON.stringify(run, null, 1));
   return run;
+}
+
+/**
+ * Judges finished runs again with the current checks, without running the agents
+ * (no model spend): for a checker that was wrong, or a check added later. Each run
+ * folder's workspace, session and sources are as the run left them.
+ */
+export async function rejudge(out: string, cases: EvalCase[], opts: { plugins: string[]; shipped?: string[]; log?: (s: string) => void }): Promise<EvalRun[]> {
+  const runs: EvalRun[] = [];
+  for (const e of (await fs.readdir(out, { withFileTypes: true })).filter((x) => x.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
+    const base = path.join(out, e.name);
+    let run: EvalRun;
+    try { run = JSON.parse(await fs.readFile(path.join(base, 'result.json'), 'utf8')) as EvalRun; } catch { continue; }
+    const c = cases.find((x) => x.pack === run.pack && x.name === run.case);
+    if (!c) { opts.log?.(`skip ${e.name}: case ${run.pack}/${run.case} not found`); runs.push(run); continue; }
+    const h = await createHarness({ dataDir: path.join(base, 'data'), plugins: opts.plugins, shippedPlugins: opts.shipped, scheduler: false });
+    try {
+      const s = h.sessions.list()[0] ? h.sessions.get(h.sessions.list()[0]!.id) : undefined;
+      const before = run.checks.filter((x) => x.pass).length;
+      run.checks = await runChecks(h, c, run.workspace, new AbortController().signal, s ? { sources: s.sources } : undefined);
+      run.pass = ['succeeded', 'done'].includes(run.status) && run.checks.every((x) => x.pass);
+      opts.log?.(`${run.pass ? 'PASS' : 'FAIL'} ${c.pack}/${c.name} ${run.model} #${run.repeat}: ${before} -> ${run.checks.filter((x) => x.pass).length}/${run.checks.length} checks`);
+      await fs.writeFile(path.join(base, 'result.json'), JSON.stringify(run, null, 1));
+    } finally { await h.close(); }
+    runs.push(run);
+  }
+  const env = await harnessDisclosure(opts.plugins);
+  await fs.writeFile(path.join(out, 'results.json'), JSON.stringify({ harness: env, rejudged: new Date().toISOString(), runs }, null, 1));
+  await fs.writeFile(path.join(out, 'report.md'), report(runs, { ...env, judged: 'checks re-run on the finished workspaces (no agent re-run)' }));
+  return runs;
 }
 
 /** Runs jobs with at most `n` at once. */
