@@ -48,3 +48,8 @@ export function sanitizeUntrusted(text: string): string {
   const what = [inv.removed ? `${inv.removed} invisible character(s)` : '', com.removed ? `${com.removed} HTML comment(s)` : ''].filter(Boolean).join(' and ');
   return `${com.text}\n[harness: removed ${what} from this content: hidden text is not shown to the model]`;
 }
+
+/** Tags that could end a fence of outside data, or pose as the harness's own: their "<" becomes "&lt;". */
+export function neutralizeTags(text: string): string {
+  return text.replace(/<(\/?)(system-reminder|background_output|trigger_payload|command-name|skill|brief|role|environment)\b/gi, '&lt;$1$2');
+}

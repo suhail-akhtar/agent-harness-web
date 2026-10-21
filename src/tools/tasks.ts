@@ -1,3 +1,4 @@
+import vm from 'node:vm';
 import type { TaskView } from '../core/types.ts';
 import type { Tool, ToolContext } from './types.ts';
 import { bool, clip, num, str } from './types.ts';
@@ -85,7 +86,7 @@ const sleep = (ms: number, signal: AbortSignal) => new Promise<void>((r) => {
   signal.addEventListener('abort', () => { clearTimeout(t); r(); }, { once: true });
 });
 
-export interface WatchResult { fired: 'match' | 'exit' | 'timeout' | 'aborted'; line?: string; status: TaskStatus; tail: string }
+export interface WatchResult { fired: 'match' | 'exit' | 'timeout' | 'aborted' | 'slow'; line?: string; status: TaskStatus; tail: string }
 
 /**
  * Waits, without model calls, until a line of the task's output matches `pattern`,
@@ -97,6 +98,13 @@ export async function watchTask(t: TaskEntry, pattern: RegExp | undefined, timeo
   let partial = '';
   const recent: string[] = [];
   const tail = () => recent.slice(-10).join('\n');
+  // Each line is tested in a vm context with a time limit: a pattern that backtracks without
+  // end on some line is cut off there instead of stalling the server's event loop.
+  const ctx = pattern ? vm.createContext({ re: pattern, s: '' }) : undefined;
+  const test = (line: string): boolean | 'slow' => {
+    ctx!.s = line.length > MONITOR_LINE_MAX ? line.slice(0, MONITOR_LINE_MAX) : line;
+    try { return vm.runInContext('re.test(s)', ctx!, { timeout: 50 }) === true; } catch { return 'slow'; }
+  };
   for (;;) {
     await t.refresh?.();
     const r = await t.read(pos);
@@ -107,7 +115,9 @@ export async function watchTask(t: TaskEntry, pattern: RegExp | undefined, timeo
     for (const l of lines) {
       recent.push(l);
       if (recent.length > 50) recent.shift();
-      if (pattern?.test(l)) return { fired: 'match', line: l, status: t.status, tail: tail() };
+      const hit = pattern ? test(l) : false;
+      if (hit === 'slow') return { fired: 'slow', line: l, status: t.status, tail: tail() };
+      if (hit) return { fired: 'match', line: l, status: t.status, tail: tail() };
     }
     if (t.status !== 'running') return { fired: 'exit', status: t.status, tail: tail() };
     if (signal.aborted) return { fired: 'aborted', status: t.status, tail: tail() };
@@ -116,10 +126,21 @@ export async function watchTask(t: TaskEntry, pattern: RegExp | undefined, timeo
   }
 }
 
-/** A regex from the model, refused when it is not one. */
-function regex(p: string): RegExp | { error: string } {
+/**
+ * A regex from the model, refused when it is not one - or when it could backtrack for
+ * minutes on one line and stall the whole server (it runs in the server's event loop):
+ * a quantified group that holds a quantifier or an alternation ("(a+)+", "(a|aa)*"),
+ * or a backreference. Lines are also tested only up to MONITOR_LINE_MAX characters.
+ */
+export function regex(p: string): RegExp | { error: string } {
+  if (p.length > 300) return { error: 'pattern is too long (at most 300 characters)' };
+  const group = String.raw`\((?:[^()\\]|\\.)*`;
+  if (new RegExp(String.raw`${group}[+*}](?:[^()\\]|\\.)*\)\s*[+*{]`).test(p) || new RegExp(String.raw`${group}\|(?:[^()\\]|\\.)*\)\s*[+*{]`).test(p) || /\\[1-9]|\\k</.test(p)) {
+    return { error: 'pattern could take too long to test (a repeated group that repeats or alternates inside, or a backreference): use a simpler one, e.g. "ready|listening" or "Error: .*"' };
+  }
   try { return new RegExp(p); } catch (e) { return { error: `pattern is not a valid regular expression: ${(e as Error).message}` }; }
 }
+const MONITOR_LINE_MAX = 4000;
 
 const age = (ms: number) => (ms < 60_000 ? `${Math.round(ms / 1000)}s` : ms < 3_600_000 ? `${Math.round(ms / 60_000)}m` : `${(ms / 3_600_000).toFixed(1)}h`);
 
@@ -249,6 +270,7 @@ export function describeWatch(id: string, p: RegExp | undefined, r: WatchResult,
   if (r.fired === 'match') return `${id} printed a line matching /${p!.source}/:\n${r.line!.slice(0, 2000)}${tail}`;
   if (r.fired === 'exit') return `${id} ended (${r.status})${p ? ` without a line matching /${p.source}/` : ''}.${tail}`;
   if (r.fired === 'aborted') return `Stopped watching ${id}.`;
+  if (r.fired === 'slow') return `Stopped watching ${id}: /${p!.source}/ took too long to test on one of its lines. Use a simpler pattern.${tail}`;
   return `Timed out after ${age(ms)} watching ${id} (still ${r.status})${p ? `: no line matched /${p.source}/` : ''}.${tail}`;
 }
 

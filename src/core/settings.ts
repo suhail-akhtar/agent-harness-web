@@ -213,7 +213,8 @@ export function applyUserSettings(base: Settings, u: UserSettings): Settings {
   const lower = (b: number, v: number | undefined) => (v ? Math.min(b, v) : b);
   return {
     ...base,
-    permissions: { allow: [...base.permissions.allow, ...u.permissions.allow], deny: [...base.permissions.deny, ...u.permissions.deny], ask: [...base.permissions.ask, ...u.permissions.ask] },
+    // The operator's allow rules are remembered apart: only they hold after untrusted content (see decide()).
+    permissions: { allow: [...base.permissions.allow, ...u.permissions.allow], deny: [...base.permissions.deny, ...u.permissions.deny], ask: [...base.permissions.ask, ...u.permissions.ask], operatorAllow: base.permissions.operatorAllow ?? [...base.permissions.allow] },
     maxSteps: lower(base.maxSteps, u.maxSteps),
     maxCostUsd: lower(base.maxCostUsd, u.maxCostUsd),
     // 0 is "no limit": a person may set one where the operator has none.
@@ -228,7 +229,9 @@ export function mergeSettings(base: Settings, project: Partial<Settings>, trustP
     permissions: {
       allow: [...base.permissions.allow, ...(trustProject && Array.isArray(p?.allow) ? p.allow : [])],
       // Only the operator's allow rules hold after untrusted content was read (see decide()).
-      operatorAllow: [...base.permissions.allow],
+      operatorAllow: base.permissions.operatorAllow ?? [...base.permissions.allow],
+      // The repository's: they cover what the sandbox contains, never a call that leaves it.
+      projectAllow: trustProject && Array.isArray(p?.allow) ? [...p.allow] : [],
       deny: [...base.permissions.deny, ...(Array.isArray(p?.deny) ? p.deny : [])],
       ask: [...base.permissions.ask, ...(Array.isArray(p?.ask) ? p.ask : [])],
     },

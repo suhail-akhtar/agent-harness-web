@@ -123,6 +123,16 @@ export function renderTemplate(template: string, run: RunRecord, scope: Scope = 
   return template.replace(REF, (m, ref: string) => (ROOTS.has(ref.split('.')[0]!) ? toText(lookup(ref, run, scope)) : m));
 }
 
+/**
+ * A shell command from a template: every value put in is quoted as one argument for
+ * the shell that runs it, so an input, an agent's output or a map item can never add
+ * commands of its own ("x; curl ... | sh" stays one word).
+ */
+export function renderShell(template: string, run: RunRecord, scope: Scope = {}, shell = 'bash'): string {
+  const quote = (v: string) => (shell === 'powershell' ? `'${v.replace(/'/g, "''")}'` : `'${v.replace(/'/g, `'\\''`)}'`);
+  return template.replace(REF, (m, ref: string) => (ROOTS.has(ref.split('.')[0]!) ? quote(toText(lookup(ref, run, scope))) : m));
+}
+
 /** A template that is exactly one reference gives its value as it is (a list stays a list); otherwise the rendered text. */
 export function resolveTemplate(template: string, run: RunRecord, scope: Scope = {}): unknown {
   const one = /^\s*\{\{\s*([a-zA-Z_][\w-]*(?:\.[\w-]+)*)\s*\}\}\s*$/.exec(template);

@@ -142,10 +142,13 @@ test('taint crosses into and out of background sub-agents', async () => {
     assert.equal(a.s.tasks.get('general-1')!.untrusted?.(), true);
   } finally { await a.close(); }
   // A background sub-agent that read outside content taints the main agent when its report arrives.
-  const b = await setup({ main: [{ calls: [bgAgent('look it up')] }, { text: 'ok' }], general: [{ calls: [{ name: 'service' }] }, { text: 'sunny' }] }, { prepare: service });
+  // (held at a gate until the main turn is checked: on a fast machine it could finish first)
+  const g = gate();
+  const b = await setup({ main: [{ calls: [bgAgent('look it up')] }, { text: 'ok' }], general: [{ wait: g.p, calls: [{ name: 'service' }] }, { text: 'sunny' }] }, { prepare: service });
   try {
     await b.turn('go');
     assert.equal(b.s.meta.tainted ?? false, false);
+    g.open();
     await b.waitFor(() => b.s.tasks.get('general-1')?.status === 'completed', 'the agent');
     assert.equal(b.s.meta.tainted, true);
   } finally { await b.close(); }

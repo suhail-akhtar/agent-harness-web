@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { ToolHost } from '../runtime/host.ts';
+import { MIRROR_SKIP_FILE } from '../companion/handler.ts';
 import { resolveIn } from '../tools/paths.ts';
 
 // Instruction files, in the tiers Claude Code reads them:
@@ -30,6 +31,8 @@ const FILE_MAX = 1_000_000;
 const IMPORT_DEPTH = 4;
 /** Directories whose files are never anyone's instructions to the agent. */
 const SKIP = new Set(['node_modules', '.git', '.hg', '.svn', '.venv', '__pycache__']);
+/** The hidden folders an @import may reach: where instructions conventionally live. */
+const IMPORT_DOT_DIRS = new Set(['.claude', '.harness', '.github']);
 
 /** A workspace-relative POSIX path, or undefined when it is absolute or leaves the workspace. */
 export function safeRel(rel: string): string | undefined {
@@ -82,7 +85,8 @@ function named(names: Set<string>, f: string): string | undefined {
 export function importsIn(text: string): string[] {
   const prose = text.replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '');
   const out: string[] = [];
-  for (const m of prose.matchAll(/(?:^|[\s(])@((?:\.{1,2}\/)*[\w-][\w./-]*)/g)) {
+  // A path may start with a dot folder (@.claude/rules.md); hidden files and secrets are refused when it is loaded.
+  for (const m of prose.matchAll(/(?:^|[\s(])@((?:\.{1,2}\/)*\.?[\w-][\w./-]*)/g)) {
     const p = m[1]!.replace(/[.,;:]+$/, '');
     if (p && !out.includes(p)) out.push(p);
   }
@@ -116,8 +120,11 @@ async function addWorkspaceFile(c: Collector, read: (rel: string) => Promise<str
   if (!c.add(tag, ` source="${rel}"${importedBy ? ` imported_by="${importedBy}"` : ''}`, text, { source: rel, scope, ...(importedBy ? { importedBy } : {}) })) return;
   if (depth >= IMPORT_DEPTH) return;
   for (const imp of importsIn(text)) {
+    // No ".." at all (even one that stays inside), no hidden files or folders, nothing that
+    // looks like a secret: an import goes into every request, without a read permission check.
+    if (imp.split(/[\\/]/).some((s) => s === '..')) continue;
     const target = safeRel(path.posix.join(path.posix.dirname(rel), imp));
-    if (target && !target.split('/').some((s) => SKIP.has(s))) await addWorkspaceFile(c, read, target, scope, tag, depth + 1, rel);
+    if (target && !target.split('/').some((s) => SKIP.has(s) || (s.startsWith('.') && !IMPORT_DOT_DIRS.has(s)) || MIRROR_SKIP_FILE.test(s))) await addWorkspaceFile(c, read, target, scope, tag, depth + 1, rel);
   }
 }
 

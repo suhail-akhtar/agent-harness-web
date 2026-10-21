@@ -15,6 +15,8 @@ export interface Rules {
   allow: string[]; deny: string[]; ask: string[];
   /** The operator's own allow rules (HARNESS_SETTINGS): the only ones that hold once untrusted content was read. */
   operatorAllow?: string[];
+  /** The repository's allow rules (trusted only in a sandbox): they never allow a call that leaves it (a service, a URL, the user's real desktop). */
+  projectAllow?: string[];
 }
 /** `guard`: asked because of untrusted content - only a person (or the operator's hooks) may answer, never auto mode's model. */
 export type Decision = { action: 'allow' | 'deny' | 'ask'; reason: string; guard?: true };
@@ -101,7 +103,10 @@ export function decide(tool: Tool, input: Record<string, unknown>, ctx: Permissi
   // repository, or from a click made before the content arrived. Only the
   // operator's rules hold.
   const guarded = !!ctx.tainted && mode !== 'bypass' && (!!tool.persists?.(input) || (process.env.HARNESS_TAINT_GUARD !== 'off' && sendsOut(tool, input, ctx.network, ctx.hostKind)));
-  if (rules.allow.some((r) => ruleMatches(r, tool, input)) && (!guarded || (rules.operatorAllow ?? []).some((r) => ruleMatches(r, tool, input)))) return { action: 'allow', reason: 'allowed by a rule' };
+  const matched = rules.allow.filter((r) => ruleMatches(r, tool, input));
+  const leaves = (tool.kindsFor?.(input, { hostKind: ctx.hostKind }) ?? [tool.kind]).some((k) => k === 'external' || k === 'network');
+  const onlyProject = matched.length > 0 && matched.every((r) => rules.projectAllow?.includes(r));
+  if (matched.length && !(onlyProject && leaves) && (!guarded || (rules.operatorAllow ?? []).some((r) => ruleMatches(r, tool, input)))) return { action: 'allow', reason: 'allowed by a rule' };
   // Anything that outlives the session (memory) is confirmed once untrusted
   // content is in the context: a page must not be able to plant instructions
   // for every future session.

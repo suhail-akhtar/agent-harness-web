@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { constants as fsc } from 'node:fs';
 import fs from 'node:fs/promises';
 import { resolveIn } from '../tools/paths.ts';
 import path from 'node:path';
@@ -24,7 +25,7 @@ import { makeSkillTool, type Skill, skillsIn, skillsListing, workspaceSkills } f
 import { sortTools } from '../tools/index.ts';
 import type { FileStamp, Tool, ToolServices } from '../tools/types.ts';
 import { MemoryStore, projectKey } from '../memory/store.ts';
-import { stripInvisible } from './untrusted.ts';
+import { neutralizeTags, sanitizeUntrusted, stripInvisible } from './untrusted.ts';
 import { SourceStore } from '../research/sources.ts';
 import { cloneRepository, publish, PublishError, shq } from '../git/publish.ts';
 import { createWorktree, removeWorktree, type Worktree, WorktreeError, worktreeWritable } from '../git/worktree.ts';
@@ -119,12 +120,24 @@ function lastText(agent: Agent | undefined): string {
   return last?.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n').trim() ?? '';
 }
 
-/** A file's bytes from `offset` (at most the last 2 MB of them), and its size. */
-async function readFrom(file: string, offset: number, cap = 2_000_000): Promise<{ text: string; size: number }> {
+/**
+ * A file's bytes from `offset` (at most the last 2 MB of them), and its size. With
+ * `root`, the file must be inside it: a sandboxed command can swap a log for a link to
+ * a server file, so it is opened without following a last link and must be the very
+ * file its real path inside `root` names.
+ */
+export async function readFrom(file: string, offset: number, cap = 2_000_000, root?: string): Promise<{ text: string; size: number }> {
   let fh: fs.FileHandle;
-  try { fh = await fs.open(file, 'r'); } catch { return { text: '', size: 0 }; }
+  try { fh = await fs.open(file, fsc.O_RDONLY | (root ? fsc.O_NOFOLLOW ?? 0 : 0)); } catch { return { text: '', size: 0 }; }
   try {
-    const size = (await fh.stat()).size;
+    const st = await fh.stat();
+    if (root) {
+      const [real, top] = await Promise.all([fs.realpath(file).catch(() => ''), fs.realpath(root).catch(() => root)]);
+      const rel = real ? path.relative(top, real) : '..';
+      const named = real ? await fs.stat(real).catch(() => null) : null;
+      if (!st.isFile() || rel.startsWith('..') || path.isAbsolute(rel) || !named || named.ino !== st.ino || named.dev !== st.dev) return { text: '', size: 0 };
+    }
+    const size = st.size;
     const start = Math.max(Math.min(offset, size), size - cap);
     const buf = Buffer.alloc(size - start);
     if (buf.length) await fh.read(buf, 0, buf.length, start);
@@ -295,7 +308,8 @@ export class Session {
     }
     if (opts.outputStyle) {
       // Resolved once, now: the text is stored, so the system prompt never changes under the session.
-      const read = opts.runtime.kind === 'companion' ? workspaceReader(await s.getHost()) : (rel: string) => fs.readFile(path.join(s.workspace, rel), 'utf8').catch(() => null);
+      // Read through the workspace's own path checks (a style may be a link to a server file).
+      const read = workspaceReader(await s.getHost());
       const style = await resolveOutputStyle(opts.outputStyle, { read, dirs: deps.registry.outputStyleDirs });
       if (style) s.meta.outputStyle = style;
     }
@@ -528,7 +542,8 @@ export class Session {
     // Background work keeps the sandbox up while it runs.
     if (this.host instanceof DockerHost && this.status === 'idle' && !this.tasks.running().length) {
       await this.end('idle');
-      if (this.toolbox) { (await this.toolbox).closeProject().catch(() => {}); this.toolbox = undefined; this.agent = undefined; }
+      // Kept sub-agents go with the main agent: they hold its closed toolbox and point at it as parent.
+      if (this.toolbox) { (await this.toolbox).closeProject().catch(() => {}); this.toolbox = undefined; this.agent = undefined; this.subs.clear(); }
       await this.host.stop();
     }
   }
@@ -1019,16 +1034,21 @@ export class Session {
    * unless the operator set HARNESS_BACKGROUND_WAKE=1, which starts a turn.
    */
   private deliver(headline: string, body: string, wake = true): void {
-    const reminder = `<system-reminder>${headline}${body ? `\n${body}` : ''}</system-reminder>`;
+    // The body (a report, a shell's output) is data, not the harness speaking: hidden text is
+    // stripped and it is fenced, with any tag that could close the fence or pose as one of
+    // the harness's own neutralised.
+    const data = body ? `\n<background_output>\n${neutralizeTags(sanitizeUntrusted(body))}\n</background_output>` : '';
+    const reminder = `<system-reminder>${headline}${data}</system-reminder>`;
     this.queued.push(reminder);
-    const idle = this.status === 'idle';
+    // No turn running (the session may still be 'waiting' on a background agent's question): idle for this.
+    const idle = this.status === 'idle' || !this.abortCtl;
     // A turn that ends before its next step leaves it unread: lateBackground handles it then.
     if (!idle && wake) this.lateResults.add(reminder);
     const waking = idle && wake && process.env.HARNESS_BACKGROUND_WAKE === '1';
     this.emit({ kind: 'notice', level: 'info', text: idle && !waking ? `${headline} The agent sees the result with your next message.` : headline });
     if (!idle) return;
     fireHooks(this.settings, this.host, 'Notification', { type: 'background', session: this.meta.id, title: this.meta.title, message: headline }, this.deps.registry.hooks, (m) => this.emit({ kind: 'notice', level: 'warn', text: m }));
-    if (waking) this.send('Background work finished: continue with its results.').catch(() => {});
+    if (waking && this.status === 'idle') this.send('Background work finished: continue with its results.').catch(() => {});
   }
 
   /** A shell bash started in the background: its log and exit code are files beside each other in the workspace. */
@@ -1036,17 +1056,27 @@ export class Session {
     const host = this.host!;
     const id = `shell-${s.id}`;
     const file = (rel: string) => path.join(host.root, rel);
+    let checks = 0;
     const entry: TaskEntry = {
       id, kind: 'shell', description: (s.description || s.command).replace(/\s+/g, ' ').slice(0, 120), status: 'running', startedAt: Date.now(), owner,
-      read: (offset = 0) => readFrom(file(s.log), offset),
+      // The log and exit file are in the workspace, where the sandbox's commands can replace them with links.
+      read: (offset = 0) => readFrom(file(s.log), offset, 2_000_000, host.root),
       refresh: async () => {
         if (entry.status !== 'running') return;
-        const code = await fs.readFile(file(s.exitFile), 'utf8').catch(() => undefined);
-        if (code === undefined) return;
-        const n = Number(code.trim());
-        if (!this.tasks.finish(id, n === 0 ? 'completed' : 'failed') || owner !== 'main') return;
+        const raw = (await readFrom(file(s.exitFile), 0, 64, host.root)).text.trim();
+        let code: string;
+        if (/^-?\d+$/.test(raw)) code = raw;
+        else {
+          // No exit code yet. A shell killed outright (kill -9, out of memory, a restarted
+          // container) never writes one: every fifth check (10 s), see whether it still runs.
+          if (++checks % 5) return;
+          const alive = await host.exec(`kill -0 ${Number(s.pid)} 2>/dev/null && echo alive`, { timeoutMs: 15_000 }).catch(() => undefined);
+          if (!alive || alive.stdout.includes('alive')) return;
+          code = 'unknown (the process is gone)';
+        }
+        if (!this.tasks.finish(id, code === '0' ? 'completed' : 'failed') || owner !== 'main') return;
         const tail = (await entry.read()).text.trimEnd().split('\n').slice(-15).join('\n');
-        this.deliver(`Background shell ${id} (${entry.description}) exited with code ${code.trim()}.`, tail ? `Last output:\n${tail}` : '');
+        this.deliver(`Background shell ${id} (${entry.description}) exited with code ${code}.${tail ? ' Its last output:' : ''}`, tail);
       },
       stop: async () => { await host.exec(stopShellScript(s.pid), { timeoutMs: 15_000 }); },
     };

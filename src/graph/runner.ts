@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { applyWrite, evaluateCondition, initState, outputInstruction, parseOutputs, renderTemplate, resolveTemplate, type Scope } from './state.ts';
+import { applyWrite, evaluateCondition, initState, outputInstruction, parseOutputs, renderShell, renderTemplate, resolveTemplate, type Scope } from './state.ts';
 import type { AgentNode, MapNode, MapTemplate, NodeRecord, RunRecord, StateField, WorkflowDef, WorkflowHost, WorkflowNode } from './types.ts';
 import { validateWorkflow } from './validate.ts';
 
@@ -253,7 +253,8 @@ export class WorkflowRunner {
       }
       case 'shell': {
         const host = await this.host.host();
-        const r = await host.exec(render(node.command, run), { timeoutMs: node.timeoutMs ?? 300_000, signal });
+        // Values go in quoted: an input or an agent's output cannot add commands.
+        const r = await host.exec(renderShell(node.command, run, {}, host.shell), { timeoutMs: node.timeoutMs ?? 300_000, signal });
         const out = `exit ${r.code}\n${(r.stdout + (r.stderr ? `\n${r.stderr}` : '')).trim().slice(-SUMMARY_MAX)}`;
         run.state[id] = out;
         if (r.code !== 0) run.feedback = `Command "${node.command.length > 120 ? `${node.command.slice(0, 117)}...` : node.command}" failed:\n${out}`;
@@ -316,7 +317,8 @@ export class WorkflowRunner {
     const p = prog;
     const todo = p.items.map((_, i) => i).filter((i) => !(String(i) in p.results));
     const left = MAX_STEPS - this.steps;
-    if (todo.length > left) return { failed: true, summary: `${id}: ${todo.length} item(s) to run, more than the ${left} step(s) left of the ${MAX_STEPS}-step cap` };
+    // One step stays for routing on from the map (a map that used the last one would end the run).
+    if (todo.length >= left) return { failed: true, summary: `${id}: ${todo.length} item(s) to run, but only ${Math.max(0, left - 1)} step(s) are left of the ${MAX_STEPS}-step cap after this one` };
     const t = node.node;
     if (t.type === 'agent' && this.w.maxAgentRuns && run.agentRuns + todo.length > this.w.maxAgentRuns) {
       return { failed: true, summary: `${id}: ${todo.length} agent run(s) would pass the agent-run limit (${this.w.maxAgentRuns}, ${run.agentRuns} used)` };
@@ -403,7 +405,7 @@ export class WorkflowRunner {
       }
       case 'shell': {
         const host = await this.host.host();
-        const r = await host.exec(render(t.command, run, scope), { timeoutMs: t.timeoutMs ?? 300_000, signal });
+        const r = await host.exec(renderShell(t.command, run, scope, host.shell), { timeoutMs: t.timeoutMs ?? 300_000, signal });
         const out = (r.stdout + (r.stderr ? `\n${r.stderr}` : '')).trim();
         if (r.code !== 0) return { failed: true, summary: `exit ${r.code}: ${out.slice(-1000)}` };
         return { outcome: 'ok', summary: `exit 0\n${out.slice(-SUMMARY_MAX)}`, output: r.stdout.trim() };

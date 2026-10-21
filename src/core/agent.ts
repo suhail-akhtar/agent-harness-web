@@ -102,6 +102,7 @@ const CLEARED = '[Old tool output cleared to keep the context lean. Run the tool
 const FILE_TOOLS = new Set(['read', 'edit', 'write']);
 /** Skills re-attached after a compaction: the most recent few, within a token budget (as Claude Code does). */
 const SKILLS_KEPT = 3;
+const KEPT_SKILLS = '<system-reminder>Skills you had loaded, kept across the compaction (load one again with the skill tool for its full text or files):</system-reminder>';
 const SKILLS_BUDGET_TOKENS = 8000;
 const SKILL_MAX_TOKENS = 4000;
 
@@ -623,12 +624,15 @@ export class Agent {
       '<system-reminder>This session was compacted to save context. The summary below replaces the earlier conversation. Files you read before are no longer in context: read them again before editing.</system-reminder>',
       await this.hooks.preamble(),
       `<summary>\n${summary}\n</summary>`,
-      skills ? `<system-reminder>Skills you had loaded, kept across the compaction (load one again with the skill tool for its full text or files):</system-reminder>\n${skills}` : '',
       todosText(this.hooks.todos()),
       lastUserText ? `<latest_user_message>\n${lastUserText.slice(0, 8000)}\n</latest_user_message>` : '',
       'Continue the work from where it stopped.',
     ].filter(Boolean);
-    this.messages = [{ role: 'user', content: [{ type: 'text', text: parts.join('\n\n') }], compactionSummary: true }];
+    // The kept skills go in a block of their own: only that block is read back at the next
+    // compaction, never the model's summary (which could repeat a skill-shaped text it read).
+    const content: Message['content'] = [{ type: 'text', text: parts.join('\n\n') }];
+    if (skills) content.push({ type: 'text', text: `${KEPT_SKILLS}\n${skills}` });
+    this.messages = [{ role: 'user', content, compactionSummary: true }];
     this.cfg.readFiles.clear();
     this.instructionDirs.clear();
     this.recentCalls = [];
@@ -650,9 +654,11 @@ export function skillsToKeep(messages: Message[]): string {
   for (const m of messages) for (const b of m.content) if (b.type === 'tool_use' && b.name === 'skill' && !b.input.file) calls.add(b.id);
   const found = new Map<string, string>();
   for (const m of messages) {
-    for (const b of m.content) {
+    for (const [i, b] of m.content.entries()) {
+      // Only what the harness itself wrote: skill tool results, a /skill command's expansion
+      // (it starts the message), and a previous compaction's own kept-skills block.
       const text = b.type === 'tool_result' && calls.has(b.tool_use_id) && !b.is_error ? b.content
-        : b.type === 'text' && m.role === 'user' && (m.compactionSummary || b.text.includes('<command-name>/')) ? b.text : '';
+        : b.type === 'text' && m.role === 'user' && ((m.compactionSummary && i > 0 && b.text.startsWith(KEPT_SKILLS)) || (i === 0 && b.text.startsWith('<command-name>/'))) ? b.text : '';
       for (const x of text.matchAll(/<skill name="([^"]+)">\n([\s\S]*?)\n<\/skill>/g)) {
         found.delete(x[1]!);
         found.set(x[1]!, x[2]!);

@@ -83,9 +83,10 @@ export async function resolveOutputStyle(name: string, from: { read?: (rel: stri
   if (!n || n === 'default') return undefined;
   if (!/^[a-z0-9][\w.-]{0,63}$/i.test(n)) throw new Error(`invalid output style name "${n}"`);
   if (OUTPUT_STYLES[n]) return { name: n, prompt: OUTPUT_STYLES[n] };
+  // The operator's plugins first: a repository cannot take over a style the user picked from the operator's list.
   const candidates: (() => Promise<string | null>)[] = [
-    ...['.harness/output-styles', '.claude/output-styles'].map((d) => () => from.read?.(`${d}/${n}.md`) ?? Promise.resolve(null)),
     ...(from.dirs ?? []).map((d) => () => fs.readFile(path.join(d.dir, `${n}.md`), 'utf8').catch(() => null)),
+    ...['.harness/output-styles', '.claude/output-styles'].map((d) => () => from.read?.(`${d}/${n}.md`) ?? Promise.resolve(null)),
   ];
   for (const c of candidates) {
     const text = await c().catch(() => null);
