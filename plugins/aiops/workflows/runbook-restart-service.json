@@ -1,0 +1,36 @@
+{
+  "name": "runbook-restart-service",
+  "description": "Restart an inventory service safely: pre-checks (status, health probe, recent logs, maintenance window) as a baseline, human approval, the restart (service_control), then verification against the baseline. Fails, with the evidence, when the service does not come back healthy.",
+  "inputs": {
+    "service": { "description": "The inventory service to restart.", "required": true },
+    "reason": { "description": "Why it needs a restart.", "default": "" }
+  },
+  "start": "precheck",
+  "maxAgentRuns": 4,
+  "nodes": {
+    "precheck": {
+      "type": "agent", "title": "Pre-checks (baseline)", "agent": "sre", "maxSteps": 30,
+      "prompt": "Pre-checks for restarting service {{input.service}} (reason: {{input.reason}}). Read-only: service_control action status, probe the service, logs_search its last 15 minutes for errors (and keep the messages: they are lost on restart), docker_status or host_stats for its host, and ops_inventory for its maintenance windows.\n\nReport: the baseline (state, health, restarts, probe latency, error lines), whether it is inside a maintenance window, and whether a restart is likely to help (a crash loop or a full disk will not be fixed by it - say so)."
+      ,"next": "approve"
+    },
+    "approve": {
+      "type": "approval", "title": "Approve the restart",
+      "message": "Restart service {{input.service}}? Reason: {{input.reason}}\n\nBaseline:\n{{state.precheck}}",
+      "next": { "on": { "approve": "restart", "reject": "stopped" } }
+    },
+    "restart": {
+      "type": "agent", "title": "Restart", "agent": "sre", "change": true, "maxSteps": 10,
+      "prompt": "A person approved restarting {{input.service}}. Run service_control action restart for it, once, and nothing else.\n\nReport: the tool's before/after output.",
+      "next": "verify"
+    },
+    "verify": {
+      "type": "agent", "title": "Verify", "agent": "sre", "verify": true, "maxSteps": 25,
+      "prompt": "Verify the restart of {{input.service}} against the baseline:\n{{state.precheck}}\n\nRestart result:\n{{state.restart}}\n\nRead-only: service_control status, probe the service, logs_search the last 5 minutes, ops_check for the service. It is VERIFIED when it runs, is healthy, the probe passes and no new errors appear; otherwise FAILED.\n\nReport: the checks and their numbers against the baseline.",
+      "decide": ["VERIFIED", "FAILED"],
+      "next": { "on": { "VERIFIED": "done" }, "default": "failed" }
+    },
+    "done": { "type": "end", "title": "Restarted and healthy", "status": "success" },
+    "stopped": { "type": "end", "title": "Not approved: nothing changed", "status": "failed" },
+    "failed": { "type": "end", "title": "Restarted but not healthy", "status": "failed" }
+  }
+}

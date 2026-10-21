@@ -1,0 +1,75 @@
+# The AIOps test stack (compose project hwtest-aiops): a demo shop that can be
+# broken on purpose, Prometheus scraping it and node-exporter, and an ssh host
+# sharing the shop's data volume. Started and reset by stack.mjs:
+#   node evals/aiops/stack/stack.mjs up | reset | break <slow|leak|crash|disk> | status | down
+# Host ports (127.0.0.1 only): Prometheus 19090, shop HTTP 19180, shop HTTPS
+# 19443 (an expired certificate), ssh 12222 (user ops: key or password, both in .state/).
+name: hwtest-aiops
+
+services:
+  demoapp:
+    image: node:22-alpine
+    container_name: hwtest-aiops-demoapp
+    working_dir: /app
+    command: ["node", "server.mjs"]
+    volumes:
+      - ./demoapp:/app:ro
+      - shopdata:/data
+    ports:
+      - "127.0.0.1:19180:8080"
+      - "127.0.0.1:19443:8443"
+    labels:
+      hwtest: aiops
+    # No USER and no healthcheck: both are findings the advisor eval expects.
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: hwtest-aiops-prometheus
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=2d", "--web.enable-lifecycle"]
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "127.0.0.1:19090:9090"
+    labels:
+      hwtest: aiops
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9090/-/ready"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: hwtest-aiops-node-exporter
+    labels:
+      hwtest: aiops
+
+  sshd:
+    image: lscr.io/linuxserver/openssh-server:latest
+    container_name: hwtest-aiops-sshd
+    hostname: db-1
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: Etc/UTC
+      USER_NAME: ops
+      PUBLIC_KEY_FILE: /keys/id_ed25519.pub
+      PASSWORD_ACCESS: "true"
+      USER_PASSWORD_FILE: /keys/password
+      SUDO_ACCESS: "true"
+    volumes:
+      - ./.state/keys:/keys:ro
+      - shopdata:/data
+    ports:
+      - "127.0.0.1:12222:2222"
+    labels:
+      hwtest: aiops
+
+volumes:
+  shopdata:
+    name: hwtest-aiops-shopdata
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=64m"

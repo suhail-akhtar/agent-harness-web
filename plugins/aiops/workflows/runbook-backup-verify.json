@@ -1,0 +1,37 @@
+{
+  "name": "runbook-backup-verify",
+  "description": "Prove a backup can be restored: find the newest backup and check its age and size, then - approved - restore it into a scratch location on the host, compare it (file count, checksums, or the application's own integrity check), and remove the scratch copy; then verify the result and that production was not touched.",
+  "inputs": {
+    "host": { "description": "The inventory host that holds the backups.", "required": true },
+    "backups": { "description": "Where the backups are (a directory or glob).", "required": true },
+    "max_age_hours": { "description": "Oldest acceptable newest backup.", "default": "26" }
+  },
+  "start": "inspect",
+  "maxAgentRuns": 4,
+  "nodes": {
+    "inspect": {
+      "type": "agent", "title": "Inspect backups", "agent": "sre", "maxSteps": 25,
+      "prompt": "Host {{input.host}}, backups at {{input.backups}}. Read-only (ssh_exec): list them (ls -la --time-style=full-iso), the newest one's age (fail if over {{input.max_age_hours}} hours), size compared with the previous ones (a sudden drop is a red flag), and its format (tar, gzip, sql dump...). Plan the restore test: the exact commands to extract or load it into a NEW scratch directory /tmp/restore-test-<date> (never over live data), the integrity checks (tar -tzf, gzip -t, file counts, checksums against a manifest, or the application's check), and the removal of the scratch directory at the end - all in one step.\n\nReport: the newest backup, its age and size trend, and the exact restore-test commands.",
+      "next": "approve"
+    },
+    "approve": {
+      "type": "approval", "title": "Approve the restore test",
+      "message": "Run this restore test on {{input.host}} (scratch directory only, removed afterwards)?\n\n{{state.inspect}}",
+      "next": { "on": { "approve": "restore-test", "reject": "stopped" } }
+    },
+    "restore-test": {
+      "type": "agent", "title": "Restore test", "agent": "sre", "change": true, "maxSteps": 20,
+      "prompt": "A person approved this restore test on {{input.host}}:\n{{state.inspect}}\n\nRun exactly those commands with ssh_exec: restore into the scratch directory, run the integrity checks, record their results, then remove the scratch directory. Nothing outside the scratch directory.\n\nReport: each command, its result, and the integrity check outcome.",
+      "next": "verify"
+    },
+    "verify": {
+      "type": "agent", "title": "Verify", "agent": "sre", "verify": true, "maxSteps": 15,
+      "prompt": "Verify the restore test on {{input.host}}:\n{{state.restore-test}}\n\nVERIFIED when the restore completed, the integrity checks passed, the newest backup is younger than {{input.max_age_hours}} hours, and the scratch directory is gone (ssh_exec ls). Otherwise FAILED - a backup that cannot be restored is an incident: say so.\n\nReport: the verdict and the evidence.",
+      "decide": ["VERIFIED", "FAILED"],
+      "next": { "on": { "VERIFIED": "done" }, "default": "failed" }
+    },
+    "done": { "type": "end", "title": "Backup restores", "status": "success" },
+    "stopped": { "type": "end", "title": "Not approved: inspected only", "status": "failed" },
+    "failed": { "type": "end", "title": "Backup did not verify", "status": "failed" }
+  }
+}

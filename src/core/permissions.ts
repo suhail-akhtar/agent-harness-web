@@ -75,6 +75,15 @@ export function ruleMatches(rule: string, tool: Tool, input: Record<string, unkn
       return host === d || host.endsWith('.' + d);
     } catch { return false; }
   }
+  // A tool that names what its rules match (ssh_exec: "<host> <command>"): exact, or a prefix that is not a compound command.
+  if (tool.ruleSubject) {
+    const subject = tool.ruleSubject(input).trim();
+    if (spec.endsWith(':*')) {
+      const prefix = spec.slice(0, -2).trim();
+      return (subject === prefix || subject.startsWith(prefix + ' ')) && !hasShellControl(subject);
+    }
+    return subject === spec.trim();
+  }
   if (name === 'computer') return spec.split('|').map((s) => s.trim()).includes(String(input.action ?? ''));
   const p = String(input.path ?? '').replace(/\\/g, '/').replace(/^\/workspace\//, '').replace(/^\.\//, '');
   return globMatcher(spec)(p);
@@ -178,6 +187,8 @@ export function suggestRule(tool: Tool, input: Record<string, unknown>): string 
     try { return `web_fetch(domain:${new URL(String(input.url)).hostname})`; } catch { return 'web_fetch'; }
   }
   if (name === 'edit' || name === 'write') return 'edit_all';
+  // Exactly this call (this host and command), never the whole tool.
+  if (tool.ruleSubject) { const subject = tool.ruleSubject(input).trim(); return subject && !/[()]/.test(subject) ? `${name}(${subject})` : name; }
   // One action at a time: allowing screenshots is not allowing clicks.
   if (name === 'computer' && typeof input.action === 'string' && /^[a-z_]+$/.test(input.action)) return `computer(${input.action})`;
   return name;

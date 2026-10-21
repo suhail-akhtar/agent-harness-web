@@ -1,0 +1,36 @@
+{
+  "name": "runbook-rotate-logs",
+  "description": "Rotate oversized logs on a host: find the large and unrotated log files and whether logrotate covers them, approval, rotation (logrotate -f for configured ones, copy-and-truncate for the rest - never deleting a log a process has open), and verification of the sizes and that the writers still log.",
+  "inputs": {
+    "host": { "description": "The inventory host.", "required": true },
+    "path": { "description": "The log directory.", "default": "/var/log" }
+  },
+  "start": "report",
+  "maxAgentRuns": 4,
+  "nodes": {
+    "report": {
+      "type": "agent", "title": "Find large logs", "agent": "sre", "maxSteps": 25,
+      "prompt": "Host {{input.host}}, logs under {{input.path}}. Read-only (ssh_exec read-only commands): the biggest files (du -xsk, find -size +50M), which process has each open (lsof if present), and whether logrotate has a rule for it (cat /etc/logrotate.conf /etc/logrotate.d/*). Plan, per file: logrotate -f <its config> when configured, otherwise cp <file> <file>.<date> && gzip the copy && truncate -s 0 <file> (keeps the open file handle). Nothing changes now.\n\nReport: the files with sizes, the exact rotation command for each, and the space it frees.",
+      "next": "approve"
+    },
+    "approve": {
+      "type": "approval", "title": "Approve the rotation",
+      "message": "Rotate these logs on {{input.host}}?\n\n{{state.report}}",
+      "next": { "on": { "approve": "rotate", "reject": "stopped" } }
+    },
+    "rotate": {
+      "type": "agent", "title": "Rotate", "agent": "sre", "change": true, "maxSteps": 20,
+      "prompt": "A person approved this rotation on {{input.host}}:\n{{state.report}}\n\nRun exactly those rotation commands with ssh_exec, one file at a time, and nothing else.\n\nReport: each command and its result.",
+      "next": "verify"
+    },
+    "verify": {
+      "type": "agent", "title": "Verify", "agent": "sre", "verify": true, "maxSteps": 20,
+      "prompt": "Verify the log rotation on {{input.host}}: the rotated files are small again, the rotated copies exist (compressed), and each writer still writes to its log (its size grows or its last line is recent; logs_search or tail). host_stats for the disk. VERIFIED or FAILED.\n\nReport: sizes before and after.",
+      "decide": ["VERIFIED", "FAILED"],
+      "next": { "on": { "VERIFIED": "done" }, "default": "failed" }
+    },
+    "done": { "type": "end", "title": "Logs rotated", "status": "success" },
+    "stopped": { "type": "end", "title": "Not approved: nothing changed", "status": "failed" },
+    "failed": { "type": "end", "title": "Rotation not verified", "status": "failed" }
+  }
+}

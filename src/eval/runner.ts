@@ -13,7 +13,9 @@
 //       { "name": "documents", "gates": ["documents-render"] },
 //       { "name": "deliverables", "files": ["docs/requirements.md"] },
 //       { "name": "plays", "playtest": "hidden-playtest.json" }        // a playtest file in this folder
-//     ]
+//     ],
+//     "setup": "node {{case}}/../stack/stack.mjs reset",   // optional: before the agent starts (a failure skips the run)
+//     "teardown": "node {{case}}/../stack/stack.mjs down"  // optional: after the checks, pass or fail
 //   }
 
 import fs from 'node:fs/promises';
@@ -143,6 +145,10 @@ export interface EvalCase {
   name: string; description?: string; dir: string; pack: string;
   workflow?: string; input?: Record<string, string>; prompt?: string;
   fixtures?: string; timeoutMin?: number; checks: EvalCheck[];
+  /** A command run before the agent starts (bring up a test environment); a failure skips the run. */
+  setup?: string;
+  /** A command run after the checks, whatever happened. */
+  teardown?: string;
 }
 export interface CheckResult { name: string; pass: boolean; detail: string }
 export interface EvalRun {
@@ -183,19 +189,33 @@ async function freePort(): Promise<number> {
   });
 }
 
+/**
+ * A case's command with {{case}}, {{ws}} and {{port}} filled in. Paths go into a shell command:
+ * forward slashes (bash on Windows eats backslashes) and quoted (spaces) together with what
+ * follows them ({{case}}/check.mjs is one word), in the quoting of the shell that runs it
+ * (PowerShell doubles a quote; bash closes and reopens). {{port}}: a free port for this
+ * command, so runs in parallel never collide.
+ */
+async function caseCommand(host: LocalHost, c: EvalCase, ws: string, cmd: string): Promise<string> {
+  const quote = (s: string) => host.shell === 'powershell' ? `'${s.replace(/'/g, "''")}'` : `'${s.replace(/'/g, `'\\''`)}'`;
+  const fill = (s: string, token: string, p: string) => s.replace(new RegExp(`\\{\\{${token}\\}\\}([^\\s'"|;&<>()]*)`, 'g'), (_m, rest: string) => quote(p.split(path.sep).join('/') + rest));
+  return fill(fill(cmd, 'case', c.dir), 'ws', ws).replaceAll('{{port}}', String(await freePort()));
+}
+
+/** A case's setup or teardown command; throws with its output when it fails. */
+async function caseStep(c: EvalCase, ws: string, which: 'setup' | 'teardown'): Promise<void> {
+  const host = new LocalHost(ws);
+  const r = await host.exec(await caseCommand(host, c, ws, c[which]!), { timeoutMs: 15 * 60_000 });
+  if (r.code !== 0 || r.timedOut) throw new Error(`${which} ${r.timedOut ? 'timed out' : `exited ${r.code}`}: ${`${r.stdout}\n${r.stderr}`.trim().slice(-600)}`);
+}
+
 export async function runChecks(h: Harness, c: EvalCase, ws: string, signal: AbortSignal, services?: ToolServices): Promise<CheckResult[]> {
   const host = new LocalHost(ws);
   const results: CheckResult[] = [];
   for (const ch of c.checks) {
     try {
       if (ch.run) {
-        // {{port}}: a free port for this check, so runs in parallel never collide.
-        // Paths go into a shell command: forward slashes (bash on Windows eats backslashes) and
-        // quoted (spaces) together with what follows them ({{case}}/check.mjs is one word), in
-        // the quoting of the shell that runs it (PowerShell doubles a quote; bash closes and reopens).
-        const quote = (s: string) => host.shell === 'powershell' ? `'${s.replace(/'/g, "''")}'` : `'${s.replace(/'/g, `'\\''`)}'`;
-        const fill = (s: string, token: string, p: string) => s.replace(new RegExp(`\\{\\{${token}\\}\\}([^\\s'"|;&<>()]*)`, 'g'), (_m, rest: string) => quote(p.split(path.sep).join('/') + rest));
-        const cmd = fill(fill(ch.run, 'case', c.dir), 'ws', ws).replaceAll('{{port}}', String(await freePort()));
+        const cmd = await caseCommand(host, c, ws, ch.run);
         const r = await host.exec(cmd, { timeoutMs: (ch.timeoutSec ?? 300) * 1000, signal });
         const out = `${r.stdout}\n${r.stderr}`.trim().split('\n').slice(-6).join('\n');
         results.push({ name: ch.name, pass: r.code === 0 && !r.timedOut, detail: r.timedOut ? 'timed out' : `exit ${r.code}${out ? `: ${out.slice(-600)}` : ''}` });
@@ -234,6 +254,14 @@ export async function runOne(c: EvalCase, model: string, repeat: number, out: st
   await fs.mkdir(ws, { recursive: true });
   if (c.fixtures) await fs.cp(path.join(c.dir, c.fixtures), ws, { recursive: true });
   const t0 = Date.now();
+  if (c.setup) {
+    try { await caseStep(c, ws, 'setup'); } catch (e) {
+      const failed: EvalRun = { pack: c.pack, case: c.name, model, repeat, ...(cfg ? { config: cfg.name } : {}), status: 'setup-failed', pass: false, checks: [], cost: 0, inputTokens: 0, cacheHit: 0, output: 0, modelCalls: 0, toolCalls: 0, seconds: Math.round((Date.now() - t0) / 1000), workspace: ws, error: (e as Error).message };
+      opts.log?.(`FAIL ${c.pack}/${c.name} ${model} #${repeat}: ${failed.error}`);
+      await fs.writeFile(path.join(base, 'result.json'), JSON.stringify(failed, null, 1));
+      return failed;
+    }
+  }
   const h = await createHarness({ dataDir: path.join(base, 'data'), plugins: await configPlugins(opts.plugins, cfg), shippedPlugins: opts.shipped, ...(cfg?.memory ? { memory: cfg.memory } : {}) });
   // Code mode is the run_script tool; a configuration can take it (or any tool) out.
   for (const t of [...(cfg?.codeMode === false ? ['run_script'] : []), ...(cfg?.disableTools ?? [])]) h.registry.tools.delete(t);
@@ -274,6 +302,7 @@ export async function runOne(c: EvalCase, model: string, repeat: number, out: st
     clearTimeout(timer);
     run.seconds = Math.round((Date.now() - t0) / 1000);
     await h.close();
+    if (c.teardown) await caseStep(c, ws, 'teardown').catch((e) => { opts.log?.(`${c.pack}/${c.name}: ${(e as Error).message}`); });
   }
   opts.log?.(`${run.pass ? 'PASS' : 'FAIL'} ${c.pack}/${c.name} ${model}${cfg ? ` [${cfg.name}]` : ''} #${repeat}: ${run.status}, ${run.checks.filter((x) => x.pass).length}/${run.checks.length} checks, $${run.cost.toFixed(4)}, ${run.seconds}s`);
   await fs.writeFile(path.join(base, 'result.json'), JSON.stringify(run, null, 1));

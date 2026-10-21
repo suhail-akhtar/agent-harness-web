@@ -145,7 +145,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   }
   async function load(dir: string): Promise<LoadedPlugin> {
     const signature = await admit(dir);
-    await loadPlugin(registry, dir, log);
+    await loadPlugin(registry, dir, log, { dataDir: opts.dataDir });
     const p = registry.plugins.at(-1)!;
     p.signature = signature;
     return p;

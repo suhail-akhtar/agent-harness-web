@@ -83,6 +83,11 @@ export interface Tool {
   kindsFor?(input: Record<string, unknown>, where?: { hostKind?: string }): ToolKind[];
   /** Whether a session on this host gets the tool at all (default: yes). A tool that can only fail there is left out of every request. */
   availableIn?(host: import('../runtime/host.ts').ToolHost): boolean | Promise<boolean>;
+  /**
+   * What "tool(spec)" permission rules match for this call (e.g. ssh_exec: "<host> <command>"):
+   * the exact text, or "prefix:*", which never covers a compound command. Without it a spec matches input.path.
+   */
+  ruleSubject?(input: Record<string, unknown>): string;
   /** One line for permission prompts and the UI. */
   summarize(input: Record<string, unknown>): string;
   /**

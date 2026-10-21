@@ -62,6 +62,8 @@ export interface ProviderDef {
 export interface PluginAPI {
   readonly pluginName: string;
   readonly pluginDir: string;
+  /** A folder for the plugin's own state on this server (created on first use): outside every workspace, so no agent can edit it. */
+  readonly dataDir: string;
   /** A Tool, or a plain definition ({ name, description, parameters, kind?, run }): plugins need no imports. */
   registerTool(tool: Tool | ToolDefinition): void;
   /** Resolves a path inside the session's workspace (symlink-safe); throws if it leaves it. */
@@ -110,6 +112,8 @@ export interface ToolDefinition {
   /** Whether a call can carry data out of the session (default: from its kind, or true for a plugin that declares network hosts). */
   sendsOut?: Tool['sendsOut'];
   summarize?: (input: Record<string, unknown>) => string;
+  /** What "tool(spec)" permission rules match (exact, or "prefix:*"), e.g. "<host> <command>". */
+  ruleSubject?: Tool['ruleSubject'];
   /** Whether a session on this host gets the tool at all (e.g. only where the sandbox image has the program). */
   availableIn?: Tool['availableIn'];
   run(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutcome | string>;
@@ -124,6 +128,7 @@ export function defineTool(t: ToolDefinition): Tool {
     ...(t.untrusted ? { untrusted: true } : {}),
     ...(t.sendsOut !== undefined ? { sendsOut: t.sendsOut } : {}),
     ...(t.availableIn ? { availableIn: t.availableIn } : {}),
+    ...(t.ruleSubject ? { ruleSubject: t.ruleSubject } : {}),
     remoteable: false,
     summarize: t.summarize ?? ((i) => `${t.name} ${JSON.stringify(i).slice(0, 80)}`),
     async run(input, ctx) {
@@ -156,5 +161,5 @@ export interface PluginManifest {
    * process, so this does not contain code that ignores those channels: that is
    * what signing and review are for.
    */
-  permissions?: { network?: string[]; secrets?: string[] };
+  permissions?: { network?: string[]; secrets?: string[]; /** Key Vault entry names (or prefix* patterns) the plugin's code may read. */ vault?: string[] };
 }

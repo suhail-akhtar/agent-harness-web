@@ -1,0 +1,16 @@
+{
+  "name": "advisor-report",
+  "description": "The ops-advisor workflow on the test stack. Its report must flag the seeded issues: the shop's expired TLS certificate (127.0.0.1:19443), the shop container running as root, and the missing health checks / monitoring (billing-worker has no health URL or metrics; the shop container has no health check) - each with evidence - and change nothing. Needs Docker; --concurrency 1; HARNESS_OPS_SECRETS as for the pack.",
+  "workflow": "ops-advisor",
+  "input": {},
+  "fixtures": "../fixtures",
+  "timeoutMin": 40,
+  "setup": "node {{case}}/../stack/stack.mjs up-reset",
+  "checks": [
+    { "name": "expired certificate flagged", "run": "node {{case}}/../lib/check.mjs advisor {{ws}} expired-cert" },
+    { "name": "root container flagged", "run": "node {{case}}/../lib/check.mjs advisor {{ws}} root-container" },
+    { "name": "missing health checks flagged", "run": "node {{case}}/../lib/check.mjs advisor {{ws}} missing-health" },
+    { "name": "recommendations carry evidence", "run": "node {{case}}/../lib/check.mjs advisor {{ws}} evidence" },
+    { "name": "read-only: no changes", "run": "node {{case}}/../lib/check.mjs no-changes {{ws}}" }
+  ]
+}

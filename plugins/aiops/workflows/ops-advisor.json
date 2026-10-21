@@ -1,0 +1,46 @@
+{
+  "name": "ops-advisor",
+  "description": "A prioritised recommendations report on the estate in the ops inventory, with evidence: reliability (missing monitoring, single points of failure, noisy alerts, SLOs), capacity (trends and forecasts), security posture (ports, ssh, packages, certificates, root containers, secrets in env) and cost (idle and oversized resources) - each analysed in parallel by its specialist, then merged into .harness/ops/reports/ops-advisor.md. Read-only: it changes nothing.",
+  "inputs": {
+    "focus": { "description": "Anything to look at especially (optional).", "default": "the whole estate" }
+  },
+  "state": {
+    "estate": { "type": "string", "description": "a short description of the estate: hosts, services, monitoring" }
+  },
+  "start": "survey",
+  "maxAgentRuns": 8,
+  "nodes": {
+    "survey": {
+      "type": "agent", "title": "Survey the estate", "agent": "sre",
+      "prompt": "Survey the estate, read-only: ops_inventory validate and list, docker_status, ops_check (include_ok), and prometheus_query count by (job) (up) to see what is scraped. Focus: {{input.focus}}\n\nReport: the hosts, services, what is monitored and what is not, and anything that looked wrong - short.",
+      "outputs": ["estate"],
+      "next": "analyse"
+    },
+    "analyse": {
+      "type": "parallel", "title": "Specialist analyses", "branches": ["reliability", "capacity", "security", "cost"],
+      "next": "report"
+    },
+    "reliability": {
+      "type": "agent", "title": "Reliability", "agent": "sre",
+      "prompt": "Estate: {{state.estate}}\nAnalyse RELIABILITY, read-only, and write .harness/ops/reports/advisor/reliability.md: services in the inventory with no health URL, no metrics job or no alert rule (missing monitoring), Prometheus targets that are down, containers without a health check or restart policy, single points of failure (one instance, one host, no backup), noisy or always-firing alerts (ops_check action history), SLOs without alerts and their burn (slo_status), restart loops and OOM kills.\nEvery recommendation in the format: Title, Priority (P1-P4), Finding, Evidence (the exact query or command and the numbers), Impact, Effort (S/M/L), Change (the exact change), Risk.\n\nReport: the recommendations' titles with priorities."
+    },
+    "capacity": {
+      "type": "agent", "title": "Capacity", "agent": "capacity-planner",
+      "prompt": "Estate: {{state.estate}}\nAnalyse CAPACITY, read-only, and write .harness/ops/reports/advisor/capacity.md: for CPU, memory and every filesystem (node-exporter metrics where scraped; host_stats otherwise), and request rates of the services, use capacity_forecast (range 7d or what data exists) to give trends, time to full and headroom. Say plainly when the data is too short to forecast.\nEvery recommendation in the format: Title, Priority, Finding, Evidence, Impact, Effort, Change, Risk.\n\nReport: the recommendations' titles with priorities."
+    },
+    "security": {
+      "type": "agent", "title": "Security posture", "agent": "security-auditor",
+      "prompt": "Estate: {{state.estate}}\nAnalyse SECURITY POSTURE with read-only checks only, and write .harness/ops/reports/advisor/security.md: TLS certificates of every service with a TLS endpoint (probe type tls: expired, expiring, self-signed, name mismatch), containers running as root or privileged and secret-looking environment variables (docker_status - names only, never values), and on hosts reachable over ssh: listening ports (ss -tlnp), sshd settings (sshd -T: PasswordAuthentication, PermitRootLogin), outdated packages.\nEvery recommendation in the format: Title, Priority, Finding, Evidence, Impact, Effort, Change, Risk.\n\nReport: the recommendations' titles with priorities."
+    },
+    "cost": {
+      "type": "agent", "title": "Cost", "agent": "cost-optimizer",
+      "prompt": "Estate: {{state.estate}}\nAnalyse COST, read-only, and write .harness/ops/reports/advisor/cost.md: idle or oversized containers and hosts (CPU and memory use against limits and capacity over the data available), stopped containers and unused resources, duplicated services.\nEvery recommendation in the format: Title, Priority, Finding, Evidence, Impact, Effort, Change, Risk.\n\nReport: the recommendations' titles with priorities."
+    },
+    "report": {
+      "type": "agent", "title": "Prioritised report", "agent": "sre",
+      "prompt": "Merge the four analyses in .harness/ops/reports/advisor/ (reliability.md, capacity.md, security.md, cost.md) into one report at .harness/ops/reports/ops-advisor.md: a one-paragraph summary of the estate's state, a table of every recommendation (priority, area, title, effort), then the recommendations in priority order (P1 first), each with Finding, Evidence (keep the exact queries, commands and numbers), Impact, Effort, Change and Risk. Drop duplicates; keep every distinct finding. Do not change any system.\n\nSpecialist summaries: reliability - {{state.reliability}}; capacity - {{state.capacity}}; security - {{state.security}}; cost - {{state.cost}}\n\nReport: the summary paragraph and the P1/P2 titles.",
+      "next": "done"
+    },
+    "done": { "type": "end", "title": "Report written", "status": "success" }
+  }
+}
