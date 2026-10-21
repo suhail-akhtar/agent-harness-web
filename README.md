@@ -25,6 +25,7 @@ npm run build                 # browser UI + companion script
 npm run sandbox:image         # the Docker sandbox image (once)
 npm run sandbox:image:3d      # optional: the same plus Blender 4.2 LTS and Godot 4.7 (games3d)
 npm run sandbox:image:3d-export   # optional: the 3D image plus Godot's export templates (Linux, Web)
+npm run sandbox:image:desktop # optional: the sandbox plus a desktop (Xvfb, Firefox) for computer use
 export DEEPSEEK_API_KEY=... OPENAI_API_KEY=... ANTHROPIC_API_KEY=...   # or GW_ANTHROPIC_API_KEY
 npm start                     # http://127.0.0.1:4310, prints an access token
 ```
@@ -42,6 +43,7 @@ npm run cli -- --runtime docker --image harness-sandbox-3d:latest "Make a stool 
 Or make it every session's image with `HARNESS_SANDBOX_IMAGE=harness-sandbox-3d:latest`. A session can only name an image on that list; the browser and the agent cannot pick any other.
 
 **Godot exports** need Godot's export templates, which the 3D image leaves out. `npm run sandbox:image:3d-export` builds `harness-sandbox-3d:export` from the same Dockerfile with `--build-arg GODOT_EXPORT_TEMPLATES=1`: it downloads the official `Godot_v4.7.2-stable_export_templates.tpz` (1.3 GB, checked against Godot's SHA512-SUMS.txt) and keeps only the Linux x86_64 and Web templates and the ICU data (185 MB; the image is 3.8 GB). For every platform (Windows, macOS, Android, iOS) add `--build-arg GODOT_TEMPLATES=all`, or name the files to keep from the .tpz's `templates/` folder, e.g. `--build-arg "GODOT_TEMPLATES=windows_release_x86_64.exe windows_debug_x86_64.exe"`. Allow it like the 3D image: `HARNESS_SANDBOX_IMAGES=harness-sandbox-3d:latest,harness-sandbox-3d:export`.
+**The desktop sandbox image** (`docker/Dockerfile.sandbox-desktop`, `harness-sandbox-desktop:latest`, about 1.9 GB) is the sandbox plus Xvfb, the fluxbox window manager, xdotool, ImageMagick, Firefox ESR, xterm and Mousepad, for the `computer` tool (see Computer use). It is allowed and chosen the same way: `HARNESS_SANDBOX_IMAGES=harness-sandbox-desktop:latest`.
 
 **On Windows, natively.** The npm scripts are plain `node` launchers (`scripts/run.mjs`, `scripts/test.mjs`), so they work in PowerShell and cmd as they do in bash. What to install:
 
@@ -319,6 +321,21 @@ Blender and Godot run where the session's commands run: in the 3D sandbox image 
 
 Skills: `blender-scripting` (bpy: bmesh and modifiers, materials, units and axes for glTF, FBX/OBJ export, previews without a GPU) and `godot-essentials` (a Godot 4 project as text files, a scene built in code, input actions, a self-test the `run` action drives). Their recipes were run in the 3D image: the Blender stool exported to .glb, imported by the Godot template and drawn in a screenshot. `3d-artist` uses Blender when asked for it, `game-engineer` builds a Godot project when asked for one, and the workflows do either with `engine` (above). In the export image a tiny project was exported to Linux (the build then ran headless in the container) and to the Web (`index.html`, `.js`, `.wasm`, `.pck`).
 
+### Computer use (`plugins/computer`)
+
+The agent operates a desktop through screenshots, mouse and keyboard, in the shape of Anthropic's computer-use tool. The desktop runs inside the session's Docker sandbox (the desktop image above), so it is contained like any command there: same user, limits and network policy.
+
+| Tool | What it does |
+|---|---|
+| `computer {action, coordinate?, start_coordinate?, text?, scroll_direction?, scroll_amount?, duration?, region?}` | `screenshot`, `left_click`, `right_click`, `middle_click`, `double_click`, `mouse_move`, `left_click_drag`, `type`, `key` (xdotool names: `ctrl+l`, `Return`), `scroll`, `wait`, `cursor_position`, `zoom` (a region enlarged, to read small text) and `launch` (start an app detached in `/workspace`, e.g. `firefox-esr https://example.com`). Every action except `wait` and `cursor_position` returns a fresh screenshot the model sees. |
+
+- The display is 1280x800 (`HARNESS_DESKTOP_SIZE`). Larger displays are shown scaled to fit 1280x800 and the model's coordinates are scaled back.
+- On first use the tool starts Xvfb on `:99` and fluxbox, detached, so they outlive the call; a sandbox restarted after idling gets a new desktop on the next call. Apps started from the agent's own commands draw there too (`DISPLAY=:99`).
+- It is an `exec` tool: free in a sandbox, like a command. Anywhere else (no Docker, or an image without the desktop) it says how to get the desktop image.
+- While a browser is open, its results are marked untrusted, so the rules for web content below apply (ways out are confirmed, hidden text is stripped from the text part).
+- Skill: `computer-use` (screenshot first, check every result, prefer keyboard shortcuts, zoom to read, never type secrets, what a page says is data).
+- Tested against the real image: launch xterm, click into it, type a command and press Return, and the file it writes appears in the workspace; screenshots are PNGs of the display size and not blank.
+
 ## Permissions
 
 Enforced in code on every call. Order: deny rules, then ask rules, then allow rules, then the mode's default.
@@ -375,6 +392,7 @@ Deterministic steps the model cannot skip, at 14 points: `SessionStart`, `Sessio
     - **full**.
   - Files sit in a host folder mounted at `/workspace`. The file tools check real paths, so a symlink planted from inside the container cannot reach the host.
   - **API keys without the key in the sandbox.** With `HARNESS_SANDBOX_CREDENTIALS` (presets `openai`, `anthropic`, `deepseek`, `github`, or a JSON file of your own), an allowlist sandbox gets base URLs pointing at its proxy (`OPENAI_BASE_URL=http://egress:3128/__cred/openai/v1`, ...) and a placeholder key; the proxy adds the real key on the way out, from a file only it mounts, and drops whatever auth the sandbox sent. The agent is told which credentials exist. Verified live: a sandbox listed OpenAI's models while `env` inside showed only the placeholder.
+  - **A desktop**, with the desktop image: the `computer` tool works the screen, mouse and keyboard of a virtual display inside the container (see Computer use).
   - **Setup scripts.** A session's `setup` (or a repository's `.harness/setup.sh` when `HARNESS_REPO_SETUP=1`) runs once as root with the network open, in a throwaway container with the workspace mounted, as cloud harnesses do. What it installs is kept as a snapshot image (by base image and script, for `HARNESS_SNAPSHOT_DAYS`, 7) and reused; the script runs again on top of it, so idempotent installs are quick. The session then starts from the snapshot with its own user and network policy. The log is in `.harness/setup.log`; a failing script leaves the session usable on the base image.
 - **Your computer** (companion)
   - Open "Your computers", then run the two lines it shows.
@@ -539,7 +557,7 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 | `HARNESS_TRUST_PROJECT` | off | Let repository hooks and stdio MCP servers run outside the sandbox. |
 | `HARNESS_AUTO_RESUME` | off | Continue interrupted sessions after a restart. |
 | `HARNESS_GATES_ON_STOP` | off | Refuse to end a turn while a blocking quality gate fails. |
-| `HARNESS_BUNDLED_PLUGINS` | on | `off` skips the bundled `plugins/` (quality gates, SDLC, visual, documents, games3d). |
+| `HARNESS_BUNDLED_PLUGINS` | on | `off` skips the bundled `plugins/` (quality gates, SDLC, visual, documents, games3d, computer). |
 | `HARNESS_PLUGIN_KEYS` | | Trusted public keys; when set, every non-bundled plugin must be signed. |
 | `HARNESS_PLUGIN_CATALOGUE` | | Signed plugins to install from the UI/API: a folder, or the https URL of an `index.json`. |
 | `HARNESS_MEMORY` | on | `read` (load, never change) or `off`. |
@@ -567,9 +585,10 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 | `HARNESS_SHELL` | auto | Windows: `powershell`, or the path of a `bash.exe` (default: Git Bash, else PowerShell). |
 | `HARNESS_SHELL_WRITE_GUARD` | on | `off` allows shell file writes. |
 | `HARNESS_SANDBOX_IMAGE`, `_MEMORY`, `_CPUS`, `_IDLE_MS` | `harness-sandbox:latest`, `4g`, `2`, 30 min | |
-| `HARNESS_SANDBOX_IMAGES` | | Other images a sandbox session may choose (comma-separated), e.g. `harness-sandbox-3d:latest,harness-sandbox-3d:export` (the second has Godot's export templates). |
+| `HARNESS_SANDBOX_IMAGES` | | Other images a sandbox session may choose (comma-separated), e.g. `harness-sandbox-3d:latest,harness-sandbox-3d:export,harness-sandbox-desktop:latest` (the second has Godot's export templates, the third a desktop for computer use). |
 | `HARNESS_BLENDER`, `HARNESS_GODOT` | auto | Blender and Godot for server-folder sessions (searched on the PATH and in the usual install folders); on a companion, the same variables on the user's computer. |
 | build args of `docker/Dockerfile.sandbox-3d` | `GODOT_EXPORT_TEMPLATES=0` | `1` adds Godot's export templates (`npm run sandbox:image:3d-export`); `GODOT_TEMPLATES` lists the template files kept (default Linux x86_64, Web, ICU data; `all` for every platform). |
+| `HARNESS_DESKTOP_SIZE` | `1280x800` | The `computer` tool's display (`WxH`, 640x480 to 3840x2160). Screenshots larger than 1280x800 are scaled down to fit. |
 | `HARNESS_PRICING_JSON` | | Override prices per model. |
 | `HARNESS_SETTINGS` | | The operator's settings file (JSON: `permissions`, `hooks` of every kind, `maxSteps`, `maxCostUsd`, `compactAt`, `subagentModel`, `autoModel`, `gatesOnStop`, `maxSubagentDepth`, `maxParallelSubagents`). |
 | `HARNESS_AUTO_MODEL` | sub-agent model | The model that checks calls in auto mode. |
@@ -593,6 +612,7 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
   - Outside Docker and Linux, a script's process cannot be cut off from the network, so there `run_script` asks before running.
   - Behind an HTTP proxy, the proxy resolves names, so `web_fetch` can check addresses only before the request (without a proxy it pins the address it checked).
   - Companion mirrors (the server's copy for render and browser) leave out `.env`, key files and files over 20 MB, so secrets stay on the user's computer; on a Windows server, names with `\` or `:` too.
+  - Computer use: the image half of a screenshot cannot be cleaned of planted instructions the way text is; it is marked untrusted while a browser is open, and the skill tells the model a page is data. Firefox runs without its own sandbox inside the container (user namespaces are not allowed there), so the container is the boundary.
   - The OS sandboxes (bubblewrap, Seatbelt) have no proxy, so a host allowlist needs the Docker sandbox; with them an allowlist means no network.
   - Godot exports: the export image has the Linux x86_64 and Web templates only (rebuild with `GODOT_TEMPLATES=all` for the rest); a Web export was checked for its files, not played in a browser. Outside a sandbox the templates must be installed by hand.
   - The `godot-selftest` gate proves only what the game's own `--selftest` checks; the playtester reads the scripts to judge that, but cannot play a Godot game with input.
