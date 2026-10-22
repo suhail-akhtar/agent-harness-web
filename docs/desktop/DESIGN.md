@@ -415,6 +415,20 @@ renderers as a web bundle, refreshed by the server and pushed live; viewers neve
 unless allowed; unpublish revokes at once; a static export is available. Plugins can add data source types
 and widgets.
 
+Target: the full capability set of an enterprise BI platform, built on SQL. (A) A semantic model:
+relationships with cross-filter direction, calculated columns, measures with filter context and time
+intelligence (YTD, previous period, same period last year, running totals, % of total, rank), hierarchies
+with drill. (B) Multi-page reports: slicers, cross-filter and cross-highlight per visual pair, drill-through
+with context, tooltip pages, bookmarks and buttons, conditional formatting, themes, phone layouts. (C) Visuals:
+cards, KPI and gauge, every bar/line/area/combo/ribbon/waterfall/funnel/pie/treemap/scatter with a play axis,
+matrix with subtotals, maps from local GeoJSON, a decomposition tree, key-driver analysis, anomalies and
+forecasts (statistical, computed by the engine, method shown), a narrative written only from computed
+numbers. (D) A query editor: recorded steps compiled to SQL, previews and column profiling, parameters,
+incremental refresh. (E) Operations: refresh history and failure alerts, data alerts, subscriptions,
+row-level security enforced server-side (app and published pages), usage metrics, paginated print-ready
+reports, Excel export, embed codes, versions with restore, certified datasets. (F) Natural-language
+questions answered by queries on the semantic model, with the SQL shown.
+
 ## 19. The harness home (`~/.harness`)
 
 By default everything lives under one folder the person can find and move: `~/.harness/` (or
