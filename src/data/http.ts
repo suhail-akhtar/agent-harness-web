@@ -238,9 +238,11 @@ async function access(ctx: DataHttpContext, req: http.IncomingMessage, slug: str
   const { spec } = await home.doc(entry.doc);
   const cat = (await home.catalog()).spec;
   const model = spec.model ? cat.models.find((m) => m.id === spec.model) : undefined;
-  const isOwner = entry.access === 'signed-in' && user === entry.owner;
-  const roles = model?.roles.filter((r) => (entry.access === 'token' ? r.name === entry.role || r.members.includes(`token:${entry.slug}`) : (entry.role ? r.name === entry.role : false) || r.members.includes('*') || (!!user && r.members.includes(user)))) ?? [];
-  return { entry, doc: spec, model, viewer: isOwner && !entry.role ? { owner: true, showSql: !!entry.showSql } : { owner: false, user, roles, showSql: !!entry.showSql } };
+  // A link (token) shows its role's rows, or, published without a role, what the owner published.
+  // Signed-in viewers see the rows of the roles they are members of (none: no data, when the model has roles).
+  const roles = model?.roles.filter((r) => (entry.access === 'token' ? r.name === entry.role : (entry.role ? r.name === entry.role : false) || r.members.includes('*') || (!!user && r.members.includes(user)))) ?? [];
+  const all = (entry.access === 'token' && !entry.role) || (entry.access === 'signed-in' && user === entry.owner && !entry.role) || !model?.roles.length;
+  return { entry, doc: spec, model, viewer: all ? { owner: true, showSql: !!entry.showSql } : { owner: false, user, roles, showSql: !!entry.showSql } };
 }
 
 const streams = new Map<string, Set<http.ServerResponse>>();

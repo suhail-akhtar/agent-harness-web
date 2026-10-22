@@ -522,7 +522,8 @@ export async function reads(svc: DataService, home: DataHome, a: Op, actor: Acto
       const r = await svc.publish(home.owner, d.id, { access, accounts, role: a.role as string | undefined, showSql: a.showSql === true, by: actor.label });
       const base = (process.env.HARNESS_PUBLIC_URL ?? '').replace(/\/+$/, '');
       const url = `${base}/p/${r.entry.slug}${r.token ? `#t=${r.token}` : ''}`;
-      return { op: a.op, message: `published ${d.id} at ${url}${access === 'signed-in' ? ` (signed-in ${accounts?.join(', ') ?? 'accounts'})` : ' (anyone with the link)'}${r.entry.role ? `, role ${r.entry.role}` : ''}. Embed: <iframe src="${url}" style="border:0;width:100%;height:720px"></iframe>`, data: { slug: r.entry.slug, url, ...(r.token ? { token: r.token } : {}), access } };
+      const rlsNote = access === 'token' && !a.role && cat.models.find((x) => x.id === d.spec.model)?.roles.length ? ' NOTE: the model has row-level security roles and this link has none, so it shows every row; publish with role to restrict it.' : '';
+      return { op: a.op, message: `published ${d.id} at ${url}${access === 'signed-in' ? ` (signed-in ${accounts?.join(', ') ?? 'accounts'})` : ' (anyone with the link)'}${r.entry.role ? `, role ${r.entry.role}` : ''}.${rlsNote} Embed: <iframe src="${url}" style="border:0;width:100%;height:720px"></iframe>`, data: { slug: r.entry.slug, url, ...(r.token ? { token: r.token } : {}), access } };
     }
     case 'unpublish': { const ok = await svc.unpublish(home.owner, String(a.doc ?? '')); return { op: a.op, message: ok ? `unpublished ${String(a.doc)}: its link stopped working` : `${String(a.doc)} was not published` }; }
     case 'export': { const { exportDoc } = await import('./export.ts'); const r = await exportDoc(svc, home, String(a.doc ?? ''), String(a.format ?? 'xlsx') as 'xlsx'); return { op: a.op, message: `exported ${r.file} (${r.bytes} bytes)`, data: r }; }

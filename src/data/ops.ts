@@ -549,7 +549,7 @@ const H: Record<string, Handler> = {
     const d = await tx.doc(a.doc);
     const page = a.page ? findPage(d, a.page) : d.pages.find((p) => !p.kind) ?? d.pages[0]!;
     const raw = O<Partial<VisualSpec>>(a, 'visual');
-    const v: VisualSpec = { ...(raw as VisualSpec), id: raw.id && /^v-[a-z0-9-]{2,40}$/.test(raw.id) && !page.visuals.some((x) => x.id === raw.id) ? raw.id : newId('v'), layout: raw.layout ?? place(page, raw) };
+    const v: VisualSpec = { ...(raw as VisualSpec), id: raw.id && /^v-[a-z0-9-]{1,40}$/.test(raw.id) && !page.visuals.some((x) => x.id === raw.id) ? raw.id : newId('v'), layout: raw.layout ?? place(page, raw) };
     await checkVisual(tx, d, v, page);
     page.visuals.push(v);
     return { op: a.op, message: `added ${v.id}: ${visualSummary(v)} on ${page.id}`, data: { id: v.id, page: page.id } };
