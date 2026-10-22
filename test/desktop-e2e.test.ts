@@ -117,8 +117,18 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       await ready();
       await page.waitForSelector('[data-home]');
       assert.match(await page.locator('[data-greeting]').innerText(), /Where should we begin\?/);
-      // The window is never shown under the tests; it still paints: a screenshot has real content.
-      assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.isVisible()), !!process.env.HARNESS_E2E_SHOW, 'hidden unless HARNESS_E2E_SHOW=1');
+      // Under the tests the window is shown off every display and never focused (unless HARNESS_E2E_SHOW=1): nobody
+      // sees it, yet it renders like a visible window, and a screenshot has real content.
+      const where = await app.evaluate(({ BrowserWindow, screen }) => {
+        const w = BrowserWindow.getAllWindows()[0]!;
+        const b = w.getBounds();
+        const onScreen = screen.getAllDisplays().some((d) => b.x < d.bounds.x + d.bounds.width && b.x + b.width > d.bounds.x && b.y < d.bounds.y + d.bounds.height && b.y + b.height > d.bounds.y);
+        return { onScreen, focused: w.isFocused() };
+      });
+      if (!process.env.HARNESS_E2E_SHOW) {
+        assert.equal(where.onScreen, false, 'off every display unless HARNESS_E2E_SHOW=1');
+        assert.equal(where.focused, false, 'it never takes the focus');
+      }
       await page.waitForTimeout(300);
       assertNotBlank(await capture(app), 'the home page');
     });

@@ -125,6 +125,11 @@ const MdBlock = React.memo(function MdBlock({ text, streaming, renderFence, sour
         return <FencedBlock lang={lang} source={text.replace(/\n$/, '')} streaming={streaming} renderFence={renderFence} onFix={onFix} />;
       },
       pre({ children }) { return <>{children}</>; },
+      // While an answer streams, its footnotes come and go as each chunk re-parses: they are drawn once it is complete.
+      section({ children, node: _n, ...rest }) {
+        if ('data-footnotes' in rest && streaming) return null;
+        return <section {...rest}>{children}</section>;
+      },
       a({ href, children, node: _n, ...rest }) {
         const safe = safeHref(href);
         const label = textOf(children).trim();

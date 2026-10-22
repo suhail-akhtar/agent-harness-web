@@ -33,8 +33,8 @@ function loadProduct(): ProductProfile {
   return normaliseProduct({});
 }
 const product = loadProduct();
-// Under the end-to-end tests (HARNESS_DESKTOP_TEST=1) the window is never shown, focused or flashed, and nothing
-// notifies: playwright drives it (and takes its screenshots) through CDP. HARNESS_E2E_SHOW=1 shows it to watch.
+// Under the end-to-end tests (HARNESS_DESKTOP_TEST=1) the window is shown without focus off every display, never
+// flashed, and nothing notifies: playwright drives it through CDP. HARNESS_E2E_SHOW=1 shows it on screen to watch.
 const quiet = process.env.HARNESS_DESKTOP_TEST === '1' && process.env.HARNESS_E2E_SHOW !== '1';
 app.setName(product.name);
 if (process.platform === 'win32') app.setAppUserModelId(product.appId);
@@ -132,6 +132,12 @@ function appIcon(): Electron.NativeImage | undefined {
   return undefined;
 }
 
+/** A position left of every display, far enough that no part of the window shows. */
+function offscreen(width: number): { x: number; y: number } {
+  const left = Math.min(...screen.getAllDisplays().map((d) => d.bounds.x));
+  return { x: left - width - 4000, y: 0 };
+}
+
 function createWindow(): void {
   const p = prefs.get();
   const b = p.window;
@@ -139,7 +145,7 @@ function createWindow(): void {
   const dark = p.theme === 'dark' || (p.theme === 'system' && nativeTheme.shouldUseDarkColors);
   const bg = dark ? '#1d1c1a' : '#faf9f6';
   mainWindow = new BrowserWindow({
-    width: b.width, height: b.height, ...(visible ? { x: b.x, y: b.y } : {}),
+    width: b.width, height: b.height, ...(quiet ? offscreen(b.width) : visible ? { x: b.x, y: b.y } : {}),
     minWidth: 480, minHeight: 480, show: false, title: product.name, icon: appIcon(), backgroundColor: bg,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
     titleBarOverlay: process.platform === 'darwin' ? undefined : { color: bg, symbolColor: dark ? '#ecebe6' : '#1f1e1c', height: 40 },
@@ -147,18 +153,13 @@ function createWindow(): void {
     webPreferences: { preload: path.join(distDir, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false, nodeIntegrationInSubFrames: false, webviewTag: false, spellcheck: true, ...(quiet ? { backgroundThrottling: false } : {}) },
   });
   if (b.maximized && !quiet) mainWindow.maximize();
-  mainWindow.once('ready-to-show', () => { if (!process.env.HARNESS_DESKTOP_HIDDEN && !quiet) mainWindow?.show(); });
-  if (quiet) {
-    // A window never shown makes no compositor frames by itself, so the hit-test data of plugin frames
-    // (out-of-process iframes) goes stale and a click lands on the old layout. A one-pixel capture that
-    // keeps the page hidden makes it render a frame: every 150 ms, while the tests drive it.
-    const w = mainWindow;
-    const beat = setInterval(() => { if (w.isDestroyed()) { clearInterval(beat); return; } void w.webContents.capturePage({ x: 0, y: 0, width: 1, height: 1 }, { stayHidden: true, stayAwake: true }).catch(() => {}); }, 150);
-    w.on('closed', () => clearInterval(beat));
-  }
+  // Under the tests the window is shown without focus, off every display: it renders and lays out like a
+  // visible window (a hidden one lets plugin frames' layout go stale, so clicks land on the old layout),
+  // yet nobody sees it and it never takes focus or a taskbar entry.
+  mainWindow.once('ready-to-show', () => { if (quiet) { mainWindow?.setPosition(offscreen(b.width).x, offscreen(b.width).y); mainWindow?.showInactive(); } else if (!process.env.HARNESS_DESKTOP_HIDDEN) mainWindow?.show(); });
   void mainWindow.loadURL(`${APP_ORIGIN}/`);
   const save = () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (!mainWindow || mainWindow.isDestroyed() || quiet) return;
     const max = mainWindow.isMaximized();
     prefs.set({ window: max ? { ...prefs.get().window, maximized: true } : { ...mainWindow.getBounds(), maximized: false } });
   };

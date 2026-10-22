@@ -82,13 +82,14 @@ Kit.start(async (harness) => {
   });
 
   // ---------------- incidents ----------------
-  let incFilter = 'open';
+  // The person's choice of incidents is kept in the plugin's storage, so a reload of this page keeps it.
+  let incFilter = await harness.storage.get('incFilter').then((v) => (['open', 'resolved', 'all'].includes(v) ? v : 'open'), () => 'open');
   async function incidents() {
     // A refresh started before the filter changed answers late: only the current filter's answer is drawn.
     const want = incFilter;
     const r = await route('incidents', { status: want });
     if (want !== incFilter) return;
-    const seg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Which incidents' }, [['open', `Open (${r.counts.open})`], ['resolved', `Resolved (${r.counts.resolved})`], ['all', 'All']].map(([id, label]) => h('button', { type: 'button', 'aria-pressed': String(incFilter === id), onclick: () => { incFilter = id; void refresh(); } }, label)));
+    const seg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Which incidents' }, [['open', `Open (${r.counts.open})`], ['resolved', `Resolved (${r.counts.resolved})`], ['all', 'All']].map(([id, label]) => h('button', { type: 'button', 'aria-pressed': String(incFilter === id), onclick: () => { incFilter = id; void harness.storage.set('incFilter', id).catch(() => {}); void refresh(); } }, label)));
     const list = r.incidents.length ? r.incidents.map((x) => h('button', { type: 'button', class: 'cardlink inc', 'data-incident': x.id, onclick: () => harness.view.open('incidents', { id: x.id }) },
       h('span', { class: `sevbar ${x.severity}` }),
       h('div', { class: 'body' },

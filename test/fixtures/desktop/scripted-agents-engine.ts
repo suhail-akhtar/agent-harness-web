@@ -29,7 +29,8 @@ type Step = { text?: string; calls?: Call[]; delay?: number };
 type Script = Array<Step | ((results: string[]) => Step)>;
 
 const textOf = (b: Block[]) => b.filter((x) => x.type === 'text').map((x) => (x as { text: string }).text).join('\n');
-const stripped = (t: string) => t.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').replace(/<environment>[\s\S]*?<\/environment>/g, '').trim();
+// Only the person's words choose a script: the context blocks the harness adds (reminders, environment, the skills list) are removed.
+const stripped = (t: string) => t.replace(/<(system-reminder|environment|skills|instructions|memory)>[\s\S]*?<\/\1>/g, '').trim();
 
 export const HTML_V1 = '<!doctype html><html><body style="font-family:system-ui;padding:24px"><h1 id="title">Launch plan v1</h1><ol><li>Write the tests</li><li>Update the docs</li></ol></body></html>';
 

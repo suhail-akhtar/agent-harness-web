@@ -334,13 +334,23 @@ test('plugins journey: Engineering and Operations switched on and off live, used
         await view(`aiops:${cur}`).locator(`[data-tab="${tab}"]`).click();
         cur = tab;
         const v = view(`aiops:${tab}`);
-        await v.locator(sel).first().waitFor({ timeout: 20_000 });
+        // With core.diagrams installed, Topology hands its graph to the host's diagram renderer (render.show): the
+        // nodes are then drawn in the app over the frame, not inside it. Either way the service must be there.
+        const hostTopo = page.locator('[data-view="aiops:topology"] [data-host-block="diagram"]', { hasText: 'checkout' });
+        if (tab === 'topology') await Promise.any([v.locator(sel).first().waitFor({ timeout: 20_000 }), hostTopo.first().waitFor({ timeout: 20_000 })]);
+        else await v.locator(sel).first().waitFor({ timeout: 20_000 });
         if (tab === 'services') {
           assert.equal(await v.locator('[data-service="checkout"]').getAttribute('data-state'), 'critical', 'its error-ratio rule fires');
           assert.equal(await v.locator('[data-service="payments"]').getAttribute('data-state'), 'healthy');
           assert.match(await v.locator('[data-slo="checkout/availability"]').innerText(), /burn 12\.0x/);
         }
-        if (tab === 'topology') assert.ok(await v.locator('[data-node]').count() >= 6, 'five services and a host');
+        if (tab === 'topology') {
+          const block = page.locator('[data-view="aiops:topology"] [data-host-block="diagram"]');
+          if (await block.count()) {
+            const text = await block.innerText();
+            for (const svc of ['storefront', 'checkout', 'payments', 'search', 'orders-db']) assert.match(text, new RegExp(svc), `${svc} is drawn by the diagrams plugin`);
+          } else assert.ok(await v.locator('[data-node]').count() >= 6, 'five services and a host');
+        }
         await shot(`ops-${tab}`);
       }
       await home();
