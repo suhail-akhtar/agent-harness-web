@@ -165,6 +165,9 @@ export function initialView(set: TrackSet, chrom: string): [number, number] {
   return [Math.max(1, Math.floor(lo - pad)), Math.ceil(hi + pad)];
 }
 
+/** Lanes for a chromosome's items; a label (about 6.2 px a character on a 700 px track) reserves its width too. */
 export function laneItems(items: Transcript[], chrom: string, span: number): Array<{ item: Transcript; lane: number }> {
-  return packLanes(items.filter((t) => t.chrom === chrom), span * 0.015);
+  const bpPerChar = (span / 700) * 6.2;
+  return packLanes(items.filter((t) => t.chrom === chrom).map((item) => ({ item, start: item.start, end: Math.max(item.end, item.start + (item.name.length + 3) * bpPerChar) })), span * 0.015)
+    .map(({ item, lane }) => ({ item: item.item, lane }));
 }

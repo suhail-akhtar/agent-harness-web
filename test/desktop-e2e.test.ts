@@ -129,6 +129,7 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
 
     let sessionId = '';
     let richId = '';
+    let bioId = '';
     await step('a session in a folder: a permission request in the attention bar and the inbox, approved, and the tool card', async () => {
       // The engine restarts to take the new folder as a root: watch it go down and come back.
       await page.evaluate(() => { const w = window as unknown as { __restarted: boolean }; w.__restarted = false; const el = document.querySelector('[data-engine-status]')!; new MutationObserver(() => { if (el.getAttribute('data-engine-status') !== 'ready') w.__restarted = true; }).observe(el, { attributes: true }); });
@@ -475,6 +476,7 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       const r = await api('POST', '/api/sessions/import', { runtime: 'local', bundle: { ...longBundle(0), source: { ...longBundle(0).source, title: 'Biology sink' }, history: [{ role: 'user', content: [{ type: 'text', text: 'Show me the biology renderers.' }] }, { role: 'assistant', content: [{ type: 'text', text: BIO_KITCHEN_SINK }] }] } });
       assert.equal(r.status, 201, JSON.stringify(r.body));
       const id = (r.body as { id: string }).id;
+      bioId = id;
       await page.click('[data-nav="core.chat:search"]');
       await page.click(`[data-session-row="${id}"] button`);
       const inSession = `[data-session="${id}"] [data-assistant-message]`;
@@ -554,23 +556,6 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       await shotTall('render-bio-heatmap', '[data-widget="Heatmap"]');
       await shotEl('render-bio-survival', '[data-widget="Survival curve"]');
       await shotEl('render-bio-manhattan', '[data-widget="Manhattan plot"]');
-      const theme = ((await invoke('prefs:get')) as { theme?: string }).theme ?? 'system';
-      await invoke('prefs:set', { theme: 'dark' });
-      await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
-      await page.waitForFunction((s) => document.querySelectorAll(`${s} [data-bioplot] [data-chart="vega"] svg`).length >= 4, inSession, { timeout: 30_000 });
-      await setSize(1280, 1000);
-      await page.evaluate(() => { document.documentElement.style.zoom = '0.55'; });
-      try {
-        await page.locator(`${inSession} [data-widget="Plasmid map"]`).first().evaluate((el) => el.scrollIntoView({ block: 'start' }));
-        await page.waitForTimeout(1200);
-        await shot('render-bio-dark');
-      } finally {
-        await page.evaluate(() => { document.documentElement.style.zoom = ''; });
-        await setSize(1280, 820);
-        await invoke('prefs:set', { theme });
-        await page.waitForTimeout(400);
-      }
-      assert.equal(await page.locator(`${inSession} [data-render-error]`).count(), 0, 'the theme switch broke nothing');
       await newChat();
       assert.deepEqual(errors.slice(before), [], 'no console errors or exceptions while drawing biology');
     });
@@ -739,6 +724,36 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       }
       await shot('small-window');
       await setSize(1280, 820);
+    });
+
+    // After the theme step: a theme switch before the 1,000-message step perturbs its layout-shift measurement.
+    await step('biology in dark: every block follows the theme', async () => {
+      assert.ok(bioId, 'the biology session exists');
+      const before = errors.length;
+      const inSession = `[data-session="${bioId}"] [data-assistant-message]`;
+      await page.click('[data-nav="core.chat:search"]');
+      await page.click(`[data-session-row="${bioId}"] button`);
+      await page.waitForSelector(`${inSession} [data-seq-map]`, { timeout: 30_000 });
+      const theme = ((await invoke('prefs:get')) as { theme?: string }).theme ?? 'system';
+      await invoke('prefs:set', { theme: 'dark' });
+      await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
+      await page.waitForFunction((s) => document.querySelectorAll(`${s} [data-bioplot] [data-chart="vega"] svg`).length >= 4, inSession, { timeout: 30_000 });
+      await page.waitForSelector(`${inSession} [data-pathway] [data-graphviz="svg"] svg`, { timeout: 30_000 });
+      await setSize(1280, 1000);
+      await page.evaluate(() => { document.documentElement.style.zoom = '0.55'; });
+      try {
+        await page.locator(`${inSession} [data-widget="Plasmid map"]`).first().evaluate((el) => el.scrollIntoView({ block: 'start' }));
+        await page.waitForTimeout(1200);
+        await shot('render-bio-dark');
+      } finally {
+        await page.evaluate(() => { document.documentElement.style.zoom = ''; });
+        await setSize(1280, 820);
+        await invoke('prefs:set', { theme });
+        await page.waitForTimeout(400);
+      }
+      assert.equal(await page.locator(`${inSession} [data-render-error]`).count(), 0, 'the theme switch broke nothing');
+      await newChat();
+      assert.deepEqual(errors.slice(before), [], 'no console errors or exceptions');
     });
 
     await step('the onboarding wizard steps come from the registry', async () => {
