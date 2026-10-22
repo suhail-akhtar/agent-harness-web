@@ -194,6 +194,25 @@ test('a run the provider stopped (credits, a key, an outage) is listed as not sc
   assert.match(md, /## Not scored[\s\S]*#2: You have no credits remaining/);
 });
 
+test('a run the machine slept through is seen (timers do not count suspended time) and so not scored', async () => {
+  const { pauseWatch } = await import('../src/eval/runner.ts');
+  const realNow = Date.now;
+  let skew = 0;
+  Date.now = () => realNow() + skew;
+  try {
+    const awake = pauseWatch(20, 200);
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(awake(), 0, 'an ordinary run has no pause');
+    const slept = pauseWatch(20, 200);
+    await new Promise((r) => setTimeout(r, 50));
+    skew = 3 * 3_600_000; // the lid closed for three hours
+    await new Promise((r) => setTimeout(r, 50));
+    const ms = slept();
+    assert.ok(ms > 2.9 * 3_600_000 && ms < 3 * 3_600_000 + 1_000, String(ms));
+    assert.equal(slept(), ms, 'asking again changes nothing');
+  } finally { Date.now = realNow; }
+});
+
 test('the web-console gate asked for by name where there is no page fails with a reason instead of crashing', async () => {
   const { runGates } = await import('../src/gates/gates.ts');
   const { createHarness } = await import('../src/kernel/harness.ts');

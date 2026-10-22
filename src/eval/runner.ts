@@ -158,7 +158,7 @@ export interface EvalRun {
   status: string; pass: boolean; checks: CheckResult[];
   cost: number; inputTokens: number; cacheHit: number; output: number; modelCalls: number; toolCalls: number; seconds: number;
   workspace: string; error?: string;
-  /** The run stopped on the provider's side (credits, a key, an outage), not the model's or the harness's: not counted. */
+  /** The run stopped on the provider's side (credits, a key, an outage) or the machine slept through it, not the model's or the harness's fault: not counted. */
   unscored?: boolean;
 }
 
@@ -166,6 +166,23 @@ export interface EvalRun {
 export function providerProblem(texts: (string | undefined)[]): string | undefined {
   const re = /no credits|insufficient[_ ]quota|exceeded your current quota|billing|credit balance is too low|invalid[_ ]?api[_ ]?key|incorrect api key|authentication|unauthori[sz]ed|\b40[13]\b|overloaded|\b5(02|03|29)\b|service unavailable/i;
   return texts.find((t) => !!t && re.test(t))?.slice(0, 300);
+}
+
+/**
+ * Time the process was not running (the machine asleep, the process paused) while the
+ * returned stop() was pending. Timers do not count suspended time, so a laptop closed
+ * mid-run looks like a run of hours and kills its containers: that run is not scored.
+ */
+export function pauseWatch(tickMs = 10_000, gapMs = 60_000): () => number {
+  let last = Date.now();
+  let paused = 0;
+  const t = setInterval(() => { const now = Date.now(); if (now - last > gapMs) paused += now - last - tickMs; last = now; }, tickMs);
+  t.unref();
+  let stopped = false;
+  return () => {
+    if (!stopped) { stopped = true; clearInterval(t); const now = Date.now(); if (now - last > gapMs) paused += now - last - tickMs; }
+    return paused;
+  };
 }
 
 export async function loadCases(root: string, packs?: string[], only?: string[]): Promise<EvalCase[]> {
@@ -278,6 +295,7 @@ export async function runOne(c: EvalCase, model: string, repeat: number, out: st
   const run: EvalRun = { pack: c.pack, case: c.name, model, repeat, ...(cfg ? { config: cfg.name } : {}), status: 'error', pass: false, checks: [], cost: 0, inputTokens: 0, cacheHit: 0, output: 0, modelCalls: 0, toolCalls: 0, seconds: 0, workspace: ws };
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), (c.timeoutMin ?? 90) * 60_000);
+  const pauses = pauseWatch();
   try {
     const s = await h.sessions.create({ model, ...(cfg?.effort ? { effort: cfg.effort } : {}), mode: 'bypass', runtime: { kind: 'local', network: 'none', path: ws } });
     const errors: string[] = [];
@@ -312,12 +330,15 @@ export async function runOne(c: EvalCase, model: string, repeat: number, out: st
     // A provider failure (no credits, a bad key, an outage) says nothing about the model or the harness.
     const problem = run.status !== 'succeeded' && run.status !== 'done' ? providerProblem([runs[0]?.error, ...errors]) : undefined;
     if (problem) { run.status = 'provider-error'; run.error = problem; run.unscored = true; }
+    const paused = pauses();
+    if (paused > 0 && !run.unscored) { run.status = 'machine-asleep'; run.error = `the machine was asleep (or the process paused) for ${Math.round(paused / 60_000)} min during the run`; run.unscored = true; }
     run.checks = await runChecks(h, c, ws, new AbortController().signal, { sources: s.sources });
     run.pass = ['succeeded', 'done'].includes(run.status) && run.checks.every((x) => x.pass);
   } catch (e) {
     run.error = (e as Error).message;
   } finally {
     clearTimeout(timer);
+    pauses();
     run.seconds = Math.round((Date.now() - t0) / 1000);
     await h.close();
     if (c.teardown) await caseStep(c, ws, 'teardown').catch((e) => { opts.log?.(`${c.pack}/${c.name}: ${(e as Error).message}`); });
@@ -468,7 +489,7 @@ export function report(all: EvalRun[], harness?: Record<string, string>, configO
   // Runs the provider stopped (credits, keys, outages) are listed, never counted.
   const runs = all.filter((r) => !r.unscored);
   const unscored = all.filter((r) => r.unscored);
-  const lines = ['# Evaluation report', '', `${runs.length} run(s)${unscored.length ? ` scored, ${unscored.length} not scored (provider errors, listed at the end)` : ''}, ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC`, ''];
+  const lines = ['# Evaluation report', '', `${runs.length} run(s)${unscored.length ? ` scored, ${unscored.length} not scored (provider errors or the machine asleep, listed at the end)` : ''}, ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC`, ''];
   if (harness) lines.push('Harness (a score describes the model and the harness together):', '', ...Object.entries(harness).map(([k, v]) => `- ${k}: ${v}`), '');
   const order = [...new Set([...(configOrder ?? []), ...runs.map((r) => r.config).filter((x): x is string => !!x)])];
   const ablation = order.length > 1;
@@ -518,7 +539,7 @@ export function report(all: EvalRun[], harness?: Record<string, string>, configO
     for (const ch of r.checks.filter((x) => !x.pass)) lines.push(`  - ${ch.name}: ${ch.detail.replace(/\n/g, ' | ').slice(0, 400)}`);
   }
   if (unscored.length) {
-    lines.push('', '## Not scored', '', 'These runs stopped on the provider\'s side; they say nothing about the model or the harness. Run them again.', '');
+    lines.push('', '## Not scored', '', 'These runs stopped on the provider\'s side or the machine slept through them; they say nothing about the model or the harness. Run them again.', '');
     for (const r of unscored) lines.push(`- ${r.pack}/${r.case} ${r.model}${r.config ? ` [${r.config}]` : ''} #${r.repeat}: ${r.error}`);
   }
   return lines.join('\n') + '\n';
