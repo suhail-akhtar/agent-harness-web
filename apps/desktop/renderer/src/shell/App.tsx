@@ -83,7 +83,7 @@ export function App(): React.ReactElement {
                 <div className="min-h-0 flex-1 overflow-auto p-2">
                   {panel.kind === 'artifact' ? <Artifact kind={panel.artifact} source={panel.source} language={panel.language} title={panel.title} fill />
                     : panel.kind === 'file' ? <FilePreview path={panel.path} content={panel.content} fill />
-                    : panelDef ? <PanelHost panel={panelDef} params={panel.params} /> : <EmptyState title="This panel is not available" />}
+                    : panelDef ? <PanelHost panel={panelDef} params={panel.params} data={panel.data} /> : <EmptyState title="This panel is not available" />}
                 </div>
               </aside>
             )}

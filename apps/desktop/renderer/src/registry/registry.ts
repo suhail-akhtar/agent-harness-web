@@ -56,7 +56,7 @@ export interface Registry {
   slashCommands: SlashCommand[];
   composerChips: ComposerChip[];
   settings: SettingsSection[];
-  renderers: { tool: Map<string, Renderer>; event: Map<string, Renderer>; fence: Map<string, Renderer> };
+  renderers: { tool: Map<string, Renderer>; event: Map<string, Renderer>; fence: Map<string, Renderer>; artifact: Map<string, Renderer> };
   homeCards: HomeCard[];
   statusItems: StatusItem[];
   themes: Theme[];
@@ -86,7 +86,7 @@ const isBuiltin = (p: PluginEntry) => p.source === 'builtin';
 export function buildRegistry(entries: PluginEntry[], o: RegistryOptions = {}): Registry {
   const r: Registry = {
     plugins: entries, active: [], navItems: [], views: new Map(), panels: new Map(), commands: [], slashCommands: [], composerChips: [], settings: [],
-    renderers: { tool: new Map(), event: new Map(), fence: new Map() }, homeCards: [], statusItems: [], themes: [], prompts: [], onboarding: [], errors: [], conflicts: [],
+    renderers: { tool: new Map(), event: new Map(), fence: new Map(), artifact: new Map() }, homeCards: [], statusItems: [], themes: [], prompts: [], onboarding: [], errors: [], conflicts: [],
   };
   const required = new Set(o.required ?? []);
   // Built-ins first, so a third-party plugin's renderer (later) replaces a built-in default.
@@ -117,9 +117,9 @@ export function buildRegistry(entries: PluginEntry[], o: RegistryOptions = {}): 
     for (const ch of c.composerChips) r.composerChips.push(q(ch));
     for (const s of c.settings) r.settings.push(q(s));
     for (const rd of c.renderers) {
-      const f = rd.for as { tool?: string; event?: string; fence?: string };
-      const map = f.tool ? r.renderers.tool : f.event ? r.renderers.event : r.renderers.fence;
-      map.set((f.tool ?? f.event ?? f.fence)!, { ...q(rd), trust });
+      const f = rd.for as { tool?: string; event?: string; fence?: string; artifact?: string };
+      const map = f.tool ? r.renderers.tool : f.event ? r.renderers.event : f.artifact ? r.renderers.artifact : r.renderers.fence;
+      map.set((f.tool ?? f.event ?? f.artifact ?? f.fence)!, { ...q(rd), trust });
     }
     for (const h of c.homeCards) r.homeCards.push({ ...q(h), trust });
     for (const s of c.statusItems) r.statusItems.push(q(s));
@@ -170,7 +170,7 @@ export function interpolate(text: string, values: Record<string, unknown>): stri
 }
 
 /** The renderer for a tool's results, an event kind or a fence language, if a plugin brings one. */
-export function rendererFor(r: Registry, kind: 'tool' | 'event' | 'fence', key: string): Renderer | undefined { return r.renderers[kind].get(key); }
+export function rendererFor(r: Registry, kind: 'tool' | 'event' | 'fence' | 'artifact', key: string): Renderer | undefined { return r.renderers[kind].get(key); }
 
 /** Fuzzy match for the command palette: every character of the query in order; better when contiguous and early. */
 export function fuzzyScore(query: string, text: string): number {
@@ -203,7 +203,7 @@ export function describeRegistry(r: Registry) {
     commands: r.commands.map((c) => ({ id: c.qid, title: c.title, keys: c.keys ?? null })),
     slashCommands: r.slashCommands.map((s) => ({ name: s.name, plugin: s.plugin, description: s.description })),
     settings: r.settings.map((s) => ({ id: s.qid, title: s.title, scope: s.scope, group: s.group ?? 'plugins' })),
-    renderers: { tool: [...r.renderers.tool.keys()], event: [...r.renderers.event.keys()], fence: [...r.renderers.fence.keys()] },
+    renderers: { tool: [...r.renderers.tool.keys()], event: [...r.renderers.event.keys()], fence: [...r.renderers.fence.keys()], artifact: [...r.renderers.artifact.keys()] },
     themes: r.themes.map((t) => ({ id: t.qid, label: t.label, mode: t.mode })),
     conflicts: r.conflicts,
     errors: r.errors,

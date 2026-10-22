@@ -13,7 +13,7 @@ import { runAction } from './actions';
 import { PluginFrame } from './Frame';
 import { desktop } from '../bridge';
 
-export interface NativeProps { params: Record<string, string>; plugin: string; contribution: string }
+export interface NativeProps { params: Record<string, string>; plugin: string; contribution: string; /** A panel's structured input (openPluginPanel). */ data?: unknown }
 
 function nativeComponent(plugin: string, component: string): React.ComponentType<NativeProps> | undefined {
   const e = useData.getState().registry.active.find((p) => p.name === plugin);
@@ -110,8 +110,8 @@ export function HomeCardHost({ card }: { card: HomeCard }): React.ReactElement |
   );
 }
 
-export function PanelHost({ panel, params }: { panel: Panel; params?: Record<string, string> }): React.ReactElement {
+export function PanelHost({ panel, params, data }: { panel: Panel; params?: Record<string, string>; data?: unknown }): React.ReactElement {
   if (panel.kind === 'frame' && panel.entry) return <PluginFrame plugin={panel.plugin} contribution={panel.qid} entry={panel.entry} params={params} fill title={panel.title} />;
   const C = panel.component ? nativeComponent(panel.plugin, panel.component) : undefined;
-  return C ? <C params={params ?? {}} plugin={panel.plugin} contribution={panel.qid} /> : <EmptyState icon="puzzle" title="Panel not available" />;
+  return C ? <C params={params ?? {}} plugin={panel.plugin} contribution={panel.qid} data={data} /> : <EmptyState icon="puzzle" title="Panel not available" />;
 }

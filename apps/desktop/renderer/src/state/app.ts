@@ -10,7 +10,7 @@ import type { ArtifactKind } from '@harness/ui';
 
 export interface Route { view: string; params?: Record<string, string> }
 export type SidePanel =
-  | { kind: 'plugin'; panel: string; params?: Record<string, string> }
+  | { kind: 'plugin'; panel: string; params?: Record<string, string>; /** Structured input for a native panel (the details of a selected node, say). */ data?: unknown }
   | { kind: 'artifact'; title: string; artifact: ArtifactKind; source: string; language: string }
   | { kind: 'file'; title: string; path: string; sessionId: string; content: string };
 
@@ -96,4 +96,9 @@ export const openSession = (id: string) => navigate({ view: 'core.chat:session',
 export function prefill(text: string, newChat?: boolean) {
   useApp.setState({ prefill: { text, newChat, nonce: Date.now() } });
   if (newChat) navigate(HOME);
+}
+
+/** Opens a plugin's side panel (a qualified id), with params and, for a native panel, structured data. */
+export function openPluginPanel(panel: string, params?: Record<string, string>, data?: unknown): void {
+  useApp.setState({ panel: { kind: 'plugin', panel, ...(params ? { params } : {}), ...(data !== undefined ? { data } : {}) } });
 }

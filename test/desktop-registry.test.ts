@@ -3,6 +3,24 @@ import { test } from 'node:test';
 import { validateUiManifest } from '../packages/plugin-ui/src/index.ts';
 import { buildRegistry, fuzzyScore, interpolate, normaliseChordText, rendererFor, type PluginEntry } from '../apps/desktop/renderer/src/registry/registry.ts';
 import { allowedWhileTyping, chordFromEvent, conflicts, formatChord, matches, parseChord } from '../apps/desktop/renderer/src/registry/keybindings.ts';
+import { reconcile } from '../apps/desktop/renderer/src/registry/reconcile.ts';
+
+test('reconcile: switching a plugin off live leaves nothing of it in the window; other plugins are untouched', () => {
+  const core = native('core.settings', { settings: [{ id: 'appearance', title: 'Appearance', scope: 'app', component: 'A', group: 'app' }] });
+  const notes = third('acme-notes', { displayName: 'Acme Notes', trust: 'frame', contributes: {
+    views: [{ id: 'notes', title: 'Notes', kind: 'markdown', markdown: '# n' }], panels: [{ id: 'side', title: 'Side', kind: 'frame', entry: 'ui/s.html' }],
+    settings: [{ id: 'prefs', title: 'Notes', scope: 'app', schema: { type: 'object', properties: {} } }],
+  } });
+  const on = buildRegistry([core, notes]);
+  const off = buildRegistry([core, { ...notes, enabled: false }]);
+  const r = reconcile(on, off, { route: { view: 'acme-notes:notes' }, panel: { kind: 'plugin', panel: 'acme-notes:side' }, settingsSection: 'acme-notes:prefs', badges: { 'acme-notes.unread': 3, 'core.settings.dot': 1 } });
+  assert.deepEqual(r.leaveView, { plugin: 'acme-notes', label: 'Acme Notes' });
+  assert.equal(r.closePanel, true);
+  assert.equal(r.settingsSection, 'core.settings:appearance');
+  assert.deepEqual(r.dropBadges, ['acme-notes.unread']);
+  // Back on: nothing to undo, and nothing of another plugin's is touched.
+  assert.deepEqual(reconcile(off, on, { route: { view: 'core.chat:home' }, panel: null, settingsSection: null, badges: { 'core.settings.dot': 1 } }), { dropBadges: [] });
+});
 
 const native = (name: string, contributes: Record<string, unknown>, extra: Partial<PluginEntry> = {}): PluginEntry => ({
   name, source: 'builtin', enabled: true, ui: validateUiManifest({ trust: 'native', contributes }, { trustCeiling: 'native' }), native: { components: {} }, ...extra,
@@ -63,6 +81,29 @@ test('registry: a third-party renderer replaces a built-in default; renderers by
   assert.equal(rendererFor(r, 'tool', 'note_save')!.qid, 'better-diagrams:t');
   assert.equal(rendererFor(r, 'event', 'notice')!.entry, 'ui/e.html');
   assert.equal(rendererFor(r, 'fence', 'python'), undefined);
+});
+
+test('registry: a native plugin contributes a fence renderer, an artifact-kind renderer, a full-page view and a details panel (the core.diagrams shape)', () => {
+  const Canvas = () => null; const Page = () => null; const Details = () => null;
+  const diagrams = native('core.diagrams', {
+    renderers: [{ id: 'fence', for: { fence: 'diagram' }, kind: 'native', component: 'Canvas' }, { id: 'artifact', for: { artifact: 'diagram' }, kind: 'native', component: 'Canvas' }],
+    views: [{ id: 'diagram', title: 'Diagram', kind: 'native', component: 'Page' }],
+    panels: [{ id: 'details', title: 'Details', kind: 'native', component: 'Details', where: 'any' }],
+  }, { native: { components: { Canvas, Page, Details } } });
+  const r = buildRegistry([diagrams]);
+  assert.equal(rendererFor(r, 'fence', 'diagram')!.component, 'Canvas');
+  assert.equal(rendererFor(r, 'artifact', 'diagram')!.qid, 'core.diagrams:artifact');
+  assert.equal(rendererFor(r, 'fence', 'html'), undefined);
+  assert.equal(r.views.get('core.diagrams:diagram')!.kind, 'native');
+  assert.equal(r.panels.get('core.diagrams:details')!.component, 'Details');
+  // A third party may draw an artifact kind in a frame too; a malformed target is refused with the reason.
+  const framed = third('acme-art', { trust: 'frame', contributes: { renderers: [{ id: 'a', for: { artifact: 'html' }, kind: 'frame', entry: 'ui/a.html' }] } });
+  assert.equal(rendererFor(buildRegistry([framed]), 'artifact', 'html')!.entry, 'ui/a.html');
+  assert.throws(() => validateUiManifest({ contributes: { renderers: [{ id: 'x', for: { artifact: 'Not A Kind!' }, kind: 'frame', entry: 'ui/x.html' }] } }), /"artifact": kind/);
+  // Switched off: every one of them is gone.
+  const off = buildRegistry([{ ...diagrams, enabled: false }]);
+  assert.equal(rendererFor(off, 'artifact', 'diagram'), undefined);
+  assert.equal(off.views.size + off.panels.size + off.renderers.fence.size, 0);
 });
 
 test('registry: all thirteen contribution points resolve from one manifest', () => {
