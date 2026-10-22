@@ -51,6 +51,8 @@ export interface AppOptions {
   sso?: { client: OidcClient; sessions: BrowserSessions };
   /** Per-account limits on running turns and sandbox sessions (default: from the environment). */
   limits?: ConcurrencyLimits;
+  /** Requests per minute per address to plugin routes (default HARNESS_ROUTE_RATE_LIMIT, else 600). */
+  routeRateLimit?: number;
 }
 
 export interface Principal { id?: string; name: string; role: Role; email?: string }
@@ -150,6 +152,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
   const limiter = new RateLimiter(o.rateLimit ?? 600);
   const messageLimiter = new RateLimiter(o.messageRateLimit ?? 30);
   const limits = o.limits ?? concurrencyLimits();
+  const routeLimiter = new RateLimiter(o.routeRateLimit ?? Number(process.env.HARNESS_ROUTE_RATE_LIMIT ?? 600));
 
   const sandboxed = (r: SessionMeta['runtime']) => r.kind === 'docker' || (r.kind === 'local' && r.sandbox === 'docker');
   const counted = () => harness.sessions.list().map((m) => ({ owner: m.owner, busy: harness.sessions.statusOf(m.id) !== 'idle', sandbox: sandboxed(m.runtime) }));
@@ -159,6 +162,8 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     if (why) throw new HttpError(429, why);
   }
   // Scheduled prompts and triggers count against the same limits as typed messages.
+  // Sessions plugins start (an alert's investigation) count against them too.
+  harness.bridge.mayRun = (owner) => concurrencyRefusal('running', owner, counted(), limits);
   if (harness.scheduler) harness.scheduler.mayRun = (owner, sched) => concurrencyRefusal('running', owner, counted(), limits) ?? (sched.newSession && sandboxed(sched.newSession.runtime) ? concurrencyRefusal('sandboxes', owner, counted(), limits) : undefined);
 
   async function serveStatic(res: http.ServerResponse, pathname: string): Promise<boolean> {
@@ -435,6 +440,10 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       } catch { throw new HttpError(404, 'companion not built; run npm run build'); }
     }
 
+    // ---- plugin routes: /api/plugins/<plugin>/<path> (webhooks: alerts, chat, CI/CD) ----
+    const pr = /^\/api\/plugins\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/(.+)$/.exec(p);
+    if (pr) return pluginRoute(req, res, url, pr[1]!, pr[2]!, method);
+
     // ---- triggers: a secret URL starts a stored prompt (Slack, a GitHub webhook, a phone shortcut) ----
     const trig = /^\/api\/triggers\/(hwt_[A-Za-z0-9_-]{20,64})$/.exec(p);
     if (trig && method === 'POST') {
@@ -539,6 +548,42 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       });
     }
     if (p === '/api/plugins/catalogue' && method === 'GET') return send(res, 200, await harness.catalogue());
+
+    // ---- plugin routes' tokens (administrators): each shown once, rotatable ----
+    if (p === '/api/plugin-routes' || p.startsWith('/api/plugin-routes/')) {
+      if (!admin) throw new HttpError(403, 'administrators only');
+      const base = process.env.HARNESS_PUBLIC_URL?.replace(/\/+$/, '') || `http://${req.headers.host ?? '127.0.0.1'}`;
+      if (p === '/api/plugin-routes' && method === 'GET') {
+        const out: Record<string, unknown>[] = [];
+        const fresh = new Map<string, string>();
+        for (const r of registry.routes) {
+          const key = `${r.plugin}/${r.path}`;
+          const entry: Record<string, unknown> = { plugin: r.plugin, method: r.method, path: r.path, auth: r.auth, url: `${base}/api/plugins/${key}` };
+          if (r.auth === 'token') {
+            // Shown once: the first administrator to look gets it; after that only a rotation shows a new one.
+            // Several methods on one path share its token.
+            const issued = fresh.has(key) ? undefined : await harness.bridge.routeTokens.issued(key);
+            if (!issued) {
+              if (!fresh.has(key)) fresh.set(key, await harness.bridge.routeTokens.issue(key));
+              entry.token = fresh.get(key);
+              entry.note = 'Shown once: callers pass it as ?token= or the x-harness-route-token header. Rotate it to get a new one.';
+            } else {
+              entry.issuedAt = new Date(issued.createdAt).toISOString();
+              entry.note = 'The token was shown when it was made; rotate it to get a new one.';
+            }
+          } else entry.note = 'No harness token: the plugin verifies callers itself (a signing secret).';
+          out.push(entry);
+        }
+        return send(res, 200, out);
+      }
+      const rot = /^\/api\/plugin-routes\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/(.+)\/rotate$/.exec(p);
+      if (rot && method === 'POST') {
+        if (!harness.bridge.route(rot[1]!, rot[2]!).some((r) => r.auth === 'token')) throw new HttpError(404, 'no such route with a token');
+        const token = await harness.bridge.routeTokens.issue(`${rot[1]}/${rot[2]}`);
+        return send(res, 200, { plugin: rot[1], path: rot[2], url: `${base}/api/plugins/${rot[1]}/${rot[2]}`, token, note: 'The old token no longer works.' });
+      }
+      throw new HttpError(404, 'not found');
+    }
     if (p === '/api/plugins/install' && method === 'POST') {
       if (!admin) throw new HttpError(403, 'only administrators install plugins: their code runs in the server');
       const b = await readJson(req);
@@ -910,6 +955,51 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     }
 
     throw new HttpError(404, 'not found');
+  }
+
+  /**
+   * A plugin's route: rate-limited per address, the route's token checked (auth 'token'),
+   * the body read whole (1 MB at most), then the plugin's handler. Its errors are logged,
+   * not shown to the caller.
+   */
+  async function pluginRoute(req: http.IncomingMessage, res: http.ServerResponse, url: URL, plugin: string, rel: string, method: string): Promise<void> {
+    const lim = routeLimiter.take(`route:${req.socket.remoteAddress ?? ''}`);
+    if (!lim.ok) throw new HttpError(429, `Too many requests; try again in ${lim.retryAfterSec}s.`, { 'retry-after': String(lim.retryAfterSec) });
+    const routes = harness.bridge.route(plugin, rel);
+    if (!routes.length) throw new HttpError(404, 'not found');
+    const r = routes.find((x) => x.method === method);
+    if (!r) throw new HttpError(405, 'method not allowed', { allow: routes.map((x) => x.method).join(', ') });
+    if (r.auth === 'token') {
+      const given = url.searchParams.get('token') ?? String(req.headers['x-harness-route-token'] ?? '');
+      if (!given || !await harness.bridge.routeTokens.verify(`${plugin}/${rel}`, given)) throw new HttpError(401, 'a valid route token is required (?token= or the x-harness-route-token header)');
+    }
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const c of req) {
+      size += (c as Buffer).length;
+      if (size > 1_000_000) throw new HttpError(413, 'body too large (1 MB at most)');
+      chunks.push(c as Buffer);
+    }
+    const query = Object.fromEntries([...url.searchParams.entries()].filter(([k]) => k !== 'token'));
+    const headers: Record<string, string> = {};
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (k === 'cookie' || k === 'x-harness-route-token' || v === undefined) continue;
+      headers[k.toLowerCase()] = Array.isArray(v) ? v.join(', ') : String(v);
+    }
+    let out: Awaited<ReturnType<typeof r.handler>>;
+    try {
+      out = await r.handler({ method, path: rel, query, headers, body: Buffer.concat(chunks), ip: req.socket.remoteAddress ?? '' });
+    } catch (e) {
+      console.error(`plugin route ${plugin}/${rel} failed:`, e);
+      return send(res, 500, { error: 'the plugin could not handle this request' });
+    }
+    const status = Number.isInteger(out?.status) && out.status >= 100 && out.status <= 599 ? out.status : 200;
+    const h: Record<string, string> = { 'x-content-type-options': 'nosniff' };
+    for (const [k, v] of Object.entries(out?.headers ?? {})) if (!/^(set-cookie|content-length|transfer-encoding|connection)$/i.test(k)) h[k.toLowerCase()] = String(v);
+    const body = out?.body;
+    if (body === undefined || body === null) { res.writeHead(status, { 'cache-control': 'no-store', ...h }); return void res.end(); }
+    if (Buffer.isBuffer(body)) { res.writeHead(status, { 'content-type': 'application/octet-stream', 'cache-control': 'no-store', ...h }); return void res.end(body); }
+    return send(res, status, body, h);
   }
 
   async function handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {

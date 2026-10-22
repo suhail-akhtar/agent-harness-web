@@ -12,7 +12,9 @@ import { assertPublicUrl, publicFetch } from '../tools/web.ts';
 import { resolveIn } from '../tools/paths.ts';
 import type { Tool, ToolServices } from '../tools/types.ts';
 import type { VaultService } from '../vault/store.ts';
-import { defineTool, type PluginAPI, type PluginDefinition, type PluginManifest } from './api.ts';
+import { defineTool, type PluginAPI, type PluginDefinition, type PluginManifest, type PluginSessions } from './api.ts';
+import { ChangeJournal } from '../ops/changes.ts';
+import { ROUTE_PATH } from './host.ts';
 
 // Plugins are folders with a harness-plugin.json. The operator lists plugin
 // directories (HARNESS_PLUGINS); those are TRUSTED: their code runs in the
@@ -84,6 +86,9 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void, da
   // The operator may add hosts to a plugin's own list (HARNESS_PLUGIN_NETWORK, e.g. a GitHub
   // Enterprise or internal Prometheus address): never the plugin itself.
   const declared = { network: [...(m.permissions?.network ?? []).map(String), ...operatorHosts(m.name)], secrets: (m.permissions?.secrets ?? []).map(String), vault: (m.permissions?.vault ?? []).map(String).filter((g) => g.trim()) };
+  // Driving sessions and serving HTTP are declared like network and secrets: an operator sees them before installing.
+  const mayDrive = m.permissions?.sessions === true;
+  const mayServe = m.permissions?.routes === true;
   for (const [name, cfg] of Object.entries(m.mcpServers ?? {})) {
     reg.mcpServers.set(name, { ...cfg, plugin: m.name, secrets: declared.secrets, operator: false } as never);
     contributes.push(`mcp:${name}`);
@@ -108,6 +113,18 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void, da
     const mod = await import(pathToFileURL(within(m.main)).href) as { default?: PluginDefinition };
     const def = mod.default;
     if (!def || typeof def.setup !== 'function') throw new Error(`${m.name}: ${m.main} must default-export definePlugin({...})`);
+    const undeclared = (what: string, key: string) => () => { throw new Error(`${m.name}: ${what} needs "permissions": {"${key}": true} in harness-plugin.json`); };
+    const bridgeOrThrow = () => {
+      if (!reg.bridge) throw new Error(`${m.name}: sessions are only available in a server harness (createHarness)`);
+      return reg.bridge;
+    };
+    const sessions: PluginSessions = mayDrive ? {
+      start: (o) => bridgeOrThrow().sessionsFor(m.name).start(o),
+      send: (id, text, o) => bridgeOrThrow().sessionsFor(m.name).send(id, text, o),
+      respond: (id, requestId, d) => bridgeOrThrow().sessionsFor(m.name).respond(id, requestId, d),
+      get: (id) => reg.bridge?.sessionsFor(m.name).get(id),
+    } : { start: async () => undeclared('api.sessions', 'sessions')(), send: async () => undeclared('api.sessions', 'sessions')(), respond: async () => undeclared('api.sessions', 'sessions')(), get: undeclared('api.sessions', 'sessions') } as PluginSessions;
+    const localChanges = new ChangeJournal(path.resolve(dataRoot ?? path.join(os.tmpdir(), 'harness-plugin-data')));
     const api: PluginAPI = {
       pluginName: m.name,
       pluginDir: dir,
@@ -146,6 +163,31 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void, da
       },
       on: (event, handler, matcher) => { reg.hooks.push({ event, handler, matcher, plugin: m.name }); contributes.push(`hook:${event}`); },
       log: (msg) => log(`[${m.name}] ${msg}`),
+      registerRoute: (r) => {
+        if (!mayServe) undeclared('api.registerRoute', 'routes')();
+        if (r?.method !== 'GET' && r?.method !== 'POST') throw new Error(`${m.name}: a route's method is GET or POST`);
+        if (r.auth !== 'token' && r.auth !== 'none') throw new Error(`${m.name}: a route's auth is "token" or "none"`);
+        if (typeof r.path !== 'string' || !ROUTE_PATH.test(r.path) || r.path.split('/').some((x) => x === '.' || x === '..')) throw new Error(`${m.name}: route path "${r.path}" must be letters, digits, . _ - and / (no leading slash)`);
+        if (typeof r.handler !== 'function') throw new Error(`${m.name}: a route needs a handler`);
+        if (reg.routes.some((x) => x.plugin === m.name && x.path === r.path && x.method === r.method)) throw new Error(`${m.name}: ${r.method} ${r.path} is registered twice`);
+        reg.routes.push({ ...r, plugin: m.name });
+        contributes.push(`route:${r.method} ${r.path}`);
+      },
+      events: {
+        subscribe: (handler) => {
+          if (!mayDrive) undeclared('api.events', 'sessions')();
+          const entry = { plugin: m.name, handler };
+          reg.eventHandlers.push(entry);
+          return () => { const i = reg.eventHandlers.indexOf(entry); if (i >= 0) reg.eventHandlers.splice(i, 1); };
+        },
+      },
+      sessions,
+      get changes() { return reg.bridge?.changes ?? localChanges; },
+      lease: async (name) => (reg.bridge ? reg.bridge.lease(m.name, String(name)) : true),
+      get vault() {
+        const b = reg.bridge;
+        return declared.vault.length && b?.hasVault() ? { list: () => b.vaultList(m.name, declared.vault), reveal: (name: string, purpose: string) => b.vaultReveal(m.name, declared.vault, String(name), String(purpose ?? '')) } : undefined;
+      },
     };
     try {
       await def.setup(api);
@@ -156,7 +198,8 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void, da
     if (typeof def.close === 'function') reg.closers.push(() => def.close!());
   }
   const { vault, ...rest } = declared;
-  reg.plugins.push({ name: m.name, version: m.version ?? '0.0.0', description: m.description ?? '', dir, trusted: true, contributes: [...new Set(contributes)], ...(declared.network.length || declared.secrets.length || vault.length ? { permissions: { ...rest, ...(vault.length ? { vault } : {}) } } : {}) });
+  const extra = { ...(mayDrive ? { sessions: true } : {}), ...(mayServe ? { routes: true } : {}) };
+  reg.plugins.push({ name: m.name, version: m.version ?? '0.0.0', description: m.description ?? '', dir, trusted: true, contributes: [...new Set(contributes)], ...(declared.network.length || declared.secrets.length || vault.length || mayDrive || mayServe ? { permissions: { ...rest, ...(vault.length ? { vault } : {}), ...extra } } : {}) });
 }
 
 /**

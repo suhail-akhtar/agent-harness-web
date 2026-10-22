@@ -27,6 +27,31 @@ const act = (i) => String(i.action ?? '');
 /** Key Vault entry names a call reads (strings only, in input order). */
 const named = (...vs) => vs.filter((v) => typeof v === 'string' && v !== '');
 
+// ---------------- the change journal ----------------
+// Every call that changes a real system is recorded in the harness's change journal
+// (ToolServices.changes, <data>/changes.jsonl) - failed ones too, marked so: a failed
+// apply or deploy may have changed something before it failed. Incident correlation
+// and the aiops change_timeline tool read it.
+const first = (r) => String(typeof r === 'string' ? r : r?.content ?? '').split('\n').find((l) => l.trim())?.trim().slice(0, 300) ?? '';
+const failed = (r) => typeof r === 'object' && r?.is_error === true;
+const outcome = (r) => (failed(r) ? ` (FAILED: ${first(r)})` : first(r) ? ` - ${first(r)}` : '');
+const where = (i) => `${i.context ? `${i.context}/` : ''}${i.namespace ?? 'default'}`;
+// A call missing what it acts on was refused before it ran: nothing to record.
+export const CHANGE_OF = {
+  iac: (i, r) => (act(i) === 'apply' && i.planHash ? { kind: 'iac-apply', target: `terraform ${i.dir ?? '.'}`, summary: `apply plan ${String(i.planHash ?? '').slice(0, 12)}${outcome(r)}`, ref: `plan sha256:${String(i.planHash ?? '')}` } : undefined),
+  k8s: (i, r) => (act(i) === 'apply' && (Array.isArray(i.paths) || i.chart) ? { kind: 'k8s-apply', target: `k8s ${where(i)}: ${Array.isArray(i.paths) ? i.paths.join(' ') : i.chart ?? i.resource ?? 'manifests'}`, summary: `kubectl apply${outcome(r)}` }
+    : act(i) === 'rollout-undo' && i.resource ? { kind: 'rollback', target: `k8s ${where(i)}: ${i.resource ?? '?'}`, summary: `rollout undo ${i.resource ?? ''}${i.toRevision ? ` to revision ${i.toRevision}` : ''}${outcome(r)}` } : undefined),
+  deploy: (i, r) => (['up', 'down', 'rollback'].includes(act(i)) && i.project ? { kind: act(i) === 'up' ? 'deploy' : act(i) === 'rollback' ? 'rollback' : 'other', target: `compose ${i.project ?? '?'}${i.dockerHost ? ` on ${i.dockerHost}` : ''}`, ...(typeof i.service === 'string' && i.service ? { service: i.service } : {}), summary: `deploy ${act(i)}${i.service ? ` ${i.service}${i.image ? `=${i.image}` : ''}` : ''}${outcome(r)}`, ...(i.image ? { ref: String(i.image) } : {}) } : undefined),
+  ci: (i, r) => (act(i) === 'rerun-failed' || act(i) === 'dispatch' ? { kind: 'ci-run', target: `github ${i.repo ?? '(workspace origin)'}`, summary: `${act(i)}${i.workflow ? ` ${i.workflow}` : ''}${i.runId ? ` run ${i.runId}` : ''}${i.ref ? ` at ${i.ref}` : ''}${outcome(r)}` } : undefined),
+};
+/** Runs a tool's call, then records the change it made (if any). Recording never fails the call. */
+export const recorded = (tool, run) => async (input, ctx) => {
+  const r = await run(input, ctx);
+  const c = CHANGE_OF[tool]?.(input, r);
+  if (c && ctx.services?.changes) await ctx.services.changes.record({ ...c, target: String(c.target).slice(0, 300) }).catch(() => {});
+  return r;
+};
+
 export function tools(api) {
   return [
     defineTool({
@@ -39,7 +64,7 @@ export function tools(api) {
       vaultNames: iacVaultNames,
       availableIn: opsAvailable,
       summarize: (i) => (act(i) === 'apply' ? describeApply(i) : `${act(i)} ${i.dir ?? '.'}${i.env && Object.keys(i.env).length ? ` with vault ${Object.values(i.env).join(',')}` : ''}`),
-      run: (input, ctx) => runIac(input, ctx),
+      run: recorded('iac', (input, ctx) => runIac(input, ctx)),
     }),
     defineTool({
       name: 'k8s',
@@ -51,7 +76,7 @@ export function tools(api) {
       vaultNames: (i) => (K8S_REMOTE.has(act(i)) ? named(i.kubeconfig) : []),
       availableIn: opsAvailable,
       summarize: (i) => `${act(i)} ${i.resource ?? (Array.isArray(i.paths) ? i.paths.join(' ') : i.chart ?? '')}${i.namespace ? ` -n ${i.namespace}` : ''}${i.context ? ` --context ${i.context}` : ''}${i.kubeconfig ? ` (kubeconfig ${i.kubeconfig})` : ''}`.trim(),
-      run: (input, ctx) => runK8s(input, ctx),
+      run: recorded('k8s', (input, ctx) => runK8s(input, ctx)),
     }),
     defineTool({
       name: 'ci',
@@ -62,7 +87,7 @@ export function tools(api) {
       sendsOut: (i) => CI_REMOTE.has(act(i)),
       vaultNames: ciVaultNames,
       summarize: (i) => `${act(i)}${i.repo ? ` ${i.repo}` : ''}${i.workflow ? ` ${i.workflow}` : ''}${i.runId ? ` run ${i.runId}` : ''}${i.jobId ? ` job ${i.jobId}` : ''}${i.branch ? ` on ${i.branch}` : ''}${i.ref ? ` at ${i.ref}` : ''}`,
-      run: (input, ctx) => runCi(input, ctx, api),
+      run: recorded('ci', (input, ctx) => runCi(input, ctx, api)),
     }),
     defineTool({
       name: 'container',
@@ -86,7 +111,7 @@ export function tools(api) {
       vaultNames: (i) => named(i.dockerHost, i.sshKey),
       availableIn: opsAvailable,
       summarize: (i) => `${act(i)} ${i.project ?? '?'}${i.service ? ` ${i.service}=${i.image ?? '?'}` : ''}${i.dockerHost ? ` on ${i.dockerHost}` : ' (local daemon)'}`,
-      run: (input, ctx) => runDeploy(input, ctx),
+      run: recorded('deploy', (input, ctx) => runDeploy(input, ctx)),
     }),
   ];
 }

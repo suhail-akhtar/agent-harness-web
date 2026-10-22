@@ -1,6 +1,6 @@
 {
   "name": "ops-watch",
-  "description": "One watch round, meant to be scheduled (every N minutes, in an unattended dontAsk session): evaluate every alert rule now, and when something fires, open or update an incident for it and tell the user (notify_user). Read-only apart from the incident record.",
+  "description": "One watch round run by an agent, for manual or explicit use: the server's own model-free watch loop (HARNESS_OPS_WATCH_SECONDS, default every 60 s) is the default way to watch, and starts an agent only for a new or escalated incident. This workflow, scheduled (every N minutes, in an unattended dontAsk session), runs an agent every round: evaluate every alert rule now, and when something fires, open or update an incident for it and tell the user (notify_user). Read-only apart from the incident record.",
   "inputs": {
     "scope": { "description": "Only this service (optional).", "default": "" }
   },

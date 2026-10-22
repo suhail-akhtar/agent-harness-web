@@ -45,6 +45,8 @@ import { addUsage, emptyUsage } from './types.ts';
 import type { LeaseRecord, Leases } from '../util/lease.ts';
 import { readJson, withFileLock, writeFileAtomic } from '../util/shared-file.ts';
 import { seal, serverKey, unseal } from '../util/sealed.ts';
+import type { ChangeService } from '../ops/changes.ts';
+import { ruleMatches } from './permissions.ts';
 
 export type RuntimeKind = 'docker' | 'local' | 'companion';
 
@@ -93,6 +95,8 @@ export interface SessionMeta {
   outputStyle?: { name: string; prompt: string };
   /** Key vault entries whose values this session was given (names only): hidden again after a restart. */
   vaultNames?: string[];
+  /** Started by a plugin (api.sessions.start): its name. */
+  startedBy?: string;
 }
 
 export interface StoredEvent { seq: number; at: number; event: HarnessEvent }
@@ -172,6 +176,10 @@ export interface SessionDeps {
   vault?: VaultStore;
   /** Several servers on one data folder: a session is driven by the server holding its lease. */
   leases?: Leases;
+  /** Every event of every session (plugins' api.events); must not throw. */
+  onEvent?: (session: Session, event: HarnessEvent) => void;
+  /** The change journal (ToolServices.changes). */
+  changes?: ChangeService;
 }
 
 /** The session is being worked on by another server (it holds the session's lease). */
@@ -390,6 +398,7 @@ export class Session {
       if (this.events.length > EVENT_BUFFER) this.events.splice(0, this.events.length - EVENT_BUFFER);
     }
     for (const l of this.listeners) l(e);
+    if (this.deps.onEvent) { try { this.deps.onEvent(this, e.event); } catch { /* a plugin's handler never breaks the session */ } }
   }
 
   subscribe(after: number, fn: (e: StoredEvent) => void): () => void {
@@ -401,6 +410,19 @@ export class Session {
   get lastSeq(): number { return this.seq; }
 
   pendingRequests(): HarnessEvent[] { return [...this.pending.values()].map((p) => p.event); }
+
+  /**
+   * Why a pending permission request may not be allowed by someone answering for the
+   * user from elsewhere (a chat integration): a deny rule of this session covers the call.
+   * Undefined when nothing forbids it.
+   */
+  deniedByRules(requestId: string): string | undefined {
+    const ev = this.pending.get(requestId)?.event;
+    if (!ev || ev.kind !== 'permission_request' || !this.settings) return undefined;
+    const tool = this.deps.registry.tools.get(ev.tool) ?? ({ spec: { name: ev.tool, description: '', input_schema: {} }, kind: 'external' } as unknown as Tool);
+    const rule = this.rules().deny.find((r) => ruleMatches(r, tool, ev.input ?? {}));
+    return rule ? `the deny rule "${rule}" covers ${ev.tool}` : undefined;
+  }
 
   private setStatus(s: SessionStatus): void {
     this.status = s;
@@ -907,6 +929,11 @@ export class Session {
       } } : {}),
       tasks: this.taskService(caller, main),
       ...(vault ? { vault } : {}),
+      ...(this.deps.changes ? { changes: {
+        // Who and where default to this session; a tool may name the actor it knows better (a CI run's).
+        record: (c: Parameters<NonNullable<ToolServices['changes']>['record']>[0]) => this.deps.changes!.record({ ...c, by: c.by || (this.meta.owner ? `account:${this.meta.owner}` : 'operator'), source: c.source ?? `session:${this.meta.id}` }),
+        query: (q: Parameters<NonNullable<ToolServices['changes']>['query']>[0]) => this.deps.changes!.query(q),
+      } } : {}),
       notify: async (message: string) => {
         this.emit({ kind: 'notice', level: 'info', text: `The agent says: ${message}` });
         fireHooks(this.settings, this.host, 'Notification', { type: 'agent', session: this.meta.id, title: this.meta.title, message }, this.deps.registry.hooks, (m) => this.emit({ kind: 'notice', level: 'warn', text: m }));
@@ -1558,7 +1585,8 @@ export class Session {
   private workflowHost(w: WorkflowDef, bg?: AbortSignal, parent?: Agent): WorkflowHost {
     return {
       host: () => this.getHost(),
-      runAgent: (a) => this.runAgent({ ...a, allowTodos: true, ...(parent ? { parent } : {}) }),
+      // A session that read outside data (a webhook's alert) runs its workflow's agents as tainted too.
+      runAgent: (a) => this.runAgent({ ...a, allowTodos: true, ...(parent ? { parent } : {}), ...(this.meta.tainted ? { tainted: true } : {}) }),
       runGates: async (names, signal) => runGates(this.deps.registry, await this.getHost(), names, signal, await this.services(false)),
       approve: async ({ runId, node, title, message, files }) => {
         const host = await this.getHost();

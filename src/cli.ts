@@ -81,6 +81,8 @@ async function main() {
     plugins: [path.join(appRoot, 'plugins'), ...(process.env.HARNESS_PLUGINS || '').split(path.delimiter).filter(Boolean)],
     shippedPlugins: [path.join(appRoot, 'plugins')],
     mcp: process.env.HARNESS_MCP_CONFIG || undefined,
+    // One task from the command line: no plugin loops (an alert watch loop) alongside it.
+    backgroundWork: false,
   });
   // --resume <runId> --session <id> continues a stopped workflow run from the step it was in.
   const resume = arg('resume');

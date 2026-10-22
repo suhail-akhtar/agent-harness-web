@@ -270,7 +270,8 @@ export async function runOne(c: EvalCase, model: string, repeat: number, out: st
       return failed;
     }
   }
-  const h = await createHarness({ dataDir: path.join(base, 'data'), plugins: await configPlugins(opts.plugins, cfg), shippedPlugins: opts.shipped, ...(cfg?.memory ? { memory: cfg.memory } : {}) });
+  // No background work of plugins (an alert watch loop starting investigations) inside an eval run.
+  const h = await createHarness({ dataDir: path.join(base, 'data'), plugins: await configPlugins(opts.plugins, cfg), shippedPlugins: opts.shipped, backgroundWork: false, ...(cfg?.memory ? { memory: cfg.memory } : {}) });
   // Code mode is the run_script tool; a configuration can take it (or any tool) out.
   for (const t of [...(cfg?.codeMode === false ? ['run_script'] : []), ...(cfg?.disableTools ?? [])]) h.registry.tools.delete(t);
   opts.setup?.(h, cfg);
@@ -339,7 +340,7 @@ export async function rejudge(out: string, cases: EvalCase[], opts: { plugins: s
     try { run = JSON.parse(await fs.readFile(path.join(base, 'result.json'), 'utf8')) as EvalRun; } catch { continue; }
     const c = cases.find((x) => x.pack === run.pack && x.name === run.case);
     if (!c) { opts.log?.(`skip ${e.name}: case ${run.pack}/${run.case} not found`); runs.push(run); continue; }
-    const h = await createHarness({ dataDir: path.join(base, 'data'), plugins: opts.plugins, shippedPlugins: opts.shipped, scheduler: false });
+    const h = await createHarness({ dataDir: path.join(base, 'data'), plugins: opts.plugins, shippedPlugins: opts.shipped, scheduler: false, backgroundWork: false });
     try {
       const s = h.sessions.list()[0] ? h.sessions.get(h.sessions.list()[0]!.id) : undefined;
       // A run recorded before provider errors were told apart: its workflow record says why it stopped.

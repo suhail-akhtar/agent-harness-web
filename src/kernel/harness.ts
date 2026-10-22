@@ -24,6 +24,7 @@ import { BUILTIN_TOOLS } from '../tools/index.ts';
 import { BUILTIN_SEARCH, makeSearchService, type SearchService } from '../research/search.ts';
 import { Registry, type LoadedPlugin } from './registry.ts';
 import { VaultStore } from '../vault/store.ts';
+import { createBridge, type PluginBridge } from '../plugins/host.ts';
 
 // The harness as a library: one call assembles the registry (built-ins, then
 // plugins), the MCP manager, the companion hub and the session manager.
@@ -92,6 +93,12 @@ export interface HarnessOptions {
    * HARNESS_NODE_ID, HARNESS_NODE_URL, HARNESS_LEASE_SECONDS; null turns it off.
    */
   cluster?: ClusterConfig | null;
+  /**
+   * Plugins' server-side loops (an alert watch loop): api.lease() answers false when off, so
+   * they do nothing here. Default on, unless HARNESS_PLUGIN_LOOPS=off; the eval runner and the
+   * CLI turn them off (a run must not start investigations of its own).
+   */
+  backgroundWork?: boolean;
   log?: (message: string) => void;
 }
 
@@ -129,6 +136,8 @@ export interface Harness {
     remove(name: string): Promise<boolean>;
   };
   dataDir: string;
+  /** What plugin code reaches of the harness: routes' tokens, the change journal, sessions (see src/plugins/host.ts). */
+  bridge: PluginBridge;
   /** Signed plugins available to install (empty without a catalogue). */
   catalogue(): Promise<CatalogueEntry[]>;
   /** Verifies, copies and loads a catalogue plugin; new sessions get it. */
@@ -178,6 +187,11 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     return p;
   }
 
+  // Plugins reach the running harness through the bridge; what it needs (sessions, leases, the vault) is made below.
+  let sessionsLate: SessionManager | undefined;
+  const late: { leases?: Leases; vault?: VaultStore } = {};
+  const bridge = createBridge({ registry, dataDir: opts.dataDir, sessions: () => sessionsLate, get leases() { return late.leases; }, get vault() { return late.vault; }, log, loops: opts.backgroundWork ?? process.env.HARNESS_PLUGIN_LOOPS !== 'off' } as Parameters<typeof createBridge>[0]);
+  registry.bridge = bridge;
   const installDir = path.resolve(opts.installDir ?? path.join(opts.dataDir, 'plugins'));
   for (const root of [...(opts.plugins ?? []), installDir]) {
     for (const dir of await findPluginDirs(path.resolve(root))) {
@@ -259,13 +273,17 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   // With several servers, schedules fire on the one holding the scheduler lease (another takes over if it stops).
   if (scheduler && leases) scheduler.leader = async () => (await leases.acquire('scheduler')).ok;
   await scheduler?.load();
+  late.leases = leases;
+  late.vault = vault;
   const sessions = new SessionManager({
     dataDir: opts.dataDir, companions, registry, mcp, onSpan: otel ? (sid, span) => otel.record(sid, span) : undefined,
+    onEvent: (s, e) => bridge.dispatch(s, e), changes: bridge.changes,
     memory: { root: path.resolve(opts.memoryDir ?? path.join(opts.dataDir, 'memory')), mode: memoryMode }, search, spend: opts.spend,
     publish: opts.publish === null ? undefined : opts.publish ?? publishFromEnv(),
     sandboxCredentials, scheduler, vault, leases,
   });
   sessionsRef = sessions;
+  sessionsLate = sessions;
   await sessions.load();
   scheduler?.start();
   /** Downloads, checks the hash, unpacks, verifies the signature, then installs like a folder plugin. */
@@ -301,7 +319,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   }
 
   return {
-    registry, sessions, companions, mcp, scheduler, vault, dataDir: opts.dataDir, search: search?.backend,
+    registry, sessions, companions, mcp, scheduler, vault, dataDir: opts.dataDir, search: search?.backend, bridge,
     ...(leases ? { cluster: { id: leases.owner, url: leases.url, leases, ...(clusterCfg?.secret ? { secret: clusterCfg.secret } : {}), ...(clusterCfg?.peers ? { peers: clusterCfg.peers } : {}) } } : {}),
     mcpb: {
       list: () => installedMcpb(mcpbRoot),
