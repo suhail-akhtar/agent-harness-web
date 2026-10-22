@@ -14,12 +14,18 @@ import {
   isPending, PENDING_KINDS, type Approval, type FileTree, type SearchHit, type Attachment, type CatalogueEntry, type Config, type Capabilities, type EffectiveSetting, type Effort, type FileContent, type FileEntry,
   type GitLogEntry, type GitStatus, type Health, type HarnessEvent, type HistoryPage, type McpBundle, type Me, type Mode, type ModelInfo, type PendingRequest, type PluginInfo,
   type ProviderInfo, type ProviderTest, type Schedule, type SessionDetail, type SessionMeta, type SessionsPage, type TaskView, type VaultEntry, type VersionInfo, type WorkflowInfo, type WorkflowRunView,
+  type ArtifactContent, type ArtifactMeta, type Proposal, type TraceSpan,
 } from './types.ts';
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) { super(message); this.status = status; this.name = 'ApiError'; }
+  /** Seconds the server asked to wait before trying again (Retry-After on a 503). */
+  retryAfter?: number;
+  constructor(status: number, message: string, retryAfter?: number) { super(message); this.status = status; this.name = 'ApiError'; if (retryAfter !== undefined) this.retryAfter = retryAfter; }
 }
+
+/** The server (or the app's proxy) is starting: worth asking again shortly. */
+export const isStarting = (e: unknown): boolean => e instanceof ApiError && (e.status === 503 || e.status === 502 || e.status === 0);
 
 /** The server does not have this endpoint (or this thing does not exist). */
 export const isMissing = (e: unknown): boolean => e instanceof ApiError && (e.status === 404 || e.status === 405);
@@ -34,8 +40,10 @@ export interface ClientOptions {
   clientKind?: string;
 }
 
-/** Sent when a session is created: the client kind, its version, the fence languages and kinds it renders, and the tools it answers (client_call). */
-export interface ClientDescriptor { kind: 'desktop' | 'web' | string; version: string; renderers: string[]; tools: string[] }
+/** An agent-callable command of the app's own plugins (the server cannot read their manifests). */
+export interface ClientCommand { id: string; description: string; inputSchema?: Record<string, unknown> }
+/** Sent when a session is created: the client kind, its version, the fence languages and kinds it renders, the tools it answers (client_call) and its agent-callable commands. */
+export interface ClientDescriptor { kind: 'desktop' | 'web' | string; version: string; renderers: string[]; tools: string[]; commands?: ClientCommand[] }
 
 export interface NewSession {
   title?: string; model?: string; effort?: Effort; mode?: Mode;
@@ -76,7 +84,10 @@ export class HarnessClient {
     const text = await res.text();
     let data: unknown;
     try { data = text ? JSON.parse(text) : undefined; } catch { data = text; }
-    if (!res.ok) throw new ApiError(res.status, (data as { error?: string } | undefined)?.error ?? (typeof data === 'string' && data ? data.slice(0, 300) : `HTTP ${res.status}`));
+    if (!res.ok) {
+      const ra = Number(res.headers?.get?.('retry-after'));
+      throw new ApiError(res.status, (data as { error?: string } | undefined)?.error ?? (typeof data === 'string' && data ? data.slice(0, 300) : `HTTP ${res.status}`), Number.isFinite(ra) && ra > 0 ? ra : undefined);
+    }
     return data as T;
   }
   get<T>(p: string, o?: { signal?: AbortSignal }) { return this.request<T>('GET', p, undefined, o); }
@@ -103,9 +114,24 @@ export class HarnessClient {
   me(): Promise<Me> { return this.get<Me>('/api/me'); }
   config(): Promise<Config> { return this.get<Config>('/api/config'); }
 
-  /** Models with whether each has a key. GET /api/models (new), else the config's list. */
-  models(): Promise<ModelInfo[]> {
-    return this.optional('models', async () => { const r = await this.get<ModelInfo[] | { models: ModelInfo[] }>('/api/models'); return Array.isArray(r) ? r : r.models; }, async () => (await this.config()).models);
+  /**
+   * Models with whether each has a key. GET /api/models (new), else the config's list. A server
+   * still starting answers 503 with Retry-After (and the app's proxy 502/503 while the engine
+   * restarts): asked again, a few times, rather than reporting no models.
+   */
+  async models(o: { attempts?: number; wait?: (ms: number) => Promise<void> } = {}): Promise<ModelInfo[]> {
+    const attempts = Math.max(1, o.attempts ?? 6);
+    const wait = o.wait ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    for (let i = 1; ; i++) {
+      try {
+        const list = await this.optional('models', async () => { const r = await this.get<ModelInfo[] | { models: ModelInfo[] }>('/api/models'); return Array.isArray(r) ? r : r.models; }, async () => (await this.config()).models);
+        if (list.length || i >= attempts) return list;
+        await wait(500);
+      } catch (e) {
+        if (!isStarting(e) || i >= attempts) throw e;
+        await wait(Math.min(3000, ((e as ApiError).retryAfter ?? 0.5) * 1000));
+      }
+    }
   }
 
   // ---------------- providers (new) ----------------
@@ -145,7 +171,8 @@ export class HarnessClient {
     /** Sends a message; attachments (new) need a server that accepts them. */
     send: (id: string, text: string, attachments?: Attachment[]) => this.post<{ state: string; images?: number; files?: string[] }>(`/api/sessions/${id}/messages`, { text, ...(attachments?.length ? { attachments } : {}) }),
     abort: (id: string) => this.post<{ ok: boolean }>(`/api/sessions/${id}/abort`),
-    respond: (id: string, b: { requestId: string; decision: string; feedback?: string; answer?: string }) => this.post<{ ok: boolean }>(`/api/sessions/${id}/respond`, b),
+    /** `answer`: text, or for a question with a form, the filled-in object. */
+    respond: (id: string, b: { requestId: string; decision: string; feedback?: string; answer?: string | Record<string, unknown> }) => this.post<{ ok: boolean }>(`/api/sessions/${id}/respond`, b),
     archive: (id: string) => this.post<SessionMeta>(`/api/sessions/${id}/archive`),
     unarchive: (id: string) => this.post<SessionMeta>(`/api/sessions/${id}/unarchive`),
     fork: (id: string, turn?: number) => this.post<SessionMeta>(`/api/sessions/${id}/fork`, turn ? { turn } : {}),
@@ -160,6 +187,26 @@ export class HarnessClient {
       sessionEvents({ fetch: this.fetch, base: this.base, id, after, headers: this.extra, onEvent, onState, client: this.clientKind }),
     /** Answers a client_call (a desktop tool the agent asked this app to run). */
     clientResult: (id: string, b: { callId: string; ok: boolean; result?: unknown; error?: string; untrusted?: boolean }) => this.post<{ ok: boolean }>(`/api/sessions/${id}/client-result`, b),
+    /** Every model and tool call (cost per agent and model). */
+    trace: (id: string) => this.get<TraceSpan[]>(`/api/sessions/${id}/trace`),
+    /** Open proposals: sessions the agent offered to start. */
+    proposals: (id: string) => this.get<Proposal[]>(`/api/sessions/${id}/proposals`),
+  };
+
+  // ---------------- artifacts and proposals ----------------
+
+  artifacts = {
+    /** A session's artifacts, newest first. */
+    list: (sessionId: string) => this.get<ArtifactMeta[]>(`/api/sessions/${sessionId}/artifacts`),
+    /** One version (the latest by default). */
+    get: (sessionId: string, id: string, version?: number) => this.get<ArtifactContent>(`/api/sessions/${sessionId}/artifacts/${encodeURIComponent(id)}${version ? `?version=${version}` : ''}`),
+    /** The Library: artifacts across every session the person may use. */
+    library: (q: { query?: string; limit?: number } = {}) => this.optional('library', () => this.get<ArtifactMeta[]>(`/api/artifacts?${new URLSearchParams({ ...(q.query ? { query: q.query } : {}), ...(q.limit ? { limit: String(q.limit) } : {}) }).toString()}`), () => [] as ArtifactMeta[]),
+  };
+
+  proposals = {
+    start: (pid: string) => this.post<{ proposal: string; session: SessionMeta }>(`/api/proposals/${encodeURIComponent(pid)}/start`),
+    dismiss: (pid: string) => this.post<Proposal>(`/api/proposals/${encodeURIComponent(pid)}/dismiss`),
   };
 
   // ---------------- files and git (new routes, with the old files route as a fallback) ----------------
