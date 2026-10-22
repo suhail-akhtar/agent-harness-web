@@ -367,7 +367,8 @@ test('plugins journey: Engineering and Operations switched on and off live, used
     await step('4. both: no clash, a fixed order, the palette lists both, one conversation uses /incident and /gates', async () => {
       const s = await snapshot();
       const navIndex = (id: string) => s.nav.indexOf(id);
-      assert.ok(navIndex('sdlc:delivery') >= 0 && navIndex('aiops:incidents') === navIndex('sdlc:delivery') + 1, `Delivery (order 40) then Incidents (41): ${s.nav.join(', ')}`);
+      // Each a module: the Engineering group (menu order 40: Delivery, Start a feature, Gates), then Operations (41).
+      assert.ok(navIndex('sdlc:delivery') >= 0 && navIndex('aiops:incidents') === navIndex('sdlc:quality') + 1 && navIndex('sdlc:quality') === navIndex('sdlc:delivery') + 2, `Engineering's items then Operations': ${s.nav.join(', ')}`);
       assert.deepEqual(s.homeCards.filter((c) => /^(sdlc|aiops):/.test(c)), ['sdlc:in-flight', 'aiops:on-call']);
       assert.deepEqual(s.status.filter((c) => /^aiops:/.test(c)), ['aiops:open-incidents', 'aiops:firing-alerts']);
       for (const c of ['/feature', '/review', '/gates', '/incident', '/investigate', '/ops-check']) assert.ok(s.slash.includes(c), c);

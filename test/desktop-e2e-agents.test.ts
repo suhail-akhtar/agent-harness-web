@@ -117,7 +117,11 @@ test('desktop app end to end: the agent platform', { timeout: 15 * 60_000 }, asy
       assert.deepEqual(meta.client.tools, ['desktop_command', 'desktop_describe', 'desktop_notify', 'desktop_open']);
       const cmds = (meta.client.commands as Array<{ id: string }>).map((c) => c.id);
       for (const c of ['core.shell:set-theme', 'core.shell:open-view', 'core.chat:new', 'core.settings:open', 'core.artifacts:library', 'core.agents:page']) assert.ok(cmds.includes(c), c);
-      assert.ok(JSON.stringify(meta.client).length < 4000, `the declaration is compact (${JSON.stringify(meta.client).length})`);
+      const { plugins: index, ...decl } = meta.client as { plugins?: Array<{ name: string }> };
+      assert.ok(JSON.stringify(decl).length < 4000, `the declaration is compact (${JSON.stringify(decl).length})`);
+      // Its plugin index (one line each in the prompt; the guides are skills): the built-ins with a guide.
+      for (const p of ['core.agents', 'core.artifacts', 'core.chat', 'core.dashboards', 'core.diagrams', 'core.settings']) assert.ok(index?.some((x) => x.name === p), p);
+      assert.ok(JSON.stringify(index).length < 3000, `the plugin index is compact (${JSON.stringify(index).length})`);
       await card.click();
       await page.waitForSelector(`[data-side-panel] [data-artifact-detail="${artId}"][data-version="2"]`);
       await page.waitForSelector('[data-side-panel] iframe[data-artifact-frame="html"]');
@@ -146,7 +150,8 @@ test('desktop app end to end: the agent platform', { timeout: 15 * 60_000 }, asy
     await step('the Library: across conversations, grid and list, a kind filter and search', async () => {
       await page.click('[data-nav="core.artifacts:library"]');
       await page.waitForSelector(`[data-library-item="${artId}"]`);
-      assert.equal((await page.locator('[data-crumbs]').innerText()).trim(), 'Library', 'a page that is its own nav item: no parent');
+      assert.equal((await page.locator('[data-crumbs] [data-crumb-parent]').innerText()).trim(), 'Agents', 'the Library sits in the Agents module: Agents > Library');
+      assert.equal((await page.locator('[data-crumbs] [data-breadcrumb]').innerText()).trim(), 'Library');
       await shot('library-grid');
       await page.click('button[aria-label="Show as a list"]');
       await page.waitForSelector('[data-library-layout="list"]');

@@ -175,18 +175,21 @@ function Steps({ row, sessionId, fence, defaultOpen }: { row: Extract<Row, { kin
 }
 
 /** A plugin's native renderer of a tool's result, when it has one (it may draw nothing for a given call). */
-function useNativeTool(name: string): { qid: string; C: React.ComponentType<{ item: ToolItem; sessionId: string }> } | undefined {
+/** The props a native tool renderer gets: the whole item (core.diagrams) and its parts (core.dashboards). */
+type NativeToolProps = { item: ToolItem; tool: string; input: Record<string, unknown>; result?: string; isError?: boolean; sessionId: string };
+function useNativeTool(name: string): { qid: string; C: React.ComponentType<NativeToolProps> } | undefined {
   const registry = useData((s) => s.registry);
   const r = rendererFor(registry, 'tool', name);
   if (!r || r.kind !== 'native' || !r.component) return undefined;
-  const C = registry.active.find((p) => p.name === r.plugin)?.native?.components[r.component] as React.ComponentType<{ item: ToolItem; sessionId: string }> | undefined;
+  const C = registry.active.find((p) => p.name === r.plugin)?.native?.components[r.component] as React.ComponentType<NativeToolProps> | undefined;
   return C ? { qid: r.qid, C } : undefined;
 }
 
+/** A native plugin's renderer of a tool's result, drawn once (under its card, or for a folded turn), inside a boundary. */
 function NativeToolOutput({ item, sessionId }: { item: ToolItem; sessionId: string }) {
   const n = useNativeTool(item.name);
   if (!n || item.running) return null;
-  return <div className="mt-1" data-plugin-renderer={n.qid}><RenderBoundary fallback={() => null}><n.C item={item} sessionId={sessionId} /></RenderBoundary></div>;
+  return <div className="mt-1" data-plugin-renderer={n.qid}><RenderBoundary fallback={() => null}><n.C item={item} tool={item.name} input={item.input} result={item.result} isError={item.isError} sessionId={sessionId} /></RenderBoundary></div>;
 }
 
 /** What plugins draw for a turn's tools, shown even while its steps are folded (a diagram the turn made, say). */
@@ -206,8 +209,6 @@ export function ToolCard({ item, sessionId }: { item: ToolItem; sessionId: strin
   const s = (k: string) => (typeof item.input[k] === 'string' ? (item.input[k] as string) : '');
   const status = item.running ? 'running' : item.isError ? 'error' : 'ok';
   const diff = item.display?.type === 'diff' ? item.display : item.name === 'edit' && !item.isError && s('path') ? { path: s('path'), before: s('old_string'), after: s('new_string') } : undefined;
-  // A native plugin's renderer for this tool's results (shown under the card, the raw body stays one click away).
-  const NativeTool = custom?.kind === 'native' && custom.component ? registry.active.find((p) => p.name === custom.plugin)?.native?.components[custom.component] as React.ComponentType<{ tool: string; input: Record<string, unknown>; result?: string; isError?: boolean; sessionId: string }> | undefined : undefined;
   const resultLooksJson = !!item.result && /^\s*[[{]/.test(item.result) && item.result.length < 400_000 && (() => { try { JSON.parse(item.result!); return true; } catch { return false; } })();
   return (
     <div data-tool={item.name} data-tool-status={status} className={cx('rounded-lg', item.isError && 'bg-hx-danger/[0.04]')}>
@@ -227,7 +228,6 @@ export function ToolCard({ item, sessionId }: { item: ToolItem; sessionId: strin
         <div className="ml-6 mt-1" data-plugin-renderer={custom.qid}><PluginFrame plugin={custom.plugin} contribution={custom.qid} entry={custom.entry} height={custom.height ?? 140} context={{ tool: item.name, input: item.input, result: item.result, isError: item.isError }} /></div>
       ) : (
         <>
-          {NativeTool && !item.running && <div className="ml-6 mt-1" data-plugin-renderer={custom!.qid}><NativeTool tool={item.name} input={item.input} result={item.result} isError={item.isError} sessionId={sessionId} /></div>}
           {diff && !open && !item.isError && <div className="ml-6"><DiffView path={diff.path} before={diff.before} after={diff.after} collapsedLines={40} /></div>}
           {item.images?.length ? <div className="ml-6 mt-1"><ImageStrip images={item.images} /></div> : null}
           {open && (
