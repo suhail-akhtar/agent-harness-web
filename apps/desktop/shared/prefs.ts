@@ -29,6 +29,8 @@ export interface DesktopPrefs {
   preventSleep: boolean;
   window: WindowBounds;
   sidebar: { collapsed: boolean; width: number; showArchived: boolean };
+  /** The sidebar's plugin groups: the person's order (plugin names) and which are folded. */
+  menus: { order: string[]; collapsed: Record<string, boolean> };
   projects: ProjectRef[];
   defaultModel: string;
   defaultEffort: string;
@@ -65,6 +67,7 @@ export const DEFAULT_PREFS: DesktopPrefs = {
   preventSleep: false,
   window: { width: 1280, height: 820, maximized: false },
   sidebar: { collapsed: false, width: 272, showArchived: false },
+  menus: { order: [], collapsed: {} },
   projects: [],
   defaultModel: '',
   defaultEffort: '',
@@ -101,6 +104,9 @@ export function mergePrefs(base: DesktopPrefs, patch: unknown): DesktopPrefs {
   const p = out as unknown as DesktopPrefs;
   p.fontSize = Math.min(20, Math.max(11, Math.round(p.fontSize)));
   p.sidebar.width = Math.min(480, Math.max(200, Math.round(p.sidebar.width)));
+  const order = Array.isArray(p.menus.order) ? p.menus.order : [];
+  const folded = isObj(p.menus.collapsed) ? p.menus.collapsed : {};
+  p.menus = { order: [...new Set(order.filter((x): x is string => typeof x === 'string' && /^[a-z0-9][a-z0-9._-]{0,63}$/i.test(x)))].slice(0, 200), collapsed: Object.fromEntries(Object.entries(folded).filter(([k, v]) => typeof v === 'boolean' && /^[a-z0-9][a-z0-9._-]{0,63}$/i.test(k)).slice(0, 200)) };
   return p;
 }
 

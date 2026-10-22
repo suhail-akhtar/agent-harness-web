@@ -35,7 +35,7 @@ function useNews(): LinkNews[] {
 
 const stop = (id: string) => void client.sessions.abort(id).then(() => toast('Stopped')).catch((e: Error) => toast(e.message, { kind: 'error' }));
 
-function Working({ s, depth = 0 }: { s: SessionMeta; depth?: number }) {
+export function Working({ s, depth = 0 }: { s: SessionMeta; depth?: number }) {
   const [live] = useSessionLive(s.id);
   const sessions = useData((st) => st.sessions);
   const kids = sessions.filter((x) => x.parent === s.id && (x.status === 'running' || x.status === 'waiting'));
@@ -65,7 +65,7 @@ function Working({ s, depth = 0 }: { s: SessionMeta; depth?: number }) {
   );
 }
 
-function SessionProposals({ s }: { s: SessionMeta }) {
+export function SessionProposals({ s }: { s: SessionMeta }) {
   const list = useOpenProposals(s.id);
   if (!list?.length) return null;
   return (

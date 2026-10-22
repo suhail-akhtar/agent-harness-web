@@ -9,7 +9,7 @@ import { useApp, navigate, openPluginPanel } from './app';
 import { client, useData, type ClientCallHandler } from './data';
 import { desktop } from '../bridge';
 import { runCommand } from '../registry/actions';
-import { commandRefusal, describeForAgent, resolveOpen } from '../registry/agent-surface';
+import { commandRefusal, describeForAgent, describePlugin, resolveOpen } from '../registry/agent-surface';
 
 function now(sessionId: string) {
   const s = useApp.getState();
@@ -23,13 +23,15 @@ export const handleClientCall: ClientCallHandler = async (sessionId, tool, input
   switch (tool) {
     case 'desktop_describe': {
       const info = useApp.getState().info;
+      // {plugin}: one plugin in depth; {plugin, guide: true}: its whole guide (the server's skill <plugin>-guide asks for it).
+      if (typeof input.plugin === 'string' && input.plugin.trim()) return { result: describePlugin(registry, input.plugin.trim(), { guide: input.guide === true }) };
       return { result: describeForAgent(registry, now(sessionId), info ? { name: info.product.name, version: info.version } : undefined) };
     }
     case 'desktop_open': {
       const t = resolveOpen(registry, input);
       if ('error' in t) throw new Error(t.error);
       switch (t.target) {
-        case 'view': navigate({ view: t.view, ...(t.params ? { params: t.params } : {}) }); return { result: `Opened ${t.view}.` };
+        case 'view': navigate({ view: t.view, ...(t.params ? { params: t.params } : {}) }); return { result: `Opened ${t.view}${t.params?.plugin && t.view === 'core.shell:plugin-home' ? ` (the home of ${t.params.plugin})` : ''}.` };
         case 'panel': {
           const def = registry.panels.get(t.panel)!;
           // A conversation's panel opens on the conversation that asked (unless the agent named another).

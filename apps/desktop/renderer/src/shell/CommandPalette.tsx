@@ -1,5 +1,6 @@
 /**
- * The command palette (Mod+K): every command the registry has, every page, recent conversations
+ * The command palette (Mod+K): every command the registry has, every page ("Plugin › Item" for a
+ * plugin's module), recent conversations
  * (searched on the server as you type) and projects. Arrow keys, Enter, Escape.
  */
 
@@ -9,6 +10,7 @@ import type { SessionMeta } from '@harness/client';
 import { useApp, navigate, openSession } from '../state/app';
 import { useData, client } from '../state/data';
 import { fuzzyScore } from '../registry/registry';
+import { paletteTitle } from '../registry/modules';
 import { runCommand } from '../registry/actions';
 import { formatChord } from '../registry/keybindings';
 import { platform } from '../bridge';
@@ -35,7 +37,9 @@ export function CommandPalette(): React.ReactElement | null {
   const entries = useMemo(() => {
     const out: Entry[] = [];
     for (const c of registry.commands) out.push({ id: `cmd:${c.qid}`, group: 'Commands', title: c.category ? `${c.category}: ${c.title}` : c.title, icon: c.icon ?? 'command', keys: c.keys, run: () => void runCommand(c.qid) });
-    for (const n of registry.navItems) out.push({ id: `nav:${n.qid}`, group: 'Go to', title: n.title, icon: n.icon ?? 'arrow-right', run: () => navigate({ view: n.view, ...(n.params ? { params: n.params } : {}) }) });
+    // A plugin that is a module: its home, then its items as "Plugin › Item".
+    for (const g of registry.groups) out.push({ id: `home:${g.plugin}`, group: 'Go to', title: `${g.title} › Home`, icon: g.icon, run: () => navigate(g.home) });
+    for (const n of registry.navItems) out.push({ id: `nav:${n.qid}`, group: 'Go to', title: paletteTitle(registry, n), icon: n.icon ?? 'arrow-right', run: () => navigate({ view: n.view, ...(n.params ? { params: n.params } : {}) }) });
     for (const p of projects) out.push({ id: `proj:${p.path}`, group: 'Projects', title: p.name, hint: p.path, icon: 'folder', run: () => navigate({ view: 'core.projects:project', params: { path: p.path } }) });
     const convs = q.trim().length >= 2 ? [...found, ...sessions.filter((s) => !found.some((f) => f.id === s.id))] : sessions.slice(0, 8);
     for (const s of convs.slice(0, 30)) out.push({ id: `s:${s.id}`, group: 'Conversations', title: s.title || 'New conversation', hint: new Date(s.updatedAt).toLocaleDateString(), icon: 'chat', run: () => openSession(s.id) });

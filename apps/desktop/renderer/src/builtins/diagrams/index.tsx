@@ -13,6 +13,8 @@ import { useData } from '../../state/data';
 import { DiagramPage } from './Page';
 import { ArtifactDiagram, FenceDiagram, ToolDiagram } from './Inline';
 import { useDetails } from './store';
+import { meta, ui } from './manifest';
+import guide from './GUIDE.md?raw';
 
 function DetailsPanel(): React.ReactElement {
   const d = useDetails();
@@ -29,21 +31,9 @@ function sessionForCodeMap(): string | undefined {
 }
 
 export const coreDiagrams: BuiltinPlugin = {
-  name: 'core.diagrams', version: '0.1.0', description: 'Interactive architecture, deployment, data, code and flow diagrams: drag, explore, play flows, export, and ask the agent to change them.',
-  ui: {
-    apiVersion: 1, displayName: 'Diagrams', icon: 'layers', trust: 'native', capabilities: [],
-    contributes: {
-      views: [{ id: 'diagram', title: 'Diagram', kind: 'native', component: 'Page' }],
-      panels: [{ id: 'details', title: 'Details', kind: 'native', component: 'Details', where: 'any' }],
-      renderers: [
-        { id: 'fence', for: { fence: 'diagram' }, kind: 'native', component: 'Fence' },
-        { id: 'artifact', for: { artifact: 'diagram' }, kind: 'native', component: 'Artifact' },
-        { id: 'tool', for: { tool: 'artifact' }, kind: 'native', component: 'Tool' },
-      ],
-      commands: [{ id: 'code-map', title: 'Show code map', category: 'Diagrams', icon: 'map', handler: 'codeMap' }],
-      slashCommands: [{ name: 'codemap', description: 'Show the code map of this conversation\'s workspace', action: { type: 'command', command: 'code-map' } }],
-    },
-  },
+  ...meta,
+  ui,
+  guide,
   components: { Page: DiagramPage, Details: DetailsPanel, Fence: FenceDiagram, Artifact: ArtifactDiagram, Tool: ToolDiagram },
   handlers: {
     codeMap: () => {

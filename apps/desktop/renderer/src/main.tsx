@@ -99,7 +99,7 @@ async function boot() {
   on<DesktopPrefs>('prefs:changed', (p) => {
     const before = useApp.getState().prefs;
     useApp.setState({ prefs: p });
-    if (JSON.stringify(before.keybindings) !== JSON.stringify(p.keybindings) || JSON.stringify(before.disabledPlugins) !== JSON.stringify(p.disabledPlugins)) useData.getState().rebuild();
+    if (JSON.stringify(before.keybindings) !== JSON.stringify(p.keybindings) || JSON.stringify(before.disabledPlugins) !== JSON.stringify(p.disabledPlugins) || JSON.stringify(before.menus?.order) !== JSON.stringify(p.menus?.order)) useData.getState().rebuild();
     reapplyTheme();
   });
   on<{ id: string }>('command:run', (c) => void runCommand(c.id));

@@ -8,7 +8,7 @@ import { cx, Icon, IconButton, Menu, Tooltip, toast, Input } from '@harness/ui';
 import type { SessionMeta } from '@harness/client';
 import { useApp, navigate, openSession } from '../state/app';
 import { useData, client } from '../state/data';
-import { interpolate, type NavItem } from '../registry/registry';
+import { interpolate, isHomeRoute, type MenuGroup, type NavItem } from '../registry/registry';
 import { formatChord } from '../registry/keybindings';
 import { runCommand } from '../registry/actions';
 import { platform } from '../bridge';
@@ -22,9 +22,11 @@ export function Sidebar({ collapsed: forced, onToggle }: { collapsed?: boolean; 
   const registry = useData((s) => s.registry);
   const info = useApp((s) => s.info);
   const [moreOpen, setMoreOpen] = useState(false);
-  const primary = registry.navItems.filter((n) => (n.placement ?? 'primary') === 'primary');
-  const more = registry.navItems.filter((n) => n.placement === 'more');
-  const footer = registry.navItems.filter((n) => n.placement === 'footer');
+  // Items a plugin's menu shows are drawn in its group, not at the top level.
+  const top = registry.navItems.filter((n) => !n.group);
+  const primary = top.filter((n) => (n.placement ?? 'primary') === 'primary');
+  const more = top.filter((n) => n.placement === 'more');
+  const footer = top.filter((n) => n.placement === 'footer');
   const drag = useRef<{ x: number; w: number } | null>(null);
 
   return (
@@ -36,6 +38,7 @@ export function Sidebar({ collapsed: forced, onToggle }: { collapsed?: boolean; 
       </div>
       <nav aria-label="Main" className="flex flex-col gap-0.5 px-2 pb-2">
         {primary.map((n) => <NavRow key={n.qid} item={n} collapsed={collapsed} />)}
+        {collapsed && registry.groups.map((g) => <RailGroup key={g.plugin} group={g} />)}
         {more.length > 0 && (
           <>
             <button type="button" onClick={() => setMoreOpen((o) => !o)} aria-expanded={moreOpen} className={cx('flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13px] text-hx-secondary hover:bg-hx-hover', collapsed && 'justify-center px-0')}>
@@ -45,7 +48,7 @@ export function Sidebar({ collapsed: forced, onToggle }: { collapsed?: boolean; 
           </>
         )}
       </nav>
-      {!collapsed && <div className="hx-scroll min-h-0 flex-1 overflow-y-auto px-2 pb-2"><Projects /><Conversations /></div>}
+      {!collapsed && <div className="hx-scroll min-h-0 flex-1 overflow-y-auto px-2 pb-2">{registry.groups.length > 0 && <Modules />}<Projects /><Conversations /></div>}
       {collapsed && <div className="flex-1" />}
       <div className="flex flex-col gap-0.5 border-t border-hx-border-subtle p-2">
         {footer.map((n) => <NavRow key={n.qid} item={n} collapsed={collapsed} />)}
@@ -69,14 +72,14 @@ export function Sidebar({ collapsed: forced, onToggle }: { collapsed?: boolean; 
 
 function Logo() { return <ProductMark size={24} />; }
 
-function NavRow({ item, collapsed, indent }: { item: NavItem; collapsed: boolean; indent?: boolean }) {
+function NavRow({ item, collapsed, indent, depth = 0 }: { item: NavItem; collapsed: boolean; indent?: boolean; depth?: number }) {
   const route = useApp((s) => s.route);
   const badges = useApp((s) => s.badges);
   const active = route.view === item.view && (!item.params || JSON.stringify(item.params) === JSON.stringify(route.params ?? {}));
   const badge = item.badge ? badges[item.badge] : undefined;
   const row = (
-    <button type="button" data-nav={item.qid} aria-current={active ? 'page' : undefined} onClick={() => navigate({ view: item.view, ...(item.params ? { params: item.params } : {}) })}
-      className={cx('relative flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition-colors', collapsed && 'justify-center px-0', indent && !collapsed && 'pl-6',
+    <button type="button" data-nav={item.qid} {...(item.group ? { 'data-in-group': item.group } : {})} aria-current={active ? 'page' : undefined} onClick={() => navigate({ view: item.view, ...(item.params ? { params: item.params } : {}) })}
+      className={cx('relative flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition-colors', collapsed && 'justify-center px-0', indent && !collapsed && 'pl-6', depth === 1 && !collapsed && 'pl-7', depth >= 2 && !collapsed && 'h-7 pl-11 text-[12.5px]',
         active ? 'bg-hx-active font-medium text-hx-primary' : 'text-hx-secondary hover:bg-hx-hover hover:text-hx-primary')}>
       <Icon name={item.icon ?? 'puzzle'} size={16} />
       {!collapsed && <span className="min-w-0 flex-1 truncate text-left">{item.title}</span>}
@@ -84,6 +87,134 @@ function NavRow({ item, collapsed, indent }: { item: NavItem; collapsed: boolean
     </button>
   );
   return collapsed ? <Tooltip label={item.title} placement="right-start">{row}</Tooltip> : row;
+}
+
+// ---------------- plugins as modules ----------------
+
+/** Folds or unfolds a group; remembered on this computer. */
+function setFolded(plugin: string, folded: boolean) {
+  const p = useApp.getState().prefs;
+  useApp.getState().setPrefs({ menus: { ...p.menus, collapsed: { ...p.menus.collapsed, [plugin]: folded } } });
+}
+
+/** Moves a group up or down, or before another; the order is remembered (and the registry follows). */
+export function moveGroup(plugin: string, to: -1 | 1 | { before: string }) {
+  const order = useData.getState().registry.groups.map((g) => g.plugin);
+  const i = order.indexOf(plugin);
+  if (i < 0) return;
+  order.splice(i, 1);
+  const j = typeof to === 'number' ? Math.max(0, Math.min(order.length, i + to)) : Math.max(0, order.indexOf(to.before));
+  order.splice(j, 0, plugin);
+  const p = useApp.getState().prefs;
+  useApp.getState().setPrefs({ menus: { ...p.menus, order } });
+  useData.getState().rebuild();
+}
+
+function useFolded(g: MenuGroup): boolean {
+  const mine = useApp((s) => s.prefs.menus?.collapsed?.[g.plugin]);
+  return mine ?? g.collapsed;
+}
+
+/** The numbers of a folded group's items, added up (a folded group still says something is waiting). */
+function groupCount(g: MenuGroup, badges: Record<string, unknown>): number {
+  return g.items.flatMap((e) => [e, ...e.children]).reduce((n, e) => { const v = e.badge ? badges[e.badge] : undefined; return n + (typeof v === 'number' ? v : 0); }, 0);
+}
+
+function Modules() {
+  const groups = useData((s) => s.registry.groups);
+  const [over, setOver] = useState<string | null>(null);
+  return (
+    <div className="mt-1" data-modules>
+      {groups.map((g, i) => <GroupBlock key={g.plugin} group={g} first={i === 0} last={i === groups.length - 1} over={over === g.plugin} setOver={setOver} />)}
+    </div>
+  );
+}
+
+function GroupBlock({ group: g, first, last, over, setOver }: { group: MenuGroup; first: boolean; last: boolean; over: boolean; setOver: (p: string | null) => void }) {
+  const folded = useFolded(g);
+  const route = useApp((s) => s.route);
+  const badges = useApp((s) => s.badges);
+  const nav = useData((s) => s.registry.navItems);
+  const isHome = isHomeRoute(g.home, route);
+  const count = folded ? groupCount(g, badges) : 0;
+  const item = (qid: string) => nav.find((n) => n.qid === qid);
+  const open = () => navigate(g.home);
+  const actions = [
+    { id: 'home', label: `Open ${g.title}`, icon: 'home', onSelect: open },
+    { id: 'fold', label: folded ? 'Unfold' : 'Fold', icon: folded ? 'chevron-down' : 'chevron-right', onSelect: () => setFolded(g.plugin, !folded) },
+    { id: 'sep', label: '', separator: true },
+    { id: 'up', label: 'Move up', icon: 'arrow-up', disabled: first, onSelect: () => moveGroup(g.plugin, -1) },
+    { id: 'down', label: 'Move down', icon: 'arrow-down', disabled: last, onSelect: () => moveGroup(g.plugin, 1) },
+  ];
+  return (
+    <div data-group={g.plugin} data-folded={folded ? '1' : '0'} className={cx('mb-0.5 rounded-lg', over && 'ring-1 ring-hx-accent/60')}
+      onDragOver={(e) => { if (e.dataTransfer.types.includes('application/x-harness-group')) { e.preventDefault(); setOver(g.plugin); } }}
+      onDragLeave={() => setOver(null)}
+      onDrop={(e) => { const from = e.dataTransfer.getData('application/x-harness-group'); setOver(null); if (from && from !== g.plugin) { e.preventDefault(); moveGroup(from, { before: g.plugin }); } }}>
+      <div className="group/head relative flex h-8 items-center rounded-lg">
+        <button type="button" tabIndex={-1} data-group-fold={g.plugin} aria-expanded={!folded} aria-label={`${folded ? 'Unfold' : 'Fold'} ${g.title}`} onClick={() => setFolded(g.plugin, !folded)}
+          className="absolute left-0 top-0 z-10 flex h-8 w-6 items-center justify-center rounded-md text-hx-muted hover:text-hx-primary">
+          <Icon name={folded ? 'chevron-right' : 'chevron-down'} size={12} />
+        </button>
+        <button type="button" draggable data-group-home={g.plugin} aria-current={isHome ? 'page' : undefined} aria-expanded={!folded} title={`${g.title}: open its home (Alt+Shift+Up/Down moves it, Left/Right folds it)`}
+          onClick={open}
+          onKeyDown={(e) => {
+            if (e.altKey && e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); moveGroup(g.plugin, e.key === 'ArrowUp' ? -1 : 1); setTimeout(() => document.querySelector<HTMLElement>(`[data-group-home="${g.plugin}"]`)?.focus(), 0); }
+            else if (e.key === 'ArrowLeft' && !folded) { e.preventDefault(); setFolded(g.plugin, true); }
+            else if (e.key === 'ArrowRight' && folded) { e.preventDefault(); setFolded(g.plugin, false); }
+          }}
+          onDragStart={(e) => { e.dataTransfer.setData('application/x-harness-group', g.plugin); e.dataTransfer.effectAllowed = 'move'; }}
+          className={cx('flex h-8 min-w-0 flex-1 items-center gap-2.5 rounded-lg pl-6 pr-8 text-[13px] font-medium transition-colors', isHome ? 'bg-hx-active text-hx-primary' : 'text-hx-secondary hover:bg-hx-hover hover:text-hx-primary')}>
+          <Icon name={g.icon} size={16} />
+          <span className="min-w-0 flex-1 truncate text-left">{g.title}</span>
+          {count > 0 && <span data-group-badge={g.plugin} className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-hx-accent px-1 text-[10.5px] font-semibold text-hx-on-accent">{count}</span>}
+        </button>
+        <Menu placement="bottom-end" items={actions} trigger={({ ref, toggle, open: o }) => <IconButton ref={ref} tabIndex={-1} icon="more" size="xs" label={`${g.title} menu`} data-group-menu={g.plugin} onClick={toggle} className={cx('absolute right-1 top-1.5 opacity-0 group-hover/head:opacity-100 focus:opacity-100', o && 'opacity-100')} />} />
+      </div>
+      {!folded && (
+        <div role="group" aria-label={g.title}>
+          {g.items.map((e) => {
+            const n = item(e.qid);
+            if (!n) return null;
+            return (
+              <React.Fragment key={e.qid}>
+                <NavRow item={n} collapsed={false} depth={1} />
+                {e.children.map((c) => { const cn = item(c.qid); return cn ? <NavRow key={c.qid} item={cn} collapsed={false} depth={2} /> : null; })}
+              </React.Fragment>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The narrow rail: a group is one icon; its items open in a flyout beside it. */
+function RailGroup({ group: g }: { group: MenuGroup }) {
+  const route = useApp((s) => s.route);
+  const badges = useApp((s) => s.badges);
+  const inside = isHomeRoute(g.home, route) || g.items.some((e) => [e, ...e.children].some((x) => x.view === route.view));
+  const count = groupCount(g, badges);
+  const go = (r: { view: string; params?: Record<string, string> }) => () => navigate(r);
+  const items = [
+    { id: 'head', label: g.title, section: true },
+    { id: 'home', label: 'Home', icon: 'home', onSelect: go(g.home) },
+    ...g.items.flatMap((e) => [
+      { id: e.qid, label: e.title, icon: e.icon ?? 'puzzle', ...(e.badge && badges[e.badge] ? { hint: String(badges[e.badge]) } : {}), onSelect: go({ view: e.view, ...(e.params ? { params: e.params } : {}) }) },
+      ...e.children.map((c) => ({ id: c.qid, label: `  ${c.title}`, icon: c.icon ?? 'chevron-right', onSelect: go({ view: c.view, ...(c.params ? { params: c.params } : {}) }) })),
+    ]),
+  ];
+  return (
+    <Menu placement="right-start" items={items} className="min-w-[220px]" trigger={({ ref, toggle, open }) => (
+      <Tooltip label={g.title} placement="right-start">
+        <button ref={ref} type="button" data-group-rail={g.plugin} aria-haspopup="menu" aria-expanded={open} aria-label={g.title} onClick={toggle}
+          className={cx('relative flex h-8 w-full items-center justify-center rounded-lg text-[13px] transition-colors', inside || open ? 'bg-hx-active text-hx-primary' : 'text-hx-secondary hover:bg-hx-hover hover:text-hx-primary')}>
+          <Icon name={g.icon} size={16} />
+          {count > 0 && <span className="absolute right-1 top-0.5 flex h-[16px] min-w-[16px] items-center justify-center rounded-full bg-hx-accent px-1 text-[10px] font-semibold text-hx-on-accent">{count}</span>}
+        </button>
+      </Tooltip>
+    )} />
+  );
 }
 
 function Projects() {

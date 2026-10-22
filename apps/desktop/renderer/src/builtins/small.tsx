@@ -16,6 +16,7 @@ import { useApp, navigate, openSession, setCrumb, NARROW_PX } from '../state/app
 import { desktop } from '../bridge';
 import { PendingCard, respondFor } from '../components/Pending';
 import { fmtCost } from './core.chat/Transcript';
+import { PluginHome } from './plugin-home';
 
 // ---------------- core.shell ----------------
 
@@ -46,13 +47,15 @@ export const coreShell: BuiltinPlugin = {
         { id: 'setup', title: 'Set up (welcome wizard)', category: 'Help', icon: 'sparkles', handler: 'setup' },
         { id: 'reload-plugins', title: 'Reload plugins', category: 'Plugins', icon: 'refresh', handler: 'reloadPlugins' },
       ],
+      // The home of a plugin that declares none, drawn from its manifest (?plugin=<name>).
+      views: [{ id: 'plugin-home', title: 'Home', kind: 'native', component: 'PluginHome' }],
       themes: [
         { id: 'paper', label: 'Paper', mode: 'light', background: '#f7f3ea', foreground: '#2b2722', accent: '#b4532a' },
         { id: 'midnight', label: 'Midnight', mode: 'dark', background: '#0f1420', foreground: '#dfe6f3', accent: '#6c9cff' },
       ],
     },
   },
-  components: {},
+  components: { PluginHome },
   handlers: {
     palette: () => useApp.setState({ paletteOpen: !useApp.getState().paletteOpen }),
     back: () => useApp.getState().goBack(),
