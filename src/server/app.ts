@@ -32,7 +32,7 @@ import { effectiveSettings } from './settings-api.ts';
 import { ArtifactError } from '../core/artifacts.ts';
 import { CLIENT_KINDS, type ClientKind, ClientDeclError, cleanClient } from '../core/client.ts';
 import { LinkedError } from '../core/linked.ts';
-import { FormAnswerError } from '../core/session.ts';
+import { FormAnswerError, nodeViews } from '../core/session.ts';
 import { cleanName as cleanAttachmentName, deletePath, fileTree, gitDiff, gitLog, gitStatus, renamePath, saveUploads, searchFiles, WorkspaceError, WRITE_LIMIT, writeFile } from './workspace-api.ts';
 
 // The HTTP side: JSON API, an SSE stream per session, the built UI, and the
@@ -769,7 +769,12 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     }
 
     // ---- providers and models (keys only in: never returned or logged) ----
-    if (p === '/api/models' && method === 'GET') return send(res, 200, modelCatalog());
+    if (p === '/api/models' && method === 'GET') {
+      // Never an empty list while the registry is still filling: the client asks again after Retry-After.
+      const list = modelCatalog();
+      if (!list.length) { res.setHeader('retry-after', '1'); throw new HttpError(503, 'the engine is still starting: models are not loaded yet'); }
+      return send(res, 200, list);
+    }
     if (p === '/api/providers' && method === 'GET') {
       await harness.providerKeys.refresh();
       return send(res, 200, [...registry.providers.entries()].map(([id, def]) => {
@@ -1397,7 +1402,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       if (action === 'workflows' && method === 'GET') {
         const wfs = await s.workflows();
         return send(res, 200, {
-          workflows: wfs.map((w) => ({ name: w.name, description: w.description, inputs: w.inputs ?? {}, source: w.source, nodes: Object.entries(w.nodes).map(([id, n]) => ({ id, type: n.type, title: n.title })) })),
+          workflows: wfs.map((w) => ({ name: w.name, description: w.description, inputs: w.inputs ?? {}, source: w.source, start: w.start, nodes: nodeViews(w) })),
           runs: await s.listRuns(),
         });
       }

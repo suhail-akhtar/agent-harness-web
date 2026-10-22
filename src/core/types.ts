@@ -127,6 +127,8 @@ export interface WorkflowRunView {
   current?: string;
   cost: number;
   error?: string;
-  nodes: { id: string; type: string; title?: string }[];
+  /** agent/model: an agent node's (or a map node's agent step's); next: where it can go (parallel branches first). */
+  nodes: { id: string; type: string; title?: string; agent?: string; model?: string; next?: string[] }[];
+  start?: string;
   history: { node: string; type: string; status: string; outcome?: string; summary?: string; startedAt: number; endedAt?: number; cost?: number }[];
 }
