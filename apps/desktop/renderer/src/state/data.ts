@@ -155,6 +155,8 @@ export function applyGlobal(e: GlobalEvent): void {
       const cur = d.sessions.find((s) => s.id === id);
       if (cur) useData.setState({ sessions: d.sessions.map((s) => (s.id === id ? { ...s, ...(p.status ? { status: p.status as SessionMeta['status'] } : {}), ...(typeof p.title === 'string' ? { title: p.title } : {}), updatedAt: Date.now() } : s)) });
       else void d.refreshSessions();
+      // A turn ended: its cost and models changed (the Agents panel and page show them for sessions not on screen).
+      if (cur && p.status === 'idle') void client.sessions.get(id).then((x) => { const now = useData.getState().sessions.find((s) => s.id === id); if (now) useData.getState().upsertSession({ ...now, cost: x.meta.cost, byModel: x.meta.byModel, usage: x.meta.usage, status: x.status }); }).catch(() => {});
       return;
     }
     case 'client': {
