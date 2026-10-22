@@ -137,7 +137,7 @@ test('loading a guide: the server\'s from its plugin folder (authored + generate
     const drop = (sys: string) => sys.split('\n').filter((l) => !/^- (sdlc|core\.dashboards): /.test(l)).join('\n');
     assert.ok(/^- sdlc: /m.test(before.system) && !/^- sdlc: /m.test(after.system), 'the sdlc line went');
     assert.equal(after.system, drop(before.system), 'only the plugin\'s lines changed');
-    const enumAfter = (after.tools.find((x) => x.name === 'skill')!.input_schema as { properties: { name: { enum: string[] } } }).properties.name.enum;
+    const enumAfter = (after.tools.find((x) => x.name === 'skill')!.input_schema as unknown as { properties: { name: { enum: string[] } } }).properties.name.enum;
     assert.ok(!enumAfter.includes('sdlc-guide') && !enumAfter.includes('core.dashboards-guide') && enumAfter.includes('research-guide'), enumAfter.join(','));
     assert.deepEqual(after.tools.filter((x) => x.name !== 'skill'), before.tools.filter((x) => x.name !== 'skill'), 'every other tool as it was');
     // The same set again: nothing changes (no cache miss for nothing).

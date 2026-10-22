@@ -196,8 +196,8 @@ test('prefs: the groups\' order and folded state are remembered, cleaned', () =>
 // ---------------- guides ----------------
 
 /** Every plugin that must have a guide, with its authored text. */
-function authoredGuides(): Array<{ name: string; text: string; ui?: UiManifest; description: string }> {
-  const out = GUIDED.map((g) => ({ name: g.m.meta.name, text: fs.readFileSync(path.join(builtinsDir, g.dir, 'GUIDE.md'), 'utf8'), ui: validateUiManifest(g.m.ui, { trustCeiling: 'native' }), description: g.m.meta.description }));
+function authoredGuides(): Array<{ name: string; text: string; ui: UiManifest | undefined; description: string }> {
+  const out: Array<{ name: string; text: string; ui: UiManifest | undefined; description: string }> = GUIDED.map((g) => ({ name: g.m.meta.name, text: fs.readFileSync(path.join(builtinsDir, g.dir, 'GUIDE.md'), 'utf8'), ui: validateUiManifest(g.m.ui, { trustCeiling: 'native' }), description: g.m.meta.description }));
   for (const p of ['sdlc', 'aiops', 'research', 'quality-gates', 'devops', 'integrations']) {
     const m = manifestOf(p);
     const ui = m.ui ? validateUiManifest(m.ui, { trustCeiling: 'frame' }) : undefined;
