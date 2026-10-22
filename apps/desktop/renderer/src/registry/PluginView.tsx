@@ -31,7 +31,8 @@ export function ViewHost({ view, params }: { view: View; params: Record<string, 
         const C = nativeComponent(view.plugin, view.component);
         return C ? <C params={params} plugin={view.plugin} contribution={view.qid} /> : <EmptyState icon="puzzle" title="This page is not available">{view.plugin} did not provide {view.component}.</EmptyState>;
       }
-      case 'frame': return <div className="h-full p-0"><PluginFrame plugin={view.plugin} contribution={view.qid} entry={view.entry} params={params} fill title={view.title} /></div>;
+      // A frame page opened again with other params (an incident, a feature) starts again with them: its init carries them.
+      case 'frame': return <div className="h-full p-0"><PluginFrame key={JSON.stringify(params)} plugin={view.plugin} contribution={view.qid} entry={view.entry} params={params} fill title={view.title} /></div>;
       case 'markdown': return <div className="hx-scroll h-full overflow-auto"><div className="mx-auto max-w-column px-6 py-8"><Markdown text={view.markdown} /></div></div>;
       case 'links': return (
         <div className="hx-scroll h-full overflow-auto"><div className="mx-auto max-w-3xl px-6 py-8">
@@ -111,7 +112,7 @@ export function HomeCardHost({ card }: { card: HomeCard }): React.ReactElement |
 }
 
 export function PanelHost({ panel, params, data }: { panel: Panel; params?: Record<string, string>; data?: unknown }): React.ReactElement {
-  if (panel.kind === 'frame' && panel.entry) return <PluginFrame plugin={panel.plugin} contribution={panel.qid} entry={panel.entry} params={params} fill title={panel.title} />;
+  if (panel.kind === 'frame' && panel.entry) return <PluginFrame key={JSON.stringify(params ?? {})} plugin={panel.plugin} contribution={panel.qid} entry={panel.entry} params={params} fill title={panel.title} />;
   const C = panel.component ? nativeComponent(panel.plugin, panel.component) : undefined;
   return C ? <C params={params ?? {}} plugin={panel.plugin} contribution={panel.qid} data={data} /> : <EmptyState icon="puzzle" title="Panel not available" />;
 }
