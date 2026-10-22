@@ -34,5 +34,9 @@ if (!args.has('--no-renderer')) {
 }
 // After Vite (which empties dist/renderer): the React runtime for artifact previews.
 await build({ entryPoints: [path.join(desktop, 'renderer/artifact-runtime.ts')], outfile: path.join(dist, 'renderer/artifact-runtime.js'), bundle: true, format: 'iife', target: 'es2020', minify: !dev, define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'warning' });
+// The 3D molecule viewer for ```pdb / ```sdf blocks, served next to it (harness://preview/runtime/3Dmol-min.js).
+const threeDmol = [repo, path.join(repo, 'packages/ui')].map((d) => path.join(d, 'node_modules/3dmol/build/3Dmol-min.js')).find((f) => fs.existsSync(f));
+if (threeDmol) fs.copyFileSync(threeDmol, path.join(dist, 'renderer/3Dmol-min.js'));
+else console.warn('3dmol is not installed: 3D structures will show an error');
 fs.writeFileSync(path.join(dist, 'package.json'), JSON.stringify({ type: 'commonjs' }));
 console.log(`built Harness Desktop into ${path.relative(repo, dist)}`);

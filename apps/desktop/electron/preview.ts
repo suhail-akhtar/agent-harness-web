@@ -26,14 +26,16 @@ export function registerPreviewHtml(html: unknown): { url: string } {
 }
 
 export const RUNTIME_URL = `${PREVIEW_ORIGIN}/runtime/artifact-runtime.js`;
+/** The only scripts served besides the pages: the React runtime and the 3D molecule viewer (3Dmol.js). */
+const RUNTIME_FILES = new Set(['artifact-runtime.js', '3Dmol-min.js']);
 
 export function previewResponse(url: URL, rendererDir: string): Response {
   const parts = url.pathname.replace(/^\/+/, '').split('/');
   const token = parts[0] ?? '';
   const rest = parts.slice(1).join('/');
   const base = { 'x-content-type-options': 'nosniff', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' };
-  if (token === 'runtime' && rest === 'artifact-runtime.js') {
-    const file = path.join(rendererDir, 'artifact-runtime.js');
+  if (token === 'runtime' && RUNTIME_FILES.has(rest)) {
+    const file = path.join(rendererDir, rest);
     if (!fs.existsSync(file)) return new Response('Not found', { status: 404 });
     return new Response(fs.readFileSync(file), { status: 200, headers: { ...base, 'content-type': 'text/javascript; charset=utf-8', 'access-control-allow-origin': '*' } });
   }

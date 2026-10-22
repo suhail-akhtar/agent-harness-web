@@ -7,7 +7,7 @@
 import { create } from 'zustand';
 import { HarnessClient, toApproval, type ClientDescriptor, type Approval, type GlobalEvent, type Me, type ModelInfo, type PluginInfo, type ProviderInfo, type SessionMeta, type GlobalEvents, type Config } from '@harness/client';
 import { validateUiManifest } from '@harness/plugin-ui';
-import { toast, fenceLanguages } from '@harness/ui';
+import { toast, DECLARED_FENCES } from '@harness/ui';
 import { buildRegistry, type PluginEntry, type Registry } from '../registry/registry';
 import { desktop, platform, type DevPluginInfo } from '../bridge';
 import { useApp } from './app';
@@ -91,7 +91,7 @@ export function clientInfo(): ClientDescriptor {
   const { registry } = useData.getState();
   const plugin = [...registry.renderers.fence.keys()].map((l) => l);
   // Short on purpose (it is part of every request's cached prefix): fence names only, fixed when the session is made.
-  return { kind: 'desktop', version: useApp.getState().info?.version ?? '0.0.0', renderers: [...new Set([...fenceLanguages(), ...plugin])].sort(), tools: [] };
+  return { kind: 'desktop', version: useApp.getState().info?.version ?? '0.0.0', renderers: [...new Set([...DECLARED_FENCES, ...plugin])], tools: [] };
 }
 
 /** Every global event, for plugin frames that subscribed (events.subscribe). */

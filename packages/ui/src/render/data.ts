@@ -4,7 +4,60 @@
  */
 
 export interface TableSpec { columns: string[]; rows: Array<Array<string | number | null>>; title?: string }
-export interface ColumnSummary { sum: number; mean: number; min: number; max: number; count: number }
+export interface ColumnSummary { sum: number; mean: number; median: number; std: number; min: number; max: number; count: number }
+
+/** Rows whose cells contain the query (case-insensitive), optionally in one column only. */
+export function filterRows(spec: TableSpec, query: string, column?: number): TableSpec['rows'] {
+  const q = query.trim().toLowerCase();
+  if (!q) return spec.rows;
+  return spec.rows.filter((r) => (column === undefined ? r : [r[column]]).some((c) => String(c ?? '').toLowerCase().includes(q)));
+}
+
+export type Aggregate = 'sum' | 'count' | 'mean' | 'min' | 'max' | 'median';
+export const AGGREGATES: Aggregate[] = ['sum', 'count', 'mean', 'median', 'min', 'max'];
+
+function agg(values: number[], how: Aggregate, rows: number): number {
+  if (how === 'count') return rows;
+  if (!values.length) return NaN;
+  const sorted = [...values].sort((a, b) => a - b);
+  switch (how) {
+    case 'sum': return values.reduce((a, b) => a + b, 0);
+    case 'mean': return values.reduce((a, b) => a + b, 0) / values.length;
+    case 'min': return sorted[0]!;
+    case 'max': return sorted[sorted.length - 1]!;
+    case 'median': { const m = sorted.length >> 1; return sorted.length % 2 ? sorted[m]! : (sorted[m - 1]! + sorted[m]!) / 2; }
+  }
+}
+
+/**
+ * A pivot table: one row per distinct value of `rows`, one column per distinct value of `cols`
+ * (or a single column when none), cells aggregating `values`.
+ */
+export function pivot(spec: TableSpec, o: { rows: number; cols?: number; values?: number; aggregate: Aggregate }): TableSpec {
+  const key = (v: unknown) => (v === null || v === undefined || v === '' ? '(blank)' : String(v));
+  const rowKeys = [...new Set(spec.rows.map((r) => key(r[o.rows])))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  const colKeys = o.cols === undefined ? ['__all__'] : [...new Set(spec.rows.map((r) => key(r[o.cols!])))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  const label = `${o.aggregate}${o.values !== undefined && o.aggregate !== 'count' ? ` of ${spec.columns[o.values]}` : ''}`;
+  const columns = [spec.columns[o.rows]!, ...(o.cols === undefined ? [label] : colKeys)];
+  const rows = rowKeys.map((rk) => [rk, ...colKeys.map((ck) => {
+    const group = spec.rows.filter((r) => key(r[o.rows]) === rk && (o.cols === undefined || key(r[o.cols]) === ck));
+    const nums = o.values === undefined ? [] : group.map((r) => numericValue(r[o.values!])).filter((v): v is number => v !== undefined);
+    const v = agg(nums, o.aggregate, group.length);
+    return Number.isFinite(v) ? Math.round(v * 1000) / 1000 : null;
+  })]);
+  return { columns, rows };
+}
+
+/** CSV text of a table (RFC 4180 quoting), for export. */
+export function toCsv(spec: TableSpec, rows: TableSpec['rows'] = spec.rows): string {
+  const cell = (v: unknown) => {
+    let s = v === null || v === undefined ? '' : String(v);
+    // A text cell starting like a formula is neutralised (spreadsheet formula injection); numbers stay numbers.
+    if (typeof v !== 'number' && /^[=+\-@\t\r]/.test(s) && !/^[+-]?\d+(\.\d+)?(e[+-]?\d+)?$/i.test(s)) s = `'${s}`;
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  return [spec.columns, ...rows].map((r) => r.map(cell).join(',')).join('\r\n');
+}
 
 /** RFC 4180-ish: quoted fields with doubled quotes, newlines inside quotes, CRLF. */
 export function parseDelimited(text: string, delimiter?: string): TableSpec {
@@ -80,7 +133,12 @@ export function summarise(spec: TableSpec, index: number): ColumnSummary | undef
   const values = spec.rows.map((r) => numericValue(r[index])).filter((v): v is number => v !== undefined);
   if (!values.length) return undefined;
   const sum = values.reduce((a, b) => a + b, 0);
-  return { sum, mean: sum / values.length, min: Math.min(...values), max: Math.max(...values), count: values.length };
+  const mean = sum / values.length;
+  const sorted = [...values].sort((a, b) => a - b);
+  const m = sorted.length >> 1;
+  const median = sorted.length % 2 ? sorted[m]! : (sorted[m - 1]! + sorted[m]!) / 2;
+  const std = values.length > 1 ? Math.sqrt(values.reduce((a, v) => a + (v - mean) ** 2, 0) / (values.length - 1)) : 0;
+  return { sum, mean, median, std, min: sorted[0]!, max: sorted[sorted.length - 1]!, count: values.length };
 }
 
 /** Rows sorted by a column (numbers numerically, text by locale), without touching the spec. */
@@ -120,6 +178,15 @@ export function parseVizSpec(source: string): { spec?: Record<string, unknown>; 
   // Data only inline: a spec that names a URL would make the renderer fetch from wherever the model said.
   const urls = JSON.stringify(spec).match(/"url"\s*:/);
   if (urls) return { error: 'the viz spec loads data from a URL; put the rows inline as {"values": [...]}' };
+  // Expressions run in Vega's interpreter (no eval); these names never belong in a figure and are refused outright.
+  const exprs: string[] = [];
+  const walk = (v: unknown, k = '') => {
+    if (typeof v === 'string') { if (/^(calculate|filter|expr|test|update|init|on|signal)$/.test(k)) exprs.push(v); return; }
+    if (Array.isArray(v)) { for (const x of v) walk(x, k); return; }
+    if (v && typeof v === 'object') for (const [kk, vv] of Object.entries(v)) { if (kk === '__proto__' || kk === 'constructor') exprs.push(kk); walk(vv, kk); }
+  };
+  walk(spec);
+  if (exprs.some((e) => /\b(constructor|__proto__|prototype|globalThis|window|document|eval|Function|import)\b/.test(e))) return { error: 'an expression in the viz spec uses a name that is not allowed' };
   return { spec };
 }
 

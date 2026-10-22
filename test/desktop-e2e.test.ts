@@ -11,6 +11,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { KITCHEN_SINK } from './fixtures/desktop/rich.ts';
+import { SCIENCE_KITCHEN_SINK } from './fixtures/desktop/science.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const desktop = path.join(root, 'apps', 'desktop');
@@ -75,6 +76,8 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
   page.on('pageerror', (e) => errors.push({ phase, text: `exception: ${e.message}` }));
   // Errors of the window itself; plugin frames and artifact previews log their own refusals (the escape probes cause them on purpose).
   page.on('console', (m) => { const where = m.location().url ?? ''; if (m.type() === 'error' && !/\/plugins\/|^harness:\/\/preview|^about:srcdoc/.test(where)) errors.push({ phase, text: `console: ${m.text()} (${where})` }); });
+  page.on('crash', () => errors.push({ phase, text: 'the renderer crashed' }));
+  page.on('close', () => errors.push({ phase, text: 'the window closed' }));
   const shot = async (name: string, el?: import('playwright-core').Locator) => { if (!SHOTS) return; await page.waitForTimeout(250); await (el ?? page).screenshot({ path: path.join(SHOTS, `${name}.png`) }); };
   const setSize = (w: number, h: number) => app.evaluate(({ BrowserWindow }, s) => { const win = BrowserWindow.getAllWindows()[0]!; win.unmaximize(); win.setSize(s.w, s.h); }, { w, h });
   const invoke = (channel: string, ...args: unknown[]) => page.evaluate(([c, a]) => (window as unknown as { harnessDesktop: { invoke: (c: string, ...x: unknown[]) => Promise<unknown> } }).harnessDesktop.invoke(c as string, ...(a as unknown[])), [channel, args] as const);
@@ -96,7 +99,12 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
   try {
     await step('the engine gate shows the real state, then the app is ready', async () => {
       const gate = await page.waitForSelector('[data-engine-gate], [data-engine-status="ready"]', { timeout: 60_000 });
-      if (await gate.getAttribute('data-engine-gate')) { await shot('engine-gate'); assert.match(await page.locator('[data-engine-log]').innerText(), /starting the engine/); }
+      if (await gate.getAttribute('data-engine-gate')) {
+        await shot('engine-gate');
+        // The gate may already be giving way to the app (a fast start): read its log only while it is there.
+        const log = await page.locator('[data-engine-log]').innerText({ timeout: 2_000 }).catch(() => null);
+        if (log !== null) assert.match(log, /starting the engine/);
+      }
       await ready();
       await page.waitForSelector('[data-home]');
       assert.match(await page.locator('[data-greeting]').innerText(), /Where should we begin\?/);
@@ -364,6 +372,75 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       await shot('chat-rich-bottom');
     });
 
+    await step('science & BI: maths, chemistry 2D and 3D, plots, Graphviz, statistics, dashboard, tables, notebook, map', async () => {
+      const r = await api('POST', '/api/sessions/import', { runtime: 'local', bundle: { ...longBundle(0), source: { ...longBundle(0).source, title: 'Science sink' }, history: [{ role: 'user', content: [{ type: 'text', text: 'Show me the science and BI renderers.' }] }, { role: 'assistant', content: [{ type: 'text', text: SCIENCE_KITCHEN_SINK }] }] } });
+      assert.equal(r.status, 201, JSON.stringify(r.body));
+      const id = (r.body as { id: string }).id;
+      await page.click('[data-nav="core.chat:search"]');
+      await page.click(`[data-session-row="${id}"] button`);
+      await page.waitForSelector('[data-assistant-message] [data-fplot]', { timeout: 30_000 });
+      // Each lazy renderer loads and draws.
+      await page.waitForFunction(() => document.querySelectorAll('[data-smiles-drawn="1"]').length >= 2, null, { timeout: 30_000 });
+      await page.waitForSelector('[data-graphviz="svg"] svg', { timeout: 30_000 });
+      assert.ok(await page.locator('[data-fplot] polyline').count() >= 4, 'the plots are drawn (tan in pieces)');
+      assert.ok(await page.locator('[data-geomap] circle').count() >= 2);
+      assert.equal(await page.locator('[data-dashboard] [data-kpi]').count(), 4);
+      await page.waitForFunction(() => document.querySelectorAll('[data-dashboard] [data-chart] svg').length >= 2, null, { timeout: 30_000 });
+      await page.waitForFunction(() => document.querySelectorAll('[data-chart="vega"] svg').length >= 5, null, { timeout: 30_000 });
+      await page.waitForFunction(() => document.querySelectorAll('[data-chart="echarts"] svg').length >= 3, null, { timeout: 30_000 });
+      assert.equal(await page.locator('[data-notebook] [data-cell]').count(), 5);
+      assert.ok(await page.locator('.katex .mord').count() > 20, 'KaTeX with mhchem and the physics macros');
+      assert.equal(await page.locator('.katex-error').count(), 0, 'every formula parsed');
+      assert.equal(await page.locator('[data-diagram-placeholder]').count(), 1, 'diagram is reserved: JSON with a note');
+      // Tables: filter, stats, pivot.
+      const table = page.locator('[data-widget="CSV"] [data-table]').first();
+      await table.locator('[data-table-filter]').fill('gizmo');
+      await table.locator('[data-table-count]:has-text("3 of 10")').waitFor({ timeout: 5_000 });
+      await table.locator('button:has-text("Stats")').click();
+      await table.locator('[data-table-stats] th:has-text("median")').waitFor({ timeout: 5_000 });
+      await table.locator('[data-table-filter]').fill('');
+      await table.locator('button:has-text("Pivot")').click();
+      await table.locator('[data-table-pivot] table').waitFor({ timeout: 5_000 });
+      // The 3D viewer runs in its sandboxed frame and reports the atoms it parsed.
+      const atoms = await (async () => {
+        for (let i = 0; i < 80; i++) {
+          const found: number[] = [];
+          for (const f of page.frames().filter((x) => x.url().startsWith('harness://preview/'))) {
+            const n = await f.evaluate(() => Number(document.body.getAttribute('data-atoms') ?? 0)).catch(() => 0);
+            if (n) found.push(n);
+          }
+          if (found.length >= 2) return found.sort((a, b) => a - b);
+          await page.waitForTimeout(250);
+        }
+        return [];
+      })();
+      assert.deepEqual(atoms, [3, 10], '3Dmol parsed the molfile and the PDB');
+      for (const sb of await page.$$eval('iframe[data-artifact-frame]', (els) => els.map((e) => e.getAttribute('sandbox')))) assert.doesNotMatch(String(sb), /allow-same-origin/);
+      assert.equal(await page.locator('[data-render-error]').count(), 0, 'no block failed');
+      const shotEl = async (name: string, sel: string) => { const el = page.locator(sel).first(); await el.scrollIntoViewIfNeeded(); await shot(name, el); };
+      await shot('science-top');
+      await shotEl('render-science-math', '[data-assistant-message] .katex-display');
+      await shotEl('render-smiles', '[data-widget="Structure"]');
+      await shotEl('render-molecule-3d', '[data-widget="3D structure"]');
+      await shotEl('render-function-plot', '[data-widget="Plot"]');
+      await shotEl('render-graphviz', '[data-widget="Graph"]');
+      await shotEl('render-vega-stats', '[data-widget="Figure"]');
+      await shotEl('render-echarts-heatmap', '[data-widget="Chart"] >> nth=1');
+      // Taller than the window: shown whole at a smaller zoom.
+      const shotTall = async (name: string, sel: string) => {
+        await setSize(1280, 1000);
+        await page.evaluate(() => { document.documentElement.style.zoom = '0.6'; });
+        try { await shotEl(name, sel); } finally { await page.evaluate(() => { document.documentElement.style.zoom = ''; }); await setSize(1280, 820); }
+      };
+      await shotTall('render-table-pivot', '[data-widget="CSV"]');
+      await shotTall('render-dashboard', '[data-widget="Dashboard"]');
+      await shotTall('render-notebook', '[data-widget="Notebook"]');
+      await shotEl('render-geojson', '[data-widget="Map"]');
+      await shotEl('render-diagram-reserved', '[data-artifact="diagram"]');
+      await page.locator('[data-virtual-list]').evaluate((el) => { el.scrollTop = el.scrollHeight; });
+      await shot('science-bottom');
+    });
+
     await step('an HTML artifact cannot reach the app, its cookies or the network', async () => {
       await newChat();
       await page.evaluate(() => { (window as unknown as { __probe?: unknown }).__probe = null; window.addEventListener('message', (e) => { const d = e.data as { escapeProbe?: unknown }; if (d && d.escapeProbe) (window as unknown as { __probe?: unknown }).__probe = d.escapeProbe; }); });
@@ -475,6 +552,8 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
     const unexpected = errors.filter((e) => !(
       (/an allowed SDK call works/.test(e.phase) && /Content Security Policy|ERR_FAILED/.test(e.text))
       || (/engine stops/.test(e.phase) && /Failed to load resource/.test(e.text))
+      // Adding a folder restarts the engine with the new roots, which cuts the open event streams (they reconnect).
+      || (/a session in a folder/.test(e.phase) && /ERR_FAILED \(harness:\/\/app\/api\/(events|sessions\/[^/]+\/events)/.test(e.text))
       || (/\/api\/memory\?/.test(e.text) && /404/.test(e.text))
     ));
     assert.deepEqual(unexpected, [], 'no unexpected errors in the window');

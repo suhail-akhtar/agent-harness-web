@@ -7,7 +7,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { duration, summarize, toRows, workedLabel, type ArtifactFile, type Item, type Row, type ToolItem } from '@harness/client';
-import { Badge, Button, CodeBlock, DiffView, EmptyState, FencedBlock, Icon, IconButton, ImageStrip, ImageView, JsonView, Markdown, Reasoning, Spinner, VirtualList, copyRich, copyText, cx, toast, type FenceRenderer, type VirtualListHandle, type Source } from '@harness/ui';
+import { type ArtifactRenderer, Badge, Button, CodeBlock, DiffView, EmptyState, FencedBlock, Icon, IconButton, ImageStrip, ImageView, JsonView, Markdown, Reasoning, Spinner, VirtualList, copyRich, copyText, cx, toast, type FenceRenderer, type VirtualListHandle, type Source } from '@harness/ui';
 import { useData, client } from '../../state/data';
 import { useApp } from '../../state/app';
 import { rendererFor } from '../../registry/registry';
@@ -34,6 +34,18 @@ export function useFenceRenderer(): FenceRenderer {
     if (r.kind === 'frame' && r.entry) return <div className="my-3 overflow-hidden rounded-xl border border-hx-border-subtle" data-plugin-renderer={r.qid}><PluginFrame plugin={r.plugin} contribution={r.qid} entry={r.entry} height={r.height ?? 120} context={{ fence: lang, source }} /></div>;
     const C = r.component ? registry.active.find((p) => p.name === r.plugin)?.native?.components[r.component] as React.ComponentType<{ source: string; lang: string }> | undefined : undefined;
     return C ? <C source={source} lang={lang} /> : undefined;
+  }, [registry]);
+}
+
+/** The plugin renderers for artifact kinds (html, svg, react, diagram ...), for @harness/ui's Artifact (setArtifactHost). */
+export function useArtifactRenderer(): ArtifactRenderer {
+  const registry = useData((s) => s.registry);
+  return useCallback((kind, source, o) => {
+    const r = rendererFor(registry, 'artifact', kind);
+    if (!r) return undefined;
+    if (r.kind === 'frame' && r.entry) return <PluginFrame plugin={r.plugin} contribution={r.qid} entry={r.entry} height={r.height ?? 360} fill={o.fill} context={{ artifact: kind, source, title: o.title }} />;
+    const C = r.component ? registry.active.find((p) => p.name === r.plugin)?.native?.components[r.component] as React.ComponentType<{ kind: string; source: string; title: string; fill?: boolean }> | undefined : undefined;
+    return C ? <C kind={kind} source={source} title={o.title} fill={o.fill} /> : undefined;
   }, [registry]);
 }
 
@@ -83,6 +95,8 @@ function ItemView({ item, sessionId, fence, sources, running, isLastAnswer, onRe
   const registry = useData((s) => s.registry);
   const custom = rendererFor(registry, 'event', item.kind);
   if (custom && custom.kind === 'frame' && custom.entry) return <PluginFrame plugin={custom.plugin} contribution={custom.qid} entry={custom.entry} height={custom.height ?? 120} context={{ event: item }} />;
+  const Native = custom?.component ? registry.active.find((p) => p.name === custom.plugin)?.native?.components[custom.component] as React.ComponentType<{ item: Item; sessionId: string }> | undefined : undefined;
+  if (Native) return <Native item={item} sessionId={sessionId} />;
   switch (item.kind) {
     case 'user': return <UserMessage item={item} />;
     case 'assistant': return <AssistantMessage item={item} fence={fence} sources={sources} canRetry={!!isLastAnswer && !running} onRetry={onRetry} compact={inSteps} />;

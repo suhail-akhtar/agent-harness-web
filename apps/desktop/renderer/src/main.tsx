@@ -16,6 +16,7 @@ import * as theme from './state/theme';
 import { desktop, on, type EngineState } from './bridge';
 import { runCommand } from './registry/actions';
 import { BUILTINS } from './builtins';
+import { useArtifactRenderer } from './builtins/core.chat/Transcript';
 import type { DesktopPrefs } from '@desk/prefs';
 import type { GlobalEvents } from '@harness/client';
 
@@ -47,6 +48,7 @@ async function boot() {
     register: info ? (html) => desktop.registerPreview(html).then((r) => r.url) : undefined,
     runtimeUrl: info?.previewRuntime,
     openPanel: (a) => useApp.setState({ panel: { kind: 'artifact', title: a.title, artifact: a.kind, source: a.source, language: a.language } }),
+    useRenderer: useArtifactRenderer,
   });
   useData.getState().rebuild();
   reapplyTheme();

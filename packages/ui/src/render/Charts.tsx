@@ -57,13 +57,17 @@ export function Viz({ source, streaming }: { source: string; streaming?: boolean
     let view: { finalize: () => void } | undefined;
     void loadVega().then(async ([{ default: embed }, { expressionInterpreter }]) => {
       if (disposed || !host.current) return;
-      const result = await embed(host.current, parsed.spec as never, {
+      // A single (or layered) view fits the column, axes and titles included; a faceted or
+      // concatenated figure keeps the sizes it asked for (fit does not apply to those) and scrolls.
+      const spec = parsed.spec as Record<string, unknown> & { encoding?: Record<string, unknown> };
+      const composite = ['facet', 'hconcat', 'vconcat', 'concat', 'repeat'].some((k) => k in spec) || ['row', 'column', 'facet'].some((k) => !!spec.encoding?.[k]);
+      const result = await embed(host.current, (composite ? spec : { autosize: { type: 'fit-x', contains: 'padding' }, ...spec }) as never, {
         actions: false,
         ast: true,
         expr: expressionInterpreter,
         config: { ...vegaTheme(dark()), ...((parsed.spec!.config as object) ?? {}) },
         renderer: 'svg',
-        width: Math.max(200, host.current.clientWidth - 16),
+        ...(composite ? {} : { width: Math.max(200, host.current.clientWidth - 16) }),
         logLevel: 0,
         // No loading from anywhere: data is inline.
         loader: { load: () => Promise.reject(new Error('this figure may not load data from elsewhere')), sanitize: () => Promise.reject(new Error('no external data')), http: () => Promise.reject(new Error('no external data')), file: () => Promise.reject(new Error('no external data')) } as never,

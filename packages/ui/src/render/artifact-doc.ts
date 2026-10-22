@@ -8,7 +8,10 @@
  * (`allow-scripts`) because a live preview is the point; SVG gets none.
  */
 
-export type ArtifactKind = 'html' | 'svg' | 'react';
+/** `diagram` is reserved for the interactive diagrams of the core.diagrams plugin; until it is installed it reads as JSON. */
+export type ArtifactKind = 'html' | 'svg' | 'react' | 'diagram';
+/** The kinds previewed in a sandboxed frame by default. */
+export type FramedArtifactKind = Exclude<ArtifactKind, 'diagram'>;
 
 export function artifactCsp(scripts: boolean, runtime?: string): string {
   return [
@@ -37,8 +40,24 @@ const SIZE_REPORTER = `<script>(function(){var last=0;function send(){var h=Math
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 
+/** Formats the 3D viewer reads. */
+export const MOLECULE_FORMATS = ['pdb', 'sdf', 'mol', 'mol2', 'xyz', 'cif'] as const;
+
+/**
+ * A 3D molecule viewer (3Dmol.js, from the runtime folder next to the React runtime) for a ```pdb,
+ * ```sdf, ```mol ... block. The structure travels base64-encoded and is parsed by 3Dmol, never as markup.
+ */
+export function moleculeDocument(source: string, format: string, runtimeUrl?: string): string {
+  const fmt = (MOLECULE_FORMATS as readonly string[]).includes(format) ? format : 'pdb';
+  const base = runtimeUrl ? runtimeUrl.replace(/[^/]*$/, '') : '';
+  const b64 = btoa(unescape(encodeURIComponent(source)));
+  // Proteins as a cartoon; small molecules (and small PDB files: a ligand, a peptide) as balls and sticks.
+  const style = fmt === 'pdb' || fmt === 'cif' ? "n>300?{cartoon:{color:'spectrum'}}:{stick:{radius:0.15},sphere:{scale:0.25}}" : '{stick:{radius:0.15},sphere:{scale:0.25}}';
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${esc(artifactCsp(true, base || undefined))}"><style>html,body{margin:0;height:100%;background:#fff;font:12px system-ui}#v{position:absolute;inset:0}#e{color:#b42318;padding:10px}</style></head><body><div id="v"></div>${base ? `<script src="${esc(base)}3Dmol-min.js"></script>` : ''}<script id="mol" type="text/plain" data-b64="${b64}" data-format="${fmt}"></script><script>(function(){var el=document.getElementById('mol');try{if(!window.$3Dmol)throw new Error('the 3D viewer is not available here');var data=decodeURIComponent(escape(atob(el.getAttribute('data-b64'))));var v=window.$3Dmol.createViewer(document.getElementById('v'),{backgroundColor:'white'});var m=v.addModel(data,el.getAttribute('data-format'));var n=m?m.selectedAtoms({}).length:0;if(!n)throw new Error('no atoms in this structure');v.setStyle({},${style});v.zoomTo();v.render();document.body.setAttribute('data-atoms',String(n));parent.postMessage({harnessArtifact:'molecule',atoms:n},'*');}catch(e){var d=document.createElement('div');d.id='e';d.textContent='Could not show this structure: '+e.message;document.body.appendChild(d);}})();</script></body></html>`;
+}
+
 /** The document for an artifact. `runtimeUrl` is the React runtime script (React artifacts only). */
-export function artifactDocument(kind: ArtifactKind, source: string, opts: { runtimeUrl?: string } = {}): string {
+export function artifactDocument(kind: FramedArtifactKind, source: string, opts: { runtimeUrl?: string } = {}): string {
   if (kind === 'svg') {
     return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${artifactCsp(false)}"><style>html,body{margin:0;height:100%;background:#fff}body{display:flex;align-items:center;justify-content:center}svg{max-width:100%;max-height:100%}</style></head><body>${source}</body></html>`;
   }
@@ -58,4 +77,4 @@ export function artifactDocument(kind: ArtifactKind, source: string, opts: { run
 }
 
 /** The sandbox attribute for an artifact frame: never allow-same-origin. */
-export function artifactSandbox(kind: ArtifactKind): string { return kind === 'svg' ? '' : 'allow-scripts'; }
+export function artifactSandbox(kind: FramedArtifactKind): string { return kind === 'svg' ? '' : 'allow-scripts'; }

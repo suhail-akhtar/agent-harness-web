@@ -18,6 +18,7 @@ import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markd
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
+import { KATEX_MACROS, KATEX_OPTIONS } from './katex-setup.ts';
 import { protectCurrency } from './currency.ts';
 import { splitBlocks, isOpenBlock } from './blocks.ts';
 import { extensionFor, fenceKind, FRAMED, type FenceKind } from './fences.ts';
@@ -30,6 +31,17 @@ import { Artifact } from './Artifact.tsx';
 import { PatchView } from './DiffView.tsx';
 import { Citation, ImageView, type Source } from './Media.tsx';
 import { RenderBoundary, Widget } from './Widget.tsx';
+
+// The science and BI blocks load with their first use (Graphviz's wasm, smiles-drawer and the rest).
+const Science = () => import('./science/Science.tsx');
+const lazyBlock = <K extends 'FunctionPlot' | 'GraphvizView' | 'SmilesView' | 'Molecule3D' | 'GeoMap' | 'NotebookView' | 'Dashboard'>(k: K) =>
+  React.lazy(() => Science().then((m) => ({ default: m[k] as unknown as React.ComponentType<Record<string, unknown>> })));
+const LZ = {
+  plot: lazyBlock('FunctionPlot'), graphviz: lazyBlock('GraphvizView'), smiles: lazyBlock('SmilesView'), molecule: lazyBlock('Molecule3D'),
+  geojson: lazyBlock('GeoMap'), notebook: lazyBlock('NotebookView'), dashboard: lazyBlock('Dashboard'),
+};
+const loadingBlock = <p className="p-3 text-[12px] text-hx-muted">Loading…</p>;
+const nestedMarkdown = (text: string) => <Markdown text={text} />;
 
 /** Replaces the default for a fence language (a plugin renderer). Return undefined to keep the default. */
 export type FenceRenderer = (lang: string, source: string, streaming: boolean) => React.ReactNode | undefined;
@@ -44,7 +56,7 @@ export interface MarkdownProps {
   className?: string;
 }
 
-const TITLES: Partial<Record<FenceKind, string>> = { chart: 'Chart', viz: 'Figure', diagram: 'Diagram', math: 'Formula', table: 'Table', csv: 'CSV', tsv: 'TSV', json: 'JSON' };
+const TITLES: Partial<Record<FenceKind, string>> = { chart: 'Chart', viz: 'Figure', mermaid: 'Diagram', math: 'Formula', table: 'Table', csv: 'CSV', tsv: 'TSV', json: 'JSON', plot: 'Plot', graphviz: 'Graph', smiles: 'Structure', molecule: '3D structure', geojson: 'Map', notebook: 'Notebook', dashboard: 'Dashboard' };
 
 export function slugify(text: string): string {
   return text.toLowerCase().replace(/<[^>]*>/g, '').replace(/[^\p{L}\p{N}\s-]/gu, '').trim().replace(/\s+/g, '-').slice(0, 80) || 'section';
@@ -67,7 +79,8 @@ export function FencedBlock({ lang, source, streaming = false, renderFence, onFi
   switch (kind) {
     case 'chart': drawn = <Chart source={source} streaming={streaming} />; break;
     case 'viz': drawn = <Viz source={source} streaming={streaming} />; break;
-    case 'diagram': drawn = <Diagram source={source} streaming={streaming} />; break;
+    case 'mermaid': drawn = <Diagram source={source} streaming={streaming} />; break;
+    case 'diagram': return <Artifact kind="diagram" source={source} language="json" streaming={streaming} />;
     case 'math': drawn = <MathBlock source={source} streaming={streaming} />; break;
     case 'table': drawn = <DataTable source={source} streaming={streaming} />; break;
     case 'csv': drawn = <DataTable source={source} format="csv" streaming={streaming} />; break;
@@ -77,6 +90,11 @@ export function FencedBlock({ lang, source, streaming = false, renderFence, onFi
     case 'svg': return <Artifact kind="svg" source={source} language="xml" streaming={streaming} />;
     case 'react': return <Artifact kind="react" source={source} language={lang} streaming={streaming} />;
     case 'diff': return streaming ? <CodeBlock code={source} language="diff" streaming /> : <PatchView source={source} />;
+    case 'plot': case 'graphviz': case 'smiles': case 'molecule': case 'geojson': case 'notebook': case 'dashboard': {
+      const C = LZ[kind];
+      drawn = <React.Suspense fallback={loadingBlock}><C source={source} streaming={streaming} format={lang.toLowerCase()} renderMarkdown={nestedMarkdown} /></React.Suspense>;
+      break;
+    }
     default: return <CodeBlock code={source} language={lang} streaming={streaming} />;
   }
   if (!FRAMED.has(kind)) return drawn;
@@ -123,7 +141,7 @@ const MdBlock = React.memo(function MdBlock({ text, streaming, renderFence, sour
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath]}
-      rehypePlugins={[[rehypeKatex, { throwOnError: false, strict: false, trust: false, output: 'html' }]]}
+      rehypePlugins={[[rehypeKatex, { ...KATEX_OPTIONS, macros: { ...KATEX_MACROS } }]]}
       remarkRehypeOptions={{ clobberPrefix: prefix }}
       // The default drops data: URLs; inline images are allowed (an <img> runs no script; safe.ts checks the type).
       urlTransform={(url, key) => (key === 'src' && /^data:image\/(png|jpe?g|gif|webp|avif|svg\+xml)[;,]/i.test(url.trim()) ? url : defaultUrlTransform(url))}

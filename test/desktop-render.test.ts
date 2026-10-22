@@ -23,7 +23,7 @@ async function load() {
   if (ui) return;
   const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'hx-ui-')), 'ui.mjs');
   // React stays external (one copy); the heavy browser-only libraries load lazily and never run here.
-  await build({ entryPoints: [path.join(root, 'packages/ui/src/index.ts')], outfile: out, bundle: true, platform: 'node', format: 'esm', jsx: 'automatic', external: ['react', 'react-dom', 'react/*', 'react-dom/*', 'mermaid', 'echarts', 'vega-embed', 'vega-interpreter'], banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" }, logLevel: 'silent', absWorkingDir: root });
+  await build({ entryPoints: [path.join(root, 'packages/ui/src/index.ts')], outfile: out, bundle: true, platform: 'node', format: 'esm', jsx: 'automatic', external: ['react', 'react-dom', 'react/*', 'react-dom/*', 'mermaid', 'echarts', 'vega-embed', 'vega-interpreter', 'smiles-drawer', '@hpcc-js/wasm-graphviz', '3dmol'], banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" }, logLevel: 'silent', absWorkingDir: root });
   // Resolve its imports from the repository (copy next to node_modules).
   const local = path.join(root, 'node_modules', '.cache', `hx-ui-test-${process.pid}.mjs`);
   fs.mkdirSync(path.dirname(local), { recursive: true });

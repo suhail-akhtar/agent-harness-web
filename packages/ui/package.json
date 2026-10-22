@@ -10,7 +10,9 @@
     "./styles.css": "./src/styles.css"
   },
   "dependencies": {
+    "3dmol": "2.5.5",
     "@harness/plugin-ui": "0.1.0",
+    "@hpcc-js/wasm-graphviz": "1.29.2",
     "@tanstack/react-virtual": "3.14.13",
     "echarts": "6.1.0",
     "katex": "0.16.47",
@@ -20,6 +22,7 @@
     "rehype-katex": "7.0.1",
     "remark-gfm": "4.0.1",
     "remark-math": "6.0.0",
+    "smiles-drawer": "2.4.1",
     "vega": "6.4.0",
     "vega-embed": "7.2.0",
     "vega-interpreter": "2.3.2",
