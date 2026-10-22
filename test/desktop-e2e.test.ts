@@ -47,7 +47,7 @@ const longBundle = (n: number) => ({
 });
 
 test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
-  if (!fs.existsSync(electronExe)) { t.skip('Electron is not installed (npm install in the workspace)'); return; }
+  if (!fs.existsSync(electronExe)) { t.skip('Electron is not installed (npm install, or node node_modules/electron/install.js)'); return; }
   let pw: typeof import('playwright-core');
   try { pw = await import('playwright-core'); } catch { t.skip('playwright-core is not installed'); return; }
   const failed = ensureBuilt();

@@ -29,7 +29,8 @@
     "users": "node scripts/run.mjs src/server/users-cli.ts",
     "desktop:dev": "npm run dev -w @harness/desktop",
     "desktop:build": "npm run build:app -w @harness/desktop",
-    "desktop:test": "npm run test:e2e -w @harness/desktop"
+    "desktop:test": "npm run test:e2e -w @harness/desktop",
+    "postinstall": "node scripts/ensure-electron.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0",
