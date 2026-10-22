@@ -66,6 +66,38 @@ export interface Settings {
   maxParallelSubagents: number;
   /** Run blocking quality gates when the agent tries to finish, and send it back if any fail. */
   gatesOnStop?: boolean;
+  /**
+   * Which models agents may hand work to (sub-agents, linked sessions, workflow nodes with a
+   * model): the operator's cap, then (applyUserSettings) what the person allows within it.
+   * Data goes to that model's company: only with consent. Default: the session's own model.
+   */
+  delegation?: Delegation;
+  /** Linked sessions (start_session and friends): the person's choices. */
+  linkedSessions?: LinkedSessionSettings;
+}
+
+export interface Delegation { allowedModels: string[] | '*'; maxCostUsd?: number; requireApproval?: boolean }
+export interface LinkedSessionSettings { enabled?: boolean; autoContinue?: boolean; maxAutoContinues?: number }
+
+/** A delegation setting from JSON: model ids (or "*"), a positive cost cap, a yes/no. */
+export function cleanDelegation(v: unknown): Delegation | undefined {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const o = v as Record<string, unknown>;
+  const models = o.allowedModels === '*' ? '*' as const : Array.isArray(o.allowedModels) ? [...new Set(o.allowedModels.filter((m): m is string => typeof m === 'string' && /^[\w.:/-]{1,80}$/.test(m)))].slice(0, 50) : [];
+  const out: Delegation = { allowedModels: models };
+  if (typeof o.maxCostUsd === 'number' && Number.isFinite(o.maxCostUsd) && o.maxCostUsd > 0) out.maxCostUsd = o.maxCostUsd;
+  if (o.requireApproval === true) out.requireApproval = true;
+  return out;
+}
+
+function cleanLinked(v: unknown): LinkedSessionSettings | undefined {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const o = v as Record<string, unknown>;
+  const out: LinkedSessionSettings = {};
+  if (typeof o.enabled === 'boolean') out.enabled = o.enabled;
+  if (typeof o.autoContinue === 'boolean') out.autoContinue = o.autoContinue;
+  if (typeof o.maxAutoContinues === 'number' && Number.isFinite(o.maxAutoContinues) && o.maxAutoContinues >= 0) out.maxAutoContinues = Math.min(50, Math.floor(o.maxAutoContinues));
+  return Object.keys(out).length ? out : undefined;
 }
 
 export const defaultSettings = (): Settings => ({
@@ -80,6 +112,8 @@ export const defaultSettings = (): Settings => ({
   ...(process.env.HARNESS_SUBAGENT_MODEL ? { subagentModel: process.env.HARNESS_SUBAGENT_MODEL } : {}),
   ...(process.env.HARNESS_AUTO_MODEL ? { autoModel: process.env.HARNESS_AUTO_MODEL } : {}),
   ...(process.env.HARNESS_GATES_ON_STOP === '1' ? { gatesOnStop: true } : {}),
+  // The operator's cap on delegation: HARNESS_DELEGATION_MODELS ("*" or a comma list); none by default.
+  delegation: { allowedModels: process.env.HARNESS_DELEGATION_MODELS && process.env.HARNESS_DELEGATION_MODELS.trim() !== '*' ? process.env.HARNESS_DELEGATION_MODELS.split(',').map((m) => m.trim()).filter(Boolean) : '*' },
 });
 
 /**
@@ -109,6 +143,8 @@ export async function operatorSettings(env: NodeJS.ProcessEnv = process.env): Pr
   if (typeof j.subagentModel === 'string') base.subagentModel = j.subagentModel;
   if (typeof j.autoModel === 'string') base.autoModel = j.autoModel;
   if (typeof j.gatesOnStop === 'boolean') base.gatesOnStop = j.gatesOnStop;
+  const d = cleanDelegation((j as { delegation?: unknown }).delegation);
+  if (d) base.delegation = d;
   return base;
 }
 
@@ -164,6 +200,10 @@ export interface UserSettings {
   permissions: Rules; maxSteps?: number; maxCostUsd?: number; maxTurnMinutes?: number;
   /** Plugins' account-scope settings sections (their ui manifests' JSON Schemas), by plugin: values only, never code. */
   plugins?: Record<string, Record<string, unknown>>;
+  /** Models agents may delegate to (default: only the session's own), within the operator's cap. */
+  delegation?: Delegation;
+  /** Linked sessions: on for sessions without a desktop or web client, auto-continue of an idle parent and its cap. */
+  linkedSessions?: LinkedSessionSettings;
 }
 
 const PLUGIN_SETTINGS_MAX = 64 * 1024;
@@ -188,6 +228,10 @@ export function cleanUserSettings(j: unknown): UserSettings {
       .slice(0, 100)) as Record<string, Record<string, unknown>>;
     if (Object.keys(plugins).length && JSON.stringify(plugins).length <= PLUGIN_SETTINGS_MAX) out.plugins = plugins;
   }
+  const d = cleanDelegation(o.delegation);
+  if (d) out.delegation = d;
+  const l = cleanLinked(o.linkedSessions);
+  if (l) out.linkedSessions = l;
   return out;
 }
 
@@ -231,7 +275,22 @@ export function applyUserSettings(base: Settings, u: UserSettings): Settings {
     maxCostUsd: lower(base.maxCostUsd, u.maxCostUsd),
     // 0 is "no limit": a person may set one where the operator has none.
     maxTurnMinutes: u.maxTurnMinutes ? (base.maxTurnMinutes > 0 ? Math.min(base.maxTurnMinutes, u.maxTurnMinutes) : u.maxTurnMinutes) : base.maxTurnMinutes,
+    delegation: effectiveDelegation(base.delegation, u.delegation),
+    ...(u.linkedSessions ? { linkedSessions: u.linkedSessions } : {}),
   };
+}
+
+/**
+ * What the person allows, within the operator's cap: the models both allow ("*" on both: any),
+ * the lower cost cap, and approval when either asks for it. Without a choice of the person's,
+ * no other model (an empty list: agents stay on the session's own model).
+ */
+export function effectiveDelegation(cap: Delegation | undefined, mine: Delegation | undefined): Delegation {
+  const c = cap ?? { allowedModels: '*' as const };
+  const u = mine ?? { allowedModels: [] };
+  const models = u.allowedModels === '*' ? c.allowedModels : c.allowedModels === '*' ? u.allowedModels : u.allowedModels.filter((m) => (c.allowedModels as string[]).includes(m));
+  const costs = [c.maxCostUsd, u.maxCostUsd].filter((x): x is number => typeof x === 'number');
+  return { allowedModels: models, ...(costs.length ? { maxCostUsd: Math.min(...costs) } : {}), ...(c.requireApproval || u.requireApproval ? { requireApproval: true } : {}) };
 }
 
 export function mergeSettings(base: Settings, project: Partial<Settings>, trustProject: boolean): Settings {

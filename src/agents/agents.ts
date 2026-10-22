@@ -12,7 +12,7 @@ import { asList, parseFrontmatter } from '../util/frontmatter.ts';
 
 export const READ_ONLY_TOOLS = ['glob', 'grep', 'read', 'skill', 'tool_search', 'web_fetch'];
 /** Tools a sub-agent never gets: they talk to the user or spawn more agents. */
-export const INTERACTIVE_TOOLS = ['agent', 'ask_user', 'enter_plan_mode', 'exit_plan_mode', 'send_message', 'todo_write'];
+export const INTERACTIVE_TOOLS = ['agent', 'ask_user', 'dismiss_proposal', 'enter_plan_mode', 'exit_plan_mode', 'hand_off', 'list_sessions', 'mark_chapter', 'send_message', 'start_session', 'todo_write', 'desktop_command', 'desktop_describe', 'desktop_notify', 'desktop_open'];
 /** The ones a sub-agent does get when it may start its own (settings.maxSubagentDepth). */
 export const NESTING_TOOLS = ['agent', 'send_message'];
 
@@ -78,15 +78,28 @@ export async function loadAgentDir(dir: string, source: string): Promise<AgentDe
   return out;
 }
 
-/** The `agent` tool for one session: its enum and description list exactly the agents available. */
-export function makeAgentTool(agents: AgentDef[]): Tool {
+/** What the agent tool passes on: the brief, which agent, and optionally another model, an effort, a worktree of its own. */
+export interface SubagentArgs { description: string; prompt: string; type: string; model?: string; effort?: Effort; isolation?: 'worktree' }
+
+/**
+ * The `agent` tool for one session: its enum and description list exactly the agents available
+ * (with their tools), the other models it may use (`catalogue`, from the delegation setting) and,
+ * where the session's folder can have worktrees, `isolation`. Fixed for the session (cached).
+ */
+export function makeAgentTool(agents: AgentDef[], opts: { catalogue?: string; isolation?: boolean } = {}): Tool {
   const names = agents.map((a) => a.name);
-  const list = agents.map((a) => `- ${a.name}: ${a.description}`).join('\n');
+  const list = agents.map((a) => `- ${a.name}${a.tools ? ` [${a.tools.join(', ')}]` : ''}${a.model ? ` (${a.model})` : ''}: ${a.description}`).join('\n');
+  const extra: Record<string, unknown> = {};
+  if (opts.catalogue) {
+    extra.model = { type: 'string', description: 'Another allowed model (below).' };
+    extra.effort = { type: 'string', enum: EFFORTS };
+  }
+  if (opts.isolation) extra.isolation = { type: 'string', enum: ['worktree'], description: 'Work in a fresh git worktree on its own branch (kept and reported if it changed anything).' };
   return {
     kind: 'meta', parallelSafe: true, remoteable: false,
     spec: {
       name: 'agent',
-      description: `Delegate a self-contained task to a sub-agent with its own fresh context; it returns only its final report, with its id (send_message continues it later with its context). Write the prompt as a complete brief: the goal, what you already know, and what to report back. Several agent calls in one turn run in parallel. With run_in_background it starts and you get its id at once; keep working, and its report reaches you as a reminder when it finishes. Agents:\n${list}`,
+      description: `Delegate a self-contained task to a sub-agent with its own fresh context; it returns only its final report, with its id (send_message continues it later with its context). Write the prompt as a complete brief: the goal, what you already know, and what to report back. Several agent calls in one turn run in parallel. With run_in_background it starts and you get its id at once; keep working, and its report reaches you as a reminder when it finishes. Agents:\n${list}${opts.catalogue ? `\n${opts.catalogue}` : ''}`,
       input_schema: {
         type: 'object',
         properties: {
@@ -94,23 +107,35 @@ export function makeAgentTool(agents: AgentDef[]): Tool {
           prompt: { type: 'string' },
           type: { type: 'string', enum: names, description: 'Which agent; default explore.' },
           run_in_background: { type: 'boolean', description: 'Start it and return at once; its report arrives later.' },
+          ...extra,
         },
         required: ['description', 'prompt'],
       },
     },
-    summarize: (i) => `${bool(i.run_in_background) ? '[background] ' : ''}${str(i.type) || 'explore'}: ${str(i.description)}`,
+    summarize: (i) => `${bool(i.run_in_background) ? '[background] ' : ''}${str(i.type) || 'explore'}${str(i.model) ? ` on ${str(i.model)}` : ''}${str(i.isolation) ? ' (worktree)' : ''}: ${str(i.description)}`,
     async run(input, ctx) {
       if (!ctx.runSubagent) return { content: 'Sub-agents cannot start other sub-agents. Do the work directly.', is_error: true };
       const type = names.includes(str(input.type)) ? str(input.type) : 'explore';
-      const args = { description: str(input.description), prompt: str(input.prompt), type };
+      const effort = EFFORTS.find((e) => e === str(input.effort));
+      const args: SubagentArgs = {
+        description: str(input.description), prompt: str(input.prompt), type,
+        ...(str(input.model) ? { model: str(input.model) } : {}), ...(effort ? { effort } : {}),
+        ...(str(input.isolation) === 'worktree' ? { isolation: 'worktree' as const } : {}),
+      };
       const start = ctx.services?.tasks?.startAgent;
-      if (bool(input.run_in_background) && start) {
-        const id = await start(args);
-        return { content: `Started ${id} in the background. Keep working; its report reaches you as a reminder when it finishes. task_output ${id} shows its progress, task_stop ${id} stops it.` };
+      try {
+        if (bool(input.run_in_background) && start) {
+          const id = await start(args);
+          return { content: `Started ${id} in the background. Keep working; its report reaches you as a reminder when it finishes. task_output ${id} shows its progress, task_stop ${id} stops it.` };
+        }
+        const report = await ctx.runSubagent(args);
+        // Background work is the main agent's: a sub-agent's background request runs here and now.
+        return { content: bool(input.run_in_background) ? `${report}\n(Run in the foreground: only the main agent starts background agents.)` : report };
+      } catch (e) {
+        // A refused delegation or worktree: the agent hears why and can do otherwise.
+        if (ctx.signal.aborted) throw e;
+        return { content: (e as Error).message, is_error: true };
       }
-      const report = await ctx.runSubagent(args);
-      // Background work is the main agent's: a sub-agent's background request runs here and now.
-      return { content: bool(input.run_in_background) ? `${report}\n(Run in the foreground: only the main agent starts background agents.)` : report };
     },
   };
 }

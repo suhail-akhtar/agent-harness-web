@@ -56,6 +56,12 @@ export interface ToolServices {
     record(c: Omit<import('../ops/changes.ts').ChangeInput, 'by'> & { by?: string }): Promise<void>;
     query(q: import('../ops/changes.ts').ChangeQuery): Promise<import('../ops/changes.ts').ChangeEvent[]>;
   };
+  /** The session's artifacts (versioned, under .harness/artifacts). */
+  artifacts?: import('../core/artifacts.ts').ArtifactService;
+  /** The attached client app (desktop tools). */
+  client?: import('./desktop.ts').ClientService;
+  /** Linked sessions, proposals, messages between sessions, hand-off, chapters (the main agent only). */
+  sessions?: import('./sessions.ts').SessionsService;
 }
 
 export interface ToolContext {
@@ -66,10 +72,11 @@ export interface ToolContext {
   todos: Todo[];
   setTodos(todos: Todo[]): void;
   emit(e: HarnessEvent): void;
-  runSubagent?(args: { description: string; prompt: string; type: string }): Promise<string>;
+  runSubagent?(args: import('../agents/agents.ts').SubagentArgs): Promise<string>;
   /** Called with a file's real path before a tool changes it (checkpoints for rewind). */
   beforeWrite?(realPath: string): Promise<void>;
-  askUser?(question: string, options: string[]): Promise<string>;
+  /** With `form` (a JSON Schema the session checked), the answer is the filled-in object as JSON. */
+  askUser?(question: string, options: string[], form?: Record<string, unknown>): Promise<string>;
   proposePlan?(plan: string): Promise<{ approved: boolean; feedback?: string }>;
   isPlanMode?(): boolean;
   /** Switches the session into plan mode (the main agent only); refused where nobody could approve a plan. */

@@ -51,7 +51,7 @@ export function sanitizeUntrusted(text: string): string {
 
 /** Tags that could end a fence of outside data, or pose as the harness's own: their "<" becomes "&lt;". */
 export function neutralizeTags(text: string): string {
-  return text.replace(/<(\/?)(system-reminder|background_output|trigger_payload|outside_data|symptom|command-name|skill|brief|role|environment)\b/gi, '&lt;$1$2');
+  return text.replace(/<(\/?)(system-reminder|background_output|trigger_payload|outside_data|symptom|command-name|skill|brief|role|environment|side_session|session_message)\b/gi, '&lt;$1$2');
 }
 
 /**

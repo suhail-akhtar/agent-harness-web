@@ -69,8 +69,9 @@ export const OUTPUT_STYLES: Record<string, string> = {
 };
 const STYLE_MAX = 4000;
 
-export function systemPrompt(style?: string): string {
-  return style ? `${SYSTEM_PROMPT}\n\n# Output style\n${style}` : SYSTEM_PROMPT;
+/** The frozen prompt, then (both fixed when the session is made) its client's block and its output style. */
+export function systemPrompt(style?: string, client?: string): string {
+  return [SYSTEM_PROMPT, client, style ? `# Output style\n${style}` : ''].filter(Boolean).join('\n\n');
 }
 
 /**

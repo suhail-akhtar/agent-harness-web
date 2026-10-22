@@ -1,3 +1,5 @@
+import { type JsonSchema, validateFormSchema } from '../../packages/plugin-ui/src/manifest.ts';
+import { regex } from './tasks.ts';
 import type { Tool } from './types.ts';
 import { str } from './types.ts';
 
@@ -13,7 +15,7 @@ export const askUserTool: Tool = {
     description: 'Ask the user a question when you are blocked on a decision only they can make (a preference, a missing requirement). Offer 2-4 options when you can. Do not ask for things you can find out yourself.',
     input_schema: {
       type: 'object',
-      properties: { question: { type: 'string' }, options: { type: 'array', items: { type: 'string' } } },
+      properties: { question: { type: 'string' }, options: { type: 'array', items: { type: 'string' } }, form: { type: 'object', description: 'JSON Schema of fields to fill in; the answer is JSON.' } },
       required: ['question'],
     },
   },
@@ -21,10 +23,26 @@ export const askUserTool: Tool = {
   async run(input, ctx) {
     if (!ctx.askUser) return { content: 'No user is available to answer. Decide sensibly, state the assumption, and continue.', is_error: true };
     const options = Array.isArray(input.options) ? input.options.filter((o): o is string => typeof o === 'string').slice(0, 6) : [];
-    const answer = await ctx.askUser(str(input.question), options);
+    let form: Record<string, unknown> | undefined;
+    if (input.form !== undefined) {
+      try { form = checkForm(input.form); } catch (e) { return { content: `form is not usable: ${(e as Error).message}`, is_error: true }; }
+    }
+    const answer = await ctx.askUser(str(input.question), options, form);
     return { content: `The user answered: ${answer}` };
   },
 };
+
+/** A form schema an agent wrote: the plugin-ui subset, and every pattern one that cannot stall the server. */
+function checkForm(raw: unknown): Record<string, unknown> {
+  const schema = validateFormSchema(raw);
+  const walk = (s: JsonSchema): void => {
+    if (s.pattern !== undefined) { const r = regex(String(s.pattern)); if (!(r instanceof RegExp)) throw new Error(r.error); }
+    for (const p of Object.values(s.properties ?? {})) walk(p);
+    if (s.items) walk(s.items);
+  };
+  walk(schema);
+  return schema as Record<string, unknown>;
+}
 
 /**
  * The agent's own way into plan mode, for work that should be researched and

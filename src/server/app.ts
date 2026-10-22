@@ -29,6 +29,10 @@ import { SessionBusyError } from '../core/session.ts';
 import type { ImageBlock, Message } from '../core/types.ts';
 import { DESKTOP_TOKEN_PREFIX, DesktopAuthError, DesktopSignIn, withParams } from './desktop-auth.ts';
 import { effectiveSettings } from './settings-api.ts';
+import { ArtifactError } from '../core/artifacts.ts';
+import { CLIENT_KINDS, type ClientKind, ClientDeclError, cleanClient } from '../core/client.ts';
+import { LinkedError } from '../core/linked.ts';
+import { FormAnswerError } from '../core/session.ts';
 import { cleanName as cleanAttachmentName, deletePath, fileTree, gitDiff, gitLog, gitStatus, renamePath, saveUploads, searchFiles, WorkspaceError, WRITE_LIMIT, writeFile } from './workspace-api.ts';
 
 // The HTTP side: JSON API, an SSE stream per session, the built UI, and the
@@ -411,6 +415,13 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
 
   /** Members own their sessions; administrators see all of them. */
   const mayUse = (p: Principal, owner: string | undefined) => p.role === 'admin' || (!!p.id && owner === p.id);
+  /** The owner themselves (an administrator does not answer for someone's app or start their proposals); the operator owns what no account does. */
+  const ownsIt = (p: Principal, owner: string | undefined) => (owner === undefined ? !p.id && p.role === 'admin' : p.id === owner);
+  /** A subscriber that said which app it is (?client=desktop): counted as that app attached, when it is the owner listening. */
+  const clientKind = (url: URL, req: http.IncomingMessage): ClientKind | undefined => {
+    const k = url.searchParams.get('client') ?? (typeof req.headers['x-harness-client'] === 'string' ? req.headers['x-harness-client'].split('/')[0] : undefined);
+    return (CLIENT_KINDS as readonly string[]).includes(String(k)) ? k as ClientKind : undefined;
+  };
 
   function sessionFor(p: Principal, id: string): Session {
     const s = harness.sessions.get(id);
@@ -543,13 +554,13 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     ].join('\n');
     const blocks = (imgs: typeof atts): ImageBlock[] => imgs.map((a) => ({ type: 'image', media_type: a.mediaType, data: a.data.toString('base64') }));
     try {
-      const state = await s.send(`${text}\n\n${note(images, saved)}`.trim(), images.length ? { images: blocks(images) } : {});
+      const state = await s.send(`${text}\n\n${note(images, saved)}`.trim(), images.length ? { images: blocks(images), origin: 'person' } : { origin: 'person' });
       return { state, images: images.map((a) => cleanAttachmentName(a.name)), files: saved };
     } catch (e) {
       if (!(e instanceof SessionBusyError)) throw e;
       // The session started working meanwhile: the images are saved as files instead.
       saved = [...saved, ...await save(images)];
-      return { state: await s.send(`${text}\n\n${note([], saved)}`.trim()), images: [], files: saved };
+      return { state: await s.send(`${text}\n\n${note([], saved)}`.trim(), { origin: 'person' }), images: [], files: saved };
     }
   }
 
@@ -599,6 +610,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     f.meta.forkedFrom = { id: s.meta.id, turn };
     f.meta.turns = turn;
     if (s.meta.outputStyle) f.meta.outputStyle = s.meta.outputStyle;
+    if (s.meta.client) { f.meta.client = s.meta.client; f.meta.clientPrompt = s.meta.clientPrompt; }
     if (s.meta.gitUrl) f.meta.gitUrl = s.meta.gitUrl;
     const first = history.find(typed);
     if (first && s.meta.firstPrompt) f.meta.firstPrompt = s.meta.firstPrompt;
@@ -629,9 +641,16 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     const topics = new Set((url.searchParams.get('topics') ?? '').split(',').map((t) => t.trim()).filter(Boolean));
     const visible = (e: HubEvent) => ('all' in e.audience || mayUse(me, e.audience.owner)) && (!topics.size || topics.has(e.topic));
     res.write('retry: 3000\n\n');
-    const off = harness.events.subscribe(after, (e) => { if (visible(e)) res.write(`id: ${e.seq}\ndata: ${JSON.stringify({ seq: e.seq, topic: e.topic, payload: e.payload })}\n\n`); });
+    // A desktop listening here is attached to every session of this person that declared it.
+    const kind = clientKind(url, req);
+    const detach = kind ? harness.clients.attach({ kind, owner: me.id }) : () => {};
+    const off = harness.events.subscribe(after, (e) => {
+      // Desktop calls go only to the owner's own app (an administrator sees sessions, not their calls).
+      if (e.topic === 'client' && !ownsIt(me, (e.audience as { owner?: string }).owner)) return;
+      if (visible(e)) res.write(`id: ${e.seq}\ndata: ${JSON.stringify({ seq: e.seq, topic: e.topic, payload: e.payload })}\n\n`);
+    });
     const ping = setInterval(() => res.write(': ping\n\n'), 20_000);
-    req.on('close', () => { off(); clearInterval(ping); });
+    req.on('close', () => { off(); clearInterval(ping); detach(); });
   }
 
   async function route(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -957,6 +976,8 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     }
     if (p === '/api/sessions' && method === 'POST') {
       const b = await readJson(req);
+      let client: ReturnType<typeof cleanClient> | undefined;
+      try { client = b.client === undefined || b.client === null ? undefined : cleanClient(b.client); } catch (e) { if (e instanceof ClientDeclError) throw new HttpError(400, e.message); throw e; }
       const model = String(b.model ?? registry.listModels().find((m) => m.available)?.id ?? '');
       const kind = b.runtime === 'local' || b.runtime === 'companion' ? b.runtime : 'docker';
       const sandbox = kind === 'local' && ['auto', 'bwrap', 'seatbelt', 'docker', 'off'].includes(String(b.sandbox)) ? b.sandbox as SessionMeta['runtime']['sandbox'] : undefined;
@@ -1005,6 +1026,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         // A server folder that is a git repository can get its own worktree and branch (parallel sessions on one repository).
         worktree: kind === 'local' && !!runtime.path && b.worktree === true,
         outputStyle: typeof b.outputStyle === 'string' && b.outputStyle ? b.outputStyle : undefined,
+        ...(client ? { client } : {}),
       }).catch((e: Error) => { throw e.name === 'WorktreeError' || e.constructor.name === 'WorktreeError' || /output style/.test(e.message) ? new HttpError(400, e.message) : e; });
       return send(res, 201, s.meta);
     }
@@ -1226,6 +1248,70 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       throw new HttpError(404, 'not found');
     }
 
+    // ---- artifacts: a session's (versioned), and across the person's sessions (the Library) ----
+    const am = /^\/api\/sessions\/([a-f0-9]{16})\/artifacts(?:\/([a-z0-9][a-z0-9-]{2,60}))?$/.exec(p);
+    if (am && method === 'GET') {
+      const s = sessionFor(me, am[1]!);
+      const store = s.artifactStore();
+      try {
+        if (!am[2]) return send(res, 200, await store.list());
+        const v = url.searchParams.get('version');
+        const r = await store.get(am[2], v ? Number(v) : undefined);
+        const binary = r.meta.kind === 'image' || r.meta.kind === 'pdf';
+        if (url.searchParams.get('raw') === '1') {
+          // Never an active page of this origin: a download, sandboxed, not sniffed.
+          res.writeHead(200, {
+            'content-type': r.meta.contentType, 'content-disposition': `attachment; filename="${r.meta.id}-v${r.v.n}.${r.v.file.split('.').pop()}"`,
+            'content-security-policy': "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:", 'x-content-type-options': 'nosniff', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer',
+          });
+          return void res.end(binary ? r.data : Buffer.from((await s.loadSecrets()).redact(r.data.toString('utf8'))));
+        }
+        return send(res, 200, { meta: r.meta, version: r.v.n, contentType: r.meta.contentType, ...(binary ? { base64: r.data.toString('base64') } : { content: (await s.loadSecrets()).redact(r.data.toString('utf8')) }) });
+      } catch (e) { if (e instanceof ArtifactError) throw new HttpError(e.status, e.message); throw e; }
+    }
+    if (p === '/api/artifacts' && method === 'GET') {
+      await sessions.sync();
+      const needle = (url.searchParams.get('query') ?? '').trim().toLowerCase();
+      const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit')) || 50));
+      const out: Record<string, unknown>[] = [];
+      for (const meta of sessions.list().filter((x) => mayUse(me, x.owner))) {
+        const s = sessions.get(meta.id);
+        if (!s) continue;
+        for (const a of await s.artifactStore().list().catch(() => [])) {
+          if (needle && !`${a.title} ${a.id} ${a.kind} ${a.language ?? ''}`.toLowerCase().includes(needle)) continue;
+          out.push({ ...a, sessionId: meta.id, sessionTitle: meta.title });
+        }
+      }
+      return send(res, 200, out.sort((x, y) => Number(y.updatedAt) - Number(x.updatedAt)).slice(0, limit));
+    }
+
+    // ---- proposals: sessions an agent offered to start; the owner starts or dismisses them ----
+    const pm = /^\/api\/proposals\/(prop_[a-f0-9]{12})\/(start|dismiss)$/.exec(p);
+    if (pm && method === 'POST') {
+      const linked = sessions.linked;
+      const prop = await linked.proposal(pm[1]!);
+      const parent = prop ? sessions.get(prop.sessionId) : undefined;
+      if (!prop || !ownsIt(me, prop.owner) || (parent && !ownsIt(me, parent.meta.owner))) throw new HttpError(404, 'no such proposal');
+      try {
+        if (pm[2] === 'dismiss') return send(res, 200, await linked.dismiss(prop.id));
+        limited(messageLimiter, me);
+        const child = await linked.startProposal(prop.id);
+        return send(res, 201, { proposal: prop.id, session: child.meta });
+      } catch (e) { if (e instanceof LinkedError) throw new HttpError(e.status, e.message); throw e; }
+    }
+
+    // ---- a desktop tool's answer from the attached app: the owner's, once per call ----
+    const cr = /^\/api\/sessions\/([a-f0-9]{16})\/client-result$/.exec(p);
+    if (cr && method === 'POST') {
+      const s = sessionFor(me, cr[1]!);
+      if (!ownsIt(me, s.meta.owner)) throw new HttpError(403, 'only the session\'s owner\'s app answers its desktop calls');
+      const b = await readJson(req, 512 * 1024);
+      if (typeof b.callId !== 'string' || typeof b.ok !== 'boolean') throw new HttpError(400, 'callId and ok are required');
+      const ok = s.answerClientCall(b.callId, { ok: b.ok, ...(b.ok ? { result: b.result } : { error: typeof b.error === 'string' ? b.error.slice(0, 2000) : 'failed' }), ...(b.untrusted === true ? { untrusted: true } : {}) });
+      if (!ok) throw new HttpError(404, 'no such call waiting (answered already, timed out, or stopped)');
+      return send(res, 200, { ok: true });
+    }
+
     const m = /^\/api\/sessions\/([a-f0-9]{16})(?:\/(\w+))?$/.exec(p);
     if (m) {
       const s = sessionFor(me, m[1]!);
@@ -1282,7 +1368,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         // A message to a working session joins its turn; one to an idle session starts a turn.
         if (s.status === 'idle') capped('running', s.meta.owner);
         const text = b.text.slice(0, 200_000);
-        if (b.attachments === undefined) return send(res, 202, { state: await s.send(text) });
+        if (b.attachments === undefined) return send(res, 202, { state: await s.send(text, { origin: 'person' }) });
         return send(res, 202, await sendWithAttachments(s, text, b.attachments));
       }
       if (action === 'abort' && method === 'POST') { s.abort(); return send(res, 200, { ok: true }); }
@@ -1328,15 +1414,27 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       }
       if (action === 'respond' && method === 'POST') {
         const b = await readJson(req);
-        const ok = s.respond(String(b.requestId), { decision: String(b.decision ?? 'deny'), feedback: typeof b.feedback === 'string' ? b.feedback : undefined, answer: typeof b.answer === 'string' ? b.answer : undefined });
+        // A question with a form takes its answer as an object (or its JSON), checked against the form.
+        let answer: string | undefined;
+        try { answer = s.formAnswer(String(b.requestId), b.answer); } catch (e) { if (e instanceof FormAnswerError) throw new HttpError(400, e.message); throw e; }
+        let ok: boolean;
+        try { ok = s.respond(String(b.requestId), { decision: String(b.decision ?? 'deny'), feedback: typeof b.feedback === 'string' ? b.feedback : undefined, answer }); } catch (e) { if (e instanceof FormAnswerError) throw new HttpError(400, e.message); throw e; }
         return send(res, ok ? 200 : 404, { ok });
       }
+      if (action === 'proposals' && method === 'GET') return send(res, 200, await sessions.linked.proposals(s.meta.id));
       if (action === 'events' && method === 'GET') {
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive', 'x-accel-buffering': 'no' });
         const after = Number(url.searchParams.get('after') ?? req.headers['last-event-id'] ?? 0) || 0;
-        const off = s.subscribe(after, (e) => res.write(`id: ${e.seq}\ndata: ${JSON.stringify(e)}\n\n`));
+        // The owner's app listening here (?client=desktop) is attached to this session while the stream is open.
+        const kind = clientKind(url, req);
+        const detach = kind && ownsIt(me, s.meta.owner) ? harness.clients.attach({ kind, owner: s.meta.owner, sessionId: s.meta.id }) : () => {};
+        const off = s.subscribe(after, (e) => {
+          // A desktop call is for the owner's app only.
+          if ((e.event.kind === 'client_call' || e.event.kind === 'client_call_end') && !ownsIt(me, s.meta.owner)) return;
+          res.write(`id: ${e.seq}\ndata: ${JSON.stringify(e)}\n\n`);
+        });
         const ping = setInterval(() => res.write(': ping\n\n'), 20_000);
-        req.on('close', () => { off(); clearInterval(ping); });
+        req.on('close', () => { off(); clearInterval(ping); detach(); });
         return;
       }
       if (action === 'files' && method === 'GET') {

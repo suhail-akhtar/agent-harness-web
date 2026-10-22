@@ -4,6 +4,7 @@ import { Session, SessionElsewhereError, type SessionDeps, type SessionMeta } fr
 import type { Effort } from './models.ts';
 import type { PermissionMode } from './types.ts';
 import type { LeaseRecord } from '../util/lease.ts';
+import { LinkedSessions } from './linked.ts';
 
 export class SessionManager {
   private sessions = new Map<string, Session>();
@@ -12,8 +13,12 @@ export class SessionManager {
   private synced = 0;
   private syncing?: Promise<void>;
 
+  /** Linked sessions and proposals across this manager's sessions. */
+  readonly linked: LinkedSessions;
+
   constructor(deps: SessionDeps) {
-    this.deps = deps;
+    this.linked = new LinkedSessions({ manager: this, dataDir: deps.dataDir, mayRun: (o) => deps.mayRun?.(o), spendOver: (o) => deps.spend?.over(o) });
+    this.deps = { ...deps, linked: this.linked };
   }
 
   get registry() { return this.deps.registry; }

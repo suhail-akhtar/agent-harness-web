@@ -35,7 +35,7 @@ export interface TaskService {
   /** Registers a shell bash started in the background; returns its task id. */
   addShell(s: { id: string; pid: string; log: string; exitFile: string; command: string; description?: string }): string;
   /** Starts a sub-agent in the background (main agent only): returns its id at once. */
-  startAgent?(a: { description: string; prompt: string; type: string }): Promise<string>;
+  startAgent?(a: import('../agents/agents.ts').SubagentArgs): Promise<string>;
   /** Continues a sub-agent the caller started, with its context intact. */
   sendMessage?(to: string, message: string, background: boolean, signal: AbortSignal): Promise<string>;
   /** Watches a task in the background (main agent only); fires as a reminder. */
@@ -275,29 +275,43 @@ export function describeWatch(id: string, p: RegExp | undefined, r: WatchResult,
   return `Timed out after ${age(ms)} watching ${id} (still ${r.status})${p ? `: no line matched /${p.source}/` : ''}.${tail}`;
 }
 
-export const sendMessageTool: Tool = {
-  // Like the agent tool: it runs a sub-agent whose every call is checked.
-  kind: 'meta', parallelSafe: true, remoteable: false,
-  spec: {
-    name: 'send_message',
-    description: 'Continue a sub-agent you started (by its id, e.g. general-2), with its context intact: a follow-up question, a correction, the next piece of work. A finished agent runs again and you get its new report (with run_in_background, later as a reminder). A background agent still working sees the message at its next step. The last 20 finished sub-agents of the session are kept.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        to: { type: 'string', description: 'The agent id.' },
-        message: { type: 'string' },
-        run_in_background: { type: 'boolean' },
+/** A session id (16 hex characters): send_message goes to that session rather than a sub-agent. */
+const SESSION_ID = /^[a-f0-9]{16}$/;
+
+/** send_message; with `sessions`, it also reaches other sessions of the account (linked sessions on). */
+export function makeSendMessageTool(sessions: boolean): Tool {
+  return {
+    // Like the agent tool: it runs a sub-agent whose every call is checked.
+    kind: 'meta', parallelSafe: true, remoteable: false,
+    spec: {
+      name: 'send_message',
+      description: `Continue a sub-agent you started (by its id, e.g. general-2), with its context intact: a follow-up question, a correction, the next piece of work. A finished agent runs again and you get its new report (with run_in_background, later as a reminder). A background agent still working sees the message at its next step. The last 20 finished sub-agents of the session are kept.${sessions ? ' To a session id (list_sessions): a note it sees at its next step (an idle one starts a turn).' : ''}`,
+      input_schema: {
+        type: 'object',
+        properties: {
+          to: { type: 'string', description: sessions ? 'The agent id or session id.' : 'The agent id.' },
+          message: { type: 'string' },
+          run_in_background: { type: 'boolean' },
+        },
+        required: ['to', 'message'],
       },
-      required: ['to', 'message'],
     },
-  },
-  summarize: (i) => `${bool(i.run_in_background) ? '[background] ' : ''}message ${str(i.to)}: ${str(i.message).slice(0, 80)}`,
-  async run(input, ctx) {
-    const svc = tasksOf(ctx);
-    if (!svc?.sendMessage) return { content: 'Sub-agents cannot be continued from here.', is_error: true };
-    if (!str(input.message).trim()) return { content: 'message is empty', is_error: true };
-    try { return { content: await svc.sendMessage(str(input.to), str(input.message), bool(input.run_in_background), ctx.signal) }; } catch (e) { return { content: (e as Error).message, is_error: true }; }
-  },
-};
+    summarize: (i) => `${bool(i.run_in_background) ? '[background] ' : ''}message ${str(i.to)}: ${str(i.message).slice(0, 80)}`,
+    async run(input, ctx) {
+      if (!str(input.message).trim()) return { content: 'message is empty', is_error: true };
+      const to = str(input.to).trim();
+      const ss = ctx.services?.sessions;
+      if (SESSION_ID.test(to)) {
+        if (!ss || !sessions) return { content: 'Messages to other sessions are not available here.', is_error: true };
+        try { return { content: await ss.send(to, str(input.message)) }; } catch (e) { return { content: (e as Error).message, is_error: true }; }
+      }
+      const svc = tasksOf(ctx);
+      if (!svc?.sendMessage) return { content: 'Sub-agents cannot be continued from here.', is_error: true };
+      try { return { content: await svc.sendMessage(to, str(input.message), bool(input.run_in_background), ctx.signal) }; } catch (e) { return { content: (e as Error).message, is_error: true }; }
+    },
+  };
+}
+
+export const sendMessageTool: Tool = makeSendMessageTool(false);
 
 export const TASK_TOOLS: Tool[] = [monitorTool, sendMessageTool, taskListTool, taskOutputTool, taskStopTool];

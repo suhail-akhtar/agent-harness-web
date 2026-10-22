@@ -8,7 +8,7 @@ import type { HarnessEvent } from '../core/types.ts';
 // last events for replay (Last-Event-ID), numbered from 1 each time the server starts.
 // With several servers on one data folder, each streams what happens on it.
 
-export const EVENT_TOPICS = ['sessions', 'session', 'approvals', 'schedules', 'plugins', 'notices'] as const;
+export const EVENT_TOPICS = ['sessions', 'session', 'approvals', 'schedules', 'plugins', 'notices', 'proposals', 'linked', 'artifacts', 'chapters', 'client'] as const;
 export type EventTopic = typeof EVENT_TOPICS[number];
 
 /** Who may see an event: everyone signed in, or whoever may use what `owner` owns (administrators see all of it). */
@@ -76,6 +76,22 @@ export class EventHub {
       this.publish('approvals', { type: 'resolved', sessionId: s.meta.id, requestId: ev.requestId, at: Date.now(), decision: ev.decision }, owner);
     } else if (ev.kind === 'notice' && ev.level !== 'info') {
       this.publish('notices', { level: ev.level, text: ev.text, sessionId: s.meta.id }, owner);
+    } else if (ev.kind === 'session_proposal') {
+      const { kind: _k, ...p } = ev;
+      this.publish('proposals', { type: 'added', sessionId: s.meta.id, ...p }, owner);
+    } else if (ev.kind === 'proposal_resolved') {
+      this.publish('proposals', { type: ev.status, sessionId: s.meta.id, id: ev.id, ...(ev.sessionId ? { childId: ev.sessionId } : {}) }, owner);
+    } else if (ev.kind === 'side_session') {
+      // A linked session started, reported or got a message: on the parent's (or the receiver's) behalf.
+      this.publish('linked', { type: ev.phase, sessionId: s.meta.id, id: ev.id, title: ev.title, ...(ev.reason ? { reason: ev.reason } : {}), ...(ev.preview ? { preview: ev.preview } : {}) }, owner);
+    } else if (ev.kind === 'artifact') {
+      this.publish('artifacts', { sessionId: s.meta.id, ...ev.artifact }, owner);
+    } else if (ev.kind === 'chapter') {
+      this.publish('chapters', { sessionId: s.meta.id, index: ev.index, title: ev.title, ...(ev.summary ? { summary: ev.summary } : {}) }, owner);
+    } else if (ev.kind === 'client_call' || ev.kind === 'client_call_end') {
+      // For an app attached through this stream rather than the session's own.
+      const { kind, ...c } = ev;
+      this.publish('client', { type: kind === 'client_call' ? 'call' : 'end', sessionId: s.meta.id, ...c }, owner);
     }
   }
 
