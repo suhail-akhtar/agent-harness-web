@@ -147,6 +147,12 @@ export class Agent {
     if (r) setHookRedactor(cfg.settings, (p) => r.redactDeep(p));
   }
 
+  /** The tools changed (a desktop app's plugin switched on or off: its guide skill came or went): the definitions sent follow. */
+  setTools(tools: AgentConfig['tools']): void {
+    this.cfg = { ...this.cfg, tools };
+    this.specs = tools.map((t) => t.spec).sort((a, b) => (a.name < b.name ? -1 : 1));
+  }
+
   /** Appends a message with any vault value in it replaced (the copy kept is the one returned). */
   append(m: Message): Message {
     const clean = this.redact(m);

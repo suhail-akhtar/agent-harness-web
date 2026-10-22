@@ -49,7 +49,8 @@ import type { ChangeService } from '../ops/changes.ts';
 import { ruleMatches } from './permissions.ts';
 import { ArtifactError, type ArtifactMeta, type ArtifactService, ArtifactStore, artifactTool } from './artifacts.ts';
 import { DATA_TOOLS, dataServiceFor, dataToolsFor } from '../data/tools.ts';
-import { type ClientDecl, clientPrompt, clientSkillDirs, type ClientPresence, type DesktopTool } from './client.ts';
+import { type ClientDecl, clientPrompt, clientSkillDirs, cleanClientPlugins, type ClientPresence, type DesktopTool } from './client.ts';
+import { guideSkills, type PluginGuideInfo } from '../plugins/guides.ts';
 import { delegableModels, delegationRefusal, modelCatalogue } from './delegation.ts';
 import type { LinkedSessions } from './linked.ts';
 import { DESKTOP_TOOL_IMPLS, type ClientService } from '../tools/desktop.ts';
@@ -230,7 +231,7 @@ export interface SessionDeps {
   /** Which clients are attached (live event-stream subscribers), for desktop tools. */
   clients?: ClientPresence;
   /** The plugins the server has, with their UI halves (agent-callable commands). */
-  plugins?: () => { name: string; enabled: boolean; source: string; ui?: UiManifest }[];
+  plugins?: () => Array<{ name: string; enabled: boolean; source: string; ui?: UiManifest; description?: string; dir?: string; guide?: PluginGuideInfo; loaded?: { contributes: string[] } }>;
   /** The account's running-session cap (set by the HTTP server): why one more turn may not start. */
   mayRun?: (owner: string | undefined) => string | undefined;
   /** Data, dashboards and reports (core.dashboards): the datasource, dataset, model and dashboard tools. */
@@ -254,6 +255,9 @@ export class SessionElsewhereError extends Error {
 }
 
 /** What one session can use, assembled once (the tool list never changes mid-session: it would break the cache). */
+/** The server's own word on one of its plugins for a client's plugin index: the guide's purpose of a plugin that is on. */
+const serverPurpose = (deps: SessionDeps) => (name: string): string | undefined => deps.plugins?.().find((x) => x.name === name && x.enabled && x.guide)?.guide?.purpose;
+
 interface Toolbox {
   tools: Tool[];
   agents: AgentDef[];
@@ -416,7 +420,7 @@ export class Session {
       ...(opts.owner ? { owner: opts.owner } : {}),
       ...(opts.gitUrl ? { gitUrl: opts.gitUrl } : {}),
       // Rendered now and stored: the system prompt never changes under the session.
-      ...(opts.client ? { client: opts.client, clientPrompt: clientPrompt(opts.client, { artifacts: true }) } : {}),
+      ...(opts.client ? { client: opts.client, clientPrompt: clientPrompt(opts.client, { artifacts: true, purpose: serverPurpose(deps) }) } : {}),
     }, deps);
     await fs.mkdir(s.dir, { recursive: true });
     if (opts.runtime.network === 'allowlist') {
@@ -1254,7 +1258,56 @@ export class Session {
 
   private getToolbox(host: ToolHost): Promise<Toolbox> {
     this.toolbox ??= this.buildToolbox(host).catch((err) => { this.toolbox = undefined; throw err; });
+    // The app's plugins changed since: its guide skills follow (the rest of the toolbox stays as it was).
+    if (this.guidesStale) { this.guidesStale = false; this.toolbox = this.toolbox.then((tb) => this.withGuides(tb)); }
     return this.toolbox;
+  }
+
+  /** Set when the app's plugin index changed: the guide skills are rebuilt at the next use of the toolbox. */
+  private guidesStale = false;
+
+  /** The guide skills of the client's plugin index (src/plugins/guides.ts), in place of any skill of the same name. */
+  private guideSkillsNow(tools: () => Tool[]): Skill[] {
+    const c = this.meta.client;
+    if (!c?.plugins?.length) return [];
+    return guideSkills({
+      client: c, registry: this.deps.registry, plugins: () => this.deps.plugins?.() ?? [], tools,
+      askApp: async (plugin, signal) => {
+        const r = await this.clientCall('desktop_describe', { plugin, guide: true }, signal);
+        const text = r.ok ? (r.result as { guideText?: unknown } | undefined)?.guideText : undefined;
+        if (typeof text !== 'string') throw new Error(`The app did not give the guide of ${plugin}${r.ok ? '' : `: ${r.error ?? 'it refused'}`}. desktop_describe {"plugin": "${plugin}"} describes it.`);
+        return text;
+      },
+    });
+  }
+
+  /** The toolbox with the guide skills of the client's current plugin index (and a skill tool that knows them). */
+  private withGuides(tb: Toolbox): Toolbox {
+    const tools = tb.tools.filter((t) => t.spec.name !== 'skill');
+    const guides = this.guideSkillsNow(() => tools);
+    const names = new Set(guides.map((s) => s.name));
+    const skills = [...tb.skills.filter((s) => !s.guide && !names.has(s.name)), ...guides];
+    if (skills.length) tools.push(makeSkillTool(skills));
+    return { ...tb, skills, tools: sortTools(tools) };
+  }
+
+  /**
+   * The app's plugins changed (one switched on or off): the plugin index of the client block is
+   * rendered again (only its lines change) and the guide skills follow, from the next turn. A session
+   * no desktop app declared is left as it is. Returns whether anything changed.
+   */
+  async setClientPlugins(raw: unknown): Promise<boolean> {
+    const c = this.meta.client;
+    if (!c || c.kind !== 'desktop') return false;
+    const plugins = cleanClientPlugins(raw);
+    if (JSON.stringify(plugins) === JSON.stringify(c.plugins ?? [])) return false;
+    const next: ClientDecl = { ...c };
+    if (plugins.length) next.plugins = plugins; else delete next.plugins;
+    this.meta.client = next;
+    this.meta.clientPrompt = clientPrompt(next, { artifacts: true, purpose: serverPurpose(this.deps) });
+    if (this.toolbox) this.guidesStale = true;
+    await this.saveMeta();
+    return true;
   }
 
   private async buildToolbox(host: ToolHost): Promise<Toolbox> {
@@ -1273,6 +1326,9 @@ export class Session {
     // Skills for what the person's app draws (the diagram spec, for an app that renders `diagram`): listed only there.
     for (const s of await clientSkills(this.meta.client?.renderers ?? [])) if (!seen.has(s.name)) { seen.add(s.name); skills.push(s); }
     for (const s of await workspaceSkills(host).catch(() => [])) if (!seen.has(s.name)) { seen.add(s.name); skills.push(s); }
+    // A desktop session's plugin guides (one per plugin of its index), in place of a plugin's plain skill of the same name.
+    const guides = this.guideSkillsNow(() => tools);
+    if (guides.length) { const g = new Set(guides.map((s) => s.name)); skills.splice(0, skills.length, ...skills.filter((s) => !g.has(s.name)), ...guides); }
     if (skills.length) tools.push(makeSkillTool(skills));
 
     // Agents: built-in, plugins, then the workspace's definitions.
@@ -1435,7 +1491,9 @@ export class Session {
       this.agent.tainted = !!this.meta.tainted || this.agent.messages.some((m) => m.content.some((b) => b.type === 'tool_use' && (untrusted.has(b.name) || b.name.startsWith('mcp__') || b.name === 'tool_call')));
     } else {
       // Model or effort may have changed between turns; the context stays.
+      const toolsChanged = this.agent.cfg.tools !== cfg.tools;
       this.agent.cfg = { ...this.agent.cfg, ...cfg };
+      if (toolsChanged) this.agent.setTools(cfg.tools);
     }
     return this.agent;
   }

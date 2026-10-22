@@ -16,6 +16,8 @@ export interface Skill {
   name: string;
   description: string;
   source: string;
+  /** A plugin's guide (src/plugins/guides.ts): the plugin it guides. Listed in the client block, not in <skills>. */
+  guide?: string;
   /** Returns SKILL.md's body, or another file in the skill's folder. */
   load(file?: string): Promise<string>;
   files(): Promise<string[]>;
@@ -117,8 +119,10 @@ export async function workspaceSkills(host: ToolHost): Promise<Skill[]> {
 }
 
 export function skillsListing(skills: Skill[]): string {
-  if (!skills.length) return '';
-  return `<skills>\nSkills hold instructions for particular kinds of work. When a task matches one, load it with the skill tool before starting.\n${skills.map((s) => `- ${s.name}: ${s.description}`).join('\n')}\n</skills>`;
+  // Plugin guides are listed in the client block of the system prompt (one line per plugin), not here.
+  const listed = skills.filter((s) => !s.guide);
+  if (!listed.length) return '';
+  return `<skills>\nSkills hold instructions for particular kinds of work. When a task matches one, load it with the skill tool before starting.\n${listed.map((s) => `- ${s.name}: ${s.description}`).join('\n')}\n</skills>`;
 }
 
 export function makeSkillTool(skills: Skill[]): Tool {

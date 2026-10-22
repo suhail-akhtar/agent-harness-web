@@ -26,6 +26,7 @@ import { Registry, type LoadedPlugin, type PluginParts } from './registry.ts';
 import { VaultStore } from '../vault/store.ts';
 import { createBridge, type PluginBridge } from '../plugins/host.ts';
 import { type PluginUi, readPluginUi } from '../plugins/ui.ts';
+import { type PluginGuideInfo, readPluginGuide } from '../plugins/guides.ts';
 import type { PluginManifest } from '../plugins/api.ts';
 import { readJson, withFileLock, writeFileAtomic } from '../util/shared-file.ts';
 import { within } from '../tools/paths.ts';
@@ -178,6 +179,8 @@ export interface PluginEntry extends PluginUi {
   loaded?: LoadedPlugin;
   /** Why it is not loaded (a refused signature, a failing setup). */
   error?: string;
+  /** Its guide for agents (src/plugins/guides.ts). */
+  guide?: PluginGuideInfo;
 }
 
 export class PluginStateError extends Error {
@@ -250,6 +253,8 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       ...await readPluginUi(dir, m.ui, trustOf(signature)),
     };
     if (e.uiError) log(`plugin ${m.name}: its ui section is not used: ${e.uiError}`);
+    // Its guide for agents (ui.guide, or a <name>-guide skill): desktop sessions list it and load it on demand.
+    Object.assign(e, await readPluginGuide(dir, m, e.ui));
     entries.set(m.name, e);
     return e;
   }

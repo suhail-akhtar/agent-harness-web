@@ -628,6 +628,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     name: e.name, version: e.version, description: e.description, source: e.source, enabled: e.enabled, required: e.required,
     contributes: e.loaded?.contributes ?? [], signature: e.signature ?? null, permissions: e.loaded?.permissions ?? null,
     ...(e.ui ? { ui: e.ui, uiBase: `/api/plugins/${e.name}/ui/` } : {}), ...(e.uiError ? { uiError: e.uiError } : {}), ...(e.uiHash ? { uiHash: e.uiHash } : {}),
+    ...(e.guide ? { guide: { purpose: e.guide.purpose } } : {}),
     ...(e.error ? { error: e.error } : {}),
   });
 
@@ -1363,6 +1364,10 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         if (typeof b.pinned === 'boolean') { if (b.pinned) s.meta.pinned = true; else delete s.meta.pinned; }
         if (typeof b.group === 'string') { const g = b.group.replace(/\s+/g, ' ').trim().slice(0, 60); if (g) s.meta.group = g; else delete s.meta.group; }
         if (typeof b.pinned === 'boolean' || typeof b.group === 'string') await s.saveMeta();
+        // The app's plugins changed (one switched on or off): the plugin index of the client block and the guide skills follow, from the next turn.
+        if (b.clientPlugins !== undefined) {
+          try { await s.setClientPlugins(b.clientPlugins); } catch (e) { if ((e as Error).name === 'ClientDeclError' || e instanceof ClientDeclError) throw new HttpError(400, (e as Error).message); throw e; }
+        }
         harness.events.sessionChanged('updated', s);
         return send(res, 200, s.meta);
       }
