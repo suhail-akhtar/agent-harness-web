@@ -9,18 +9,20 @@
  * Untrusted by construction: no rehype-raw (HTML in the text is shown as text, never parsed into
  * the DOM), every URL goes through safe.ts, and markup only ever runs inside a sandboxed frame.
  *
- * Streaming: the text is split into top-level blocks (blocks.ts) and each is a memoised component,
- * so a delta re-parses only the last block and finished blocks never re-render or jump.
+ * Streaming: the text is split into top-level blocks (blocks.ts) and each is a memoised component
+ * keyed by its position, so a delta re-parses only the last block and finished blocks never re-render
+ * or jump. Footnotes and link references reach across blocks: each block gets the definitions it
+ * uses, and the footnotes are one section after the last block, drawn once the reply is complete.
  */
 
-import React, { useCallback, useId, useMemo } from 'react';
+import React, { useContext, useId, useMemo, useRef } from 'react';
 import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { KATEX_MACROS, KATEX_OPTIONS } from './katex-setup.ts';
 import { protectCurrency } from './currency.ts';
-import { splitBlocks, isOpenBlock } from './blocks.ts';
+import { planBlocks } from './blocks.ts';
 import { extensionFor, fenceKind, FRAMED, type FenceKind } from './fences.ts';
 import { safeHref, isExternal } from './safe.ts';
 import { CodeBlock } from './CodeBlock.tsx';
@@ -107,34 +109,61 @@ export function FencedBlock({ lang, source, streaming = false, renderFence, onFi
   return <Widget kind={TITLES[kind] ?? kind} source={source} extension={extensionFor(kind, lang)} onFix={onFix}>{drawn}</Widget>;
 }
 
-const MdBlock = React.memo(function MdBlock({ text, streaming, renderFence, sources, onFix, prefix }: { text: string; streaming: boolean; renderFence?: FenceRenderer; sources?: Source[]; onFix?: MarkdownProps['onFix']; prefix: string }): React.ReactElement {
-  const cite = useCallback((n: number, url?: string): Source | undefined => {
-    const byUrl = url ? sources?.find((s) => s.url === url) : undefined;
-    return byUrl ?? sources?.find((s) => s.n === n) ?? (url ? { n, url } : undefined);
-  }, [sources]);
+// The footnotes block's document is the references (in order) and the definitions: only its section is kept.
+type HastParent = { children: Array<{ type: string; tagName?: string }> };
+const onlyFootnotes = () => (tree: HastParent) => { tree.children = tree.children.filter((n) => n.type === 'element' && n.tagName === 'section'); };
+
+// What changes while a block lives is read through context and a ref, never by making the components
+// again: a new component function is a new element type, and React would remount everything the block
+// drew (a code block folding again under the reader, a chart, a frame). Whether the block is arriving:
+const BlockStreaming = React.createContext(false);
+// The reply's footnote numbers (label -> number): a block's own numbering would restart at 1.
+const FootnoteNumbers = React.createContext<ReadonlyMap<string, number>>(new Map());
+
+/**
+ * One top-level block. A footnote reference shows its number in the whole reply, and the block's own
+ * footnotes section is not drawn (the reply's is, once, at the end). `footnotesOnly` draws that section.
+ */
+const MdBlock = React.memo(function MdBlock({ text, streaming, renderFence, sources, onFix, prefix, footnotesOnly = false }: { text: string; streaming: boolean; renderFence?: FenceRenderer; sources?: Source[]; onFix?: MarkdownProps['onFix']; prefix: string; footnotesOnly?: boolean }): React.ReactElement {
+  // The sources arrive after a turn (a new array each time): read when drawn, so the components stay.
+  const sourcesRef = useRef(sources);
+  sourcesRef.current = sources;
   const components = useMemo((): Components => {
+    const cite = (n: number, url?: string): Source | undefined => {
+      const list = sourcesRef.current;
+      const byUrl = url ? list?.find((s) => s.url === url) : undefined;
+      return byUrl ?? list?.find((s) => s.n === n) ?? (url ? { n, url } : undefined);
+    };
     const heading = (Tag: 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6') => function H({ children }: { children?: React.ReactNode }) {
       const id = `${prefix}${slugify(textOf(children))}`;
       return <Tag id={id}>{children}<a href={`#${id}`} aria-label="Link to this section" className="heading-anchor" onClick={(e) => { e.preventDefault(); document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>#</a></Tag>;
     };
     return {
-      code({ className, children, node: _n, ...props }) {
+      code: function Code({ className, children, node: _n, ...props }) {
+        const streaming = useContext(BlockStreaming);
         const lang = /language-([\w+#.-]+)/.exec(className ?? '')?.[1] ?? '';
         const text = String(children ?? '');
         if (!lang && !text.includes('\n')) return <code {...props}>{children}</code>;
+        // An open ```math or $$ at the tail (KaTeX is not run on it, it would draw each half-formula as an error).
+        if (streaming && lang === 'math') return /\bmath-inline\b/.test(className ?? '') ? <code {...props}>{children}</code> : <MathBlock source="" streaming />;
         return <FencedBlock lang={lang} source={text.replace(/\n$/, '')} streaming={streaming} renderFence={renderFence} onFix={onFix} />;
       },
       pre({ children }) { return <>{children}</>; },
-      // While an answer streams, its footnotes come and go as each chunk re-parses: they are drawn once it is complete.
+      // A block's own footnotes section is not drawn: the reply's is, once, after the last block (Markdown).
       section({ children, node: _n, ...rest }) {
-        if ('data-footnotes' in rest && streaming) return null;
+        if ('data-footnotes' in rest && !footnotesOnly) return null;
         return <section {...rest}>{children}</section>;
       },
-      a({ href, children, node: _n, ...rest }) {
+      a: function A({ href, children, node: _n, ...rest }) {
+        const numbers = useContext(FootnoteNumbers);
         const safe = safeHref(href);
         const label = textOf(children).trim();
         const isFootnote = 'data-footnote-ref' in rest || 'data-footnote-backref' in rest;
-        if (safe && isFootnote) return <a href={safe} {...rest} onClick={(e) => { e.preventDefault(); document.getElementById(decodeURIComponent(safe.slice(1)))?.scrollIntoView({ behavior: 'smooth', block: 'center' }); }}>{children}</a>;
+        if (safe && isFootnote) {
+          // Numbered within the whole reply, not within this block.
+          const n = 'data-footnote-ref' in rest ? numbers.get(decodeURIComponent(safe.slice(safe.lastIndexOf('-fn-') + 4))) : undefined;
+          return <a href={safe} {...rest} onClick={(e) => { e.preventDefault(); document.getElementById(decodeURIComponent(safe.slice(1)))?.scrollIntoView({ behavior: 'smooth', block: 'center' }); }}>{n ?? children}</a>;
+        }
         const num = /^\[?(\d{1,3})\]?$/.exec(label);
         if (safe && num && isExternal(safe)) return <Citation n={Number(num[1])} source={cite(Number(num[1]), safe)} />;
         if (!safe) return <span className="text-hx-secondary" title="Link removed (not an http(s) address)">{children}</span>;
@@ -148,29 +177,38 @@ const MdBlock = React.memo(function MdBlock({ text, streaming, renderFence, sour
       input({ checked, type }) { return type === 'checkbox' ? <input type="checkbox" checked={!!checked} readOnly disabled className="mr-1.5 translate-y-[1px] accent-[var(--hx-accent)]" /> : null; },
       h1: heading('h1'), h2: heading('h2'), h3: heading('h3'), h4: heading('h4'), h5: heading('h5'), h6: heading('h6'),
     };
-  }, [streaming, renderFence, onFix, prefix, cite]);
+  }, [renderFence, onFix, prefix, footnotesOnly]);
   return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkMath]}
-      rehypePlugins={[[rehypeKatex, { ...KATEX_OPTIONS, macros: { ...KATEX_MACROS } }]]}
-      remarkRehypeOptions={{ clobberPrefix: prefix }}
-      // The default drops data: URLs; inline images are allowed (an <img> runs no script; safe.ts checks the type).
-      urlTransform={(url, key) => (key === 'src' && /^data:image\/(png|jpe?g|gif|webp|avif|svg\+xml)[;,]/i.test(url.trim()) ? url : defaultUrlTransform(url))}
-      components={components}
-    >
-      {protectCurrency(text)}
-    </ReactMarkdown>
+    <BlockStreaming.Provider value={streaming}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={streaming ? [] : footnotesOnly ? [[rehypeKatex, { ...KATEX_OPTIONS, macros: { ...KATEX_MACROS } }], onlyFootnotes] : [[rehypeKatex, { ...KATEX_OPTIONS, macros: { ...KATEX_MACROS } }]]}
+        remarkRehypeOptions={{ clobberPrefix: prefix }}
+        // The default drops data: URLs; inline images are allowed (an <img> runs no script; safe.ts checks the type).
+        urlTransform={(url, key) => (key === 'src' && /^data:image\/(png|jpe?g|gif|webp|avif|svg\+xml)[;,]/i.test(url.trim()) ? url : defaultUrlTransform(url))}
+        components={components}
+      >
+        {protectCurrency(text)}
+      </ReactMarkdown>
+    </BlockStreaming.Provider>
   );
 });
 
 export const Markdown = React.memo(function Markdown({ text, streaming = false, renderFence, sources, onFix, className }: MarkdownProps): React.ReactElement {
   const id = useId().replace(/[^a-zA-Z0-9]/g, '');
-  const blocks = useMemo(() => splitBlocks(text), [text]);
+  const plan = useMemo(() => planBlocks(text, { streaming }), [text, streaming]);
+  const order = plan.footnotes.join(' '); // labels hold no spaces
+  const numbers = useMemo(() => new Map(order ? order.split(' ').map((l, i) => [l, i + 1] as const) : []), [order]);
+  const last = plan.blocks.length - 1;
   return (
     <div className={`markdown-body ${className ?? ''}`} data-markdown>
-      {blocks.map((b, i) => (
-        <MdBlock key={i} text={b} streaming={streaming && i === blocks.length - 1 && isOpenBlock(b)} renderFence={renderFence} sources={sources} onFix={onFix} prefix={`m${id}-`} />
-      ))}
+      <FootnoteNumbers.Provider value={numbers}>
+        {plan.blocks.map((b, i) => (
+          <MdBlock key={b.key} text={b.text} streaming={streaming && i === last && b.open} renderFence={renderFence} sources={sources} onFix={onFix} prefix={`m${id}-`} />
+        ))}
+        {/* The footnotes come and go while an answer streams (a reference before its definition): drawn once it is complete. */}
+        {!streaming && plan.footnotesDoc && <MdBlock key="footnotes" text={plan.footnotesDoc} streaming={false} sources={sources} onFix={onFix} prefix={`m${id}-`} footnotesOnly />}
+      </FootnoteNumbers.Provider>
     </div>
   );
 });

@@ -546,6 +546,13 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       });
       await page.waitForTimeout(300);
       await page.evaluate(() => { (window as unknown as { __from: number }).__from = performance.now(); });
+      // The reader stays at the bottom: the view follows the answer the whole time ("jump to the latest" never shows).
+      await page.evaluate(() => {
+        const w = window as unknown as { __unpinned: number; __watch: boolean };
+        w.__unpinned = 0; w.__watch = true;
+        const tick = () => { if (!w.__watch) return; if (document.querySelector('[data-jump-latest]')) w.__unpinned++; requestAnimationFrame(tick); };
+        requestAnimationFrame(tick);
+      });
       await send('stream a long answer please');
       await page.waitForSelector(`[data-session="${id}"][data-status="running"]`, { timeout: 15_000 }).catch(() => {});
       await page.waitForSelector(`[data-session="${id}"][data-status="idle"]`, { timeout: 60_000 });
@@ -557,6 +564,10 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       const early = await page.evaluate(() => (window as unknown as { __early: number }).__early);
       t.diagnostic(`long tasks while scrolling: ${JSON.stringify(scrolling)}; while streaming: ${JSON.stringify(streaming)}; layout shift while streaming: ${shift.toFixed(4)} (settled first: ${settled}; before the send, not counted: ${early.toFixed(4)})`);
       assert.ok(shift < 0.1, `transcript layout shift while streaming: ${shift}`);
+      const unpinned = await page.evaluate(() => { const w = window as unknown as { __unpinned: number; __watch: boolean }; w.__watch = false; return w.__unpinned; });
+      const gap = await page.locator('[data-virtual-list]').evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
+      assert.equal(unpinned, 0, 'the view followed the answer (no "jump to the latest" while streaming)');
+      assert.ok(gap < 2, `the view ends at the bottom (${gap} px above it)`);
       assert.ok(Math.max(0, ...scrolling) <= 100, `scrolling: ${JSON.stringify(scrolling)}`);
       assert.ok(Math.max(0, ...streaming) <= 100, `streaming: ${JSON.stringify(streaming)}`);
     });

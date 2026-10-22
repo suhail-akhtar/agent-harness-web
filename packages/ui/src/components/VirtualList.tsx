@@ -37,6 +37,16 @@ function VirtualListInner<T>({ items, getKey, render, estimate, stickToBottom = 
     getItemKey: (i) => getKey(items[i]!, i),
     overscan,
   });
+  // When a measured row changes size, which way the view goes. Pinned to the bottom: the bottom stays put,
+  // in the same frame as the measurement (a streaming answer grows into view, a row above that settles
+  // never moves it). Reading further up: only a row wholly above the view moves the scroll (and a first
+  // measurement above it, correcting the estimate), so what is on screen stays put; a row spanning the
+  // top edge, such as a streaming answer read from its start, grows below the reader.
+  virt.shouldAdjustScrollPositionOnItemSizeChange = (item, _delta, instance) => {
+    if (stickToBottom && pinned.current) return true;
+    const offset = instance.scrollOffset ?? 0;
+    return item.end <= offset || (!instance.itemSizeCache.has(item.key) && item.start < offset);
+  };
   const toBottom = (smooth = false) => {
     const el = scroller.current;
     if (!el) return;
@@ -52,8 +62,14 @@ function VirtualListInner<T>({ items, getKey, render, estimate, stickToBottom = 
   useEffect(() => {
     const el = scroller.current;
     if (!el) return;
+    // Back at the bottom pins the view; only going up unpins it. A scroll event can arrive after the answer
+    // grew under it (the list is then far from its new bottom without the reader having moved): judged by
+    // distance alone, the view would stop following and the "jump to the latest" button flash.
+    let lastTop = el.scrollTop;
     const onScroll = () => {
-      const at = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+      const top = el.scrollTop;
+      const at = el.scrollHeight - top - el.clientHeight < 48 ? true : top < lastTop - 1 ? false : pinned.current;
+      lastTop = top;
       if (at !== pinned.current) { pinned.current = at; onAtBottomChange?.(at); }
     };
     el.addEventListener('scroll', onScroll, { passive: true });
