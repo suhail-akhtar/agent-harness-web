@@ -19,7 +19,7 @@ const again = arg('rejudge');
 if (again) {
   const runs = await rejudge(path.resolve(again), await loadCases(path.join(appRoot, 'evals')), { plugins, shipped: [path.join(appRoot, 'plugins')], log: (m) => console.log(m) });
   console.log(`
-${runs.filter((r) => r.pass).length}/${runs.filter((r) => !r.unscored).length} passed${runs.some((r) => r.unscored) ? ` (${runs.filter((r) => r.unscored).length} not scored: provider errors)` : ''}. Report: ${path.join(path.resolve(again), 'report.md')}`);
+${runs.filter((r) => r.pass).length}/${runs.filter((r) => !r.unscored).length} passed${runs.some((r) => r.unscored) ? ` (${runs.filter((r) => r.unscored).length} not scored: provider errors or the machine asleep)` : ''}. Report: ${path.join(path.resolve(again), 'report.md')}`);
   process.exit(0);
 }
 const models = list(arg('models')) ?? ['claude-haiku-5-5', 'deepseek-flash', 'gpt-6-luna'];
@@ -41,4 +41,4 @@ const runs = await runEvals({
   shipped: [path.join(appRoot, 'plugins')],
   log: (s) => console.log(s),
 });
-console.log(`\n${runs.filter((r) => r.pass).length}/${runs.filter((r) => !r.unscored).length} passed${runs.some((r) => r.unscored) ? ` (${runs.filter((r) => r.unscored).length} not scored: provider errors)` : ''}. Report: ${path.join(out, 'report.md')}`);
+console.log(`\n${runs.filter((r) => r.pass).length}/${runs.filter((r) => !r.unscored).length} passed${runs.some((r) => r.unscored) ? ` (${runs.filter((r) => r.unscored).length} not scored: provider errors or the machine asleep)` : ''}. Report: ${path.join(out, 'report.md')}`);
