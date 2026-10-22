@@ -4,7 +4,7 @@ import net from 'node:net';
 import os from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { loadAgentDir } from '../agents/agents.ts';
-import type { Registry } from '../kernel/registry.ts';
+import type { PluginParts, Registry } from '../kernel/registry.ts';
 import { HOOK_EVENTS } from '../core/settings.ts';
 import type { WorkflowDef } from '../graph/types.ts';
 import { usesNodeType, validateWorkflow } from '../graph/validate.ts';
@@ -51,15 +51,21 @@ export async function findPluginDirs(root: string): Promise<string[]> {
  * Loads one plugin, all or nothing: a plugin that fails partway through (a bad
  * workflow, a throwing setup) leaves no tools, agents, gates or hooks behind.
  */
-export async function loadPlugin(reg: Registry, dir: string, log: (m: string) => void = () => {}, opts: { dataDir?: string } = {}): Promise<void> {
+export async function loadPlugin(reg: Registry, dir: string, log: (m: string) => void = () => {}, opts: { dataDir?: string } = {}): Promise<PluginParts> {
   const restore = reg.snapshot();
+  // What it adds is recorded, so it can be switched off and on again while the server runs.
+  const added = reg.record();
   try {
     await loadInto(reg, dir, log, opts.dataDir);
+    return added();
   } catch (e) {
     restore();
     throw e;
   }
 }
+
+/** The plugin's UI section, validated (see src/plugins/ui.ts); a bad one is reported, never fatal. */
+export { readPluginUi } from './ui.ts';
 
 async function loadInto(reg: Registry, dir: string, log: (m: string) => void, dataRoot?: string): Promise<void> {
   const m = await readManifest(dir);
@@ -168,6 +174,8 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void, da
         if (r?.method !== 'GET' && r?.method !== 'POST') throw new Error(`${m.name}: a route's method is GET or POST`);
         if (r.auth !== 'token' && r.auth !== 'none') throw new Error(`${m.name}: a route's auth is "token" or "none"`);
         if (typeof r.path !== 'string' || !ROUTE_PATH.test(r.path) || r.path.split('/').some((x) => x === '.' || x === '..')) throw new Error(`${m.name}: route path "${r.path}" must be letters, digits, . _ - and / (no leading slash)`);
+        // The server's own paths under /api/plugins/<name>/: the UI files, enable and disable.
+        if (/^(ui(\/|$)|enable$|disable$)/.test(r.path)) throw new Error(`${m.name}: route path "${r.path}" is reserved (ui/..., enable, disable)`);
         if (typeof r.handler !== 'function') throw new Error(`${m.name}: a route needs a handler`);
         if (reg.routes.some((x) => x.plugin === m.name && x.path === r.path && x.method === r.method)) throw new Error(`${m.name}: ${r.method} ${r.path} is registered twice`);
         reg.routes.push({ ...r, plugin: m.name });

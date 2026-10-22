@@ -1,0 +1,22 @@
+{
+  "name": "hello-frame",
+  "version": "0.1.0",
+  "description": "An example of a plugin with both halves: a server route, and a UI that runs in sandboxed frames (a page, a session panel and a renderer for ```hello code fences) talking to the host only through postMessage.",
+  "main": "index.mjs",
+  "permissions": { "routes": true },
+  "ui": {
+    "apiVersion": 1,
+    "displayName": "Hello frame",
+    "icon": "sparkles",
+    "category": "Examples",
+    "trust": "frame",
+    "capabilities": ["routes.call", "sessions.read"],
+    "contributes": {
+      "navItems": [{ "id": "hello", "title": "Hello", "icon": "sparkles", "view": "hello", "placement": "more", "order": 90 }],
+      "views": [{ "id": "hello", "title": "Hello", "icon": "sparkles", "kind": "frame", "entry": "ui/index.html" }],
+      "panels": [{ "id": "hello-panel", "title": "Hello panel", "icon": "sparkles", "kind": "frame", "entry": "ui/panel.html", "where": "session" }],
+      "renderers": [{ "id": "hello-fence", "for": { "fence": "hello" }, "kind": "frame", "entry": "ui/fence.html", "height": 80 }],
+      "commands": [{ "id": "open-hello", "title": "Open the Hello page", "category": "Examples", "action": { "type": "open-view", "view": "hello" } }]
+    }
+  }
+}
