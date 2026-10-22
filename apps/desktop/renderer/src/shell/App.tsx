@@ -101,15 +101,26 @@ export function App(): React.ReactElement {
   );
 }
 
-/** Below 760px the sidebar is a rail; expanding it floats over the page. */
+/**
+ * Below 760px the sidebar is a rail; expanding it floats over the page until a page is picked, the
+ * scrim is clicked or Escape is pressed. This open state is the window's, not a saved preference.
+ */
 function NarrowSidebar() {
-  const prefs = useApp((s) => s.prefs);
-  if (prefs.sidebar.collapsed) return <Sidebar />;
+  const [open, setOpen] = useState(false);
+  const route = useApp((s) => s.route);
+  useEffect(() => { setOpen(false); }, [route]);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open]);
+  if (!open) return <Sidebar collapsed onToggle={() => setOpen(true)} />;
   return (
     <>
       <div className="w-14 shrink-0" />
-      <div className="fixed inset-y-0 left-0 z-40 shadow-[var(--hx-shadow)]"><Sidebar /></div>
-      <div className="fixed inset-0 z-30 bg-[var(--hx-scrim)]" onClick={() => useApp.getState().setPrefs({ sidebar: { ...prefs.sidebar, collapsed: true } })} />
+      <div className="fixed inset-y-0 left-0 z-40 shadow-[var(--hx-shadow)]"><Sidebar collapsed={false} onToggle={() => setOpen(false)} /></div>
+      <div className="fixed inset-0 z-30 bg-[var(--hx-scrim)]" onClick={() => setOpen(false)} />
     </>
   );
 }

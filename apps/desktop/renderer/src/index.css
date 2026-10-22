@@ -14,7 +14,7 @@ body {
   text-rendering: optimizeLegibility;
 }
 :focus-visible { outline: 2px solid var(--hx-focus); outline-offset: 1px; }
-textarea:focus-visible, input:focus-visible, select:focus-visible, [role='menu']:focus-visible, [role='dialog']:focus-visible, [tabindex='-1']:focus-visible { outline: none; }
+textarea:focus-visible, input:focus-visible, [role='menu']:focus-visible, [role='dialog']:focus-visible, [tabindex='-1']:focus-visible { outline: none; }
 button:focus:not(:focus-visible) { outline: none; }
 ::selection { background: var(--hx-accent-soft); }
 

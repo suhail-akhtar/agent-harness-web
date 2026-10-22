@@ -13,9 +13,10 @@ import { formatChord } from '../registry/keybindings';
 import { runCommand } from '../registry/actions';
 import { platform } from '../bridge';
 
-export function Sidebar(): React.ReactElement {
+/** The sidebar; a narrow window passes its own (unsaved) collapsed state and toggle. */
+export function Sidebar({ collapsed: forced, onToggle }: { collapsed?: boolean; onToggle?: () => void } = {}): React.ReactElement {
   const prefs = useApp((s) => s.prefs);
-  const collapsed = prefs.sidebar.collapsed;
+  const collapsed = forced ?? prefs.sidebar.collapsed;
   const width = prefs.sidebar.width;
   const registry = useData((s) => s.registry);
   const info = useApp((s) => s.info);
@@ -30,7 +31,7 @@ export function Sidebar(): React.ReactElement {
       <div className="app-drag flex h-10 shrink-0 items-center gap-2 px-3">
         {!collapsed && <span className="flex items-center gap-2 text-[14px] font-semibold tracking-tight text-hx-primary"><Logo />{info?.product.brand.wordmark ?? info?.product.name ?? 'Harness'}</span>}
         <div className="flex-1" />
-        <IconButton className="app-no-drag" icon="sidebar" size="sm" label={collapsed ? 'Expand the sidebar' : 'Collapse the sidebar'} onClick={() => useApp.getState().setPrefs({ sidebar: { ...prefs.sidebar, collapsed: !collapsed } })} />
+        <IconButton className="app-no-drag" icon="sidebar" size="sm" label={collapsed ? 'Expand the sidebar' : 'Collapse the sidebar'} onClick={onToggle ?? (() => useApp.getState().setPrefs({ sidebar: { ...prefs.sidebar, collapsed: !collapsed } }))} />
       </div>
       <nav aria-label="Main" className="flex flex-col gap-0.5 px-2 pb-2">
         {primary.map((n) => <NavRow key={n.qid} item={n} collapsed={collapsed} />)}

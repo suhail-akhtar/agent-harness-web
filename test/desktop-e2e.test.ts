@@ -132,8 +132,11 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       await page.click('[data-work-in]');
       await page.locator('[role="menuitemcheckbox"]', { hasText: path.basename(work) }).click();
       assert.match(await page.locator('[data-work-in]').innerText(), new RegExp(path.basename(work)));
+      if (await page.locator('[role="menu"]').count()) await page.keyboard.press('Escape');
+      // What the window says if the send goes wrong (a toast is gone by the time a timeout fails).
+      await page.evaluate(() => { const w = window as unknown as { __toasts: string[] }; w.__toasts = []; new MutationObserver(() => { for (const t of document.querySelectorAll('[data-toast]')) { const s = (t as HTMLElement).innerText; if (!w.__toasts.includes(s)) w.__toasts.push(s); } }).observe(document.body, { childList: true, subtree: true }); });
       await send('Please write a file for me');
-      await page.waitForSelector('[data-session]');
+      await page.waitForSelector('[data-session]', { timeout: 20_000 }).catch(async (e: Error) => { throw new Error(`${e.message.split('\n')[0]}; toasts: ${JSON.stringify(await page.evaluate(() => (window as unknown as { __toasts: string[] }).__toasts))}`); });
       sessionId = (await page.getAttribute('[data-session]', 'data-session'))!;
       const card = await page.waitForSelector('[data-attention] [data-pending="permission_request"]', { timeout: 30_000 });
       assert.match(await card.innerText(), /write/);
@@ -529,7 +532,7 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
           const cs = getComputedStyle(el);
           const ring = (cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) > 0) || (cs.boxShadow && cs.boxShadow !== 'none');
           const r = el.getBoundingClientRect();
-          return { what: el.getAttribute('data-nav') ?? el.getAttribute('aria-label') ?? el.getAttribute('data-composer-input') ?? el.tagName.toLowerCase(), ring: !!ring || el.matches('textarea, input'), visible: r.width > 0 && r.height > 0 };
+          return { what: el.hasAttribute('data-composer-input') ? 'composer' : el.getAttribute('data-nav') ?? el.getAttribute('aria-label') ?? el.tagName.toLowerCase(), ring: !!ring || el.matches('textarea, input'), visible: r.width > 0 && r.height > 0 };
         });
         if (!f) continue;
         assert.ok(f.visible, `focus on something visible (${f.what})`);
@@ -537,7 +540,7 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
         seen.push(f.what);
       }
       assert.ok(seen.some((x) => x === 'core.chat:new'), `the sidebar is reachable (${seen.join(', ')})`);
-      assert.ok(seen.some((x) => x === '' || x === 'textarea'), 'the composer is reachable');
+      assert.ok(seen.includes('composer'), `the composer is reachable (${seen.join(', ')})`);
       // The palette: open, move, run with the keyboard; Escape closes and gives focus back.
       await page.keyboard.press('Control+K');
       await page.waitForSelector('[data-palette]');
@@ -580,6 +583,12 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       await page.waitForFunction(() => document.documentElement.dataset.theme === 'light');
       await setSize(520, 760);
       await page.waitForTimeout(500);
+      // Narrow: the sidebar is a rail; expanding floats it over the page, Escape puts it back.
+      assert.equal(await page.getAttribute('[data-sidebar]', 'data-collapsed'), '1', 'a rail at narrow widths');
+      await page.click('[data-sidebar] button[aria-label="Expand the sidebar"]');
+      await page.waitForSelector('[data-sidebar][data-collapsed="0"]');
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('[data-sidebar][data-collapsed="1"]');
       const overRich = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
       assert.ok(overRich <= 1, `rich blocks stay inside a narrow window (${overRich})`);
       const wide = await page.$$eval('[data-assistant-message] *', (els) => els.filter((e) => { const r = e.getBoundingClientRect(); const list = document.querySelector('[data-virtual-list]')!.getBoundingClientRect(); return r.width > 0 && r.right > list.right + 2 && !e.closest('[data-block="code"], [data-md-table], [data-table], [data-chart], .katex-display, [data-diff], [data-block="diff"]'); }).map((e) => e.tagName + '.' + (e.className?.toString() ?? '').slice(0, 40)));

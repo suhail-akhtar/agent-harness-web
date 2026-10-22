@@ -308,7 +308,7 @@ function PluginChip({ chip }: { chip: ReturnType<typeof useData.getState>['regis
   return (
     <label className="inline-flex h-7 items-center gap-1 rounded-lg px-2 text-[12.5px] text-hx-secondary hover:bg-hx-hover" data-chip={chip.qid}>
       {chip.icon && <Icon name={chip.icon} size={14} />}{chip.title}:
-      <select value={String(value ?? chip.options?.[0] ?? '')} onChange={(e) => set(e.target.value)} className="bg-transparent outline-none">{(chip.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}</select>
+      <select value={String(value ?? chip.options?.[0] ?? '')} onChange={(e) => set(e.target.value)} className="rounded bg-transparent">{(chip.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}</select>
     </label>
   );
 }
