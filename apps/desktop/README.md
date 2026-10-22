@@ -50,7 +50,27 @@ keybinding or slash command), the core or the first-loaded plugin wins, and the 
 the clash. A `ui` section that does not validate contributes nothing and shows its error there.
 
 Examples: `examples/plugins/hello-frame` and `notes-frame` (frames with the SDK), `quick-links`
-(declarative only). To work on a plugin without installing it: `HARNESS_DESKTOP_DEV_PLUGINS=<dir>`
+(declarative only). Two real ones: `plugins/sdlc` ("Engineering": a Delivery board, a Start a feature form, a
+Quality gates panel) and `plugins/aiops` ("Operations": incidents, alerts, services, topology,
+changes, an On call card). Both are bundled, and still frames: the path any third party takes.
+
+### Writing a frame plugin
+
+- A frame loads the SDK as a classic script, `<script src="harness://app/sdk/plugin-ui.js">`, then
+  `HarnessPluginUI.connect()`; its own files (a shared `kit.js`, `kit.css`) load from its `ui/` folder.
+  It has no network: everything goes through the host, checked against the capabilities the person granted.
+- Look native with the theme variables the host sends (`--hx-bg`, `--hx-elevated`, `--hx-text-primary`,
+  `--hx-accent`, `--hx-success`/`--hx-warning`/`--hx-danger`, `--hx-font`...); a theme change arrives as an event.
+- Read your server half's data with `routes.call(path, {method: 'POST', body})` (a path takes no query:
+  pass arguments in the body) on routes registered with `auth: 'user'`: signed in like the rest of the API,
+  the handler gets `req.user` to answer each person with their own data.
+- One HTML file can serve several views: `init.contribution` says which; a view opened again with other
+  params (`view.open('incidents', {id})`) starts again with them.
+- Settings sections with `scope: "app"` are the ones a frame reads (`settings.read`).
+- `workflows.start(name, input)` opens the workflow dialog after the person says yes; opened from a page,
+  the dialog runs it in a new conversation in the folder they pick.
+- Home cards and renderers size themselves (`frame.resize` with the body's height); live values such as a
+  nav badge or a status item count come from `badge.set` in a frame that is open (the home card is a good place). To work on a plugin without installing it: `HARNESS_DESKTOP_DEV_PLUGINS=<dir>`
 or Settings > Plugins > Add a folder.
 
 ## What the transcript draws
@@ -84,7 +104,13 @@ A plugin renderer for a fence language or an artifact kind replaces the default.
   (client and event reader), `desktop-security` (frame host refusals, scheme policies),
   `desktop-render` and `desktop-science` (every renderer, hostile input included).
 - End to end: `test/desktop-e2e.test.ts` drives the app with playwright-core against a scripted
-  engine (no paid calls); it skips itself when Electron cannot start.
+  engine (no paid calls); it skips itself when Electron cannot start. `test/desktop-plugins-e2e.test.ts`
+  is the plugins journey: Engineering and Operations switched on and off live and used in between
+  (`test/fixtures/desktop/plugins-engine.ts`: the real server and plugins, fixture monitoring, a scripted
+  model); screenshots in `docs/screenshots/desktop/plugins-journey/` with `HARNESS_DESKTOP_SCREENSHOTS=1`.
 - Live smoke (costs money, not in `npm test`):
   `node --env-file=<path to .env> apps/desktop/scripts/live-smoke.mjs` runs deepseek-flash and
   claude-sonnet-5-5 at effort medium under a $0.50 cap; it never prints key values.
+  `node --env-file=<path to .env> test/fixtures/desktop/plugins-live.ts` runs the plugins journey on real
+  models (a feature with claude-sonnet-5-5, an incident with deepseek-flash, a check each on kimi-k2.6 and
+  glm-5.3-flash) under a $3.00 cap.
