@@ -163,6 +163,8 @@ export interface PluginInfo {
   source?: 'bundled' | 'installed' | 'operator' | 'catalogue' | 'dev' | string;
   contributes?: string[]; signature?: string; permissions?: Record<string, unknown>;
   ui?: UiManifest; uiError?: string; uiHash?: string; /** Where the server serves this plugin's UI files: /api/plugins/<name>/ui/ */ uiBase?: string;
+  /** The plugin has a guide for agents (skill `<name>-guide` in a desktop session): its one-sentence purpose. */
+  guide?: { purpose: string };
 }
 export interface CatalogueEntry { name: string; version: string; description?: string; installed?: boolean; url?: string }
 

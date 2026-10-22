@@ -4,3 +4,4 @@ export * from './dashboard.ts';
 export * from './diagram.ts';
 export * from './bi.ts';
 export * from './layout.ts';
+export * from './guide.ts';
