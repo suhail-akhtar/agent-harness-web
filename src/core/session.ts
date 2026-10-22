@@ -48,6 +48,7 @@ import { seal, serverKey, unseal } from '../util/sealed.ts';
 import type { ChangeService } from '../ops/changes.ts';
 import { ruleMatches } from './permissions.ts';
 import { ArtifactError, type ArtifactMeta, type ArtifactService, ArtifactStore, artifactTool } from './artifacts.ts';
+import { DATA_TOOLS, dataServiceFor, dataToolsFor } from '../data/tools.ts';
 import { type ClientDecl, clientPrompt, type ClientPresence, type DesktopTool } from './client.ts';
 import { delegableModels, delegationRefusal, modelCatalogue } from './delegation.ts';
 import type { LinkedSessions } from './linked.ts';
@@ -232,6 +233,8 @@ export interface SessionDeps {
   plugins?: () => { name: string; enabled: boolean; source: string; ui?: UiManifest }[];
   /** The account's running-session cap (set by the HTTP server): why one more turn may not start. */
   mayRun?: (owner: string | undefined) => string | undefined;
+  /** Data, dashboards and reports (core.dashboards): the datasource, dataset, model and dashboard tools. */
+  data?: import('../data/service.ts').DataService;
 }
 
 /** The session is being worked on by another server (it holds the session's lease). */
@@ -1002,6 +1005,7 @@ export class Session {
         query: (q: Parameters<NonNullable<ToolServices['changes']>['query']>[0]) => this.deps.changes!.query(q),
       } } : {}),
       artifacts: this.artifactService(),
+      ...(this.deps.data ? { data: dataServiceFor(this.deps.data, { owner: this.meta.owner, sessionId: this.meta.id, ...(this.meta.runtime.kind !== 'companion' ? { workspace: this.workspace } : {}) }) } : {}),
       ...(main && this.meta.client ? { client: this.clientService() } : {}),
       ...(main ? { sessions: this.sessionsService() } : {}),
       notify: async (message: string) => {
@@ -1261,6 +1265,8 @@ export class Session {
     tools.push(...TASK_TOOLS.filter((t) => t.spec.name !== 'send_message'), makeSendMessageTool(linked));
     // Only for sessions that use them, so every other session's prompt stays as it was.
     if (this.meta.client) tools.push(artifactTool, markChapterTool, ...this.meta.client.tools.map((t) => DESKTOP_TOOL_IMPLS[t]));
+    // Dashboards, only where an app draws them (they stay out of every other session's prompt).
+    if (this.deps.data && dataToolsFor(this.meta.client)) tools.push(...DATA_TOOLS);
     if (linked) tools.push(makeStartSessionTool(catalogue), listSessionsTool, handOffTool, dismissProposalTool);
     if (reg.gates.size) tools.push(makeGatesTool(reg));
 

@@ -30,10 +30,11 @@
     "desktop:dev": "npm run dev -w @harness/desktop",
     "desktop:build": "npm run build:app -w @harness/desktop",
     "desktop:test": "npm run test:e2e -w @harness/desktop",
-    "postinstall": "node scripts/ensure-electron.mjs"
+    "postinstall": "node scripts/ensure-electron.mjs && node scripts/ensure-duckdb.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0",
+    "@duckdb/node-api": "1.5.6-r.1",
     "preact": "^11.0.1",
     "undici": "7.30.0"
   },
@@ -45,7 +46,9 @@
   "optionalDependencies": {
     "docx": "9.13.0",
     "marked": "18.0.14",
+    "mysql2": "3.24.5",
     "pdfjs-dist": "6.3.289",
+    "pg": "8.23.1",
     "playwright-core": "1.56.1",
     "pptxgenjs": "4.0.1",
     "three": "0.186.1"

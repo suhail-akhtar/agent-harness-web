@@ -32,6 +32,7 @@ import { effectiveSettings } from './settings-api.ts';
 import { ArtifactError } from '../core/artifacts.ts';
 import { CLIENT_KINDS, type ClientKind, ClientDeclError, cleanClient } from '../core/client.ts';
 import { LinkedError } from '../core/linked.ts';
+import { dataRoutes, type DataHttpContext, publishedRoutes } from '../data/http.ts';
 import { FormAnswerError } from '../core/session.ts';
 import { cleanName as cleanAttachmentName, deletePath, fileTree, gitDiff, gitLog, gitStatus, renamePath, saveUploads, searchFiles, WorkspaceError, WRITE_LIMIT, writeFile } from './workspace-api.ts';
 
@@ -653,6 +654,8 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     req.on('close', () => { off(); clearInterval(ping); detach(); });
   }
 
+  const dataHttp: DataHttpContext = { svc: harness.data, appRoot: o.appRoot, whoami: (req) => { try { return who(req)?.p; } catch { return undefined; } } };
+
   async function route(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://x');
     const p = url.pathname;
@@ -708,6 +711,9 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     const pr = /^\/api\/plugins\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/(.+)$/.exec(p);
     if (pr && !/^(ui\/|enable$|disable$)/.test(pr[2]!)) return pluginRoute(req, res, url, pr[1]!, pr[2]!, method);
 
+    // ---- published dashboards (/p/<slug>): their own share token, or a signed-in account they are shared with ----
+    if (p.startsWith('/p/') && await publishedRoutes(dataHttp, req, res, url)) return;
+
     // ---- triggers: a secret URL starts a stored prompt (Slack, a GitHub webhook, a phone shortcut) ----
     const trig = /^\/api\/triggers\/(hwt_[A-Za-z0-9_-]{20,64})$/.exec(p);
     if (trig && method === 'POST') {
@@ -751,6 +757,9 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     limited(limiter, me);
     const admin = me.role === 'admin';
     const { sessions, companions, registry } = harness;
+
+    // ---- data, dashboards and reports (core.dashboards): every change through POST /api/data/ops ----
+    if (p.startsWith('/api/data/') && await dataRoutes(dataHttp, req, res, url, me)) return;
 
     if (p === '/api/me' && method === 'GET') return send(res, 200, { ...me, spentToday: o.spend?.spentToday(me.id) ?? 0, accounts: (o.users?.size ?? 0) > 0 });
 

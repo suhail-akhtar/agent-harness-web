@@ -82,7 +82,9 @@ const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(
  */
 export class ArtifactStore {
   readonly root: string;
-  constructor(workspace: string) { this.root = path.join(workspace, '.harness', 'artifacts'); }
+  private opts: { keep?: number };
+  /** keep: past this many versions the oldest are dropped instead of refusing a new one (documents edited often, like dashboards). */
+  constructor(workspace: string, opts: { keep?: number } = {}) { this.root = path.join(workspace, '.harness', 'artifacts'); this.opts = opts; }
 
   /** The artifacts folder, made if asked; refused when a link is on the way. */
   private async base(make: boolean): Promise<string | undefined> {
@@ -142,7 +144,11 @@ export class ArtifactStore {
   }
 
   private async write(d: string, meta: ArtifactMeta, data: Buffer, action: ArtifactVersion['action']): Promise<ArtifactMeta> {
-    if (meta.versions.length >= MAX_VERSIONS) throw new ArtifactError(`artifact ${meta.id} has ${MAX_VERSIONS} versions, the most it keeps; create a new artifact`, 409);
+    if (this.opts.keep && meta.versions.length >= this.opts.keep) {
+      const drop = meta.versions.slice(0, meta.versions.length - this.opts.keep + 1);
+      for (const v of drop) await fs.rm(path.join(d, path.basename(v.file)), { force: true });
+      meta = { ...meta, versions: meta.versions.slice(drop.length) };
+    } else if (meta.versions.length >= MAX_VERSIONS) throw new ArtifactError(`artifact ${meta.id} has ${MAX_VERSIONS} versions, the most it keeps; create a new artifact`, 409);
     const n = meta.version + 1;
     const file = `v${n}.${kindFile(meta.kind, meta.language).ext}`;
     // 'wx': never through a link, never over a file already there.

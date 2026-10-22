@@ -211,6 +211,17 @@ export interface OnboardingContribution {
   order?: number;
 }
 
+/**
+ * A data source type for dashboards (core.dashboards): this plugin's own server route returns the
+ * rows (JSON: a list of objects, [header, ...rows] or {columns, rows}); `params` (a JSON Schema) are
+ * asked when a person adds one and passed to the route as query parameters.
+ */
+export interface DataSourceContribution { id: string; title: string; icon?: IconName; description?: string; route: string; params?: JsonSchema }
+/** A dashboard visual drawn by a fence renderer (this plugin's or the app's), given {columns, rows, options} as its source. */
+export interface WidgetContribution { id: string; title: string; icon?: IconName; description?: string; fence: string }
+/** An action on a rendered block in a transcript (a chart, a table ...): runs `command` with {lang, source} as its args. */
+export interface BlockActionContribution { id: string; title: string; icon?: IconName; kinds: string[]; command: string }
+
 export interface UiContributes {
   navItems?: NavItemContribution[];
   views?: ViewContribution[];
@@ -225,9 +236,12 @@ export interface UiContributes {
   themes?: ThemeContribution[];
   prompts?: PromptContribution[];
   onboarding?: OnboardingContribution[];
+  dataSources?: DataSourceContribution[];
+  dashboardWidgets?: WidgetContribution[];
+  blockActions?: BlockActionContribution[];
 }
 
-export const CONTRIBUTION_POINTS = ['navItems', 'views', 'panels', 'commands', 'slashCommands', 'composerChips', 'settings', 'renderers', 'homeCards', 'statusItems', 'themes', 'prompts', 'onboarding'] as const;
+export const CONTRIBUTION_POINTS = ['navItems', 'views', 'panels', 'commands', 'slashCommands', 'composerChips', 'settings', 'renderers', 'homeCards', 'statusItems', 'themes', 'prompts', 'onboarding', 'dataSources', 'dashboardWidgets', 'blockActions'] as const;
 
 export interface UiManifest {
   apiVersion: number;
@@ -520,6 +534,23 @@ export function validateUiManifest(input: unknown, opts: { trustCeiling?: UiTrus
   const onboarding = arr<Record<string, unknown>>('onboarding');
   ids('onboarding step', onboarding);
   for (const o of onboarding) { title('Onboarding step', o); if (typeof o.view !== 'string' || !o.view) throw new ManifestError(`Onboarding step "${String(o.id)}" needs a "view".`); }
+  const dataSources = arr<Record<string, unknown>>('dataSources');
+  ids('data source', dataSources);
+  for (const d of dataSources) {
+    title('Data source', d); icon('Data source', d);
+    if (typeof d.route !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*){0,7}$/.test(d.route)) throw new ManifestError(`Data source "${String(d.id)}" needs a "route": a path of this plugin's own routes.`);
+    if (d.params !== undefined) checkSchema(`Data source "${String(d.id)}"`, d.params);
+  }
+  const widgets = arr<Record<string, unknown>>('dashboardWidgets');
+  ids('widget', widgets);
+  for (const w of widgets) { title('Widget', w); icon('Widget', w); if (typeof w.fence !== 'string' || !FENCE.test(w.fence)) throw new ManifestError(`Widget "${String(w.id)}" needs a "fence" language whose renderer draws it.`); }
+  const blockActions = arr<Record<string, unknown>>('blockActions');
+  ids('block action', blockActions);
+  for (const b of blockActions) {
+    title('Block action', b); icon('Block action', b);
+    if (!Array.isArray(b.kinds) || !b.kinds.length || !b.kinds.every((k) => typeof k === 'string' && FENCE.test(k))) throw new ManifestError(`Block action "${String(b.id)}" needs "kinds": the block kinds it applies to (chart, viz, table, csv ...).`);
+    if (typeof b.command !== 'string' || !b.command) throw new ManifestError(`Block action "${String(b.id)}" needs a "command" to run.`);
+  }
 
   // Trust: what the contributions need, at most what the manifest declares, at most the host's ceiling.
   const needed: UiTrust = usesNative ? 'native' : usesCode ? 'frame' : 'declarative';
@@ -549,6 +580,7 @@ export function validateUiManifest(input: unknown, opts: { trustCeiling?: UiTrus
       renderers: renderers as unknown as RendererContribution[], homeCards: homeCards as unknown as HomeCardContribution[],
       statusItems: statusItems as unknown as StatusItemContribution[], themes: themes as unknown as ThemeContribution[],
       prompts: prompts as unknown as PromptContribution[], onboarding: onboarding as unknown as OnboardingContribution[],
+      dataSources: dataSources as unknown as DataSourceContribution[], dashboardWidgets: widgets as unknown as WidgetContribution[], blockActions: blockActions as unknown as BlockActionContribution[],
     },
   };
 }

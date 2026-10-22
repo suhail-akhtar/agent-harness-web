@@ -32,6 +32,7 @@ import { within } from '../tools/paths.ts';
 import { EventHub } from './events.ts';
 import { ClientPresence } from '../core/client.ts';
 import { ProviderKeys } from './provider-keys.ts';
+import { DataService } from '../data/service.ts';
 
 // The harness as a library: one call assembles the registry (built-ins, then
 // plugins), the MCP manager, the companion hub and the session manager.
@@ -157,6 +158,8 @@ export interface Harness {
   providerKeys: ProviderKeys;
   /** Client apps attached to sessions (live event-stream subscribers that said which client they are). */
   clients: ClientPresence;
+  /** Data, dashboards and reports (src/data): sources, datasets, models, documents, refresh, published pages. */
+  data: DataService;
   close(): Promise<void>;
 }
 
@@ -426,6 +429,20 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   const providerKeys = await new ProviderKeys({ dataDir: opts.dataDir, vault, registry, log }).load();
   // Which client apps are listening now (desktop tools reach a session only while one is).
   const clients = new ClientPresence();
+  // Data and dashboards: plugins' contributed data sources are their own routes, called in the server.
+  const data = new DataService({
+    dataDir: opts.dataDir, vault, events, leases, log,
+    rootsFor: (owner) => (owner ? [] : (process.env.HARNESS_LOCAL_ROOTS ?? '').split(path.delimiter).filter(Boolean)),
+    pluginData: async (plugin, kind, params) => {
+      const ds = (entries.get(plugin)?.ui?.contributes as { dataSources?: Array<{ id: string; route: string }> } | undefined)?.dataSources?.find((d) => d.id === kind);
+      if (!ds || entries.get(plugin)?.enabled === false) throw new Error(`plugin ${plugin} offers no data source ${kind} (is it on?)`);
+      const r = bridge.route(plugin, ds.route).find((x) => x.method === 'GET') ?? bridge.route(plugin, ds.route)[0];
+      if (!r) throw new Error(`plugin ${plugin} has no route ${ds.route}`);
+      const res = await r.handler({ method: r.method, path: ds.route, query: Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)])), headers: {}, body: Buffer.from(r.method === 'POST' ? JSON.stringify(params) : ''), ip: '127.0.0.1' });
+      if (res.status >= 400) throw new Error(`plugin ${plugin} data source ${kind}: HTTP ${res.status}`);
+      return typeof res.body === 'string' || Buffer.isBuffer(res.body) ? JSON.parse(String(res.body)) : res.body;
+    },
+  });
   registry.keySource = (id) => providerKeys.get(id);
   registry.baseUrlFor = (id) => providerKeys.baseUrl(id);
   const sessions = new SessionManager({
@@ -434,12 +451,19 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     memory: { root: path.resolve(opts.memoryDir ?? path.join(opts.dataDir, 'memory')), mode: memoryMode }, search, spend: opts.spend,
     publish: opts.publish === null ? undefined : opts.publish ?? publishFromEnv(),
     sandboxCredentials, scheduler, vault, leases,
-    clients, plugins: () => plugins.list(), mayRun: (o) => bridge.mayRun?.(o),
+    clients, plugins: () => plugins.list(), mayRun: (o) => bridge.mayRun?.(o), data,
   });
   sessionsRef = sessions;
   sessionsLate = sessions;
   await sessions.load();
   scheduler?.start();
+  if (opts.backgroundWork ?? process.env.HARNESS_DATA_SCHEDULE !== 'off') data.start(async (home, doc, sub) => {
+    const { exportDoc } = await import('../data/export.ts');
+    const r = await exportDoc(data, home, doc, sub.format, {});
+    await home.recordRun({ kind: 'subscription', doc, subscription: sub.id, file: r.file });
+    data.emit(home.owner, { type: 'subscription', doc, file: r.file });
+    if (sub.deliver === 'notify') data.notice(home.owner, 'info', `${sub.title ?? 'Scheduled export'}: ${r.file} is ready (Dashboards > exports)`);
+  });
   /** Downloads, checks the hash, unpacks, verifies the signature, then installs like a folder plugin. */
   async function installRemote(name: string): Promise<LoadedPlugin> {
     if (!/^[a-z0-9][a-z0-9._-]*$/i.test(name)) throw new Error(`Bad plugin name "${name}".`);
@@ -473,7 +497,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   }
 
   return {
-    registry, sessions, companions, mcp, scheduler, vault, dataDir: opts.dataDir, search: search?.backend, bridge, plugins, events, providerKeys, clients,
+    registry, sessions, companions, mcp, scheduler, vault, dataDir: opts.dataDir, search: search?.backend, bridge, plugins, events, providerKeys, clients, data,
     ...(leases ? { cluster: { id: leases.owner, url: leases.url, leases, ...(clusterCfg?.secret ? { secret: clusterCfg.secret } : {}), ...(clusterCfg?.peers ? { peers: clusterCfg.peers } : {}) } } : {}),
     mcpb: {
       list: () => installedMcpb(mcpbRoot),
@@ -526,6 +550,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     },
     async close() {
       scheduler?.stop();
+      data.stop();
       await sessions.close();
       // The leases go last: other servers may take the sessions over once they are free.
       await leases?.close();
