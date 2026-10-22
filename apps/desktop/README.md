@@ -103,6 +103,20 @@ changes, an On call card). Both are bundled, and still frames: the path any thir
   nav badge or a status item count come from `badge.set` in a frame that is open (the home card is a good place). To work on a plugin without installing it: `HARNESS_DESKTOP_DEV_PLUGINS=<dir>`
 or Settings > Plugins > Add a folder.
 
+### Plugins as modules (DESIGN.md section 23)
+
+- `ui.menu` makes a plugin a group in the sidebar (header with icon and title, its items and
+  sub-items, badges; fold and reorder, remembered); `ui.home` is the page its header opens (else the
+  app draws one from the manifest); `ui.guide` (Markdown, frontmatter `description` = its purpose) is
+  what agents load as the skill `<plugin>-guide`, merged with sections generated from the manifest.
+- A desktop session's system prompt lists one line per enabled plugin with a guide; switching a
+  plugin on or off changes that line (and its skill) from the next message, nothing else.
+- Built-in modules: Agents (Working now, Library), Dashboards (Dashboards, Reports, Data),
+  Engineering (Delivery, Start a feature, Gates), Operations (Incidents, Alerts, Services, Topology,
+  Changes). Live check: `node --env-file=<.env> apps/desktop/scripts/live-modules.mjs` (on 2026-10-23
+  both passed for $0.13: Sonnet loaded aiops-guide and opened Incidents, $0.119; DeepSeek loaded
+  core.dashboards-guide and built a dashboard from an inline CSV through the data tools, $0.010).
+
 ## Agents in the app (DESIGN.md sections 11 to 13)
 
 - **Artifacts** (`core.artifacts`): the documents, apps, diagrams and data an agent makes with its
