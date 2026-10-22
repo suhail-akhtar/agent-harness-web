@@ -56,8 +56,10 @@ export const useData = create<DataState>((set, get) => ({
   registry: buildRegistry([]),
   eventsMode: 'stopped',
   async refreshModels() {
-    const [models, providers, me, config] = await Promise.all([client.models().catch(() => get().models), client.providers.list().catch(() => null), client.me().catch(() => get().me), client.config().catch(() => get().config)]);
-    set({ models, providers, me, config });
+    const [fetched, providers, me, config] = await Promise.all([client.models().catch(() => get().models), client.providers.list().catch(() => null), client.me().catch(() => get().me), client.config().catch(() => get().config)]);
+    // An engine mid-restart can answer with nothing: keep the list we had rather than empty the pickers.
+    const models = Array.isArray(fetched) && (fetched.length || !get().models.length) ? fetched : get().models;
+    set({ models, providers: providers ?? get().providers, me, config });
   },
   async refreshSessions() {
     try {

@@ -56,7 +56,9 @@ export function Home(): React.ReactElement {
   const start = async (text: string, attachments: Attachment[]) => {
     const path = where || info?.scratch;
     // The model chosen, else the default now (the models may have arrived after this page did).
-    const model = value.model || defaultsNow().model;
+    let model = value.model || defaultsNow().model;
+    // Just after an engine restart the list may still be on its way: ask once more before giving up.
+    if (!model) { await useData.getState().refreshModels().catch(() => {}); model = defaultsNow().model; }
     if (!model) { toast('Choose a model first (add a key in Settings > Models & providers).', { kind: 'warning' }); return false; }
     try {
       const spec = useData.getState().models.find((m) => m.id === model);

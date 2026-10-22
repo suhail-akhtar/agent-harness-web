@@ -55,6 +55,12 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
 
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'hd-e2e-'));
   const work = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hd-work-')));
+  // A workspace workflow that needs no model (one approval, then the end), there before the session is made.
+  fs.mkdirSync(path.join(work, '.harness', 'workflows'), { recursive: true });
+  fs.writeFileSync(path.join(work, '.harness', 'workflows', 'ship-check.json'), JSON.stringify({
+    name: 'ship-check', description: 'Ask before shipping', start: 'confirm',
+    nodes: { confirm: { type: 'approval', title: 'Ship it?', message: 'The build is **green**. Ship it?', next: { on: { approve: 'done', reject: 'stop' } } }, done: { type: 'end', status: 'success' }, stop: { type: 'end', status: 'failed' } },
+  }));
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !/_API_KEY$|^GW_|^HARNESS_/.test(k)) env[k] = v;
   Object.assign(env, {
@@ -159,6 +165,21 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       assert.ok(await page.locator('[data-reasoning]').count(), 'the reasoning shows, folded');
       assert.ok(await page.locator(`[data-artifact-card="hello.txt"]`).count(), 'the file the agent wrote is a card');
       await shot('chat-tool-card');
+    });
+
+    await step('a workflow: started from the session, its approval answered in the attention bar, its card follows the run', async () => {
+      await page.click('[aria-label="Run a workflow"]');
+      await page.waitForSelector('[data-workflow-dialog]');
+      await page.waitForSelector('[data-workflow-dialog] select');
+      await page.locator('[data-workflow-dialog] select').selectOption('ship-check');
+      await page.click('[data-start-workflow]');
+      await page.waitForSelector('[data-workflow="ship-check"]', { timeout: 20_000 });
+      const card = await page.waitForSelector('[data-attention] [data-pending="approval_request"]', { timeout: 20_000 });
+      assert.match(await card.innerText(), /Ship it\?/);
+      await shot('chat-workflow-approval');
+      await page.click('[data-attention] [data-pending="approval_request"] button:has-text("Approve")');
+      await page.waitForSelector('[data-workflow="ship-check"][data-status="succeeded"]', { timeout: 20_000 });
+      await shot('chat-workflow-done', page.locator('[data-workflow="ship-check"]'));
     });
 
     await step('the command palette opens with Ctrl+K and runs commands', async () => {
@@ -483,9 +504,14 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       const scrolling = await page.evaluate(() => (window as unknown as { __long: number[] }).__long.splice(0));
       // Layout shifts while the answer streams in (what moves without the person doing anything).
       await page.evaluate(() => {
-        const w = window as unknown as { __shift: number };
-        w.__shift = 0;
-        new PerformanceObserver((l) => { for (const e of l.getEntries() as Array<PerformanceEntry & { value: number; hadRecentInput: boolean }>) if (!e.hadRecentInput) w.__shift += e.value; }).observe({ type: 'layout-shift', buffered: false });
+        const w = window as unknown as { __shift: number; __shifts: string[] };
+        w.__shift = 0; w.__shifts = [];
+        type Shift = PerformanceEntry & { value: number; hadRecentInput: boolean; sources?: Array<{ node?: Node; previousRect: DOMRectReadOnly; currentRect: DOMRectReadOnly }> };
+        const name = (n?: Node) => { const el = n instanceof Element ? n : n?.parentElement; if (!el) return '?'; const a = [...el.attributes].filter((x) => x.name.startsWith('data-')).map((x) => `${x.name}=${x.value.slice(0, 20)}`).join(' '); return `${el.tagName.toLowerCase()}[${a}]`; };
+        new PerformanceObserver((l) => { for (const e of l.getEntries() as Shift[]) if (!e.hadRecentInput) {
+          // What matters: the transcript's text moving under the reader. The composer shrinking after a send is the person's own doing.
+          const inTranscript = (e.sources ?? []).some((x) => { const el = x.node instanceof Element ? x.node : x.node?.parentElement; return !!el?.closest('[data-virtual-list] [data-row]'); });
+          if (inTranscript) w.__shift += e.value; if (e.value > 0.005) w.__shifts.push(`${e.value.toFixed(3)}: ${(e.sources ?? []).map((x) => `${name(x.node)} y ${Math.round(x.previousRect.y)}->${Math.round(x.currentRect.y)} h ${Math.round(x.previousRect.height)}->${Math.round(x.currentRect.height)}`).join('; ')}`); } }).observe({ type: 'layout-shift', buffered: false });
       });
       await send('stream a long answer please');
       await page.waitForSelector(`[data-session="${id}"][data-status="running"]`, { timeout: 15_000 }).catch(() => {});
@@ -493,8 +519,10 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       await page.waitForTimeout(800);
       const streaming = await page.evaluate(() => (window as unknown as { __long: number[] }).__long.splice(0));
       const shift = await page.evaluate(() => (window as unknown as { __shift: number }).__shift);
+      const shifts = await page.evaluate(() => (window as unknown as { __shifts: string[] }).__shifts);
+      if (shifts.length) t.diagnostic(`layout shifts: ${shifts.slice(0, 8).join(' | ')}`);
       t.diagnostic(`long tasks while scrolling: ${JSON.stringify(scrolling)}; while streaming: ${JSON.stringify(streaming)}; layout shift while streaming: ${shift.toFixed(4)}`);
-      assert.ok(shift < 0.1, `layout shift while streaming: ${shift}`);
+      assert.ok(shift < 0.1, `transcript layout shift while streaming: ${shift}`);
       assert.ok(Math.max(0, ...scrolling) <= 100, `scrolling: ${JSON.stringify(scrolling)}`);
       assert.ok(Math.max(0, ...streaming) <= 100, `streaming: ${JSON.stringify(streaming)}`);
     });
