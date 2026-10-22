@@ -27,6 +27,7 @@ export interface AgentNode extends Base {
   agent?: string;
   /** The brief. {{input.x}}, {{state.node}}, {{feedback}} are filled in. */
   prompt: string;
+  /** A model id, or a template of the run's input ("{{input.reviewerModel}}"; empty: the session's model). Another model than the session's is a delegation. */
   model?: string;
   effort?: Effort;
   /** Model calls this step may make (default 150, capped by the server's HARNESS_MAX_STEPS). */

@@ -106,6 +106,9 @@ export interface PluginAPI {
    * POST /api/plugin-routes/<plugin>/<path>/rotate); callers send it as ?token= or the
    * x-harness-route-token header. auth 'none': the plugin checks the caller itself (a
    * signing secret such as Slack's or GitHub's) - every request reaches the handler.
+   * auth 'user': signed in like the rest of the API (the desktop, the web UI, an account's
+   * token; a POST needs the x-harness header), and the handler gets who asked (`user`): for
+   * a plugin's own pages (their frames call it with routes.call), read their data per person.
    * Rate-limited per address like triggers; bodies up to 1 MB. Whatever a route passes on
    * to an agent is outside data: use sessions.start/send with untrusted: true.
    */
@@ -138,13 +141,17 @@ export interface PluginAPI {
 }
 
 /** What a route handler gets: the raw body (verify signatures over it), lowercased headers, the query without the token. */
-export interface PluginRouteRequest { method: string; path: string; query: Record<string, string>; headers: Record<string, string>; body: Buffer; ip: string }
+export interface PluginRouteRequest {
+  method: string; path: string; query: Record<string, string>; headers: Record<string, string>; body: Buffer; ip: string;
+  /** auth 'user' only: who asked (id is absent for the operator's own token). */
+  user?: { id?: string; name: string; role: 'admin' | 'member' };
+}
 export interface PluginRouteResponse { status: number; headers?: Record<string, string>; body?: string | Buffer | object }
 export interface PluginRoute {
   method: 'GET' | 'POST';
   /** Relative to /api/plugins/<plugin>/ (letters, digits, . _ - and /). */
   path: string;
-  auth: 'token' | 'none';
+  auth: 'token' | 'none' | 'user';
   handler: (req: PluginRouteRequest) => Promise<PluginRouteResponse>;
 }
 

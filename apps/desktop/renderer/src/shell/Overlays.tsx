@@ -6,10 +6,10 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { Button, ConfirmDialog, EmptyState, Icon, Input, Modal, SchemaForm, Select, Spinner, cx, schemaText, toast, Textarea, Field } from '@harness/ui';
-import type { WorkflowInfo } from '@harness/client';
+import type { Effort, Mode, WorkflowInfo } from '@harness/client';
 import type { JsonSchema } from '@harness/plugin-ui';
 import { useApp, openSession } from '../state/app';
-import { useData, client } from '../state/data';
+import { useData, client, clientInfo } from '../state/data';
 import { desktop } from '../bridge';
 import { ViewHost, type NativeProps } from '../registry/PluginView';
 import type { SettingsSection } from '../registry/registry';
@@ -183,16 +183,26 @@ function SchemaSection({ s }: { s: SettingsSection }) {
 
 export function WorkflowDialog(): React.ReactElement | null {
   const req = useApp((s) => s.workflowDialog);
+  const projects = useApp((s) => s.prefs.projects);
   const [list, setList] = useState<WorkflowInfo[] | null>(null);
   const [name, setName] = useState('');
   const [input, setInput] = useState<Record<string, string>>({});
+  const [where, setWhere] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const sessionId = req?.sessionId;
+  // Opened from a page (a plugin's form, a command) with no conversation open: it runs in a new one,
+  // in a folder the person picks; the workflow's inputs are checked once that conversation exists.
+  const fresh = !!req && !sessionId;
   useEffect(() => {
     if (!req) return;
     setErr(''); setList(null);
-    if (!sessionId) { setErr('Open a conversation first: a workflow runs inside one.'); setList([]); return; }
+    if (!sessionId) {
+      if (!req.workflow) { setErr('Open a conversation first: a workflow runs inside one.'); setList([]); return; }
+      setName(req.workflow); setInput({ ...(req.input ?? {}) });
+      try { setWhere(localStorage.getItem('harness.workIn') ?? ''); } catch { setWhere(''); }
+      return;
+    }
     client.sessions.workflows(sessionId).then((r) => {
       setList(r.workflows);
       const w = r.workflows.find((x) => x.name === req.workflow) ?? r.workflows[0];
@@ -208,6 +218,50 @@ export function WorkflowDialog(): React.ReactElement | null {
     try { await client.sessions.startWorkflow(sessionId!, name, input); close(); openSession(sessionId!); toast(`Workflow ${name} started`, { kind: 'success' }); }
     catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
+  const startFresh = async () => {
+    setBusy(true); setErr('');
+    let made: string | undefined;
+    try {
+      const { prefs, info } = useApp.getState();
+      const models = useData.getState().models;
+      const model = models.find((m) => m.id === prefs.defaultModel && m.available) ?? models.find((m) => m.available);
+      if (!model) throw new Error('Choose a model first (add a key in Settings > Models & providers).');
+      const first = Object.values(input).find((v) => v.trim()) ?? '';
+      const path = where || info?.scratch;
+      const s = await client.sessions.create({ title: `${name}: ${first.replace(/\s+/g, ' ')}`.slice(0, 60), model: model.id, ...(prefs.defaultEffort ? { effort: prefs.defaultEffort as Effort } : {}), mode: (prefs.defaultMode || 'default') as Mode, runtime: 'local', ...(path ? { path } : {}), client: clientInfo() });
+      made = s.id;
+      const wf = (await client.sessions.workflows(s.id)).workflows.find((x) => x.name === name);
+      if (!wf) throw new Error(`There is no workflow "${name}" in that folder.`);
+      const values = { ...Object.fromEntries(Object.entries(wf.inputs).map(([k, v]) => [k, v.default ?? ''])), ...input };
+      const need = Object.entries(wf.inputs).filter(([k, v]) => v.required && !values[k]?.trim()).map(([k]) => k);
+      if (need.length) throw new Error(`Fill in: ${need.join(', ')}.`);
+      useData.getState().upsertSession(s);
+      await client.sessions.startWorkflow(s.id, name, values);
+      made = undefined;
+      close(); openSession(s.id); toast(`Workflow ${name} started`, { kind: 'success' });
+    } catch (e) {
+      setErr((e as Error).message);
+      // Nothing ran in it: the empty conversation is not kept.
+      if (made) await client.sessions.remove(made).catch(() => {});
+    } finally { setBusy(false); }
+  };
+  if (fresh && name) {
+    const options = [{ value: '', label: 'Scratch space' }, ...projects.map((p) => ({ value: p.path, label: p.name }))];
+    return (
+      <Modal open onClose={close} title="Run a workflow" size="lg" footer={<><Button variant="ghost" onClick={close}>Cancel</Button><Button variant="primary" loading={busy} onClick={() => void startFresh()} data-start-workflow>Start</Button></>}>
+        <div data-workflow-dialog data-fresh>
+          <p className="mb-2 text-[12.5px] text-hx-secondary">Runs <b>{name}</b> in a new conversation.</p>
+          <Field label="Work in" help="The folder the workflow reads and changes."><Select value={where} onChange={setWhere} options={options} /></Field>
+          {Object.entries(input).map(([k, v]) => (
+            <Field key={k} label={k}>
+              {k === 'request' || v.length > 80 ? <Textarea rows={5} value={v} onChange={(e) => setInput({ ...input, [k]: e.target.value })} /> : <Input value={v} onChange={(e) => setInput({ ...input, [k]: e.target.value })} />}
+            </Field>
+          ))}
+          {err && <p className="mt-2 text-[12.5px] text-hx-danger">{err}</p>}
+        </div>
+      </Modal>
+    );
+  }
   return (
     <Modal open onClose={close} title="Run a workflow" size="lg" footer={<><Button variant="ghost" onClick={close}>Cancel</Button><Button variant="primary" loading={busy} disabled={!w || missing.length > 0} onClick={() => void start()} data-start-workflow>Start</Button></>}>
       <div data-workflow-dialog>

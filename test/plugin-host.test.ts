@@ -38,6 +38,8 @@ async function setup(steps: ConstructorParameters<typeof FakeProvider>[0] = [], 
     api.registerRoute({ method: 'POST', path: 'open/slack', auth: 'none', handler: async (req) => ({ status: 200, body: 'plain ' + req.method }) });
     api.registerRoute({ method: 'GET', path: 'hook', auth: 'token', handler: async () => ({ status: 200, body: Buffer.from('bytes') }) });
     api.registerRoute({ method: 'POST', path: 'boom', auth: 'none', handler: async () => { throw new Error('secret detail'); } });
+    api.registerRoute({ method: 'GET', path: 'mine', auth: 'user', handler: async (req) => ({ status: 200, body: { user: req.user ?? null, authorization: req.headers.authorization ?? null } }) });
+    api.registerRoute({ method: 'POST', path: 'mine', auth: 'user', handler: async (req) => ({ status: 200, body: { user: req.user ?? null, got: req.body.toString('utf8') } }) });
     globalThis.__hostEvents = [];
     api.events.subscribe((e) => { globalThis.__hostEvents.push(e); });
     api.events.subscribe(() => { throw new Error('a broken handler'); });
@@ -128,6 +130,27 @@ test('plugin routes: a token per route, shown once to administrators, rotated, c
     assert.notEqual(rot.token, post.token);
     assert.equal((await t.call(undefined, 'POST', `/api/plugins/hosted/hook?token=${post.token}`, 'y')).status, 401);
     assert.equal((await t.call(undefined, 'POST', `/api/plugins/hosted/hook?token=${rot.token}`, 'y')).status, 202);
+  } finally { await t.close(); }
+});
+
+test('plugin routes with auth user: signed in like the API, the caller passed to the plugin, never its credentials', async () => {
+  const t = await setup();
+  try {
+    assert.equal((await t.call(undefined, 'GET', '/api/plugins/hosted/mine')).status, 401, 'nobody signed in');
+    assert.equal((await t.call('not-a-token', 'GET', '/api/plugins/hosted/mine')).status, 401);
+    const op = await t.call(OPERATOR, 'GET', '/api/plugins/hosted/mine');
+    assert.equal(op.status, 200);
+    assert.deepEqual(op.body, { user: { name: 'operator', role: 'admin' }, authorization: null }, 'who asked, and not the token');
+    const alice = await t.users.add('Alice', 'member');
+    const me = (await t.call(alice.token, 'GET', '/api/plugins/hosted/mine')).body as { user: { id: string; name: string; role: string } };
+    assert.deepEqual([me.user.name, me.user.role, me.user.id.startsWith('usr_')], ['Alice', 'member', true]);
+    // Writes need the x-harness header, as everywhere in the API (a cross-site form cannot send it).
+    const noHeader = await fetch(`${t.base}/api/plugins/hosted/mine`, { method: 'POST', headers: { authorization: `Bearer ${alice.token}`, 'content-type': 'application/json' }, body: '{}' });
+    assert.equal(noHeader.status, 403);
+    const posted = await t.call(alice.token, 'POST', '/api/plugins/hosted/mine', '{"a":1}');
+    assert.deepEqual([posted.status, (posted.body as { got: string }).got], [200, '{"a":1}']);
+    // A route token is no way in.
+    assert.equal((await t.call(undefined, 'GET', '/api/plugins/hosted/mine?token=hwr_x')).status, 401);
   } finally { await t.close(); }
 });
 
