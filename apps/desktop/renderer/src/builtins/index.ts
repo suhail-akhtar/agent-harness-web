@@ -8,5 +8,6 @@ import { coreChat } from './core.chat';
 import { coreSettings } from './core.settings';
 import { corePlugins } from './core.plugins';
 import { coreActivity, coreInbox, coreProjects, coreShell } from './small';
+import { coreDashboards } from './dashboards';
 
-export const BUILTINS: BuiltinPlugin[] = [coreShell, coreChat, coreInbox, coreActivity, coreProjects, corePlugins, coreSettings];
+export const BUILTINS: BuiltinPlugin[] = [coreShell, coreChat, coreInbox, coreActivity, coreProjects, corePlugins, coreSettings, coreDashboards];

@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { Artifact, Button, EmptyState, IconButton, Toaster, RenderBoundary } from '@harness/ui';
+import { Artifact, BlockActionsContext, Button, EmptyState, IconButton, Toaster, RenderBoundary } from '@harness/ui';
 import { useApp, navigate, HOME } from '../state/app';
 import { useData } from '../state/data';
 import { ViewHost, PanelHost } from '../registry/PluginView';
@@ -55,7 +55,10 @@ export function App(): React.ReactElement {
   const narrow = useNarrow(760);
   const view = registry.views.get(route.view);
   const panelDef = panel?.kind === 'plugin' ? registry.panels.get(panel.panel) : undefined;
+  // Plugins' actions on drawn blocks (a chart's "Add to dashboard"): each runs its command with the block.
+  const blockActions = React.useMemo(() => (registry.blockActions.length ? (b: { kind: string; lang: string; source: string }) => registry.blockActions.filter((a) => a.kinds.includes(b.kind)).map((a) => <IconButton key={a.qid} size="xs" icon={a.icon ?? 'plus'} label={a.title} data-block-action={a.qid} onClick={() => void runCommand(a.command, { lang: b.lang, source: b.source, kind: b.kind })} />) : null), [registry.blockActions]);
   return (
+    <BlockActionsContext.Provider value={blockActions}>
     <div className="flex h-full flex-col bg-hx-bg text-hx-primary" data-app>
       <EngineGate />
       <div className="flex min-h-0 flex-1">
@@ -98,6 +101,7 @@ export function App(): React.ReactElement {
       <ConfirmHost />
       <Toaster />
     </div>
+    </BlockActionsContext.Provider>
   );
 }
 
