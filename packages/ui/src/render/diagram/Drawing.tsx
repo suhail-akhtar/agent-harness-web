@@ -175,7 +175,8 @@ export const NodeView = React.memo(function NodeView({ n, tone, selected, dim, c
             const y = 48 + i * 22;
             const key = f.pk ? 'PK' : f.fk ? 'FK' : f.uk ? 'UK' : '';
             const kc = f.pk ? 'var(--dg-warn)' : f.fk ? '#3b82f6' : '#7c3aed';
-            const name = fit(f.name, n.w - 120 - (f.type ? Math.min(90, f.type.length * 6.2) : 0), 6.9);
+            const typeW = f.type ? Math.min(90, f.type.length * 6.2) : 0;
+            const name = fit(f.name, n.w - 42 - 14 - typeW - 8 - (f.pii ? 30 : 0), 6.9);
             return (
               <g key={i} data-field={f.name}>
                 {i > 0 && <path d={`M10 ${y}H${n.w - 10}`} stroke="var(--dg-border)" strokeOpacity={0.5} />}
@@ -195,9 +196,9 @@ export const NodeView = React.memo(function NodeView({ n, tone, selected, dim, c
     );
   }
   const lines = detailLines(node);
-  const textTop = (n.h - (28 + lines.length * 16)) / 2;
+  const textTop = (n.h - (node.findings?.length ? 16 : 0) - (28 + lines.length * 16)) / 2;
   const worst = node.findings?.reduce((w, f) => (SEVERITY.indexOf(f.severity) > SEVERITY.indexOf(w) ? f.severity : w), 'info') ?? 'info';
-  const caption = node.kind === 'folder' && node.files !== undefined ? `Folder · ${node.files} file${node.files === 1 ? '' : 's'}` : captionOf(node);
+  const caption = captionOf(node);
   return (
     <g {...common} data-kind={node.kind}>
       <rect className="dg-shadow" x={1} y={2} width={n.w} height={n.h} rx={11} />
@@ -210,7 +211,7 @@ export const NodeView = React.memo(function NodeView({ n, tone, selected, dim, c
         {lines.map((l, i) => <text key={i} className={i === 0 && node.tech ? 'dg-tech' : 'dg-mono'} x={64} y={textTop + 43 + i * 16}>{fit(l, n.w - 78, 6.4)}</text>)}
       </g>
       {node.status && <StatusBadge status={node.status} x={n.w - 16} y={16} />}
-      {node.findings?.length ? <Findings count={node.findings.length} worst={worst} x={n.w - 8} y={n.h - 21} /> : null}
+      {node.findings?.length ? <Findings count={node.findings.length} worst={worst} x={n.w - 10} y={n.h - 22} /> : null}
       {isChanged && <ChangedPill x={n.w - 70} y={-9} />}
       {sel}{ring}
     </g>

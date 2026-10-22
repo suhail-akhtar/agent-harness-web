@@ -4,6 +4,7 @@
 //   "stream"            -> streams a long reply (prose, tables, code, maths) in small pieces
 //   "escape"            -> an HTML artifact that probes its sandbox
 //   "crash the engine"  -> the process exits (the app must show it and recover)
+//   diagrams            -> diagram-script.ts (artifacts of each view, a ```diagram block, the canvas's ask)
 //   anything else       -> a short reply
 import path from 'node:path';
 import { createHarness } from '../../../src/kernel/harness.ts';
@@ -12,6 +13,7 @@ import { SpendLedger, UserStore } from '../../../src/server/users.ts';
 import type { Provider, ProviderRequest, ProviderResponse } from '../../../src/providers/types.ts';
 import type { Block } from '../../../src/core/types.ts';
 import { ESCAPE_ARTIFACT, STREAM_TEXT } from './rich.ts';
+import { diagramTurn } from './diagram-script.ts';
 
 const DATA = path.resolve(process.env.HARNESS_DATA ?? '.harness-e2e');
 const PORT = Number(process.env.HARNESS_PORT ?? 4399);
@@ -36,7 +38,11 @@ class ScriptedProvider implements Provider {
       }
       content.push({ type: 'text', text });
     };
-    if (afterTool) {
+    const diagram = diagramTurn(req.messages);
+    if (diagram) {
+      if (diagram.text) await say(diagram.text);
+      if (diagram.call) { content.push({ type: 'tool_use', id: `call_${++this.n}`, name: diagram.call.name, input: diagram.call.input }); stop = 'tool_use'; }
+    } else if (afterTool) {
       const ok = !last.content.some((b) => b.type === 'tool_result' && (b as { is_error?: boolean }).is_error);
       await say(ok ? 'I wrote **hello.txt**:\n\n```text\nHello from the desktop test\n```' : 'The write was refused, so nothing changed.');
     } else if (/write a file/i.test(said)) {

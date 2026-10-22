@@ -82,13 +82,13 @@ export function nodeSize(n: DiagramNode): { w: number; h: number } {
   if (n.fields?.length || n.kind === 'table') {
     const fields = n.fields ?? [];
     const rows = Math.min(fields.length, TABLE_ROWS) + (fields.length > TABLE_ROWS ? 1 : 0);
-    const widest = fields.slice(0, TABLE_ROWS).reduce((m, f) => Math.max(m, 58 + textW(f.name, 6.9) + textW(f.type, 6.2) + (f.pii ? 30 : 0)), 0);
+    const widest = fields.slice(0, TABLE_ROWS).reduce((m, f) => Math.max(m, 42 + 14 + 8 + textW(f.name, 6.9) + Math.min(90, textW(f.type, 6.2)) + (f.pii ? 30 : 0)), 0);
     return { w: Math.round(clamp(Math.max(70 + textW(n.title, 7.8), widest), 230, 340)), h: 48 + rows * ROW_H + (rows ? 6 : 0) };
   }
   const lines = detailLines(n);
   // The icon square on the left; the status badge's corner on the right.
   const w = clamp(64 + Math.max(textW(n.title, 7.5), textW(captionOf(n), 6.4) + 8, ...lines.map((l) => textW(l, 6.4))) + 34, 220, 320);
-  return { w: Math.round(w), h: Math.max(66, 46 + lines.length * 16 + 4) };
+  return { w: Math.round(w), h: Math.max(66, 46 + lines.length * 16 + 4) + (n.findings?.length ? 16 : 0) };
 }
 
 export const COLLAPSED_SIZE = { w: 240, h: 66 };
@@ -169,10 +169,10 @@ export interface ElkGraph { id: string; layoutOptions?: Record<string, string>; 
 export interface ElkResult { id: string; x?: number; y?: number; width?: number; height?: number; children?: ElkResult[]; edges?: Array<{ id: string; sections?: Array<{ startPoint: { x: number; y: number }; endPoint: { x: number; y: number }; bendPoints?: Array<{ x: number; y: number }> }>; labels?: Array<{ x?: number; y?: number; width?: number; height?: number; text?: string }> }> }
 
 const ELK_DIR: Record<Dir, string> = { right: 'RIGHT', down: 'DOWN', left: 'LEFT', up: 'UP' };
-const SPACING = { compact: { node: 26, layer: 64 }, normal: { node: 40, layer: 96 }, wide: { node: 60, layer: 140 } };
+const SPACING = { compact: { node: 24, layer: 56 }, normal: { node: 34, layer: 80 }, wide: { node: 56, layer: 130 } };
 const GROUP_PREFIX = '#grp:';
 
-export function toElk(vg: VisibleGraph): ElkGraph {
+export function toElk(vg: VisibleGraph, extra: Record<string, string> = {}): ElkGraph {
   const sp = SPACING[vg.spacing];
   const kids = new Map<string | undefined, ElkGraph[]>();
   const push = (parent: string | undefined, c: ElkGraph) => { (kids.get(parent) ?? kids.set(parent, []).get(parent)!).push(c); };
@@ -196,6 +196,7 @@ export function toElk(vg: VisibleGraph): ElkGraph {
       // The author's order steadies small diagrams; on large ones it costs seconds (ELK's hierarchical crossing minimisation), so it is left out there.
       'elk.layered.considerModelOrder.strategy': vg.nodes.length <= 80 && vg.edges.length <= 160 ? 'NODES_AND_EDGES' : 'NONE', 'elk.layered.nodePlacement.strategy': 'BRANDES_KOEPF', 'elk.layered.nodePlacement.bk.fixedAlignment': 'BALANCED',
       'elk.separateConnectedComponents': 'true', 'elk.spacing.componentComponent': '64', 'elk.padding': '[top=24,left=24,bottom=24,right=24]',
+      ...extra,
     },
     children: build(undefined),
     edges: vg.edges.map((e) => ({ id: e.id, sources: [e.from], targets: [e.to], ...(e.text ? { labels: [{ id: `${e.id}#l`, text: e.text, ...dims(labelSize(e.text)) }] } : {}) })),
@@ -231,7 +232,33 @@ function depthFn(vg: VisibleGraph): (g: string) => number {
   return (g) => { let d = 0; for (let p = vg.groupParent.get(g); p; p = vg.groupParent.get(p)) d++; return d; };
 }
 
+/**
+ * Label pills that would sit on another pill or on a box move along their own route to the first
+ * free place (the middle of another segment, or a third of the way along the longest).
+ */
+export function declutterLabels(nodes: Rect[], edges: SceneEdge[]): void {
+  const placed: Rect[] = [];
+  const hits = (r: Rect) => placed.some((o) => overlapsBy(r, o, 3)) || nodes.some((o) => overlapsBy(r, o, 2));
+  for (const e of edges) {
+    const l = e.label;
+    if (!l) continue;
+    if (!hits(l)) { placed.push(l); continue; }
+    const cands: Array<[number, number]> = [];
+    const p = e.points;
+    for (let i = 2; i < p.length; i += 2) {
+      const x0 = p[i - 2]!; const y0 = p[i - 1]!; const x1 = p[i]!; const y1 = p[i + 1]!;
+      const len = Math.abs(x1 - x0) + Math.abs(y1 - y0);
+      if (len < 12) continue;
+      for (const t of [0.5, 0.3, 0.7, 0.18, 0.82]) cands.push([x0 + (x1 - x0) * t, y0 + (y1 - y0) * t]);
+    }
+    const free = cands.map(([cx, cy]) => ({ x: round1(cx - l.w / 2), y: round1(cy - l.h / 2), w: l.w, h: l.h })).find((r) => !hits(r));
+    if (free) { e.label = { ...l, x: free.x, y: free.y }; placed.push(e.label); } else placed.push(l);
+  }
+}
+const overlapsBy = (a: Rect, b: Rect, m: number) => a.x < b.x + b.w + m && b.x < a.x + a.w + m && a.y < b.y + b.h + m && b.y < a.y + a.h + m;
+
 function finish(s: Omit<Scene, 'bounds'>): Scene {
+  declutterLabels(s.nodes, s.edges);
   let x0 = Infinity; let y0 = Infinity; let x1 = -Infinity; let y1 = -Infinity;
   const take = (r: Rect) => { x0 = Math.min(x0, r.x); y0 = Math.min(y0, r.y); x1 = Math.max(x1, r.x + r.w); y1 = Math.max(y1, r.y + r.h); };
   s.nodes.forEach(take); s.groups.forEach(take);
@@ -594,6 +621,8 @@ export interface LayoutOptions {
 /** Positions to keep win when they cover at least half the boxes; otherwise a fresh layout, with the kept ones laid over it. */
 function planFor(spec: DiagramSpec, o: LayoutOptions): { vg: VisibleGraph; pinned: Map<string, { x: number; y: number }>; usePinned: boolean } {
   const vg = visibleGraph(spec, o.collapsed);
+  // The previous version may have been laid out top-down (it read better): new boxes follow that.
+  if (o.previous && !o.fresh && !spec.layout?.direction) vg.dir = o.previous.dir;
   const pinned = o.fresh ? new Map<string, { x: number; y: number }>() : pinnedPositions(spec, vg, o.previous);
   return { vg, pinned, usePinned: pinned.size > 0 && pinned.size * 2 >= vg.nodes.length };
 }
@@ -618,8 +647,29 @@ export async function layoutDiagram(spec: DiagramSpec, o: LayoutOptions = {}): P
   if (usePinned) return positionsScene(vg, pinned, o.previous);
   if (o.engine === 'layered' || !o.elk) return overlay(layeredScene(vg), vg, pinned);
   let scene: Scene;
-  try { scene = fromElk(await o.elk(toElk(vg)), vg); } catch { scene = layeredScene(vg); }
+  try { scene = await bestElk(spec, vg, o.elk); } catch (e) { console.warn(`[diagram] ELK did not lay this out (${e instanceof Error ? e.message : String(e)}); using the layered layout`); scene = layeredScene(vg); }
   return overlay(scene, vg, pinned);
+}
+
+/** How well a drawing fits a window about 1.75 times as wide as it is tall (bigger is better). */
+const fitScore = (w: number, h: number) => Math.min(1.75 / Math.max(1, w), 1 / Math.max(1, h));
+
+/**
+ * ELK, and when the spec names no direction and the picture comes out long and flat, the same laid
+ * top-down: the one that fills a window best wins (small diagrams only).
+ */
+async function bestElk(spec: DiagramSpec, vg: VisibleGraph, elk: NonNullable<LayoutOptions['elk']>): Promise<Scene> {
+  const first = fromElk(await elk(toElk(vg)), vg);
+  const b = first.bounds;
+  const aspect = b.w / Math.max(1, b.h);
+  if (spec.layout?.direction || vg.nodes.length > 80 || (aspect < 2.6 && aspect > 0.9)) return first;
+  // (ELK's graph wrapping was tried: it sends the first boxes round to a far row with a long edge back.)
+  const tries: Array<Promise<Scene | null>> = [];
+  const other = { ...vg, dir: aspect >= 2.6 ? 'down' as const : 'right' as const };
+  if (other.dir !== vg.dir) tries.push(elk(toElk(other)).then((r) => fromElk(r, other), () => null));
+  let best = first;
+  for (const s of await Promise.all(tries)) if (s && fitScore(s.bounds.w, s.bounds.h) > fitScore(best.bounds.w, best.bounds.h) * 1.08) best = s;
+  return best;
 }
 
 /** Every box's top-left, for saving (layout.positions). */

@@ -109,6 +109,8 @@ export function DiagramCanvas(props: DiagramCanvasProps): React.ReactElement {
   const cameraG = useRef<SVGGElement>(null);
   const svg = useRef<SVGSVGElement>(null);
   const store = useMemo(cameraStore, []);
+  /** The person moved the camera: a resize keeps it then, instead of fitting again. */
+  const touched = useRef(false);
   const apply = useCallback((c: Camera) => {
     store.set(c);
     cameraG.current?.setAttribute('transform', `translate(${c.x} ${c.y}) scale(${c.k})`);
@@ -121,12 +123,16 @@ export function DiagramCanvas(props: DiagramCanvasProps): React.ReactElement {
     if (!w || !sc) return;
     const list = ids?.length ? sc.nodes.filter((n) => ids.includes(n.id)) : null;
     const b = list?.length ? list.reduce((r, n) => ({ x0: Math.min(r.x0, n.x), y0: Math.min(r.y0, n.y), x1: Math.max(r.x1, n.x + n.w), y1: Math.max(r.y1, n.y + n.h) }), { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity }) : { x0: sc.bounds.x, y0: sc.bounds.y, x1: sc.bounds.x + sc.bounds.w, y1: sc.bounds.y + sc.bounds.h };
+    // Room for the bars over the canvas: the tools on top, the zoom, the ask box and the minimap below.
+    touched.current = false;
     const W = w.clientWidth; const H = w.clientHeight;
-    const k = Math.max(MIN_K, Math.min(1.15, (W - PAD * 2) / Math.max(1, b.x1 - b.x0), (H - PAD * 2) / Math.max(1, b.y1 - b.y0)));
-    apply({ k, x: W / 2 - ((b.x0 + b.x1) / 2) * k, y: H / 2 - ((b.y0 + b.y1) / 2) * k });
+    const top = 60; const bottom = 84; const side = 40;
+    const k = Math.max(MIN_K, Math.min(1.15, (W - side * 2) / Math.max(1, b.x1 - b.x0), (H - top - bottom) / Math.max(1, b.y1 - b.y0)));
+    apply({ k, x: W / 2 - ((b.x0 + b.x1) / 2) * k, y: top + (H - top - bottom) / 2 - ((b.y0 + b.y1) / 2) * k });
   }, [apply]);
   const zoomBy = useCallback((f: number, at?: { x: number; y: number }) => {
     const w = wrap.current; if (!w) return;
+    touched.current = true;
     const c = store.get();
     const k = Math.max(MIN_K, Math.min(MAX_K, c.k * f));
     const px = at?.x ?? w.clientWidth / 2; const py = at?.y ?? w.clientHeight / 2;
@@ -138,6 +144,7 @@ export function DiagramCanvas(props: DiagramCanvasProps): React.ReactElement {
     const c = store.get();
     const sx = n.x * c.k + c.x; const sy = n.y * c.k + c.y;
     if (sx > 40 && sy > 40 && sx + n.w * c.k < w.clientWidth - 40 && sy + n.h * c.k < w.clientHeight - 60) return;
+    touched.current = true;
     apply({ ...c, x: w.clientWidth / 2 - (n.x + n.w / 2) * c.k, y: w.clientHeight / 2 - (n.y + n.h / 2) * c.k });
   }, [apply, store]);
   const sceneRef = useRef<Scene | null>(null);
@@ -145,18 +152,20 @@ export function DiagramCanvas(props: DiagramCanvasProps): React.ReactElement {
   // Fit when a layout first arrives and when the mode changes; a new version keeps the camera.
   const fitted = useRef('');
   useEffect(() => {
-    if (!base) return;
+    // Not while the layout for the new mode is still coming (the old one is still shown meanwhile).
+    if (!base || busy) return;
     const want = `${mode}|${center}|${hops}|${fresh}`;
     if (fitted.current === want) { apply(store.get()); return; }
     fitted.current = want;
     requestAnimationFrame(() => fit());
-  }, [base, mode, center, hops, fresh, fit, apply, store]);
+  }, [base, busy, mode, center, hops, fresh, fit, apply, store]);
   useEffect(() => {
     const w = wrap.current; if (!w) return;
-    const ro = new ResizeObserver(() => apply(store.get()));
+    // Until the person moves the camera, a change of size fits again (the page settling, the details opening).
+    const ro = new ResizeObserver(() => { if (touched.current) apply(store.get()); else fit(); });
     ro.observe(w);
     return () => ro.disconnect();
-  }, [apply, store]);
+  }, [apply, store, fit]);
 
   // ---- pointer: pan the background, drag a box, click to select, wheel to zoom
   const gesture = useRef<{ kind: 'pan' | 'node'; id?: string; edge?: string; sx: number; sy: number; cam: Camera; ox: number; oy: number; moved: boolean } | null>(null);
@@ -193,7 +202,7 @@ export function DiagramCanvas(props: DiagramCanvasProps): React.ReactElement {
     const dx = e.clientX - g.sx; const dy = e.clientY - g.sy;
     if (!g.moved && Math.hypot(dx, dy) < 4) return;
     g.moved = true;
-    if (g.kind === 'pan') { apply({ ...g.cam, x: g.cam.x + dx, y: g.cam.y + dy }); return; }
+    if (g.kind === 'pan') { touched.current = true; apply({ ...g.cam, x: g.cam.x + dx, y: g.cam.y + dy }); return; }
     if (!canDrag || !g.id) return;
     const k = store.get().k;
     const next = { id: g.id, x: Math.round(g.ox + dx / k), y: Math.round(g.oy + dy / k) };
@@ -318,7 +327,6 @@ export function DiagramCanvas(props: DiagramCanvasProps): React.ReactElement {
   };
 
   const flows = shown.flows ?? [];
-  const flowTitle = flows.find((f) => f.id === play.flow)?.title;
   const selNode = selection?.type === 'node' ? selection.id : null;
   const toNeighbourhood = (id: string | null) => {
     const c = id ?? selNode ?? [...spec.nodes].sort((a, b) => degree(spec, b.id) - degree(spec, a.id))[0]?.id ?? null;
@@ -328,7 +336,7 @@ export function DiagramCanvas(props: DiagramCanvasProps): React.ReactElement {
   toNeighbourhoodRef.current = toNeighbourhood;
 
   return (
-    <div className={cx('relative flex h-full min-h-[320px] w-full flex-col overflow-hidden bg-hx-bg', className)} data-diagram-canvas={shown.view} data-mode={mode}>
+    <div className={cx('relative flex h-full min-h-[320px] w-full flex-col overflow-hidden bg-hx-bg', className)} data-diagram-canvas={shown.view} data-mode={mode} data-engine={scene?.engine ?? ""} data-nodes={scene?.nodes.length ?? 0} data-edges={scene?.edges.length ?? 0}>
       <div className="flex min-h-0 flex-1">
         <div
           ref={wrap}
@@ -407,7 +415,6 @@ export function DiagramCanvas(props: DiagramCanvasProps): React.ReactElement {
                       </li>
                     ))}
                   </ol>
-                  {flowTitle && <p className="mt-1 truncate text-[11px] text-hx-muted">{flowTitle}</p>}
                 </>
               )}
             </div>
@@ -441,7 +448,7 @@ export function DiagramCanvas(props: DiagramCanvasProps): React.ReactElement {
           </div>
 
           {/* bottom-right: minimap */}
-          {scene && <Minimap scene={scene} store={store} viewport={wrap} onJump={(c) => apply(c)} />}
+          {scene && <Minimap scene={scene} store={store} viewport={wrap} onJump={(c) => { touched.current = true; apply(c); }} />}
 
           {/* bottom-centre: ask the agent */}
           {onAsk && (
@@ -516,7 +523,7 @@ function Minimap({ scene, store, viewport, onJump }: { scene: Scene; store: Retu
       <svg width={W} height={H} onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); jump(e); }} onPointerMove={(e) => { if (e.buttons & 1) jump(e); }} className="block cursor-pointer">
         {scene.groups.map((g) => <rect key={g.id} x={g.x * s + ox} y={g.y * s + oy} width={g.w * s} height={g.h * s} rx={2} fill="none" stroke="var(--hx-border)" />)}
         {scene.nodes.map((n) => <rect key={n.id} x={n.x * s + ox} y={n.y * s + oy} width={Math.max(1.5, n.w * s)} height={Math.max(1.5, n.h * s)} rx={1} fill="var(--hx-text-muted)" fillOpacity={0.55} />)}
-        <rect x={view.x} y={view.y} width={Math.max(4, view.w)} height={Math.max(4, view.h)} fill="var(--hx-accent)" fillOpacity={0.08} stroke="var(--hx-accent)" strokeWidth={1.3} rx={2} />
+        {(() => { const x0 = Math.max(1, view.x); const y0 = Math.max(1, view.y); const x1 = Math.min(W - 1, view.x + view.w); const y1 = Math.min(H - 1, view.y + view.h); return x1 > x0 && y1 > y0 && (x1 - x0) * (y1 - y0) < W * H * 0.92 ? <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} fill="var(--hx-accent)" fillOpacity={0.06} stroke="var(--hx-accent)" strokeWidth={1.3} rx={2} data-minimap-view="" /> : null; })()}
       </svg>
     </div>
   );
@@ -534,7 +541,9 @@ export function Legend({ summary, view, compact }: { summary: string; view: stri
         <span className="flex items-center gap-1.5">{dot('', true)}planned</span>
         <span className="flex items-center gap-1.5"><span className="inline-block h-2.5 w-4 rounded-[3px] border border-dashed border-hx-muted" />dashed = integrated / bought</span>
       </>}
-      <span className="flex items-center gap-1.5"><svg width="18" height="6" aria-hidden="true"><path d="M0 3h18" stroke="currentColor" strokeWidth="1.4" strokeDasharray="4 3" /></svg>dashed line = asynchronous</span>
+      {view === 'code' && <span className="flex items-center gap-1.5"><span className="rounded-full border border-hx-border px-1.5 text-[10px] leading-4">12</span>imports between folders</span>}
+      {view === 'data' && <span className="flex items-center gap-1.5"><b className="text-hx-secondary">n · 1</b>many rows point at one</span>}
+      {view !== 'code' && <span className="flex items-center gap-1.5"><svg width="18" height="6" aria-hidden="true"><path d="M0 3h18" stroke="currentColor" strokeWidth="1.4" strokeDasharray="4 3" /></svg>dashed line = asynchronous</span>}
       <span className="ml-auto font-medium text-hx-secondary" data-diagram-summary>{summary}</span>
     </div>
   );

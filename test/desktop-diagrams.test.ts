@@ -13,7 +13,7 @@ import { askMessage } from '../apps/desktop/renderer/src/builtins/diagrams/api-p
 import { DEPLOYMENT_WITH_CACHE, DIAGRAMS, HOSTILE, bigDiagram, json } from './fixtures/desktop/diagrams.ts';
 import { loadUi, renderAll } from './fixtures/desktop/load-ui.ts';
 
-const spec = (v: unknown): DiagramSpec => { const r = validateDiagram(typeof v === 'string' ? v : json(v)); assert.ok(r.spec, r.error); return r.spec!; };
+const spec = (v: unknown): DiagramSpec => { const r = validateDiagram(typeof v === 'string' ? v : json(v)); assert.ok(r.spec, r.error ?? ""); return r.spec!; };
 type Rect = { x: number; y: number; w: number; h: number };
 const overlap = (a: Rect, b: Rect) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 const inside = (a: Rect, b: Rect) => a.x >= b.x - 0.5 && a.y >= b.y - 0.5 && a.x + a.w <= b.x + b.w + 0.5 && a.y + a.h <= b.y + b.h + 0.5;
@@ -27,7 +27,7 @@ test('spec: every view of the fixtures validates cleanly; aliases are mapped; th
     assert.equal(r.spec!.nodes.length, d.nodes.length);
   }
   const loose = validateDiagram({ view: 'architecture', nodes: [{ id: 'db', type: 'postgres', label: 'Main DB', status: 'WIP' }, { id: 'u', kind: 'user', title: 'Ann' }, { id: 'x', kind: 'teleporter', title: 'X' }], edges: [{ source: 'u', target: 'db', style: 'dashed', cardinality: 'N:1' }] });
-  assert.ok(loose.spec, loose.error);
+  assert.ok(loose.spec, loose.error ?? "");
   assert.equal(loose.spec!.view, 'container');
   assert.deepEqual(loose.spec!.nodes.map((n) => [n.kind, n.title, n.status ?? '']), [['relational-db', 'Main DB', 'in-progress'], ['person', 'Ann', ''], ['custom', 'X', '']]);
   assert.equal(loose.spec!.edges![0]!.async, true);
@@ -116,7 +116,8 @@ test('render: every view draws its nodes, groups, edges and labels (deployment z
   for (const t of ['>PK<', '>FK<', '>UK<', '>pii<', '+ <!-- -->3<!-- --> more', 'citext', 'numeric(12,2)']) assert.ok(er.includes(t), `ER shows ${t}`);
   const code = (await renderAll(React.createElement(ui.DiagramBlock, { source: json(DIAGRAMS.code) }))).html;
   assert.match(code, />64</, 'import counts on the edges');
-  assert.match(code, /FOLDER · 61 FILES/);
+  assert.match(code, />FOLDER</);
+  assert.match(code, /61 files · 22.4k lines/);
   const sum = (d: unknown) => summaryLine(summarizeDiagram(spec(d)), spec(d).view);
   assert.equal(sum(DIAGRAMS.container), '6 built · 2 integrated · 9 relations · 1 flow · 1 finding');
   assert.equal(sum(DIAGRAMS.deployment), '4 built · 2 integrated · 7 relations · 1 flow · 1 finding');
@@ -285,7 +286,7 @@ test('code map: files aggregate into folders deep enough to read, edges count im
   assert.equal(folderDepth(scan, 80), 3);
   const s = codeMapSpec(scan, { title: 'demo - code map', maxNodes: 80 });
   const v = validateDiagram(json(s));
-  assert.ok(v.spec, v.error);
+  assert.ok(v.spec, v.error ?? "");
   assert.equal(s.view, 'code');
   const ids = s.nodes.map((n) => n.id).sort();
   assert.deepEqual(ids, ['_root', 'packages/ui/src', 'pkg', 'scripts', 'src/core', 'src/server', 'src/tools', 'src/util']);

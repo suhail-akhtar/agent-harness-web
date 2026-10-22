@@ -419,7 +419,7 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       assert.equal(await page.locator('[data-notebook] [data-cell]').count(), 5);
       assert.ok(await page.locator('.katex .mord').count() > 20, 'KaTeX with mhchem and the physics macros');
       assert.equal(await page.locator('.katex-error').count(), 0, 'every formula parsed');
-      assert.equal(await page.locator('[data-diagram-placeholder]').count(), 1, 'diagram is reserved: JSON with a note');
+      assert.equal(await page.locator('[data-artifact="diagram"] [data-diagram-svg]').count(), 1, 'a diagram block is drawn (core.diagrams)');
       // Tables: filter, stats, pivot.
       const table = page.locator('[data-widget="CSV"] [data-table]').first();
       await table.locator('[data-table-filter]').fill('gizmo');
@@ -464,7 +464,7 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       await shotTall('render-dashboard', '[data-widget="Dashboard"]');
       await shotTall('render-notebook', '[data-widget="Notebook"]');
       await shotEl('render-geojson', '[data-widget="Map"]');
-      await shotEl('render-diagram-reserved', '[data-artifact="diagram"]');
+      await shotEl('render-diagram', '[data-artifact="diagram"]');
       await page.locator('[data-virtual-list]').evaluate((el) => { el.scrollTop = el.scrollHeight; });
       await shot('science-bottom');
     });
