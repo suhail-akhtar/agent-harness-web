@@ -406,7 +406,7 @@ function DrillBar({ h, s, mode, act, toggle }: { h: HierarchySpec; s?: DrillStat
         {level > 0 && <button type="button" className="rounded px-0.5 hover:bg-hx-hover hover:text-hx-primary" onClick={stop(() => act({ action: 'to', level: 0 }))} data-crumb="all">All</button>}
         {crumbs.slice(0, level).map((c, i) => {
           if (s?.mode === 'expand' && i >= (s.path.length)) return null;
-          const label = c.all ? `all ${levelName(c.field)}s` : formatValue(c.value ?? null, undefined, c.field.includes(':') ? c.field.split(':').pop() as 'month' : undefined) || '(blank)';
+          const label = c.all ? `${levelName(c.field)}: all` : formatValue(c.value ?? null, undefined, c.field.includes(':') ? c.field.split(':').pop() as 'month' : undefined) || '(blank)';
           const back = !c.all && i + 1 < level;
           return <React.Fragment key={i}><span aria-hidden>›</span>{back ? <button type="button" className="rounded px-0.5 hover:bg-hx-hover hover:text-hx-primary" onClick={stop(() => act({ action: 'to', level: i + 1 }))} data-crumb={i}>{label}</button> : <span data-crumb={i}>{label}</span>}</React.Fragment>;
         })}

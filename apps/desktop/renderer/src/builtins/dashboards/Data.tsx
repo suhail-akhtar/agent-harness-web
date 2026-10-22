@@ -319,6 +319,13 @@ function ModelEditor({ m }: { m: ModelSpec }) {
         <div className="mt-1 flex flex-wrap gap-2">{m.tables.map((t) => (
           <div key={t.name} className="min-w-[160px] rounded-lg border border-hx-border bg-hx-elevated p-2 text-[12px]" data-model-table={t.name}>
             <div className="flex items-center"><b className="flex-1">{t.name}</b><IconButton size="xs" icon="x" label={`Remove ${t.name}`} onClick={() => void act('model.remove-table', { model: m.id, table: t.name }).catch(() => {})} /></div>
+            {(() => {
+              // Where the table's rows come from: tables of different sources relate in one model.
+              const ds = catalog.datasets.find((d) => d.name === t.dataset);
+              const src = ds?.source ? catalog.sources.find((s) => s.id === ds.source) : undefined;
+              const kind = src ? (src.type === 'file' ? (src.format ?? src.path?.split('.').pop() ?? 'file').toUpperCase() : ({ sqlite: 'SQLite', postgres: 'Postgres', mysql: 'MySQL', mssql: 'SQL Server', mongodb: 'MongoDB', http: 'API', static: 'values', plugin: 'plugin' } as Record<string, string>)[src.type] ?? src.type) : 'SQL';
+              return <div className="mb-0.5 flex flex-wrap items-center gap-1 text-[11px]" data-table-source={kind}><span className="rounded bg-hx-accent-soft px-1 font-medium text-hx-accent-text">{kind}</span><span className="truncate text-hx-secondary">{src?.name ?? 'over other datasets'}</span>{ds?.storage === 'live' && <span className="rounded bg-hx-success/15 px-1 text-hx-success" data-live>live</span>}</div>;
+            })()}
             <div className="text-hx-muted">{catalog.datasets.find((d) => d.name === t.dataset)?.state.columns?.filter((c) => c.name !== '__rn').map((c) => c.name).join(', ')}</div>
             {(t.columns ?? []).map((c) => <div key={c.name} className="flex items-center text-hx-accent-text">ƒ {c.name}<IconButton size="xs" icon="x" label="Remove" onClick={() => void act('model.remove-column', { model: m.id, table: t.name, column: c.name }).catch(() => {})} /></div>)}
           </div>

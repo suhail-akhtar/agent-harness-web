@@ -230,7 +230,7 @@ function linkTargets(doc: DocSpec): Set<string> {
 }
 
 /** Who may see a published page (or a dashboard it links to, read through it), and with which row-level security. */
-async function access(ctx: DataHttpContext, req: http.IncomingMessage, slug: string, linked?: string | null): Promise<{ entry: PublishedEntry; viewer: Viewer; doc: DocSpec; model?: ModelSpec; docId: string }> {
+async function access(ctx: DataHttpContext, req: http.IncomingMessage, slug: string, linked?: string | null): Promise<{ entry: PublishedEntry; viewer: Viewer; doc: DocSpec; model?: ModelSpec; docId: string; allowed: Set<string> }> {
   const entry = (await ctx.svc.published()).find((x) => x.slug === slug && !x.remote);
   if (!entry) throw new DataError('this page is not published (or was unpublished)', 404);
   const home = ctx.svc.home(entry.owner);
@@ -246,6 +246,7 @@ async function access(ctx: DataHttpContext, req: http.IncomingMessage, slug: str
     user = who.id;
   }
   let { spec } = await home.doc(entry.doc);
+  const published = spec;
   let docId = entry.doc;
   if (linked && linked !== entry.doc) {
     // The owner linked it from the published page: it is shown with the same link and the same rules.
@@ -259,7 +260,15 @@ async function access(ctx: DataHttpContext, req: http.IncomingMessage, slug: str
   // Signed-in viewers see the rows of the roles they are members of (none: no data, when the model has roles).
   const roles = model?.roles.filter((r) => (entry.access === 'token' ? r.name === entry.role : (entry.role ? r.name === entry.role : false) || r.members.includes('*') || (!!user && r.members.includes(user)))) ?? [];
   const all = (entry.access === 'token' && !entry.role) || (entry.access === 'signed-in' && user === entry.owner && !entry.role) || !model?.roles.length;
-  return { entry, doc: spec, model, docId, viewer: all ? { owner: true, showSql: !!entry.showSql } : { owner: false, user, roles, showSql: !!entry.showSql } };
+  // What the page may be filtered on: the fields it shows; a linked dashboard also takes the fields of
+  // the page that links to it (the context a link carries), where its own model has their tables.
+  const allowed = allowedFields(spec, model);
+  if (docId !== entry.doc) {
+    const pm = published.model ? cat.models.find((m) => m.id === published.model) : undefined;
+    const tables = new Set((model?.tables ?? []).map((t) => t.name));
+    for (const f of allowedFields(published, pm)) if (tables.has(parseField(f)?.table ?? '')) allowed.add(f);
+  }
+  return { entry, doc: spec, model, docId, allowed, viewer: all ? { owner: true, showSql: !!entry.showSql } : { owner: false, user, roles, showSql: !!entry.showSql } };
 }
 
 const streams = new Map<string, Set<http.ServerResponse>>();
@@ -293,12 +302,12 @@ export async function publishedRoutes(ctx: DataHttpContext, req: http.IncomingMe
     if (m[2] === 'doc' && method === 'GET') {
       void home.countView(a.docId, 'published').catch(() => {});
       // fields: what this page may be filtered on (a dashboard opened from another keeps only those of the carried filters).
-      { send(res, 200, { doc: publicDoc(a.doc, !!a.entry.showSql), id: a.docId, hierarchies: a.model?.hierarchies ?? [], formats: a.model?.formats ?? {}, role: a.viewer.roles?.map((r) => r.name) ?? [], published: { at: a.entry.at }, fields: [...allowedFields(a.doc, a.model)] }); return true; }
+      { send(res, 200, { doc: publicDoc(a.doc, !!a.entry.showSql), id: a.docId, hierarchies: a.model?.hierarchies ?? [], formats: a.model?.formats ?? {}, role: a.viewer.roles?.map((r) => r.name) ?? [], published: { at: a.entry.at }, fields: [...a.allowed] }); return true; }
     }
     if (m[2] === 'visual' && method === 'POST') {
       const v = a.doc.pages.flatMap((x) => x.visuals).find((x) => x.id === b!.visual);
       if (!v) throw new DataError('no such visual', 404);
-      const state = cleanState(b!.state, allowedFields(a.doc, a.model));
+      const state = cleanState(b!.state, a.allowed);
       const r = await visualData(ctx.svc, home, a.doc, v, state, a.viewer);
       { send(res, 200, stripResult(JSON.parse(JSON.stringify(r)) as QueryResult, !!a.entry.showSql)); return true; }
     }

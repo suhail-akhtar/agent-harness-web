@@ -30,7 +30,7 @@ export function implicitModel(datasets: string[]): ModelSpec {
 interface Edge { many: FieldRef; one: FieldRef; both: boolean; oneToOne: boolean }
 interface Measure extends MeasureSpec { inline?: boolean }
 
-const GRAIN_SQL = (g: Grain, x: string) => (g === 'hour' ? `date_trunc('hour', ${x})` : `CAST(date_trunc('${g}', ${x}) AS DATE)`);
+const GRAIN_SQL = (g: Grain, x: string) => (g === 'hour' || g === 'minute' ? `date_trunc('${g}', ${x})` : `CAST(date_trunc('${g}', ${x}) AS DATE)`);
 const INTERVAL = (g: Grain, n = 1) => `INTERVAL ${n} ${g === 'quarter' ? 'MONTH' : g.toUpperCase()}`.replace(/INTERVAL (\d+) MONTH$/, (_m, k) => `INTERVAL ${g === 'quarter' ? Number(k) * 3 : k} MONTH`);
 
 /** Strings and quoted names masked, so scanning an expression never matches inside them. */

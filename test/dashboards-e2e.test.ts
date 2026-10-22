@@ -305,6 +305,43 @@ test('dashboards end to end', { timeout: 15 * 60_000 }, async (t) => {
       assert.equal(r.body.published, null);
     });
 
+    await step('the model view: tables from an Excel sheet, a SQLite database and a JSON file, related; one of them live', async () => {
+      const { writeXlsx } = await import('../src/data/xlsx.ts');
+      const { DatabaseSync } = await import('node:sqlite');
+      fs.writeFileSync(path.join(work, 'products.xlsx'), writeXlsx([{ name: 'Products', columns: ['Price list'], rows: [[], ['sku', 'name', 'price'], ['P1', 'Tea', 4.5], ['P2', 'Coffee', 7.25]] }]));
+      fs.writeFileSync(path.join(work, 'customers.json'), JSON.stringify([{ id: 'c1', profile: { name: 'Ada', country: 'France' } }, { id: 'c2', profile: { name: 'Bo', country: 'Canada' } }]));
+      const db = new DatabaseSync(path.join(work, 'shop.sqlite'));
+      db.exec("CREATE TABLE orders (id INTEGER PRIMARY KEY, customer TEXT, sku TEXT, qty INTEGER); INSERT INTO orders VALUES (1,'c1','P1',2),(2,'c2','P2',1),(3,'c1','P2',3);");
+      db.close();
+      const r = await api('POST', '/api/data/ops', { ops: [
+        { op: 'add_source', source: { id: 'src-xl', name: 'Price list (Excel)', type: 'file', path: path.join(work, 'products.xlsx') } },
+        { op: 'add_source', source: { id: 'src-db', name: 'Shop database', type: 'sqlite', path: path.join(work, 'shop.sqlite') } },
+        { op: 'add_source', source: { id: 'src-js', name: 'Customers (JSON)', type: 'file', path: path.join(work, 'customers.json') } },
+        { op: 'define', dataset: { name: 'products', source: 'src-xl', from: 'Products' } },
+        { op: 'define', dataset: { name: 'orders', source: 'src-db', from: 'orders' } },
+        { op: 'define', dataset: { name: 'customers', source: 'src-js' } },
+        { op: 'set_storage', dataset: 'orders', storage: 'live', ttl: 5 },
+        { op: 'add_model', model: { id: 'shop', name: 'Shop (three sources)' } },
+        { op: 'set_table', model: 'shop', table: { name: 'orders', dataset: 'orders' } },
+        { op: 'set_table', model: 'shop', table: { name: 'products', dataset: 'products' } },
+        { op: 'set_table', model: 'shop', table: { name: 'customers', dataset: 'customers' } },
+        { op: 'set_relationship', model: 'shop', relationship: { from: 'orders.sku', to: 'products.sku' } },
+        { op: 'set_relationship', model: 'shop', relationship: { from: 'orders.customer', to: 'customers.id', crossFilter: 'both' } },
+        { op: 'set_measure', model: 'shop', measure: { name: 'Sales', expr: 'sum(orders.qty * products.price)', format: 'currency:USD' } },
+        { op: 'set_hierarchy', model: 'shop', hierarchy: { name: 'Market', levels: ['customers.profile_country', 'customers.profile_name'] } },
+      ] });
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      const q = await api('POST', '/api/data/ops', { ops: [{ op: 'model_query', query: { model: 'shop', dims: ['customers.profile_country'], measures: ['Sales'], sort: [{ by: 'customers.profile_country' }] } }] });
+      assert.deepEqual(q.body.results[0].data.rows, [['Canada', 7.25], ['France', 2 * 4.5 + 3 * 7.25]]);
+      await page.click('[data-nav="core.dashboards:data"]');
+      await page.click('[role="tab"]:has-text("Model")');
+      await page.selectOption('select[aria-label="Model"]', 'shop').catch(async () => { await page.click('[aria-label="Model"]'); await page.click('[role="option"]:has-text("Shop (three sources)")'); });
+      await page.waitForSelector('[data-model="shop"] [data-model-table="orders"] [data-live]', { timeout: 20_000 });
+      for (const [t, kind] of [['products', 'XLSX'], ['orders', 'SQLite'], ['customers', 'JSON']]) assert.equal(await page.getAttribute(`[data-model-table="${t}"] [data-table-source]`, 'data-table-source'), kind);
+      assert.equal(await page.locator('[data-model="shop"] [data-relationship]').count(), 2);
+      await shot('model-cross-source');
+    });
+
     const unexpected = errors.filter((e) => !/Failed to load resource|ResizeObserver/.test(e.text));
     assert.deepEqual(unexpected, [], 'no unexpected errors in the window');
   } finally {

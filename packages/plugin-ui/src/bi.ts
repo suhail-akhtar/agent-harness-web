@@ -19,7 +19,7 @@
 /** Dataset, table and model-object names: SQL identifiers. */
 export const IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,62}$/;
 export const ID = /^[a-z0-9][a-z0-9-]{0,62}$/;
-export const GRAINS = ['year', 'quarter', 'month', 'week', 'day', 'hour'] as const;
+export const GRAINS = ['year', 'quarter', 'month', 'week', 'day', 'hour', 'minute'] as const;
 export type Grain = typeof GRAINS[number];
 
 /** "table.column" or "table.column:grain" (a date truncated to that grain). */
@@ -472,7 +472,7 @@ export function themeOf(t: DocSpec['theme']): ThemeSpec { return typeof t === 'o
 
 const GRAIN_FMT: Record<Grain, Intl.DateTimeFormatOptions> = {
   year: { year: 'numeric', timeZone: 'UTC' }, quarter: { year: 'numeric', timeZone: 'UTC' }, month: { year: 'numeric', month: 'short', timeZone: 'UTC' },
-  week: { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' }, day: { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' }, hour: { month: 'short', day: 'numeric', hour: '2-digit', timeZone: 'UTC' },
+  week: { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' }, day: { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' }, hour: { month: 'short', day: 'numeric', hour: '2-digit', timeZone: 'UTC' }, minute: { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' },
 };
 /**
  * Formats a value for display. Formats: "currency:USD[:decimals]", "percent[:decimals]" (0.12 ->
