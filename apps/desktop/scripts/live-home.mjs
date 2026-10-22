@@ -36,7 +36,7 @@ if (!fs.existsSync(path.join(desktop, 'dist', 'main.cjs'))) { const { spawnSync 
 
 // The app's data folder of its own: its harness home is <data>/home (never the person's ~/.harness).
 const data = fs.mkdtempSync(path.join(os.tmpdir(), 'hd-live-home-'));
-const app = await _electron.launch({ executablePath: electronExe, args: [desktop], env: { ...process.env, HARNESS_DESKTOP_DATA: data, HARNESS_DESKTOP_NO_TRAY: '1', HARNESS_DESKTOP_TEST: '1', HARNESS_PLUGIN_LOOPS: 'off' }, timeout: 60_000 });
+const app = await _electron.launch({ executablePath: electronExe, args: [desktop], env: { ...process.env, HARNESS_DESKTOP_DATA: data, HARNESS_DESKTOP_NO_TRAY: '1', HARNESS_DESKTOP_TEST: '1', HARNESS_PLUGIN_LOOPS: 'off', HARNESS_OPS_ALERTS_INVESTIGATE: '0', HARNESS_OPS_WATCH_SECONDS: '0' }, timeout: 60_000 });
 const capture = async () => Buffer.from(await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG().toString('base64')), 'base64');
 const page = await app.firstWindow();
 const errors = [];
@@ -91,10 +91,9 @@ try {
   const inc = (await api('POST', '/api/plugins/aiops/console/incidents', { status: 'open' })).body?.incidents?.[0]?.id;
   if (!inc) throw new Error('no incident from the alert');
   log(`incident ${inc}`);
-  // The person has allowed the Operations pages (its frame grant), so the incident shows.
-  const plugins = (await api('GET', '/api/plugins')).body;
-  const aiops = (Array.isArray(plugins) ? plugins : []).find((p) => p.name === 'aiops');
-  if (aiops?.uiHash) await invoke('grants:set', 'aiops', { uiHash: aiops.uiHash, capabilities: aiops.ui?.capabilities ?? [] });
+  // The person allows the Operations pages once (their frame's access), so the incident can show.
+  await page.click('[data-nav="aiops:incidents"]');
+  await page.click('[data-grant]', { timeout: 20_000 }).catch(() => {});
   const s2 = await api('POST', '/api/sessions', { title: 'Live incident', model: MODEL, effort: 'medium', mode: 'default', runtime: 'local', path: ws, client: { kind: 'desktop', version: 'live', renderers: [], tools: ['desktop_command', 'desktop_describe', 'desktop_notify', 'desktop_open'] } });
   const id2 = s2.body.id ?? s2.body.meta?.id;
   await page.click('[data-nav="core.chat:new"]');

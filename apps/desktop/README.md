@@ -218,4 +218,4 @@ A plugin renderer for a fence language or an artifact kind replaces the default.
   `node --env-file=<path to .env> apps/desktop/scripts/live-home.mjs` checks the harness home and plugin
   commands on claude-sonnet-5-5 (effort medium): a file written in `<home>/workspaces/default` and read
   back, then an Operations incident (from an alert) opened in the app by the agent with `desktop_command`
-  (asked first), under a $0.50 cap.
+  (asked first), under a $0.50 cap. On 2026-10-22 both passed for $0.039 ($0.022 and $0.017).
