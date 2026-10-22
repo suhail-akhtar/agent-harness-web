@@ -73,7 +73,9 @@ the query editor (steps, previews, profiling, SQL), the semantic model (relation
 hierarchies, roles), dashboards and reports edited in place (drag, resize, the inspector, nine
 layout types, templates) with Undo, Ask (an agent applying the same ops beside the dashboard),
 publishing as a live page, exports. Every chart, figure and table in a transcript has "Add to
-dashboard". See the README's "Data, dashboards and reports". `node apps/desktop/scripts/build-viewer.mjs`
+dashboard". A visual with a hierarchy has a drill bar (up, drill mode, next level, expand all, a
+breadcrumb); a point's menu opens linked dashboards with its context; slicers sync across
+dashboards; the model view shows where each table comes from (and which are live). See the README's "Data, dashboards and reports". `node apps/desktop/scripts/build-viewer.mjs`
 builds the published-page viewer (`dist/bi-viewer`); the e2e builds it when it is out of date.
 
 ## Environment

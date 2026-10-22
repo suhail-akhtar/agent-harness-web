@@ -398,7 +398,7 @@ Where it differs from the text above, and why:
 
 ## 18. Data, dashboards and reports (`core.dashboards`)
 
-One engine (DuckDB) computes every number; models never type one. Sources (files, Excel, SQLite,
+One engine (DuckDB) computes every number; models never type one. (Since: logs, XML, NDJSON, MongoDB and SQL Server sources, live tables beside imported ones, cleansing steps, five-level drill with a drill bar and breadcrumb, links and synced slicers between dashboards; the pure drill and context rules live in `packages/plugin-ui/src/bi.ts` so the app, published pages and the agents' `drill`/`drillthrough` ops agree.) Sources (files, Excel, SQLite,
 Postgres, MySQL, HTTP APIs, inline values, plugins' sources) become extracts; datasets add
 query-editor steps and SQL; a semantic model adds relationships, measures (time intelligence
 exact by re-aggregation), hierarchies and row-level security; documents (dashboards and reports)
