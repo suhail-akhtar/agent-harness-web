@@ -398,3 +398,28 @@ Where it differs from the text above, and why:
   copied.
 - **Delegation to other models needs the person's consent** (`delegation` in their settings, within the
   operator's cap): sub-agents, linked sessions and workflow agent nodes with a `model`.
+
+## 18. Data, dashboards and reports (`core.dashboards`)
+
+One query engine under everything: DuckDB, over files (CSV, TSV, JSON, Parquet, Excel), SQLite, Postgres,
+MySQL, HTTP APIs (fetched by the server, hosts declared, credentials from the vault) and datasets the research
+tools produce. A dataset is a named, parameterised, read-only SQL query with cached results (time, rows,
+hash). Accuracy by construction: every chart, KPI and table in a dashboard or report is bound to a dataset the
+engine computed - models never type the numbers - and each visual shows its lineage (source, SQL,
+parameters, refreshed at). Dashboards (versioned artifacts) have a grid, filters and parameters with
+cross-filtering, drill-down, time ranges, refresh policies (manual, interval, cron, event), thresholds and
+alerts, TV mode and exports. Reports embed live visuals and can be snapshotted and scheduled. Any visual in a
+transcript can be pinned to a dashboard or report. Agents drive it with lean `datasource`, `dataset` and
+`dashboard` tools and a skill loaded on demand. Publishing serves a dashboard at `/p/<slug>` with the same
+renderers as a web bundle, refreshed by the server and pushed live; viewers never see credentials or SQL
+unless allowed; unpublish revokes at once; a static export is available. Plugins can add data source types
+and widgets.
+
+## 19. The harness home (`~/.harness`)
+
+By default everything lives under one folder the person can find and move: `~/.harness/` (or
+`HARNESS_HOME`, or Settings > Application > Location): `data/` (the server's sessions, vault, plugin
+data), `workspaces/` (`default/` and one folder per project the harness creates), `tmp/` (scratch sessions,
+cleaned on a schedule), `dashboards/` and `reports/` exports, `plugins/` (installed), `logs/`, and
+`settings.json`. Opening an existing folder keeps working in place; "Scratch" uses `tmp/`. Moving the home
+is a setting that migrates (or points at) the folder after confirmation.
