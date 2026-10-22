@@ -608,6 +608,9 @@ export function register(api, shared) {
   });
   shared.alerts = engine;
   shared.serverInventory = inventory;
+  // Every change to the alert incidents (a webhook, the watch loop) tells the apps: their badges read again at once.
+  const ingest = engine.ingest.bind(engine);
+  engine.ingest = async (alerts) => { const r = await ingest(alerts); api.signal?.('incidents'); return r; };
 
   for (const format of Object.keys(FORMATS)) {
     api.registerRoute({

@@ -288,6 +288,13 @@ export function register(api, shared) {
       inventory: !!h.inv?.present,
     });
   });
+  // The sidebar badge and the status bar's counts, read by the app while no Operations page is open (ui.badges).
+  read('badges', async (req) => {
+    const list = await incidents(req.user);
+    const gs = await groups();
+    const firing = gs.reduce((n, g) => n + Object.values(g.alerts ?? {}).filter((a) => a.status === 'firing').length, 0);
+    return ok({ open: list.filter((x) => x.open).length || null, firing: firing || null });
+  });
   read('incidents', async (req, a) => {
     const list = await incidents(req.user);
     const want = a.status === 'all' ? 'all' : a.status === 'resolved' ? 'resolved' : 'open';

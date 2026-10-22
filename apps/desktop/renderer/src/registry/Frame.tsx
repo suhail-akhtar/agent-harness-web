@@ -10,11 +10,14 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { PROTOCOL, UI_API_VERSION, qualify, type Capability, type InitMessage } from '@harness/plugin-ui';
 import { Button, Icon, toast, Spinner } from '@harness/ui';
 import { decide, grantRecord, CAPABILITY_TEXT } from '@desk/grants';
-import { handleFrameCall, type Impl } from './frame-host';
+import { handleFrameCall, registryAnswer, type Impl } from './frame-host';
+import { mergedSettings, hasAccountKeys, settingKeys, settingWrite } from './plugin-settings';
+import { rendererFor } from './registry';
+import { useFenceRenderer } from './renderers';
 import { useData, client, globalBus } from '../state/data';
 import { navigate, prefill, useApp } from '../state/app';
 import { onThemeChange, themeVars } from '../state/theme';
-import { desktop } from '../bridge';
+import { desktop, scratchFolder } from '../bridge';
 
 const skipped = new Set<string>();
 
@@ -76,6 +79,9 @@ function FrameView({ plugin, contribution, entry, params, context, height: initi
   const [loaded, setLoaded] = useState(false);
   const pointerInside = useRef(false);
   const subs = useRef(new Set<string>());
+  // A block one of the host's renderers draws over a rectangle of the frame (render.show).
+  const [block, setBlock] = useState<{ fence: string; source: string; rect: { x: number; y: number; width: number; height: number } } | null>(null);
+  const fenceRenderer = useFenceRenderer();
   const src = useMemo(() => pluginFileUrl(plugin, entry), [plugin, entry]);
   const post = (m: unknown) => ref.current?.contentWindow?.postMessage(m, '*');
 
@@ -95,13 +101,22 @@ function FrameView({ plugin, contribution, entry, params, context, height: initi
       'composer.prefill': (x) => { prefill(String(x.text), x.newChat === true); },
       'frame.resize': (x) => { if (!fill) setHeight(Math.max(40, Math.min(2400, Number(x.height) + 2))); },
       'badge.set': (x) => { useApp.getState().setBadge(`${plugin}.${String(x.name)}`, x.value); },
+      'registry.has': (x) => registryAnswer(useData.getState().registry, plugin, 'registry.has', x),
+      'registry.list': (x) => registryAnswer(useData.getState().registry, plugin, 'registry.list', x),
+      'render.show': (x) => {
+        const fence = String(x.fence);
+        if (!rendererFor(useData.getState().registry, 'fence', fence)) throw new Error(`no renderer for "${fence}" here: draw it in the frame`);
+        const r = x.rect as { x: number; y: number; width: number; height: number };
+        setBlock({ fence, source: String(x.source), rect: { x: r.x, y: r.y, width: r.width, height: r.height } });
+      },
+      'render.hide': () => { setBlock(null); },
       'sessions.list': async (x) => (await client.sessions.list({ query: typeof x.query === 'string' ? x.query : undefined, limit: Math.min(200, Number(x.limit) || 50) })).sessions.map((s) => ({ id: s.id, title: s.title, model: s.model, status: s.status, updatedAt: s.updatedAt, createdAt: s.createdAt, cost: s.cost })),
       'sessions.get': async (x) => { const d = await client.sessions.get(String(x.id)); return { meta: d.meta, status: d.status, pending: d.pending.length }; },
       'sessions.history': (x) => client.sessions.history(String(x.id), { after: Number(x.after) || 0, limit: Math.min(500, Number(x.limit) || 100) }),
       'sessions.start': async (x) => {
         const prefs = useApp.getState().prefs;
         const info = useApp.getState().info;
-        const s = await client.sessions.create({ title: String(x.title), model: typeof x.model === 'string' ? x.model : prefs.defaultModel || undefined, runtime: 'local', path: info?.scratch });
+        const s = await client.sessions.create({ title: String(x.title), model: typeof x.model === 'string' ? x.model : prefs.defaultModel || undefined, runtime: 'local', path: await scratchFolder(info?.scratch) });
         if (typeof x.prompt === 'string' && x.prompt.trim()) await client.sessions.send(s.id, x.prompt);
         navigate({ view: 'core.chat:session', params: { id: s.id } });
         return { id: s.id };
@@ -116,8 +131,29 @@ function FrameView({ plugin, contribution, entry, params, context, height: initi
       'files.read': (x) => { const sid = typeof x.session === 'string' ? x.session : currentSession(); if (!sid) throw new Error('no conversation is open'); return client.files.read(sid, String(x.path)); },
       'workflows.list': async () => { const sid = currentSession(); return sid ? (await client.sessions.workflows(sid)).workflows : []; },
       'workflows.start': (x) => { useApp.setState({ workflowDialog: { sessionId: currentSession(), workflow: String(x.name), input: (x.input as Record<string, string>) ?? {} } }); return { opened: true }; },
-      'settings.get': (x) => { const all = useApp.getState().prefs.pluginSettings[plugin] ?? {}; return typeof x.key === 'string' ? all[x.key] : all; },
-      'settings.set': (x) => { const prefs = useApp.getState().prefs; useApp.getState().setPrefs({ pluginSettings: { ...prefs.pluginSettings, [plugin]: { ...(prefs.pluginSettings[plugin] ?? {}), [String(x.key)]: x.value } } }); },
+      // Its own settings: app-scope keys on this computer, account-scope keys with the account on the server (plugin-settings.ts).
+      'settings.get': async (x) => {
+        const keys = settingKeys(useData.getState().registry.plugins.find((p) => p.name === plugin)?.ui);
+        const app = useApp.getState().prefs.pluginSettings[plugin] ?? {};
+        const account = hasAccountKeys(keys) ? (((await client.settings.mine().catch(() => ({}))) as { plugins?: Record<string, Record<string, unknown>> }).plugins?.[plugin] ?? {}) : {};
+        const all = mergedSettings(keys, app, account);
+        return typeof x.key === 'string' ? all[x.key] : all;
+      },
+      'settings.set': async (x) => {
+        const key = String(x.key);
+        const keys = settingKeys(useData.getState().registry.plugins.find((p) => p.name === plugin)?.ui);
+        const w = settingWrite(keys, key, x.value);
+        if ('error' in w) throw new Error(w.error);
+        if (w.target === 'account') {
+          const m = await client.settings.mine() as { plugins?: Record<string, Record<string, unknown>> };
+          const mine = { ...(m.plugins?.[plugin] ?? {}) };
+          if (x.value === null || x.value === undefined) delete mine[key]; else mine[key] = x.value;
+          await client.settings.saveMine({ ...m, plugins: { ...(m.plugins ?? {}), [plugin]: mine } });
+          return;
+        }
+        const prefs = useApp.getState().prefs;
+        useApp.getState().setPrefs({ pluginSettings: { ...prefs.pluginSettings, [plugin]: { ...(prefs.pluginSettings[plugin] ?? {}), [key]: x.value } } });
+      },
       'clipboard.write': async (x) => { await desktop.clipboard(String(x.text)); },
       'browser.open': async (x) => { await desktop.openExternal(String(x.url)); },
       'external.open': async (x) => { await desktop.openExternal(String(x.url)); },
@@ -139,6 +175,8 @@ function FrameView({ plugin, contribution, entry, params, context, height: initi
 
   const init = () => {
     setLoaded(true);
+    // A (re)loaded frame starts without a host-drawn block (render.show belongs to the page that asked).
+    setBlock(null);
     const m: InitMessage = { protocol: PROTOCOL, kind: 'init', plugin, contribution, params: params ?? {}, theme: themeVars(), apiVersion: UI_API_VERSION, capabilities: granted, ...(context !== undefined ? { context } : {}) };
     post(m);
   };
@@ -160,6 +198,12 @@ function FrameView({ plugin, contribution, entry, params, context, height: initi
         style={fill ? { height: '100%' } : { height }}
         data-capabilities={granted.join(' ')}
       />
+      {block && (
+        <div className="absolute overflow-auto rounded-lg bg-hx-bg" data-host-block={block.fence} data-host-block-plugin={plugin}
+          style={{ left: Math.max(0, block.rect.x), top: Math.max(0, block.rect.y), width: block.rect.width, height: block.rect.height, maxWidth: '100%' }}>
+          {fenceRenderer(block.fence, block.source, false) ?? null}
+        </div>
+      )}
     </div>
   );
 }

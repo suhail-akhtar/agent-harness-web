@@ -32,6 +32,20 @@
       "workflows.start",
       "settings.read"
     ],
+    "badges": [
+      {
+        "name": "open",
+        "route": "console/badges",
+        "every": 30,
+        "signal": true
+      },
+      {
+        "name": "firing",
+        "route": "console/badges",
+        "every": 30,
+        "signal": true
+      }
+    ],
     "contributes": {
       "navItems": [
         {
@@ -225,7 +239,7 @@
           "schema": {
             "type": "object",
             "title": "Operations console",
-            "description": "How the Operations pages show and investigate incidents on this computer. The server's own watch loop runs on its schedule (HARNESS_OPS_WATCH_SECONDS); here you choose how often the pages look.",
+            "description": "How the Operations pages look on this computer. The server's own watch loop runs on its schedule (HARNESS_OPS_WATCH_SECONDS); here you choose how often the pages look.",
             "properties": {
               "refreshSeconds": {
                 "type": "integer",
@@ -252,14 +266,29 @@
                 ],
                 "default": "info",
                 "order": 2
-              },
+              }
+            }
+          }
+        },
+        {
+          "id": "investigations",
+          "title": "Operations investigations",
+          "icon": "search",
+          "group": "agent",
+          "scope": "account",
+          "order": 41,
+          "schema": {
+            "type": "object",
+            "title": "Investigations",
+            "description": "The models an investigation you start from the Operations pages uses: kept with your account. Another model than the conversation's is a delegation, used only when your delegation setting (Settings > Agents) allows it.",
+            "properties": {
               "evidenceModel": {
                 "type": "string",
                 "title": "Model for gathering evidence",
                 "description": "The evidence steps of an investigation you start here. Empty: the conversation's model. Another model is a delegation, used only when your delegation setting (Settings > Agents) allows it.",
                 "maxLength": 80,
                 "default": "",
-                "order": 3
+                "order": 1
               },
               "refuterModel": {
                 "type": "string",
@@ -267,7 +296,7 @@
                 "description": "A second opinion from another provider before anything changes. Empty: the conversation's model. A delegation, as above.",
                 "maxLength": 80,
                 "default": "",
-                "order": 4
+                "order": 2
               }
             }
           }

@@ -11,7 +11,8 @@ import { App } from './shell/App';
 import { useApp, navigate, openSession, prefill, HOME } from './state/app';
 import { reconcile } from './registry/reconcile';
 import { describeRegistry } from './registry/registry';
-import { useData, setBuiltins, client, applyGlobal, setClientCallHandler } from './state/data';
+import { useData, setBuiltins, client, applyGlobal, setClientCallHandler, globalBus } from './state/data';
+import { badgePlan, runBadges } from './state/badges';
 import { handleClientCall } from './state/client-calls';
 import * as theme from './state/theme';
 import { desktop, on, type EngineState } from './bridge';
@@ -30,6 +31,25 @@ setClientCallHandler(handleClientCall);
 function reapplyTheme() { theme.apply(useApp.getState().prefs, useData.getState().registry, useApp.getState().info?.product.brand.accent); }
 
 let events: GlobalEvents | null = null;
+
+// Badge sources (ui.badges): plugins' badges kept current with none of their pages open; re-planned when the registry changes.
+let badges: ReturnType<typeof runBadges> | null = null;
+let badgeKey = '';
+function replanBadges() {
+  const plan = useApp.getState().engine.status === 'ready' ? badgePlan(useData.getState().registry) : [];
+  const key = JSON.stringify(plan);
+  if (key === badgeKey) return;
+  badgeKey = key;
+  badges?.stop();
+  badges = plan.length ? runBadges(plan, {
+    call: (plugin, route, method) => client.plugins.route(plugin, route, method),
+    set: (k, v) => useApp.getState().setBadge(k, v),
+    // Paused while the window is hidden (the e2e tests' windows are never shown, yet driven: they count as visible).
+    hidden: () => document.visibilityState === 'hidden' && !useApp.getState().info?.test,
+    onVisibility: (fn) => { document.addEventListener('visibilitychange', fn); return () => document.removeEventListener('visibilitychange', fn); },
+  }) : null;
+}
+globalBus.on((e) => { const p = (e.payload ?? {}) as { type?: string; plugin?: string }; if (e.topic === 'plugins' && p.type === 'signal' && typeof p.plugin === 'string') badges?.signal(p.plugin); });
 async function onReady() {
   const d = useData.getState();
   await Promise.all([d.refreshModels(), d.refreshSessions(), d.refreshPlugins(), d.refreshApprovals()]);
@@ -38,6 +58,7 @@ async function onReady() {
   events.on(applyGlobal);
   events.onState((m) => useData.setState({ eventsMode: m }));
   events.start();
+  replanBadges();
   const { models } = useData.getState();
   const { prefs } = useApp.getState();
   if (!prefs.onboardingDone && models.length && !models.some((m) => m.available)) useApp.setState({ onboardingOpen: true });
@@ -65,6 +86,7 @@ async function boot() {
     if (r.closePanel) useApp.setState({ panel: null });
     if (r.settingsSection !== undefined) useApp.setState({ settingsSection: r.settingsSection });
     if (r.dropBadges.length) { const b = { ...useApp.getState().badges }; for (const k of r.dropBadges) delete b[k]; useApp.setState({ badges: b }); }
+    replanBadges();
     reapplyTheme();
   });
 
@@ -72,7 +94,7 @@ async function boot() {
     const was = useApp.getState().engine.status;
     useApp.setState({ engine: s });
     if (s.status === 'ready' && was !== 'ready') void onReady();
-    if (s.status !== 'ready') { events?.stop(); }
+    if (s.status !== 'ready') { events?.stop(); replanBadges(); }
   });
   on<DesktopPrefs>('prefs:changed', (p) => {
     const before = useApp.getState().prefs;

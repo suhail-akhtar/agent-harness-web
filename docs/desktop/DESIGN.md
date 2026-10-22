@@ -140,6 +140,11 @@ Contribution points (each has an `id` unique in the plugin, referenced from else
 | `prompts` | Quick prompts, optionally on the home screen | - |
 | `onboarding` | Steps in the first-run wizard | - |
 
+Besides `contributes`, `ui.badges` (`[{ "name", "route", "every", "signal" }]`) names badge sources: the host
+reads the plugin's own signed-in route as the person every `every` seconds (at least 15, paused while the
+window is hidden) and at once when its server half calls `api.signal(name)` (a `plugins` event with no data),
+so a nav badge or a status item stays current while no page of the plugin is open. It needs `routes.call`.
+
 Actions: `prompt` (prefill, never send without the person), `open-view`, `open-panel`, `open-url`,
 `browse`, `terminal` (always shown before it runs), `workflow` (opens the start dialog with inputs),
 `command`, `theme`, `route` (calls the plugin's own server route and shows the result).
@@ -159,7 +164,7 @@ Capabilities a frame can declare (each a set of SDK calls):
 
 | Capability | SDK calls |
 |---|---|
-| (always) | `theme.get`, `theme.onChange`, `view.open`, `notify.toast`, `storage.get/set` (namespaced), `composer.prefill` |
+| (always) | `theme.get`, `theme.onChange`, `view.open`, `notify.toast`, `storage.get/set` (namespaced), `composer.prefill`, `registry.has/list` (what else is installed: ids and yes/no only), `render.show/hide` (a block drawn by one of the host's fence renderers over a rectangle of the frame) |
 | `sessions.read` | `sessions.list`, `sessions.get`, `sessions.history` |
 | `sessions.start` | `sessions.start` (shown to the person when not from their click), `sessions.send` |
 | `events.subscribe` | `events.subscribe(filter)` - the global stream, filtered |
@@ -167,7 +172,7 @@ Capabilities a frame can declare (each a set of SDK calls):
 | `routes.call` | `routes.call(path, body)` - this plugin's own server routes only |
 | `files.read` | `files.list/read` within the session's or project's workspace |
 | `workflows.start` | `workflows.list`, `workflows.start` (opens the dialog; the person confirms) |
-| `settings.read` / `settings.write` | this plugin's own settings |
+| `settings.read` / `settings.write` | this plugin's own settings: `app` keys on this machine, `account` keys with the person's account (checked against the schema; the server keeps only a plugin's account keys), `operator` keys read-only |
 | `clipboard.write`, `browser.open`, `external.open` | as named |
 
 ## 5. Built-in plugins
@@ -447,6 +452,19 @@ cleaned on a schedule), `dashboards/` and `reports/` exports, `plugins/` (instal
 `settings.json`. Opening an existing folder keeps working in place; "Scratch" uses `tmp/`. Moving the home
 is a setting that migrates (or points at) the folder after confirmation.
 
+Built: `src/util/home.ts` (the server, the CLI and the app share it). Where: `HARNESS_HOME`, else the place a move
+recorded in `~/.harness-location`, else `~/.harness`; explicit variables still win for what they name
+(`HARNESS_DATA`/`HARNESS_DATA_DIR`, and `HARNESS_LOCAL_ROOTS` adds folders). The home's `workspaces/` and `tmp/`
+are always among the local runtime's allowed roots (`HARNESS_HOME_ROOTS=off` drops them); nothing outside the
+allowed roots is reachable. `tmp/` is cleaned on start and daily of entries unchanged for `tmpCleanupDays`
+(settings.json, 7): only inside it, links removed as links and never followed or walked. Exports go to
+`exports/` (one folder for dashboards, reports and conversation exports). The server's old default
+(`./.harness-data`) stays in use while it has data and the home has none; the desktop moves its old
+user-data engine folder in once (copied, checked, the old one kept as a backup; on failure it keeps using it).
+Moving the home copies and checks it, points the sessions' recorded folders and the app's projects at the new
+place, writes the pointer and restarts the engine; the old copy stays until the person removes it. The CLI's
+runs default to the home's data and a scratch folder each in `tmp/`.
+
 ## 20. Domain plugins as frames (sdlc, aiops)
 
 The first two domain products are plugins, not core: `plugins/sdlc` ("Engineering") and
@@ -465,9 +483,22 @@ small, each for any plugin):
   them): links between a plugin's pages (`view.open('incidents', {id})`) work, back and forward too.
 - **`open-view` actions take an agent's plain arguments as params** ("open incident <id>").
 
-Not yet: a frame cannot ask the registry what else is installed, so the Operations topology draws its
-own SVG rather than handing a `diagram` spec to `core.diagrams` when that is present; agent-callable
-commands are listed, but the desktop still declines `desktop_command` calls.
+Then (follow-ups, for any plugin):
+
+- **What is installed**: `registry.has` / `registry.list` (ids, yes/no). The Operations topology asks for a
+  `diagram` fence renderer and, when core.diagrams is there, hands it a deployment spec through `render.show`
+  (the host draws it over a placeholder in the page); otherwise it draws its own SVG.
+- **Account-scope settings for frames**: `settings.get/set` span the plugin's sections by scope (see section 4).
+  Engineering's approval, stack, review strictness and role models, and Operations' investigation models,
+  moved to account sections; display choices (gates shown, refresh, severity filter) stay on the machine.
+- **Badges with no page open**: `ui.badges` and `api.signal` (section 4). Operations' open-incidents badge and
+  its status items come from `console/badges`, read every 30 s and at once when an alert or incident changes.
+- **The inventory gates only in operations projects**: `inventory-valid` and `alerts-valid` apply where the
+  workspace has an inventory or a session used the aiops tools; the operator's inventory alone no longer makes a
+  software project (a slugify repository) answer for it. Named explicitly, they always run.
+- **Plugin commands through `desktop_command`**: a frame plugin's commands marked `agent` run in the app, args
+  checked against `inputSchema` (by the server, then the app), asked in default mode; the answer says what
+  happened (the page opened, a route's text). An e2e step has a scripted agent open an incident this way.
 
 ## 21. The desktop side of sections 11 to 13 (built)
 

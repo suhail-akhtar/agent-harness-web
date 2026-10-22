@@ -76,9 +76,30 @@ export interface NavItemContribution {
   /** `primary` in the sidebar list; `more` under More; `footer` near the profile row. Default primary. */
   placement?: 'primary' | 'more' | 'footer';
   order?: number;
-  /** A live value (from a frame's `badge.set` or a built-in's store) shown as a count. */
+  /** A live value shown as a count: `<plugin>.<name>`, set by a frame's `badge.set`, a built-in's store, or a badge source (`ui.badges`). */
   badge?: string;
 }
+
+/**
+ * Where a badge's value comes from while no page of the plugin is open (`ui.badges`): the host reads
+ * the plugin's own signed-in route (auth "user") as the person, every `every` seconds (at least 15;
+ * paused while the window is hidden), and at once when the plugin's server half signals (`signal`).
+ * The route answers the value (a number, short text or null), or an object holding it by `name`
+ * (one route can feed several badges: it is read once for all of them).
+ */
+export interface BadgeSource {
+  /** The badge it sets: `<plugin>.<name>` (what navItems[].badge and statusItems' `{...}` name). */
+  name: string;
+  /** One of this plugin's route paths (GET unless `method`). */
+  route: string;
+  method?: 'GET' | 'POST';
+  /** Seconds between reads (15 to 86400; default 60). */
+  every?: number;
+  /** Read again at once when the plugin's server half calls api.signal() (a `plugins` event). */
+  signal?: boolean;
+}
+
+export const BADGE_MIN_SECONDS = 15;
 
 interface ViewBase { id: string; title: string; icon?: IconName; description?: string }
 
@@ -239,6 +260,8 @@ export interface UiManifest {
   /** Shipped on and cannot be switched off (set by a product profile for the core plugins). */
   required?: boolean;
   contributes: Required<UiContributes>;
+  /** Badge values the host keeps current while no page of the plugin is open (see BadgeSource). */
+  badges?: BadgeSource[];
 }
 
 /** The subset of JSON Schema the settings and form renderer understands. */
@@ -534,6 +557,24 @@ export function validateUiManifest(input: unknown, opts: { trustCeiling?: UiTrus
   if (!Array.isArray(caps) || !caps.every((x) => (CAPABILITIES as readonly string[]).includes(String(x)))) throw new ManifestError(`"ui.capabilities" lists capabilities from: ${CAPABILITIES.join(', ')}.`);
   if (caps.length && declared === 'declarative') throw new ManifestError('"ui.capabilities" are for frame or native UI; declarative UI runs no code.');
 
+  // Badge sources: the plugin's own routes, read by the host as the person (so the plugin must declare routes.call).
+  let badges: BadgeSource[] | undefined;
+  if (m.badges !== undefined) {
+    if (!Array.isArray(m.badges) || m.badges.length > 20 || !m.badges.every(isObj)) throw new ManifestError('"ui.badges" is a list of at most 20 badge sources ({ "name", "route", "every" }).');
+    if (!caps.includes('routes.call')) throw new ManifestError('"ui.badges" read the plugin\'s own routes: declare the "routes.call" capability.');
+    const seen = new Set<string>();
+    badges = (m.badges as Array<Record<string, unknown>>).map((b) => {
+      if (typeof b.name !== 'string' || !/^[a-zA-Z0-9_.-]{1,40}$/.test(b.name)) throw new ManifestError(`Badge source ${JSON.stringify(b.name)}: "name" is letters, digits, dot, dash and underscore (at most 40).`);
+      if (seen.has(b.name)) throw new ManifestError(`Duplicate badge source "${b.name}".`);
+      seen.add(b.name);
+      if (typeof b.route !== 'string' || !/^[a-z0-9][a-z0-9/_.-]{0,127}$/i.test(b.route) || b.route.includes('..')) throw new ManifestError(`Badge source "${b.name}": "route" must be one of this plugin's route paths.`);
+      if (b.method !== undefined && b.method !== 'GET' && b.method !== 'POST') throw new ManifestError(`Badge source "${b.name}": "method" is GET or POST.`);
+      if (b.every !== undefined && (typeof b.every !== 'number' || !Number.isInteger(b.every) || b.every < BADGE_MIN_SECONDS || b.every > 86_400)) throw new ManifestError(`Badge source "${b.name}": "every" is whole seconds, ${BADGE_MIN_SECONDS} to 86400.`);
+      if (b.signal !== undefined && typeof b.signal !== 'boolean') throw new ManifestError(`Badge source "${b.name}": "signal" is true or false.`);
+      return { name: b.name, route: b.route, ...(b.method ? { method: b.method as 'GET' | 'POST' } : {}), ...(b.every !== undefined ? { every: b.every } : {}), ...(b.signal ? { signal: true } : {}) };
+    });
+  }
+
   return {
     apiVersion,
     displayName: typeof m.displayName === 'string' ? m.displayName.slice(0, 60) : undefined,
@@ -542,6 +583,7 @@ export function validateUiManifest(input: unknown, opts: { trustCeiling?: UiTrus
     trust: declared as UiTrust,
     capabilities: [...new Set(caps as Capability[])],
     ...(m.required === true ? { required: true } : {}),
+    ...(badges ? { badges } : {}),
     contributes: {
       navItems: navItems as NavItemContribution[], views: views as unknown as ViewContribution[], panels: panels as unknown as PanelContribution[],
       commands: commands as unknown as CommandContribution[], slashCommands: slashCommands as unknown as SlashCommandContribution[],

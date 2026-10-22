@@ -11,7 +11,7 @@ import type { Effort, Mode, WorkflowInfo } from '@harness/client';
 import type { JsonSchema } from '@harness/plugin-ui';
 import { useApp, openSession } from '../state/app';
 import { useData, client, clientInfo } from '../state/data';
-import { desktop, platform } from '../bridge';
+import { desktop, platform, scratchFolder } from '../bridge';
 import { ViewHost, type NativeProps } from '../registry/PluginView';
 import type { SettingsSection } from '../registry/registry';
 
@@ -168,7 +168,7 @@ function SchemaSection({ s }: { s: SettingsSection }) {
   const save = async () => {
     try {
       if (s.scope === 'app') useApp.getState().setPrefs({ pluginSettings: { ...prefs.pluginSettings, [s.plugin]: value } });
-      else { const m = await client.settings.mine(); await client.settings.saveMine({ ...m, plugins: { ...((m.plugins as object) ?? {}), [s.plugin]: value } }); }
+      else { const m = await client.settings.mine(); const all = (m.plugins as Record<string, Record<string, unknown>> | undefined) ?? {}; await client.settings.saveMine({ ...m, plugins: { ...all, [s.plugin]: { ...(all[s.plugin] ?? {}), ...value } } }); }
       setSaved(value); toast('Saved', { kind: 'success' });
     } catch (e) { toast((e as Error).message, { kind: 'error' }); }
   };
@@ -228,7 +228,7 @@ export function WorkflowDialog(): React.ReactElement | null {
       const model = models.find((m) => m.id === prefs.defaultModel && m.available) ?? models.find((m) => m.available);
       if (!model) throw new Error('Choose a model first (add a key in Settings > Models & providers).');
       const first = Object.values(input).find((v) => v.trim()) ?? '';
-      const path = where || info?.scratch;
+      const path = where || await scratchFolder(info?.scratch);
       const s = await client.sessions.create({ title: `${name}: ${first.replace(/\s+/g, ' ')}`.slice(0, 60), model: model.id, ...(prefs.defaultEffort ? { effort: prefs.defaultEffort as Effort } : {}), mode: (prefs.defaultMode || 'default') as Mode, runtime: 'local', ...(path ? { path } : {}), client: clientInfo() });
       made = s.id;
       const wf = (await client.sessions.workflows(s.id)).workflows.find((x) => x.name === name);

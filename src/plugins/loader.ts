@@ -169,6 +169,7 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void, da
       },
       on: (event, handler, matcher) => { reg.hooks.push({ event, handler, matcher, plugin: m.name }); contributes.push(`hook:${event}`); },
       log: (msg) => log(`[${m.name}] ${msg}`),
+      signal: (name) => { if (typeof name === 'string' && /^[a-zA-Z0-9_.-]{1,40}$/.test(name)) reg.bridge?.signal?.(m.name, name); },
       registerRoute: (r) => {
         if (!mayServe) undeclared('api.registerRoute', 'routes')();
         if (r?.method !== 'GET' && r?.method !== 'POST') throw new Error(`${m.name}: a route's method is GET or POST`);

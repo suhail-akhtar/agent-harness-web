@@ -89,6 +89,12 @@ export interface PluginAPI {
   registerWorkflow(def: WorkflowDef): void;
   on(event: HookEvent, handler: HookHandler, matcher?: string): void;
   log(message: string): void;
+  /**
+   * Tells the people's apps that something of this plugin changed (a `plugins` event
+   * {type: "signal", plugin, name}, with no data): a badge source with "signal": true reads its
+   * route again at once. At most one per name each second.
+   */
+  signal(name: string): void;
   /** A server secret the plugin declared in permissions.secrets (throws for undeclared names). */
   secret(name: string): string | undefined;
   /** fetch, limited to the hosts declared in permissions.network (redirects re-checked; private addresses need an exact entry). */

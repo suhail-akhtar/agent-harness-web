@@ -66,7 +66,8 @@ test('both UI halves validate as frame plugins (never native), with every entry 
     const c = ui.contributes;
     assert.ok(c.navItems.length && c.views.length && c.panels.length && c.commands.length && c.slashCommands.length && c.settings.length && c.renderers.length && c.homeCards.length, name);
     assert.ok(c.commands.some((x) => x.agent), `${name} has agent-callable commands`);
-    for (const s of c.settings) assert.equal(s.scope, 'app', 'frames read their own settings (settings.read): this machine\'s');
+    // Frames read their own settings (settings.read): this machine's sections, and the account's (the person's choices that follow them).
+    assert.deepEqual(c.settings.map((s) => s.scope).sort(), ['account', 'app'], `${name}: one section on this computer, one with the account`);
   }
   const sdlc = validateUiManifest(JSON.parse(await fs.readFile(path.join(PLUGINS, 'sdlc', 'harness-plugin.json'), 'utf8')).ui);
   assert.deepEqual(sdlc.contributes.slashCommands.map((s) => s.name), ['feature', 'review', 'gates']);

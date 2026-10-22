@@ -175,7 +175,8 @@ export function applyGlobal(e: GlobalEvent): void {
       } else if (p.type === 'resolved') useData.setState({ approvals: d.approvals.filter((x) => x.requestId !== p.requestId) });
       return;
     }
-    case 'plugins': void d.refreshPlugins(); return;
+    // A plugin's server half signalled (api.signal): its badge sources read again (state/badges.ts); nothing else changed.
+    case 'plugins': if (p.type === 'signal') return; void d.refreshPlugins(); return;
     case 'notices': if (p.level === 'error' || p.level === 'warn') toast(String(p.text ?? ''), { kind: p.level === 'error' ? 'error' : 'warning' }); return;
     case 'schedules': if (p.type === 'fired') toast(`Scheduled: ${String(p.title ?? 'a prompt')} ran`, { kind: 'info' }); return;
   }

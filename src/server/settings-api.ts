@@ -1,4 +1,4 @@
-import type { JsonSchema } from '../../packages/plugin-ui/src/manifest.ts';
+import { validateValue, type JsonSchema } from '../../packages/plugin-ui/src/manifest.ts';
 import type { PluginEntry } from '../kernel/harness.ts';
 import { applyUserSettings, loadProjectSettings, loadUserSettings, operatorSettings, type Settings, type UserSettings } from '../core/settings.ts';
 
@@ -90,3 +90,33 @@ export async function effectiveSettings(o: { dataDir: string; owner: string | un
 }
 
 const pluginValues = (u: UserSettings, plugin: string): Record<string, unknown> => u.plugins?.[plugin] ?? {};
+
+/**
+ * The scope rule for a person's `plugins` settings (PUT /api/me/settings): a plugin keeps only the
+ * keys of its own account-scope sections, each checked against its schema (app keys live on the
+ * person's computer, operator keys are the operator's). A plugin this server does not know keeps
+ * what it had (the body cannot add to it). Returns the clean map, or the problems (a 400).
+ */
+export function cleanPluginSettings(body: unknown, plugins: PluginEntry[], previous: UserSettings['plugins']): { plugins: Record<string, Record<string, unknown>>; errors: string[] } {
+  const out: Record<string, Record<string, unknown>> = {};
+  const errors: string[] = [];
+  const raw = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : {};
+  for (const [name, values] of Object.entries(raw)) {
+    const entry = plugins.find((p) => p.name === name);
+    if (!entry?.ui) { if (previous?.[name]) out[name] = previous[name]!; continue; }
+    if (!values || typeof values !== 'object' || Array.isArray(values)) { errors.push(`plugins.${name}: must be an object`); continue; }
+    const schemas = new Map<string, JsonSchema>();
+    for (const sec of entry.ui.contributes.settings) if (sec.scope === 'account') for (const [k, s] of Object.entries(sec.schema?.properties ?? {})) if (!schemas.has(k)) schemas.set(k, s);
+    const kept: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(values as Record<string, unknown>)) {
+      const schema = schemas.get(k);
+      if (!schema || v === undefined || v === null) continue; // not an account key of this plugin: not stored here
+      const problems = validateValue(schema, v, `plugins.${name}.${k}`);
+      if (problems.length) errors.push(...problems.slice(0, 3)); else kept[k] = v;
+    }
+    if (Object.keys(kept).length) out[name] = kept;
+  }
+  // Plugins the body does not name and this server does not know: kept as they were.
+  for (const [name, v] of Object.entries(previous ?? {})) if (!Object.hasOwn(raw, name) && !plugins.some((p) => p.name === name)) out[name] = v;
+  return { plugins: out, errors };
+}
