@@ -26,6 +26,8 @@ function loadMermaid(dark: boolean): Promise<Mermaid> {
         theme: 'base',
         themeVariables: diagramTheme(dark),
         themeCSS: diagramCss(dark),
+        // SVG text labels, not HTML in a foreignObject (which the scrub removes).
+        htmlLabels: false,
         flowchart: { curve: 'basis', htmlLabels: false, nodeSpacing: 44, rankSpacing: 54 },
         sequence: { actorMargin: 56, mirrorActors: false },
         gantt: { barHeight: 22, barGap: 6, topPadding: 46 },

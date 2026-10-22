@@ -121,6 +121,7 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
     });
 
     let sessionId = '';
+    let richId = '';
     await step('a session in a folder: a permission request in the attention bar and the inbox, approved, and the tool card', async () => {
       // The engine restarts to take the new folder as a root: watch it go down and come back.
       await page.evaluate(() => { const w = window as unknown as { __restarted: boolean }; w.__restarted = false; const el = document.querySelector('[data-engine-status]')!; new MutationObserver(() => { if (el.getAttribute('data-engine-status') !== 'ready') w.__restarted = true; }).observe(el, { attributes: true }); });
@@ -326,12 +327,15 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
     await step('rich output: every renderer draws, and the artifact frames are sandboxed', async () => {
       const r = await api('POST', '/api/sessions/import', { runtime: 'local', bundle: { ...longBundle(0), source: { ...longBundle(0).source, title: 'Kitchen sink' }, history: [{ role: 'user', content: [{ type: 'text', text: 'Show me everything you can draw.' }] }, { role: 'assistant', content: [{ type: 'text', text: KITCHEN_SINK }] }] } });
       assert.equal(r.status, 201, JSON.stringify(r.body));
+      richId = (r.body as { id: string }).id;
       await page.click('[data-nav="core.chat:search"]');
       await page.evaluate((id) => { sessionStorage.setItem('harness.route', JSON.stringify({ view: 'core.chat:session', params: { id } })); }, (r.body as { id: string }).id);
       await page.click(`[data-session-row="${(r.body as { id: string }).id}"] button`);
       await page.waitForSelector('[data-assistant-message]');
       await page.waitForSelector('[data-diagram="svg"] svg', { timeout: 30_000 });
       await page.waitForFunction(() => document.querySelectorAll('[data-diagram="svg"] svg').length >= 2, null, { timeout: 30_000 });
+      const flowText = await page.locator('[data-diagram="svg"] svg').first().textContent();
+      for (const label of ['Browser', 'Gateway', 'API', 'Error page', 'Database', 'auth ok']) assert.ok(flowText?.includes(label), `the Mermaid label "${label}" is drawn`);
       await page.waitForSelector('[data-chart="echarts"] svg', { timeout: 30_000 });
       await page.waitForSelector('[data-chart="vega"] svg', { timeout: 30_000 });
       assert.ok(await page.locator('.katex').count() >= 2, 'KaTeX drew the maths');
@@ -474,12 +478,20 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
         el.scrollTop = el.scrollHeight;
       });
       const scrolling = await page.evaluate(() => (window as unknown as { __long: number[] }).__long.splice(0));
+      // Layout shifts while the answer streams in (what moves without the person doing anything).
+      await page.evaluate(() => {
+        const w = window as unknown as { __shift: number };
+        w.__shift = 0;
+        new PerformanceObserver((l) => { for (const e of l.getEntries() as Array<PerformanceEntry & { value: number; hadRecentInput: boolean }>) if (!e.hadRecentInput) w.__shift += e.value; }).observe({ type: 'layout-shift', buffered: false });
+      });
       await send('stream a long answer please');
       await page.waitForSelector(`[data-session="${id}"][data-status="running"]`, { timeout: 15_000 }).catch(() => {});
       await page.waitForSelector(`[data-session="${id}"][data-status="idle"]`, { timeout: 60_000 });
       await page.waitForTimeout(800);
       const streaming = await page.evaluate(() => (window as unknown as { __long: number[] }).__long.splice(0));
-      t.diagnostic(`long tasks while scrolling: ${JSON.stringify(scrolling)}; while streaming: ${JSON.stringify(streaming)}`);
+      const shift = await page.evaluate(() => (window as unknown as { __shift: number }).__shift);
+      t.diagnostic(`long tasks while scrolling: ${JSON.stringify(scrolling)}; while streaming: ${JSON.stringify(streaming)}; layout shift while streaming: ${shift.toFixed(4)}`);
+      assert.ok(shift < 0.1, `layout shift while streaming: ${shift}`);
       assert.ok(Math.max(0, ...scrolling) <= 100, `scrolling: ${JSON.stringify(scrolling)}`);
       assert.ok(Math.max(0, ...streaming) <= 100, `streaming: ${JSON.stringify(streaming)}`);
     });
@@ -498,6 +510,47 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       await invoke('prefs:set', { keybindings: {} });
     });
 
+    await step('keyboard: everything reachable with Tab and a visible focus ring, every icon button named, dialogs close with Escape', async () => {
+      await newChat();
+      const unnamed = await page.$$eval('button, [role="button"], a[href], input, textarea, select', (els) => els.filter((e) => {
+        const el = e as HTMLElement;
+        if (!el.offsetParent && getComputedStyle(el).position !== 'fixed') return false;
+        const name = (el.getAttribute('aria-label') ?? el.getAttribute('title') ?? el.getAttribute('placeholder') ?? el.textContent ?? '').trim();
+        const labels = (el as HTMLInputElement).labels; return !name && !(labels && labels.length);
+      }).map((e) => e.outerHTML.slice(0, 120)));
+      assert.deepEqual(unnamed, [], 'every control has a name');
+      await page.locator('[data-statusbar]').click();
+      const seen: string[] = [];
+      for (let i = 0; i < 40; i++) {
+        await page.keyboard.press('Tab');
+        const f = await page.evaluate(() => {
+          const el = document.activeElement as HTMLElement | null;
+          if (!el || el === document.body) return null;
+          const cs = getComputedStyle(el);
+          const ring = (cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) > 0) || (cs.boxShadow && cs.boxShadow !== 'none');
+          const r = el.getBoundingClientRect();
+          return { what: el.getAttribute('data-nav') ?? el.getAttribute('aria-label') ?? el.getAttribute('data-composer-input') ?? el.tagName.toLowerCase(), ring: !!ring || el.matches('textarea, input'), visible: r.width > 0 && r.height > 0 };
+        });
+        if (!f) continue;
+        assert.ok(f.visible, `focus on something visible (${f.what})`);
+        assert.ok(f.ring, `a focus ring on ${f.what}`);
+        seen.push(f.what);
+      }
+      assert.ok(seen.some((x) => x === 'core.chat:new'), `the sidebar is reachable (${seen.join(', ')})`);
+      assert.ok(seen.some((x) => x === '' || x === 'textarea'), 'the composer is reachable');
+      // The palette: open, move, run with the keyboard; Escape closes and gives focus back.
+      await page.keyboard.press('Control+K');
+      await page.waitForSelector('[data-palette]');
+      await page.keyboard.type('settings');
+      await page.keyboard.press('ArrowDown');
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('[data-palette]', { state: 'detached' });
+      await page.keyboard.press('Control+,');
+      await page.waitForSelector('[data-settings]', { timeout: 5_000 });
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('[data-settings]', { state: 'detached', timeout: 5_000 });
+    });
+
     await step('light and dark themes, a plugin theme, and small windows', async () => {
       await newChat();
       await invoke('prefs:set', { theme: 'dark' });
@@ -511,6 +564,29 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       await invoke('prefs:set', { theme: 'light' });
       await page.waitForFunction(() => document.documentElement.dataset.theme === 'light');
       await shot('chat-light');
+      // The rich renderers in dark, and at narrow widths (wide blocks scroll inside, never the page).
+      await page.click('[data-nav="core.chat:search"]');
+      await page.click(`[data-session-row="${richId}"] button`);
+      await page.waitForSelector(`[data-session="${richId}"] [data-chart="vega"] svg`, { timeout: 30_000 });
+      await invoke('prefs:set', { theme: 'dark' });
+      await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
+      await page.waitForTimeout(600);
+      await shot('chat-rich-dark');
+      for (const sel of ['[data-block="code"][data-lang="python"]', '[data-md-table]', '[data-widget="Chart"]', '[data-block="diff"]']) {
+        const el = page.locator(sel).first(); await el.scrollIntoViewIfNeeded();
+      }
+      await shot('chat-rich-dark-bottom');
+      await invoke('prefs:set', { theme: 'light' });
+      await page.waitForFunction(() => document.documentElement.dataset.theme === 'light');
+      await setSize(520, 760);
+      await page.waitForTimeout(500);
+      const overRich = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      assert.ok(overRich <= 1, `rich blocks stay inside a narrow window (${overRich})`);
+      const wide = await page.$$eval('[data-assistant-message] *', (els) => els.filter((e) => { const r = e.getBoundingClientRect(); const list = document.querySelector('[data-virtual-list]')!.getBoundingClientRect(); return r.width > 0 && r.right > list.right + 2 && !e.closest('[data-block="code"], [data-md-table], [data-table], [data-chart], .katex-display, [data-diff], [data-block="diff"]'); }).map((e) => e.tagName + '.' + (e.className?.toString() ?? '').slice(0, 40)));
+      assert.deepEqual(wide.slice(0, 5), [], 'nothing pokes out of the column');
+      await shot('chat-rich-narrow');
+      await setSize(1280, 820);
+      await newChat();
       for (const [w, h] of [[900, 700], [640, 640], [520, 560]] as const) {
         await setSize(w, h);
         await page.waitForTimeout(400);

@@ -75,17 +75,23 @@ export function OnboardProvider(): React.ReactElement {
   return <div className="px-6 py-4"><p className="mb-3 text-[13px] text-hx-secondary">Add a key for at least one provider. DeepSeek (inexpensive) or Anthropic (Claude Sonnet) are good places to start.</p><ModelsProviders onboarding /></div>;
 }
 
+/** The defaults onboarding suggests, in order. */
+export const SUGGESTED_MODELS = ['claude-sonnet-5-5', 'deepseek-flash'];
+
 export function OnboardModel(): React.ReactElement {
   const models = useData((s) => s.models);
   const prefs = useApp((s) => s.prefs);
-  const available = models.filter((m) => m.available);
+  // Suggested first: Claude Sonnet for quality, DeepSeek Flash for cost.
+  const rank = (id: string) => { const i = SUGGESTED_MODELS.indexOf(id); return i < 0 ? 99 : i; };
+  const available = models.filter((m) => m.available).sort((a, b) => rank(a.id) - rank(b.id));
+  useEffect(() => { if (available.length && !available.some((m) => m.id === prefs.defaultModel)) useApp.getState().setPrefs({ defaultModel: available[0]!.id }); }, [available.length]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div className="px-6 py-4" data-onboard-model>
       {!available.length ? <InfoNote tone="warning">No model has a key yet: go back a step and add one.</InfoNote> : (
         <div className="space-y-1.5">
           {available.map((m) => (
             <button key={m.id} type="button" onClick={() => useApp.getState().setPrefs({ defaultModel: m.id })} className={cx('flex w-full items-center gap-3 rounded-xl border p-3 text-left', prefs.defaultModel === m.id ? 'border-hx-accent bg-hx-accent-soft' : 'border-hx-border-subtle hover:border-hx-border')}>
-              <Icon name="cpu" size={16} /><span className="flex-1"><span className="block text-[13.5px] font-medium">{m.label}</span><span className="block text-[11.5px] text-hx-muted">{m.provider} · {Math.round(m.contextWindow / 1000)}K context{m.notes ? ` · ${m.notes}` : ''}</span></span>{prefs.defaultModel === m.id && <Icon name="check" size={16} className="text-hx-accent-text" />}
+              <Icon name="cpu" size={16} /><span className="flex-1"><span className="block text-[13.5px] font-medium">{m.label}{rank(m.id) < 99 && <span className="ml-2 rounded bg-hx-accent-soft px-1.5 py-0.5 text-[10.5px] font-medium text-hx-accent-text">Suggested</span>}</span><span className="block text-[11.5px] text-hx-muted">{m.provider} · {Math.round(m.contextWindow / 1000)}K context{m.notes ? ` · ${m.notes}` : ''}</span></span>{prefs.defaultModel === m.id && <Icon name="check" size={16} className="text-hx-accent-text" />}
             </button>
           ))}
         </div>

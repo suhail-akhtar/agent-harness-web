@@ -3,37 +3,25 @@
  * JSON as a collapsible tree.
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
+import katex from 'katex';
 import { Icon } from '../icons.tsx';
 import { KATEX_MACROS } from './katex-setup.ts';
 import { AGGREGATES, filterRows, jsonSummary, numericColumns, parseDelimited, parseTableSpec, pivot, sortRows, summarise, toCsv, type Aggregate, type TableSpec } from './data.ts';
 import { downloadText } from './download.ts';
 
-type Katex = { renderToString: (tex: string, o?: Record<string, unknown>) => string };
-let katexPromise: Promise<Katex> | null = null;
-const loadKatex = () => (katexPromise ??= import('./katex-setup.ts').then(() => import('katex')).then((m) => ((m as { default?: Katex }).default ?? m) as Katex));
-
+// KaTeX is in the main bundle already (inline maths in prose); katex-setup adds mhchem and the macros.
 export function MathBlock({ source, streaming }: { source: string; streaming?: boolean }): React.ReactElement {
-  const [html, setHtml] = useState('');
-  const [error, setError] = useState('');
-  useEffect(() => {
-    if (streaming) return;
-    let cancelled = false;
-    void loadKatex().then((k) => {
-      if (cancelled) return;
-      try {
-        // trust: false refuses every command that can emit a URL or raw HTML (\href, \url, \htmlClass ...).
-        setHtml(k.renderToString(source.trim(), { displayMode: true, throwOnError: true, strict: false, trust: false, macros: { ...KATEX_MACROS } }));
-        setError('');
-      } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-    });
-    return () => { cancelled = true; };
+  const out = useMemo((): { html?: string; error?: string } => {
+    if (streaming) return {};
+    // trust: false refuses every command that can emit a URL or raw HTML (\href, \url, \htmlClass ...).
+    try { return { html: katex.renderToString(source.trim(), { displayMode: true, throwOnError: true, strict: false, trust: false, macros: { ...KATEX_MACROS } }) }; }
+    catch (e) { return { error: e instanceof Error ? e.message : String(e) }; }
   }, [source, streaming]);
   if (streaming) return <p className="p-2 text-[11.5px] text-hx-muted">Formula arriving…</p>;
-  if (error) throw new Error(error.split('\n')[0]);
-  if (!html) return <p className="p-2 text-[11.5px] text-hx-muted">Setting…</p>;
+  if (out.error) throw new Error(out.error.split('\n')[0]);
   // KaTeX's own markup with trust: false.
-  return <div data-math="block" className="overflow-x-auto px-2 py-3 text-hx-primary [&_.katex-display]:my-0" dangerouslySetInnerHTML={{ __html: html }} />;
+  return <div data-math="block" className="overflow-x-auto px-2 py-3 text-hx-primary [&_.katex-display]:my-0" dangerouslySetInnerHTML={{ __html: out.html ?? '' }} />;
 }
 
 const fmt = (v: number) => (Number.isInteger(v) ? v.toLocaleString() : v.toLocaleString(undefined, { maximumFractionDigits: 2 }));
