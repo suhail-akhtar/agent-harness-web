@@ -1187,7 +1187,7 @@ Every report names the harness that produced it - version, commit (and whether i
 
 Every model and tool call is a span in the session's `trace.jsonl` (UI: "Open trace"). With `HARNESS_OTEL_ENDPOINT` (and `HARNESS_OTEL_HEADERS="k=v,k=v"`) they are also exported as OTLP/HTTP JSON: one trace per session, `chat <model>` spans with `gen_ai.*` token attributes plus cache reads, cost and retries, and `execute_tool <name>` spans with errors. Batched off the request path; a failed export is logged and dropped.
 
-## Measured (2026-10-20, 2026-10-21)
+## Measured (2026-10-20 to 2026-10-22)
 
 Every result below was checked independently, outside the agent's own claims: hidden HTTP acceptance checks, rendering and reading every slide, playing each game in the headless browser, viewing each model from four sides. One run per model per task, so these are observations, not benchmark statistics (`npm run eval -- --repeat N` gives those).
 
@@ -1216,6 +1216,8 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 **Phase 4 - `npm run eval`, every pack on every model** (after the fixes below; [full report](evals/results/2026-10-20.md)): **12/12 runs passed, 39/39 hidden checks**, for $2.56 in total (111M input tokens, ~93% read from cache). Per model, all four cases together: GPT-6 Luna $0.23, Claude Haiku 5.5 $0.96, DeepSeek Flash $1.38. On the re-run board deck the stricter reviewer blocked the invented region name, marked the hosting cost as an assumption, and found that the test data itself contradicts (6 logos x $210k exceeds the quarter's new ARR).
 
 **2026-10-21 - every pack on every model again, on native Windows** ([full report](evals/results/2026-10-21.md)): **17/17 runs, 58/58 hidden checks, $4.52** (GPT-6 Luna $0.43 for six cases, Claude Haiku 5.5 $1.41 for six, DeepSeek Flash $2.68 for five), 74-98% of input read from cache. The long-task workflow on Haiku now builds the whole CLI and passes every hidden check (on 2026-10-20 it stopped at 10/26 features: a workflow deadlock, fixed and now verified). Computer use ran live on Haiku and Luna for under a cent each.
+
+**2026-10-22 - AIOps** ([full report](evals/results/2026-10-22-aiops.md)): **8/8 scored runs passed every hidden check** on Haiku 5.5, DeepSeek Flash and Sonnet 5.5 (medium) across the advisor report, a full disk, a slow endpoint (an incident from alert to approved fix to postmortem) and a crash-looping Kubernetes deployment, $0.03-$1.92 a run. The runs found three harness bugs, each fixed with a test: a machine that slept through a run looked like a hang (now unscored), a model thinking quietly past 180 s looked like a dead stream (the SDK hides pings), and tool arguments a model broke mid-stream were fatal (now asked again).
 
 **What the live runs fixed in the harness:** parallel branches colliding on one save file; an agent step treating "out of steps" as failure; streams that drop mid-way ending a step; every old render staying in the context; one-image full-page renders that DeepSeek rejects; a rejected image ending a step; browser key presses that could fall between frames; plugins that broke when installed outside the repository; sub-agents wandering outside the workspace.
 
