@@ -21,16 +21,25 @@ export function retryAfter(headers: Headers): number | undefined {
 
 export async function postStream(url: string, headers: Record<string, string>, body: unknown, signal: AbortSignal): Promise<Response> {
   let res: Response;
+  // A server that takes the request and never answers would hold the step for good: the
+  // response must start within IDLE_MS, like every gap in the stream after it.
+  // (A timer cleared once it starts: the body goes on streaming under the same signal.)
+  const waiting = new AbortController();
+  const startMs = Number(process.env.HARNESS_STREAM_IDLE_MS ?? IDLE_MS);
+  const timer = setTimeout(() => waiting.abort(new Error('no response')), startMs);
   try {
     res = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...headers },
       body: JSON.stringify(body),
-      signal,
+      signal: AbortSignal.any([signal, waiting.signal]),
     });
   } catch (err) {
     if (signal.aborted) throw err;
+    if (waiting.signal.aborted) throw new ProviderError(`no response within ${startMs / 1000}s`, 0, true);
     throw new ProviderError(`network error: ${(err as Error).message}`, 0, true);
+  } finally {
+    clearTimeout(timer);
   }
   if (!res.ok) {
     const text = await res.text().catch(() => '');

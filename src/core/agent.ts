@@ -450,9 +450,7 @@ export class Agent {
       // A file changed on the companion's computer is checkpointed here first (the tool there has no checkpoints).
       const writes = remote ? tool.writesPath?.(input) : undefined;
       if (writes) await this.cfg.beforeWrite?.(writes);
-      outcome = remote
-        ? await this.cfg.host.remoteTool!(name, input, signal)
-        : await tool.run(input, ctx);
+      outcome = await watchdog(remote ? this.cfg.host.remoteTool!(name, input, signal) : tool.run(input, ctx), signal, name);
     } catch (err) {
       if (signal.aborted) return finish('Interrupted by the user.', true, undefined, undefined, name);
       const msg = err instanceof PathError ? err.message : `${name} failed: ${(err as Error).message ?? String(err)}`;
@@ -704,6 +702,27 @@ export function skillsToKeep(messages: Message[]): string {
     kept.unshift(`<skill name="${name}">\n${text}\n</skill>`);
   }
   return kept.join('\n');
+}
+
+const toolMaxMs = () => Number(process.env.HARNESS_TOOL_MAX_MINUTES ?? 30) * 60_000;
+
+/**
+ * A tool call the loop can always get past: one that ignores the stop (a hung connection,
+ * a library without abort support) is left behind when the turn is stopped, and any call
+ * is abandoned after HARNESS_TOOL_MAX_MINUTES (30). Tools have their own, shorter limits; this is the floor
+ * under all of them, so no single call can hold an agent for good.
+ */
+function watchdog<T>(work: Promise<T>, signal: AbortSignal, name: string): Promise<T> {
+  const TOOL_MAX_MS = toolMaxMs();
+  let timer: NodeJS.Timeout | undefined;
+  let onAbort: (() => void) | undefined;
+  const stop = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`did not finish within ${Math.round(TOOL_MAX_MS / 60_000)} minutes and was abandoned (HARNESS_TOOL_MAX_MINUTES)`)), TOOL_MAX_MS);
+    onAbort = () => reject(signal.reason ?? new Error(`${name} interrupted`));
+    if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true });
+  });
+  work.catch(() => {}); // a call left behind may still fail later: nobody is waiting for it
+  return Promise.race([work, stop]).finally(() => { clearTimeout(timer); if (onAbort) signal.removeEventListener('abort', onAbort); });
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {

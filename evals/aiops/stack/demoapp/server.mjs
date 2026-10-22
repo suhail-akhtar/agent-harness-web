@@ -180,11 +180,21 @@ setInterval(() => {
   log('INFO', `worker: restarting (attempt ${workerRestarts})`);
 }, 4000);
 let n = 0;
+// The runaway render job of the disk-full case, as an incident finds it: it ran hours ago
+// (its files carry those times, not "just now") and died when the disk filled - it does
+// not go on refilling the volume while someone cleans it.
+const jobStartedAt = Date.now() - 3 * 3600_000;
 setInterval(() => {
   if (!faults.disk) return;
   try {
-    for (let i = 0; i < 4; i++) fs.writeFileSync(path.join(DATA, 'cache', `render-${Date.now()}-${n++}.tmp`), crypto.randomBytes(1024 * 1024), { mode: 0o644 });
+    for (let i = 0; i < 4; i++) {
+      const file = path.join(DATA, 'cache', `render-${Date.now()}-${n++}.tmp`);
+      fs.writeFileSync(file, crypto.randomBytes(1024 * 1024), { mode: 0o644 });
+      const at = new Date(jobStartedAt + n * 60_000);
+      fs.utimesSync(file, at, at);
+    }
   } catch (e) {
+    if (e.code === 'ENOSPC' && faults.disk) { faults.disk = false; log('ERROR', `render-job: aborted: ${e.code} writing to /data/cache (no space left on device)`); }
     try { fs.writeFileSync(path.join(DATA, 'uploads', `upload-${Date.now()}.bin`), crypto.randomBytes(64 * 1024)); } catch (e2) {
       if (n % 5 === 0) log('ERROR', `uploads: write failed ${e2.code}: ${e2.message}`);
     }

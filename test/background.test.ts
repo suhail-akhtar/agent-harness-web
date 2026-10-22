@@ -171,7 +171,9 @@ test('send_message continues a sub-agent with its context; finished ones are kep
     assert.match(results(t.s.history[4])[0]!.content, /^second report/);
     assert.match(t.p.sent.general![1]!, /part one[\s\S]*first report[\s\S]*and part two\?/, 'its context is intact');
     assert.match(results(t.s.history[6])[0]!.content, /continues in the background/);
-    assert.match(json(t.s.history[8]), /third report/, 'a background continuation reports later');
+    // It reports later, as a reminder of its own (never inside the call's result), with whichever step comes next.
+    assert.ok(t.s.history.slice(6).some((m) => m.role === 'user' && m.content.some((b) => b.type === 'text' && /third report/.test(b.text))), 'a background continuation reports later');
+    assert.doesNotMatch(results(t.s.history[6])[0]!.content, /third report/);
     const tools = t.p.requests.general![0]!.tools.map((x) => x.name);
     assert.ok(!tools.includes('send_message') && !tools.includes('agent'), 'sub-agents that may not nest cannot continue others');
     assert.ok(t.p.requests.main![0]!.tools.some((x) => x.name === 'task_list'));

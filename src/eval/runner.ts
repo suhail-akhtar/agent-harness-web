@@ -294,7 +294,9 @@ export async function runOne(c: EvalCase, model: string, repeat: number, out: st
     ac.signal.addEventListener('abort', () => s.abort(), { once: true });
     if (c.workflow) await s.startWorkflow(c.workflow, { approval: 'auto', ...(c.input ?? {}) });
     else await s.send(c.prompt!);
-    await done;
+    // After the time limit the run is stopped; something that ignores the stop (a hung call)
+    // gets two minutes, then the run is recorded as timed out and the eval goes on.
+    await Promise.race([done, new Promise<void>((r) => ac.signal.addEventListener('abort', () => setTimeout(r, 120_000).unref(), { once: true }))]);
     const runs = await s.listRuns();
     run.status = c.workflow ? (runs[0]?.status ?? 'unknown') : (ac.signal.aborted ? 'timeout' : endReason === 'error' ? 'error' : 'done');
     if (ac.signal.aborted) run.status = 'timeout';
