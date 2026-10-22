@@ -216,6 +216,14 @@ export class LocalHost implements ToolHost {
     }
   }
 
+  /** The same host (sandbox, network, egress settings) rooted at another folder (a sub-agent's worktree). */
+  withRoot(root: string, more: { writable?: string[]; readable?: string[] } = {}): LocalHost {
+    return new LocalHost(root, {
+      ...(this.osSandbox ? { sandbox: this.osSandbox, network: this.networkPolicy } : {}),
+      writable: [...this.writable, ...(more.writable ?? [])], readable: [...this.readable, ...(more.readable ?? [])], ...this.net,
+    });
+  }
+
   /** allowlist: the session's egress proxy, started on first use. */
   private proxy(): Promise<LocalEgress> {
     this.egress ??= startLocalEgress({

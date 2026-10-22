@@ -29,11 +29,12 @@ async function git(cwd: string, args: string[], timeoutMs = 120_000): Promise<st
 
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30) || 'session';
 
-/** A new worktree of `repo` at its current HEAD, on a new branch. */
-export async function createWorktree(repo: string, dir: string, title: string): Promise<Worktree> {
+/** A new worktree of `repo` at its current HEAD (or at `at`, a commit), on a new branch. */
+export async function createWorktree(repo: string, dir: string, title: string, at?: string): Promise<Worktree> {
   const top = await git(repo, ['rev-parse', '--show-toplevel']).catch(() => { throw new WorktreeError(`${repo} is not a git repository, so it cannot get a worktree.`); });
   const commonDir = path.resolve(top, await git(top, ['rev-parse', '--git-common-dir']));
-  const base = await git(top, ['rev-parse', 'HEAD']).catch(() => { throw new WorktreeError(`${repo} has no commits yet; commit once before starting a worktree session.`); });
+  if (at !== undefined && !/^[0-9a-f]{7,64}$/.test(at)) throw new WorktreeError(`"${at}" is not a commit id`);
+  const base = at ?? await git(top, ['rev-parse', 'HEAD']).catch(() => { throw new WorktreeError(`${repo} has no commits yet; commit once before starting a worktree session.`); });
   const branch = `harness/${slug(title)}-${crypto.randomBytes(3).toString('hex')}`;
   await fs.mkdir(path.dirname(dir), { recursive: true });
   await git(top, ['worktree', 'add', '-b', branch, dir, base]);
@@ -55,6 +56,13 @@ export async function removeWorktree(w: Worktree): Promise<{ kept: boolean; comm
   await git(w.repo, ['worktree', 'remove', '--force', w.dir]).catch(async () => { await fs.rm(w.dir, { recursive: true, force: true }); await git(w.repo, ['worktree', 'prune']).catch(() => {}); });
   if (!commits) await git(w.repo, ['branch', '-D', w.branch]).catch(() => {});
   return { kept: commits > 0, commits };
+}
+
+/** What changed in a worktree since it was made: commits on its branch, and files not committed. */
+export async function worktreeChanges(w: Worktree): Promise<{ commits: number; dirty: boolean }> {
+  const commits = Number(await git(w.repo, ['rev-list', '--count', `${w.base}..${w.branch}`]).catch(() => '0')) || 0;
+  const status = await git(w.dir, ['status', '--porcelain', '--untracked-files=normal']).catch(() => '');
+  return { commits, dirty: !!status.trim() };
 }
 
 /** What a sandboxed command in this worktree may write besides the worktree itself. */

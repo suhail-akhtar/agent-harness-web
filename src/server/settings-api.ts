@@ -52,6 +52,9 @@ export async function effectiveSettings(o: { dataDir: string; owner: string | un
     const d = (BUILTIN as Record<string, unknown>)[k];
     out.push({ key: k, value: v ?? null, source: v !== undefined && v !== d ? 'operator' : 'default', scope: 'operator', locked: true, layers: { ...(d !== undefined ? { default: d } : {}), ...(v !== undefined && v !== d ? { operator: v } : {}) } });
   }
+  // Delegation to other models: what the person allows, within the operator's cap; linked sessions: the person's choices.
+  out.push({ key: 'delegation', value: eff.delegation, source: user.delegation ? 'account' : op.delegation?.allowedModels !== '*' ? 'operator' : 'default', scope: 'account', locked: false, layers: { default: { allowedModels: [] }, ...(op.delegation?.allowedModels !== '*' || op.delegation?.maxCostUsd !== undefined ? { operator: op.delegation } : {}), ...(user.delegation ? { account: user.delegation } : {}) } });
+  out.push({ key: 'linkedSessions', value: { autoContinue: true, maxAutoContinues: 5, ...user.linkedSessions }, source: user.linkedSessions ? 'account' : 'default', scope: 'account', locked: false, layers: { default: { autoContinue: true, maxAutoContinues: 5 }, ...(user.linkedSessions ? { account: user.linkedSessions } : {}) } });
   const gates = op.gatesOnStop ?? (project?.gatesOnStop === true ? true : undefined);
   out.push({ key: 'gatesOnStop', value: gates ?? false, source: op.gatesOnStop !== undefined ? 'operator' : project?.gatesOnStop === true ? 'project' : 'default', scope: 'operator', locked: true, layers: { default: false, ...(op.gatesOnStop !== undefined ? { operator: op.gatesOnStop } : {}), ...(project?.gatesOnStop !== undefined ? { project: project.gatesOnStop } : {}) } });
   // Rules add up: every tier's list, the value their union; the source is the tier with the strongest say (operator first).

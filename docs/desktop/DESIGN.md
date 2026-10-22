@@ -371,3 +371,27 @@ only when it draws one (no cost to sessions that never do).
   in place, the changed nodes marked `changed`.
 - **Layout:** automatic (ELK layered with orthogonal routing, in a worker; AICO's layered layout as the
   fallback), stable between edits so a small change does not move everything.
+
+## 17. Server implementation notes (sections 11 to 13: where they differ from the above)
+
+The server side of sections 11 and 12 is built (README "Multi-agent" and "HTTP API for desktop clients").
+Where it differs from the text above, and why:
+
+- **Tool lists stay fixed.** A session's tools never change mid-session (it would break the cache), so
+  desktop tools are declared when the session's client declaration names them and answer "unavailable"
+  while no app is attached, rather than appearing and disappearing. Artifacts, chapters, desktop tools and
+  the linked-session tools are declared only for sessions with a client (linked sessions: desktop or web
+  clients, or the person's `linkedSessions.enabled`), so other sessions' prompts do not grow.
+- **The `artifact` event nests its fields** (`{kind: 'artifact', artifact: {id, title, kind, version,
+  action}}`): `kind` is every event's discriminator.
+- **Client calls also reach the global stream** (topic `client`, only to the owner's own streams), so an
+  app attached through `/api/events?client=desktop` can answer them; attachment is the declaration plus a
+  live stream opened with `?client=<kind>` by the session's owner.
+- **The client declaration may list `commands`** (agent-callable commands of the app's own native plugins,
+  whose manifests the server cannot read); a server plugin's commands are agent-callable only when its
+  manifest marks them `agent`.
+- **`start_session` has `share_workspace`**: a server folder that is not a git repository is shared only
+  when the agent asks for it; otherwise the start is refused with what to do. A sandbox's workspace is
+  copied.
+- **Delegation to other models needs the person's consent** (`delegation` in their settings, within the
+  operator's cap): sub-agents, linked sessions and workflow agent nodes with a `model`.

@@ -110,7 +110,15 @@ export interface CommandContribution {
   action?: UiAction;
   /** Native plugins run code instead: the id of a handler their module registers. */
   handler?: string;
+  /**
+   * Marks the command agent-callable: an agent may run it with desktop_command (asked like an
+   * action on another system unless a rule allows it). Unmarked commands are the person's only.
+   */
+  agent?: AgentCommand;
 }
+
+/** What an agent sees of an agent-callable command, and the shape of the args it must pass. */
+export interface AgentCommand { description: string; inputSchema?: JsonSchema }
 
 export interface SlashCommandContribution {
   /** Typed as `/name`; lower-case letters, digits and dashes. */
@@ -311,6 +319,69 @@ function checkSchema(where: string, s: unknown, depth = 0): JsonSchema {
   return s as JsonSchema;
 }
 
+function checkAgentCommand(where: string, a: unknown): AgentCommand {
+  if (!isObj(a) || typeof a.description !== 'string' || !a.description.trim() || a.description.length > 500) throw new ManifestError(`${where}: "agent" needs a "description" (at most 500 characters) saying what the command does for an agent.`);
+  if (a.inputSchema !== undefined) checkSchema(`${where} agent.inputSchema`, a.inputSchema);
+  return { description: a.description.trim(), ...(a.inputSchema !== undefined ? { inputSchema: a.inputSchema as JsonSchema } : {}) };
+}
+
+/**
+ * A form an agent asks the person to fill in (ask_user's `form`): the same JSON Schema subset as
+ * settings, an object at the top, at most 40 fields and 20,000 characters. Throws ManifestError.
+ */
+export function validateFormSchema(s: unknown): JsonSchema {
+  const schema = checkSchema('form', s);
+  if (schema.type !== 'object' || !isObj(schema.properties) || !Object.keys(schema.properties).length) throw new ManifestError('form: the schema must be {"type": "object", "properties": {...}}.');
+  if (Object.keys(schema.properties).length > 40) throw new ManifestError('form: at most 40 fields.');
+  if (JSON.stringify(schema).length > 20_000) throw new ManifestError('form: the schema is larger than 20,000 characters.');
+  for (const r of schema.required ?? []) if (!Object.hasOwn(schema.properties, r)) throw new ManifestError(`form: "required" names "${r}", which is not a property.`);
+  return schema;
+}
+
+/**
+ * Checks a value against the schema subset: types, required, enum, minimum/maximum,
+ * minLength/maxLength, pattern, items. Returns every problem found (empty: valid).
+ * Properties the schema does not name are refused, so a form answer carries only its fields.
+ */
+export function validateValue(schema: JsonSchema, value: unknown, where = 'answer'): string[] {
+  const out: string[] = [];
+  const t = schema.type;
+  if (value === undefined || value === null) return t ? [`${where}: a ${t} is required`] : [];
+  const kind = Array.isArray(value) ? 'array' : typeof value;
+  if (t === 'object') {
+    if (kind !== 'object') return [`${where}: must be an object`];
+    const v = value as Record<string, unknown>;
+    const props = schema.properties ?? {};
+    for (const r of schema.required ?? []) if (v[r] === undefined || v[r] === null || v[r] === '') out.push(`${where}.${r}: is required`);
+    for (const [k, x] of Object.entries(v)) {
+      if (!Object.hasOwn(props, k)) { out.push(`${where}.${k}: is not a field of this form`); continue; }
+      if (x !== undefined && x !== null) out.push(...validateValue(props[k]!, x, `${where}.${k}`));
+    }
+    return out;
+  }
+  if (t === 'array') {
+    if (kind !== 'array') return [`${where}: must be a list`];
+    (value as unknown[]).slice(0, 1000).forEach((x, i) => { if (schema.items) out.push(...validateValue(schema.items, x, `${where}[${i}]`)); });
+    if ((value as unknown[]).length > 1000) out.push(`${where}: at most 1000 items`);
+    return out;
+  }
+  if (t === 'string' && kind !== 'string') return [`${where}: must be text`];
+  if ((t === 'number' || t === 'integer') && (kind !== 'number' || !Number.isFinite(value as number))) return [`${where}: must be a number`];
+  if (t === 'integer' && !Number.isInteger(value)) return [`${where}: must be a whole number`];
+  if (t === 'boolean' && kind !== 'boolean') return [`${where}: must be true or false`];
+  if (schema.enum && !schema.enum.includes(value as string | number)) out.push(`${where}: must be one of ${schema.enum.map((e) => JSON.stringify(e)).join(', ')}`);
+  if (typeof value === 'number') {
+    if (schema.minimum !== undefined && value < schema.minimum) out.push(`${where}: at least ${schema.minimum}`);
+    if (schema.maximum !== undefined && value > schema.maximum) out.push(`${where}: at most ${schema.maximum}`);
+  }
+  if (typeof value === 'string') {
+    if (schema.minLength !== undefined && value.length < schema.minLength) out.push(`${where}: at least ${schema.minLength} characters`);
+    if (value.length > (schema.maxLength ?? 100_000)) out.push(`${where}: at most ${schema.maxLength ?? 100_000} characters`);
+    if (schema.pattern !== undefined) { let re: RegExp | undefined; try { re = new RegExp(schema.pattern); } catch { /* checked with the schema */ } if (re && !re.test(value.slice(0, 10_000))) out.push(`${where}: does not match the expected format`); }
+  }
+  return out;
+}
+
 /**
  * Validates and normalises the `ui` section. Throws a ManifestError a person (or model) can act on.
  * `trustCeiling` is the most the host allows this plugin (native only for signed first-party ones).
@@ -390,6 +461,7 @@ export function validateUiManifest(input: unknown, opts: { trustCeiling?: UiTrus
     if (cmd.action !== undefined) checkAction(`Command "${String(cmd.id)}"`, cmd.action);
     else if (typeof cmd.handler === 'string' && COMPONENT.test(cmd.handler)) usesNative = true;
     else throw new ManifestError(`Command "${String(cmd.id)}" needs an "action" (or, for native plugins, a "handler").`);
+    if (cmd.agent !== undefined) cmd.agent = checkAgentCommand(`Command "${String(cmd.id)}"`, cmd.agent);
   }
   const slashCommands = arr<Record<string, unknown>>('slashCommands');
   ids('slash command', slashCommands, 'name', SLASH);

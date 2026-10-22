@@ -30,6 +30,7 @@ import type { PluginManifest } from '../plugins/api.ts';
 import { readJson, withFileLock, writeFileAtomic } from '../util/shared-file.ts';
 import { within } from '../tools/paths.ts';
 import { EventHub } from './events.ts';
+import { ClientPresence } from '../core/client.ts';
 import { ProviderKeys } from './provider-keys.ts';
 
 // The harness as a library: one call assembles the registry (built-ins, then
@@ -154,6 +155,8 @@ export interface Harness {
   events: EventHub;
   /** Provider keys and base URLs set through the API. */
   providerKeys: ProviderKeys;
+  /** Client apps attached to sessions (live event-stream subscribers that said which client they are). */
+  clients: ClientPresence;
   close(): Promise<void>;
 }
 
@@ -421,6 +424,8 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   if (scheduler) scheduler.onEvent = (type, s, run) => events.scheduleEvent(type, s, run);
   // Keys and base URLs set through the API: the environment's key still wins (Registry.keyInfo).
   const providerKeys = await new ProviderKeys({ dataDir: opts.dataDir, vault, registry, log }).load();
+  // Which client apps are listening now (desktop tools reach a session only while one is).
+  const clients = new ClientPresence();
   registry.keySource = (id) => providerKeys.get(id);
   registry.baseUrlFor = (id) => providerKeys.baseUrl(id);
   const sessions = new SessionManager({
@@ -429,6 +434,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     memory: { root: path.resolve(opts.memoryDir ?? path.join(opts.dataDir, 'memory')), mode: memoryMode }, search, spend: opts.spend,
     publish: opts.publish === null ? undefined : opts.publish ?? publishFromEnv(),
     sandboxCredentials, scheduler, vault, leases,
+    clients, plugins: () => plugins.list(), mayRun: (o) => bridge.mayRun?.(o),
   });
   sessionsRef = sessions;
   sessionsLate = sessions;
@@ -467,7 +473,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   }
 
   return {
-    registry, sessions, companions, mcp, scheduler, vault, dataDir: opts.dataDir, search: search?.backend, bridge, plugins, events, providerKeys,
+    registry, sessions, companions, mcp, scheduler, vault, dataDir: opts.dataDir, search: search?.backend, bridge, plugins, events, providerKeys, clients,
     ...(leases ? { cluster: { id: leases.owner, url: leases.url, leases, ...(clusterCfg?.secret ? { secret: clusterCfg.secret } : {}), ...(clusterCfg?.peers ? { peers: clusterCfg.peers } : {}) } } : {}),
     mcpb: {
       list: () => installedMcpb(mcpbRoot),
