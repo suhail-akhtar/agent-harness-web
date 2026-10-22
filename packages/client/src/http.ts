@@ -30,6 +30,8 @@ export interface ClientOptions {
   fetch?: Fetch;
   /** Extra headers on every request (Authorization for Node callers). */
   headers?: () => Record<string, string>;
+  /** Which client this is ("desktop"): its event streams say so (?client=), which makes it *attached* to its sessions. */
+  clientKind?: string;
 }
 
 /** Sent when a session is created: the client kind, its version, the fence languages and kinds it renders, and the tools it answers (client_call). */
@@ -55,7 +57,9 @@ export class HarnessClient {
     const f = o.fetch ?? (globalThis.fetch as Fetch);
     this.fetch = (input, init) => f(input, init);
     this.extra = o.headers ?? (() => ({}));
+    this.clientKind = o.clientKind;
   }
+  readonly clientKind?: string;
 
   /** Does the server have this (new) endpoint? False once it answered 404. */
   has(feature: string): boolean { return !this.missing.has(feature); }
@@ -153,7 +157,9 @@ export class HarnessClient {
     sources: (id: string) => this.get<Array<{ id?: string | number; url: string; title?: string; snippet?: string }>>(`/api/sessions/${id}/sources`),
     tasks: async (id: string): Promise<TaskView[]> => (await this.sessions.get(id)).tasks ?? [],
     events: (id: string, after: number, onEvent: (e: HarnessEvent, seq: number) => void, onState?: (s: 'open' | 'retrying' | 'closed' | 'missing') => void) =>
-      sessionEvents({ fetch: this.fetch, base: this.base, id, after, headers: this.extra, onEvent, onState }),
+      sessionEvents({ fetch: this.fetch, base: this.base, id, after, headers: this.extra, onEvent, onState, client: this.clientKind }),
+    /** Answers a client_call (a desktop tool the agent asked this app to run). */
+    clientResult: (id: string, b: { callId: string; ok: boolean; result?: unknown; error?: string; untrusted?: boolean }) => this.post<{ ok: boolean }>(`/api/sessions/${id}/client-result`, b),
   };
 
   // ---------------- files and git (new routes, with the old files route as a fallback) ----------------
@@ -197,7 +203,7 @@ export class HarnessClient {
 
   /** The global event stream (with a polling fallback). Call start() on it. */
   globalEvents(pollMs?: number): GlobalEvents {
-    return new GlobalEvents({ fetch: this.fetch, base: this.base, headers: this.extra, pollMs, listSessions: async () => (await this.sessions.list()).sessions, listApprovals: () => this.approvals() });
+    return new GlobalEvents({ fetch: this.fetch, base: this.base, headers: this.extra, pollMs, client: this.clientKind, listSessions: async () => (await this.sessions.list()).sessions, listApprovals: () => this.approvals() });
   }
 
   // ---------------- plugins ----------------

@@ -7,7 +7,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { apply, fromHistory, isPending, type HarnessEvent, type Live, type PendingRequest, type SessionDetail, type SessionMeta, type SessionStatus, type TaskView, type Usage } from '@harness/client';
-import { client, useData } from '../../state/data';
+import { client, declineClientCall, useData } from '../../state/data';
 
 export interface SessionLive {
   meta: SessionMeta | null;
@@ -62,6 +62,8 @@ export function useSessionLive(id: string): [SessionLive, (f: (s: SessionLive) =
       // A workflow run still going gets its card back.
       client.sessions.workflows(id).then((r) => { if (!cancelled) for (const run of r.runs.filter((x) => x.status === 'running' || x.status === 'waiting')) set((s) => ({ ...s, live: apply(s.live, { kind: 'workflow', phase: 'started', run }) })); }).catch(() => {});
       stop = client.sessions.events(id, d.lastSeq, (e) => {
+        const call = e as { kind: string; callId?: unknown };
+        if (call.kind === 'client_call' && typeof call.callId === 'string') declineClientCall(id, call.callId);
         set((s) => reduce(s, e));
         if (e.kind === 'turn_end' && !e.agent) client.sessions.get(id).then((dd) => set((s) => ({ ...s, meta: dd.meta, status: dd.status, tasks: dd.tasks ?? s.tasks }))).catch(() => {});
       }, (st) => set((s) => ({ ...s, stream: st })));

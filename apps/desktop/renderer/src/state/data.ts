@@ -14,7 +14,7 @@ import { useApp } from './app';
 import type { Grants } from '@desk/grants';
 
 /** The engine through the harness:// proxy (main adds the token). */
-export const client = new HarnessClient({ base: '' });
+export const client = new HarnessClient({ base: '', clientKind: 'desktop' });
 
 export interface BuiltinPlugin { name: string; version: string; description: string; ui: unknown; components: Record<string, unknown>; handlers?: Record<string, (args?: unknown) => unknown>; /** Runs once at start (live values, subscriptions). */ activate?: () => void }
 let builtins: BuiltinPlugin[] = [];
@@ -94,6 +94,15 @@ export function clientInfo(): ClientDescriptor {
   return { kind: 'desktop', version: useApp.getState().info?.version ?? '0.0.0', renderers: [...new Set([...DECLARED_FENCES, ...plugin])], tools: [] };
 }
 
+/** Answers a client_call with "not supported" (once per call: the global stream and the session's may both bring it). */
+const declined = new Set<string>();
+export function declineClientCall(sessionId: string, callId: string): void {
+  if (declined.has(callId)) return;
+  declined.add(callId);
+  if (declined.size > 500) declined.delete(declined.values().next().value!);
+  void client.sessions.clientResult(sessionId, { callId, ok: false, error: 'not supported by this version' }).catch(() => { /* answered already, or the call ended */ });
+}
+
 /** Every global event, for plugin frames that subscribed (events.subscribe). */
 const busListeners = new Set<(e: GlobalEvent) => void>();
 export const globalBus = { on(f: (e: GlobalEvent) => void): () => void { busListeners.add(f); return () => { busListeners.delete(f); }; } };
@@ -117,6 +126,11 @@ export function applyGlobal(e: GlobalEvent): void {
       const cur = d.sessions.find((s) => s.id === id);
       if (cur) useData.setState({ sessions: d.sessions.map((s) => (s.id === id ? { ...s, ...(p.status ? { status: p.status as SessionMeta['status'] } : {}), ...(typeof p.title === 'string' ? { title: p.title } : {}), updatedAt: Date.now() } : s)) });
       else void d.refreshSessions();
+      return;
+    }
+    case 'client': {
+      // A desktop tool an agent asked this app to run: not in this version, said at once so no agent waits.
+      if (p.type === 'call' && typeof p.sessionId === 'string' && typeof p.callId === 'string') declineClientCall(p.sessionId, p.callId);
       return;
     }
     case 'approvals': {

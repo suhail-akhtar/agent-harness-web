@@ -113,11 +113,11 @@ export function readStream(o: StreamOptions): () => void {
  * A session's live events from `after` on. Envelopes carry `seq`; the reader resumes from the
  * last one it delivered after a reconnect and drops duplicates.
  */
-export function sessionEvents(o: { fetch: Fetch; base: string; id: string; after: number; headers?: () => Record<string, string>; onEvent: (e: HarnessEvent, seq: number) => void; onState?: StreamOptions['onState'] }): () => void {
+export function sessionEvents(o: { fetch: Fetch; base: string; id: string; after: number; headers?: () => Record<string, string>; onEvent: (e: HarnessEvent, seq: number) => void; onState?: StreamOptions['onState']; client?: string }): () => void {
   let last = o.after;
   return readStream({
     fetch: o.fetch, headers: o.headers, onState: o.onState,
-    url: () => `${o.base}/api/sessions/${o.id}/events?after=${last}`,
+    url: () => `${o.base}/api/sessions/${o.id}/events?after=${last}${o.client ? `&client=${encodeURIComponent(o.client)}` : ''}`,
     onMessage: (m) => {
       let env: SessionEventEnvelope;
       try { env = JSON.parse(m.data) as SessionEventEnvelope; } catch { return; }
@@ -145,6 +145,8 @@ export interface GlobalEventsOptions {
   listSessions: () => Promise<SessionMeta[]>;
   listApprovals: () => Promise<Approval[]>;
   pollMs?: number;
+  /** The client kind ("desktop"): an app listening here is attached to its sessions. */
+  client?: string;
 }
 
 /**
@@ -176,7 +178,7 @@ export class GlobalEvents {
     let justOpened = false;
     this.stopStream = readStream({
       fetch: this.o.fetch, headers: this.o.headers,
-      url: () => `${this.o.base}/api/events${lastSeq ? `?after=${lastSeq}` : ''}`,
+      url: () => { const q = [lastSeq ? `after=${lastSeq}` : '', this.o.client ? `client=${encodeURIComponent(this.o.client)}` : ''].filter(Boolean).join('&'); return `${this.o.base}/api/events${q ? `?${q}` : ''}`; },
       onState: (s) => {
         if (s === 'open') { justOpened = true; this.setMode('stream'); }
         else if (s === 'retrying') this.setMode('retrying');

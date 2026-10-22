@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { test } from 'node:test';
-import { HarnessClient, SseParser, normaliseApprovals, readStream, sessionEvents, toApproval, type GlobalEvent } from '../packages/client/src/index.ts';
+import { HarnessClient, SseParser, apply, fromHistory, normaliseApprovals, readStream, sessionEvents, toApproval, toRows, type GlobalEvent } from '../packages/client/src/index.ts';
 
 test('SSE parser: chunks split anywhere, CRLF, comments, multi-line data, ids', () => {
   const p = new SseParser();
@@ -122,4 +122,40 @@ test('approvals: server items, full events, and junk', () => {
     'nonsense', null, { requestId: 'd', kind: 'question' },
   ]).map((a) => `${a.requestId}:${a.kind}:${a.summary}`), ['a:question:Which?', 'b:plan_proposed:1. do']);
   assert.deepEqual(normaliseApprovals({ approvals: [{ sessionId: 's', requestId: 'e', kind: 'approval_request', at: 2 }] }).map((a) => a.requestId), ['e']);
+});
+
+test('the agent platform: new events leave the timeline alone, streams say they are the desktop, client calls are answered', async () => {
+  let live = { items: fromHistory([{ role: 'user', content: [{ type: 'text', text: 'hi' }] }, { role: 'assistant', content: [{ type: 'text', text: 'hello' }, { type: 'artifact_ref', id: 'x' } as never] }]), contextTokens: 0, contextWindow: 0 };
+  const before = JSON.stringify(toRows(live.items, false));
+  for (const e of [
+    { kind: 'artifact', artifact: { id: 'a1', title: 'Plan', kind: 'markdown', version: 2, action: 'updated' } },
+    { kind: 'session_proposal', id: 'p1', title: 'Split the work', brief: 'x' },
+    { kind: 'proposal_resolved', id: 'p1', decision: 'dismissed' },
+    { kind: 'side_session', phase: 'started', id: 's2', title: 'Tests' },
+    { kind: 'chapter', index: 1, title: 'Exploration' },
+    { kind: 'client_call', callId: 'c1', tool: 'desktop_describe', input: {} },
+    { kind: 'client_call_end', callId: 'c1', ok: false, reason: 'not supported by this version' },
+    { kind: 'something_newer_still', x: 1 },
+  ]) live = apply(live as never, e as never);
+  assert.equal(JSON.stringify(toRows(live.items, false)), before, 'nothing drawn, nothing broken');
+
+  // ?client=desktop on both streams, and the client-result answer.
+  const urls: string[] = [];
+  const bodies: unknown[] = [];
+  const fake = (async (input: string, init?: { body?: string }) => {
+    urls.push(String(input));
+    if (init?.body) bodies.push(JSON.parse(init.body));
+    const result = String(input).includes('client-result');
+    return new Response(result ? '{"ok":true}' : '', { status: result ? 200 : 404, headers: { 'content-type': 'application/json' } });
+  }) as never;
+  const c = new HarnessClient({ base: 'http://x', fetch: fake, clientKind: 'desktop' });
+  const stop = c.sessions.events('aaaaaaaaaaaaaaaa', 5, () => {});
+  const g = c.globalEvents(60_000);
+  g.start();
+  await new Promise((r) => setTimeout(r, 50));
+  stop(); g.stop();
+  assert.ok(urls.includes('http://x/api/sessions/aaaaaaaaaaaaaaaa/events?after=5&client=desktop'), urls.join(' '));
+  assert.ok(urls.includes('http://x/api/events?client=desktop'), urls.join(' '));
+  await c.sessions.clientResult('aaaaaaaaaaaaaaaa', { callId: 'c1', ok: false, error: 'not supported by this version' });
+  assert.deepEqual(bodies.at(-1), { callId: 'c1', ok: false, error: 'not supported by this version' });
 });
