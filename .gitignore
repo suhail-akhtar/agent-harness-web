@@ -13,3 +13,6 @@ dist/
 # Agent worktrees
 .claude/worktrees/
 .claude/launch.json
+
+# Desktop packaging output
+apps/desktop/release/

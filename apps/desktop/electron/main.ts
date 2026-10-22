@@ -221,6 +221,16 @@ app.whenReady().then(async () => {
   createWindow();
   createTray();
   handleDeepLink(process.argv);
+  // npm run desktop:dev rebuilds the interface on change; the window reloads when it lands.
+  if (process.env.HARNESS_DESKTOP_DEV_RELOAD && !app.isPackaged) {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      fs.watch(ctx.paths.rendererDir, { recursive: true }, () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => mainWindow?.webContents.reloadIgnoringCache(), 300);
+      });
+    } catch { /* no recursive watch here: reload by hand (Ctrl+R) */ }
+  }
 });
 
 app.on('activate', () => { if (!mainWindow) createWindow(); });
