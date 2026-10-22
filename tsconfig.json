@@ -13,5 +13,5 @@
     "types": ["node"],
     "lib": ["es2023", "dom"]
   },
-  "include": ["src", "test", "bench", "scripts"]
+  "include": ["src", "test", "bench", "scripts", "packages/plugin-ui/src"]
 }
