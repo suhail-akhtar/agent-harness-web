@@ -7,7 +7,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { duration, summarize, toRows, workedLabel, type ArtifactFile, type Item, type Row, type ToolItem } from '@harness/client';
-import { type ArtifactRenderer, Badge, Button, CodeBlock, DiffView, EmptyState, FencedBlock, Icon, IconButton, ImageStrip, ImageView, JsonView, Markdown, Reasoning, Spinner, VirtualList, copyRich, copyText, cx, toast, type FenceRenderer, type VirtualListHandle, type Source } from '@harness/ui';
+import { type ArtifactRenderer, Badge, Button, CodeBlock, DiffView, EmptyState, FencedBlock, Icon, IconButton, ImageStrip, ImageView, JsonView, Markdown, Reasoning, RenderBoundary, Spinner, VirtualList, copyRich, copyText, cx, toast, type FenceRenderer, type VirtualListHandle, type Source } from '@harness/ui';
 import { useData, client } from '../../state/data';
 import { useApp } from '../../state/app';
 import { rendererFor } from '../../registry/registry';
@@ -44,8 +44,8 @@ export function useArtifactRenderer(): ArtifactRenderer {
     const r = rendererFor(registry, 'artifact', kind);
     if (!r) return undefined;
     if (r.kind === 'frame' && r.entry) return <PluginFrame plugin={r.plugin} contribution={r.qid} entry={r.entry} height={r.height ?? 360} fill={o.fill} context={{ artifact: kind, source, title: o.title }} />;
-    const C = r.component ? registry.active.find((p) => p.name === r.plugin)?.native?.components[r.component] as React.ComponentType<{ kind: string; source: string; title: string; fill?: boolean }> | undefined : undefined;
-    return C ? <C kind={kind} source={source} title={o.title} fill={o.fill} /> : undefined;
+    const C = r.component ? registry.active.find((p) => p.name === r.plugin)?.native?.components[r.component] as React.ComponentType<{ kind: string; source: string; title: string; fill?: boolean; origin?: typeof o.origin }> | undefined : undefined;
+    return C ? <C kind={kind} source={source} title={o.title} fill={o.fill} origin={o.origin} /> : undefined;
   }, [registry]);
 }
 
@@ -158,8 +158,31 @@ function Steps({ row, sessionId, fence, defaultOpen }: { row: Extract<Row, { kin
           {row.items.map((it) => <div key={it.key} className="py-0.5"><ItemView item={it} sessionId={sessionId} fence={fence} inSteps /></div>)}
         </div>
       )}
+      {!isOpen && <ToolOutputs items={row.items} sessionId={sessionId} />}
     </div>
   );
+}
+
+/** A plugin's native renderer of a tool's result, when it has one (it may draw nothing for a given call). */
+function useNativeTool(name: string): { qid: string; C: React.ComponentType<{ item: ToolItem; sessionId: string }> } | undefined {
+  const registry = useData((s) => s.registry);
+  const r = rendererFor(registry, 'tool', name);
+  if (!r || r.kind !== 'native' || !r.component) return undefined;
+  const C = registry.active.find((p) => p.name === r.plugin)?.native?.components[r.component] as React.ComponentType<{ item: ToolItem; sessionId: string }> | undefined;
+  return C ? { qid: r.qid, C } : undefined;
+}
+
+function NativeToolOutput({ item, sessionId }: { item: ToolItem; sessionId: string }) {
+  const n = useNativeTool(item.name);
+  if (!n || item.running) return null;
+  return <div className="mt-1" data-plugin-renderer={n.qid}><RenderBoundary fallback={() => null}><n.C item={item} sessionId={sessionId} /></RenderBoundary></div>;
+}
+
+/** What plugins draw for a turn's tools, shown even while its steps are folded (a diagram the turn made, say). */
+function ToolOutputs({ items, sessionId }: { items: Item[]; sessionId: string }) {
+  const tools = items.filter((i): i is ToolItem => i.kind === 'tool' && !i.running && !i.isError);
+  if (!tools.length) return null;
+  return <>{tools.map((t) => <NativeToolOutput key={t.key} item={t} sessionId={sessionId} />)}</>;
 }
 
 const TOOL_ICON: Record<string, string> = { bash: 'terminal', read: 'file-text', write: 'file-plus', edit: 'edit', glob: 'search', grep: 'search', web_fetch: 'globe', web_search: 'globe', agent: 'bot', todo_write: 'list', ask_user: 'help', exit_plan_mode: 'list', skill: 'sparkles', tool_search: 'search', workflow: 'workflow', render: 'image', browser: 'globe' };
@@ -183,6 +206,7 @@ export function ToolCard({ item, sessionId }: { item: ToolItem; sessionId: strin
         {item.running ? <Spinner size={12} className="text-hx-accent-text" /> : item.isError ? <span className="text-[11px] text-hx-danger">failed</span> : item.ms !== undefined ? <span className="text-[11px] tabular-nums text-hx-muted">{item.ms < 1000 ? `${item.ms}ms` : duration(item.ms)}</span> : null}
         <Icon name={open ? 'chevron-up' : 'chevron-down'} size={12} className="shrink-0 text-hx-muted opacity-0 group-hover:opacity-100" />
       </button>
+      {!(custom && custom.kind === 'frame') && <div className="ml-6"><NativeToolOutput item={item} sessionId={sessionId} /></div>}
       {item.name === 'agent' && item.activity.length > 0 && (
         <div className="ml-7 space-y-0.5 py-0.5 text-[12px] text-hx-muted">{item.activity.slice(open ? 0 : -3).map((a, i) => <div key={i} className={a.isError ? 'text-hx-danger' : ''}>{a.done ? (a.isError ? '✕' : '✓') : '…'} <b className="font-medium">{a.name}</b> {a.summary}</div>)}</div>
       )}
