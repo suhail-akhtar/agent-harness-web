@@ -18,6 +18,26 @@ It is tuned and tested on three cost-efficient models: **Claude Haiku 5.5**, **D
 
 Screenshots of real sessions (a sandbox task with tests and gates, approvals, computer use, background work, workflows) are in [docs/screenshots](docs/screenshots); `node scripts/screenshots.mjs` makes them again against a running server.
 
+## Desktop
+
+**Harness Desktop** (`apps/desktop`, Electron) runs the same harness as a desktop app. The app
+starts the server itself as its engine (local, on 127.0.0.1 with a random port and token), or
+connects to a remote server. The shell is generic: the sidebar, pages, panels, commands,
+settings, renderers and themes all come from plugins, the built-in chat, projects, inbox,
+activity, plugins and settings included. Third-party plugins add to it through the `ui` section
+of `harness-plugin.json`, with sandboxed frames for anything that runs code.
+
+```bash
+npm run desktop:dev     # build, start, rebuild on change
+npm run desktop:build   # package (apps/desktop/release: unpacked app and the Windows installer)
+npm run desktop:test    # end-to-end in Electron against a scripted engine (no paid calls)
+```
+
+The details (architecture, plugins, renderers, environment, tests) are in
+[apps/desktop/README.md](apps/desktop/README.md), the design in
+[docs/desktop/DESIGN.md](docs/desktop/DESIGN.md), and screenshots in
+[docs/screenshots/desktop](docs/screenshots/desktop).
+
 ## Quick start
 
 ```bash

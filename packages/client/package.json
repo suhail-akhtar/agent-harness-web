@@ -1,0 +1,12 @@
+{
+  "name": "@harness/client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A typed client of the harness HTTP API and its event streams, shared by the desktop and the browser UI.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./timeline": "./src/timeline.ts",
+    "./events": "./src/events.ts"
+  }
+}

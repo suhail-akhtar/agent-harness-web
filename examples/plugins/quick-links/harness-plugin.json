@@ -1,0 +1,48 @@
+{
+  "name": "quick-links",
+  "version": "0.1.0",
+  "description": "An example of a declarative UI plugin: JSON only, no code runs. A links page, a prompt board, a Markdown page and a form; a command, slash commands, a composer chip, a settings section, a home card, a status item, a theme, a prompt and an onboarding step. Two of them clash on purpose with the core (the Ctrl+K shortcut and /plan) to show how clashes are resolved.",
+  "ui": {
+    "apiVersion": 1,
+    "displayName": "Quick links",
+    "icon": "link",
+    "category": "Examples",
+    "contributes": {
+      "navItems": [
+        { "id": "links", "title": "Quick links", "icon": "link", "view": "links", "order": 70 },
+        { "id": "board", "title": "Prompt board", "icon": "sparkles", "view": "board", "placement": "more", "order": 71 }
+      ],
+      "views": [
+        { "id": "links", "title": "Quick links", "kind": "links", "description": "Pages the team keeps going back to.", "links": [
+          { "title": "Harness on GitHub", "url": "https://github.com/", "description": "Source and issues" },
+          { "title": "Release notes", "url": "https://example.com/releases", "description": "What changed" }
+        ] },
+        { "id": "board", "title": "Prompt board", "kind": "prompt-board", "prompts": [
+          { "title": "Review my last change", "prompt": "Review the last change in this project for bugs.", "icon": "bug" },
+          { "title": "Write release notes", "prompt": "Write release notes from the recent commits.", "icon": "book" }
+        ] },
+        { "id": "welcome", "title": "Welcome to quick links", "kind": "markdown", "markdown": "# Quick links\n\nA plugin made only of **JSON**: pages, commands and settings with no code." },
+        { "id": "ask", "title": "Ask about a link", "kind": "form", "schema": { "type": "object", "required": ["topic"], "properties": { "topic": { "type": "string", "title": "Topic", "minLength": 2 }, "depth": { "type": "string", "enum": ["short", "long"], "default": "short" } } }, "submit": { "label": "Draft the question", "action": { "type": "prompt", "prompt": "Explain {topic} ({depth} answer).", "newChat": true } } }
+      ],
+      "commands": [
+        { "id": "open", "title": "Open quick links", "category": "Quick links", "icon": "link", "keybinding": "Mod+K", "action": { "type": "open-view", "view": "links" } },
+        { "id": "board", "title": "Open the prompt board", "category": "Quick links", "icon": "sparkles", "keybinding": "Ctrl+Alt+L", "action": { "type": "open-view", "view": "board" } },
+        { "id": "ask", "title": "Ask about a link", "category": "Quick links", "action": { "type": "open-view", "view": "ask" } }
+      ],
+      "slashCommands": [
+        { "name": "links", "description": "Open the quick links", "action": { "type": "open-view", "view": "links" } },
+        { "name": "plan", "description": "Plan (clashes with the core's /plan on purpose)", "action": { "type": "prompt", "prompt": "Plan: {args}" } }
+      ],
+      "composerChips": [{ "id": "tone", "title": "Tone", "icon": "tag", "kind": "select", "setting": "quick-links.tone", "options": ["neutral", "friendly", "formal"] }],
+      "settings": [{ "id": "links", "title": "Quick links", "icon": "link", "group": "plugins", "scope": "app", "schema": { "type": "object", "properties": {
+        "openIn": { "type": "string", "title": "Open links in", "enum": ["browser", "app"], "enumLabels": ["The system browser", "The app"], "default": "browser" },
+        "pinned": { "type": "array", "title": "Pinned links", "items": { "type": "string" } }
+      } } }],
+      "homeCards": [{ "id": "card", "title": "Quick links", "kind": "markdown", "markdown": "Open **Quick links** from the sidebar, or type `/links`.", "order": 30 }],
+      "statusItems": [{ "id": "links", "text": "Quick links", "tooltip": "Open the quick links", "command": "open", "align": "right", "order": 50 }],
+      "themes": [{ "id": "sea", "label": "Sea", "mode": "dark", "background": "#0b1d26", "foreground": "#d8eef5", "accent": "#2fb6a7" }],
+      "prompts": [{ "id": "summary", "title": "Summarise the links", "prompt": "Summarise what each of my quick links is for.", "icon": "link", "home": true }],
+      "onboarding": [{ "id": "welcome", "title": "Meet the quick links", "description": "An example plugin's step in the first-run wizard.", "view": "welcome", "order": 40 }]
+    }
+  }
+}

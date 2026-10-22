@@ -1,0 +1,48 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "lib": [
+      "es2023",
+      "dom",
+      "dom.iterable"
+    ],
+    "types": [
+      "vite/client"
+    ],
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ],
+      "@desk/*": [
+        "../shared/*"
+      ],
+      "@harness/ui": [
+        "../../../packages/ui/src/index.ts"
+      ],
+      "@harness/client": [
+        "../../../packages/client/src/index.ts"
+      ],
+      "@harness/plugin-ui": [
+        "../../../packages/plugin-ui/src/index.ts"
+      ],
+      "@harness/plugin-ui/sdk": [
+        "../../../packages/plugin-ui/src/sdk.ts"
+      ]
+    }
+  },
+  "include": [
+    "src",
+    "../shared",
+    "../../../packages/ui/src",
+    "../../../packages/client/src"
+  ]
+}

@@ -20,6 +20,9 @@ export const ICON_NAMES = [
   'mail', 'history', 'stack', 'eye', 'zap', 'play', 'pause', 'stop', 'heart', 'bookmark', 'compass', 'box',
   'puzzle', 'brain', 'calculator', 'atom', 'function', 'workflow', 'robot', 'memory', 'vault', 'dollar', 'home',
   'pin', 'archive', 'trash', 'download', 'upload', 'link', 'external', 'info', 'warning', 'help', 'command',
+  // Added for the desktop shell's own commands (compatible: only new names).
+  'edit', 'keyboard', 'monitor', 'sun', 'moon', 'folder-plus', 'arrow-left', 'arrow-right', 'arrow-up', 'arrow-down',
+  'sidebar', 'panel-right', 'refresh', 'plus', 'x', 'copy', 'file-text', 'alert', 'bot', 'paperclip', 'tag', 'filter', 'share', 'save',
 ] as const;
 export type IconName = typeof ICON_NAMES[number];
 
@@ -153,8 +156,8 @@ export interface SettingsContribution {
 
 export interface RendererContribution {
   id: string;
-  /** What it draws: a tool's results, an event kind, or a Markdown code-fence language. */
-  for: { tool: string } | { event: string } | { fence: string };
+  /** What it draws: a tool's results, an event kind, a Markdown code-fence language, or an artifact kind (html, svg, react, diagram ...). */
+  for: { tool: string } | { event: string } | { fence: string } | { artifact: string };
   kind: 'frame' | 'native';
   entry?: string;
   component?: string;
@@ -492,8 +495,8 @@ export function validateUiManifest(input: unknown, opts: { trustCeiling?: UiTrus
   for (const r of renderers) {
     body('Renderer', r, ['frame', 'native']);
     const f = r.for;
-    const ok = isObj(f) && Object.keys(f).length === 1 && ((typeof f.tool === 'string' && /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/.test(f.tool)) || (typeof f.event === 'string' && /^[a-z_]{2,40}$/.test(f.event)) || (typeof f.fence === 'string' && FENCE.test(f.fence)));
-    if (!ok) throw new ManifestError(`Renderer "${String(r.id)}" needs "for": {"tool": name} or {"event": kind} or {"fence": language}.`);
+    const ok = isObj(f) && Object.keys(f).length === 1 && ((typeof f.tool === 'string' && /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/.test(f.tool)) || (typeof f.event === 'string' && /^[a-z_]{2,40}$/.test(f.event)) || (typeof f.fence === 'string' && FENCE.test(f.fence)) || (typeof f.artifact === 'string' && FENCE.test(f.artifact)));
+    if (!ok) throw new ManifestError(`Renderer "${String(r.id)}" needs "for": {"tool": name} or {"event": kind} or {"fence": language} or {"artifact": kind}.`);
   }
   const homeCards = arr<Record<string, unknown>>('homeCards');
   ids('home card', homeCards);
