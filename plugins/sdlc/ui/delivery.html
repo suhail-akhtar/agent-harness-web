@@ -9,9 +9,11 @@
   .filters { margin: 0 0 14px; }
   #board { min-width: 0; }
   .board { display: grid; grid-template-columns: repeat(7, minmax(150px, 1fr)); gap: 10px; overflow-x: auto; padding-bottom: 6px; }
-  .col { background: var(--hx-sidebar); border: 1px solid var(--hx-border-subtle); border-radius: 12px; padding: 8px; min-height: 160px; }
+  .col { min-width: 0; overflow-wrap: anywhere; background: var(--hx-sidebar); border: 1px solid var(--hx-border-subtle); border-radius: 12px; padding: 8px; min-height: 160px; }
   .col > header { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding: 2px 4px 8px; font-size: 11.5px; font-weight: 600; color: var(--hx-text-secondary); text-transform: uppercase; letter-spacing: .03em; }
   .col .cardlink + .cardlink { margin-top: 8px; }
+  /* With a feature open beside the board, an empty stage is a narrow strip with its name upright. */
+  .col.slim { padding: 8px 4px; } .col.slim > header { writing-mode: vertical-rl; flex-wrap: nowrap; padding: 4px 0; margin: 0 auto; }
   .feature-title { font-weight: 500; font-size: 13px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .meta { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; margin-top: 6px; font-size: 11.5px; color: var(--hx-text-muted); }
   .failing { margin-top: 4px; font-size: 11.5px; color: var(--hx-danger); }
@@ -87,10 +89,10 @@ Kit.start(async (harness) => {
       return;
     }
     // An empty stage takes less room than one with features in it.
-    const cols = data.stages.map((st) => (list.some((d) => d.stage === st.id) ? 'minmax(170px, 2fr)' : 'minmax(84px, 1fr)')).join(' ');
+    const cols = data.stages.map((st) => (list.some((d) => d.stage === st.id) ? 'minmax(180px, 1fr)' : (selected ? '46px' : 'minmax(120px, 0.6fr)'))).join(' ');
     mount(board, h('div', { class: 'board', 'data-board': '', style: { gridTemplateColumns: cols } }, data.stages.map((st) => {
       const items = list.filter((d) => d.stage === st.id);
-      return h('section', { class: 'col', 'data-stage': st.id, 'aria-label': st.title }, h('header', {}, st.title, h('span', { class: 'count' }, String(items.length))), items.map(cardOf));
+      return h('section', { class: `col${!items.length && selected ? ' slim' : ''}`, 'data-stage': st.id, title: st.title, 'aria-label': st.title }, h('header', {}, st.title, h('span', { class: 'count' }, String(items.length))), items.map(cardOf));
     })));
   }
 

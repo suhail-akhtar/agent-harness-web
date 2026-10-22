@@ -492,7 +492,9 @@ test('plugins journey: Engineering and Operations switched on and off live, used
     // Adding a project restarts the engine with the new roots: requests cut while it does are expected there.
     const unexpected = errors.filter((e) => !(/^setup/.test(e.phase) && /(502|ERR_FAILED)/.test(e.text)));
     assert.deepEqual(unexpected, [], 'no errors in the window');
-    assert.deepEqual(frameErrors.filter((e) => /\/plugins\/(sdlc|aiops)\//.test(e.text)), [], 'none in the plugins\' frames');
+    // A frame's request already on its way when its plugin is switched off finds the route gone (404): only that, only in the phase that switches it off.
+    const racing = (e: { phase: string; text: string }) => /status of 404/.test(e.text) && ((/^5\./.test(e.phase) && /\/plugins\/sdlc\//.test(e.text)) || (/^6\./.test(e.phase) && /\/plugins\/aiops\//.test(e.text)));
+    assert.deepEqual(frameErrors.filter((e) => /\/plugins\/(sdlc|aiops)\//.test(e.text) && !racing(e)), [], 'none in the plugins\' frames');
   } finally {
     await app.close().catch(() => {});
     try { fs.rmSync(data, { recursive: true, force: true, maxRetries: 3 }); fs.rmSync(repo, { recursive: true, force: true, maxRetries: 3 }); fs.rmSync(ops, { recursive: true, force: true, maxRetries: 3 }); } catch { /* in use (Windows) */ }
