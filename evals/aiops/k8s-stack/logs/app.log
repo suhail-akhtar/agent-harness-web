@@ -1,0 +1,3 @@
+2026-10-22T08:14:02.101000000Z stdout F INFO crash-demo 1.0.0 starting
+2026-10-22T08:14:02.104000000Z stdout F INFO reading configuration from /etc/app/config.yaml
+2026-10-22T08:14:02.105000000Z stdout F INFO connecting with password=hunter2-not-a-real-secret

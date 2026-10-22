@@ -524,7 +524,7 @@ test('aiops workflows: every built-in workflow is valid; every runbook and incid
     assert.deepEqual(validateWorkflow(w), [], n);
     const s = runbooks.checkWorkflowSafety(w);
     assert.deepEqual(s.errors, [], n);
-    if (n.startsWith('runbook-') || n === 'incident-response.json') assert.ok(s.changes.length >= 1, `${n} marks its change step`);
+    if (n.startsWith('runbook-') || n.startsWith('incident-response')) assert.ok(s.changes.length >= 1, `${n} marks its change step`);
     else assert.equal(s.changes.length, 0, `${n} is read-only`);
   }
   // An unsafe one: a change reachable without approval, a change approved on reject, and no verify before the end.

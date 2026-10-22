@@ -1,0 +1,5 @@
+2026-10-22T08:13:31.101000000Z stdout F INFO crash-demo 1.0.0 starting
+2026-10-22T08:13:31.104000000Z stdout F INFO reading configuration from /etc/app/config.yaml
+2026-10-22T08:13:31.107000000Z stderr F ERROR open /etc/app/config.yaml: no such file or directory
+2026-10-22T08:13:31.107000000Z stderr F FATAL cannot start without a configuration; exiting with status 1
+2026-10-22T08:13:31.108000000Z stderr F ERROR open /etc/app/config.yaml: no such file or directory

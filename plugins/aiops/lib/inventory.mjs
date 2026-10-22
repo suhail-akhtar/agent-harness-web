@@ -47,6 +47,10 @@ export function assertSafe(kind, value) {
   return String(value);
 }
 const CREDENTIAL_KEYS = ['prometheus_credential', 'loki_credential'];
+const K8S_NAMESPACE = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/;
+/** The built-in Kubernetes checks an alert rule may name (k8s: { cluster, check }); lib/k8s.mjs evaluates them. */
+export const K8S_CHECK_NAMES = ['pod-crashlooping', 'deployment-unavailable', 'node-not-ready', 'pvc-pending', 'job-failed', 'hpa-maxed'];
+const PROM_LABELS = /^\s*[a-zA-Z_][a-zA-Z0-9_]*\s*(=|!=|=~|!~)\s*"[^"\\]*"\s*(,\s*[a-zA-Z_][a-zA-Z0-9_]*\s*(=|!=|=~|!~)\s*"[^"\\]*"\s*)*$/;
 export const SEVERITIES = ['critical', 'warning', 'info'];
 
 /** "90s", "5m", "2h", "30d", "1w", "250ms" (or a number of seconds) in milliseconds; NaN when not a duration. */
@@ -112,9 +116,9 @@ const isUrl = (s, protos = ['http:', 'https:']) => { try { return protos.include
  */
 export function validateInventory(doc, { source = 'workspace', vaultPatterns = ['ops-*'], external = {} } = {}) {
   const errors = []; const warnings = [];
-  const inv = { monitoring: {}, environments: [], hosts: [], services: [], maintenance: [], alerts: [] };
+  const inv = { monitoring: {}, environments: [], hosts: [], clusters: [], services: [], maintenance: [], alerts: [] };
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return { errors: ['the inventory must be a mapping with hosts, services, environments, maintenance, alerts'], warnings, inv };
-  const known = ['monitoring', 'environments', 'hosts', 'services', 'maintenance', 'alerts', 'version'];
+  const known = ['monitoring', 'environments', 'hosts', 'clusters', 'services', 'maintenance', 'alerts', 'version'];
   for (const k of Object.keys(doc)) if (!known.includes(k)) warnings.push(`unknown top-level key "${k}" (known: ${known.join(', ')})`);
   const credOk = (c) => vaultPatterns.some((p) => (p.endsWith('*') ? c.startsWith(p.slice(0, -1)) : c === p));
 
@@ -189,6 +193,42 @@ export function validateInventory(doc, { source = 'workspace', vaultPatterns = [
     inv.hosts.push({ ...rest, ...(credential !== undefined ? { credential: String(credential) } : {}), ...(reader ?? {}), port, user: String(h.user ?? 'root'), tags: asList(h.tags).map(String), source });
   });
 
+  // Kubernetes clusters: the operator's file only. A cluster is reached with a kubeconfig from the vault,
+  // so a cluster is a credential: a workspace (a repository) may not declare one, nor point one elsewhere.
+  // credential: the operator kubeconfig (changes, asked about); readCredential: a read-only kubeconfig
+  // (a ServiceAccount bound to view-only RBAC: the k8s_* reads use it and are not asked about).
+  const clusterNames = new Set();
+  if (doc.clusters !== undefined && source !== 'operator') warnings.push('clusters: ignored: only the operator\'s inventory (HARNESS_OPS_INVENTORY) declares Kubernetes clusters and their kubeconfig credentials');
+  else asList(doc.clusters).forEach((c, i) => {
+    const at = `clusters[${i}]`;
+    if (!c || typeof c !== 'object' || !NAME.test(String(c.name ?? ''))) { errors.push(`${at}: needs a name (letters, digits, . _ -)`); return; }
+    const where = `clusters.${c.name}`;
+    const before = errors.length;
+    if (clusterNames.has(c.name)) errors.push(`${where}: cluster "${c.name}" appears twice`);
+    if (c.context !== undefined && !/^[\w.@:/-]{1,253}$/.test(String(c.context))) errors.push(`${where}: context "${c.context}" is not a kubeconfig context name`);
+    if (c.credential === undefined && c.readCredential === undefined) errors.push(`${where}: needs credential (the operator kubeconfig's vault name) and/or readCredential (a read-only kubeconfig's)`);
+    for (const k of ['credential', 'readCredential']) {
+      if (c[k] === undefined) continue;
+      if (!SAFE.credential.test(String(c[k]))) errors.push(`${where}: ${k} "${c[k]}" is not a vault name`);
+      else if (!credOk(String(c[k]))) errors.push(`${where}: ${k} "${c[k]}" is outside what this plugin may read from the vault (${vaultPatterns.join(', ')})`);
+    }
+    for (const n of asList(c.namespaces)) if (typeof n !== 'string' || !K8S_NAMESPACE.test(n)) errors.push(`${where}: namespace "${n}" is not a namespace name`);
+    if (c.prometheus_labels !== undefined && !PROM_LABELS.test(String(c.prometheus_labels))) errors.push(`${where}: prometheus_labels must be label matchers like cluster="prod-eu" (comma-separated)`);
+    if (c.scale !== undefined) {
+      const sc = c.scale;
+      if (!sc || typeof sc !== 'object' || [sc.min, sc.max].some((v) => v !== undefined && (!Number.isInteger(v) || v < 0)) || (sc.min !== undefined && sc.max !== undefined && sc.min > sc.max)) errors.push(`${where}: scale must be { min, max } whole numbers with min <= max`);
+    }
+    if (c.checks !== undefined && typeof c.checks !== 'boolean') errors.push(`${where}: checks must be true or false`);
+    checkEnv(where, c.env);
+    if (errors.length > before) { errors.push(`${where}: left out of the inventory until fixed`); return; }
+    clusterNames.add(c.name);
+    let readCredential = c.readCredential !== undefined ? String(c.readCredential) : undefined;
+    if (readCredential && readCredential === String(c.credential ?? '')) { warnings.push(`${where}: readCredential is the operator kubeconfig itself: no read-only kubeconfig (reads are asked about)`); readCredential = undefined; }
+    if (!c.credential) warnings.push(`${where}: no operator kubeconfig (credential): read only, k8s_control cannot change it`);
+    inv.clusters.push({ ...c, ...(c.credential !== undefined ? { credential: String(c.credential) } : {}), readCredential, namespaces: asList(c.namespaces).map(String), tags: asList(c.tags).map(String), source });
+  });
+  const clusterKnown = (n) => clusterNames.has(n) || !!external.clusters?.has(n);
+
   const svcNames = new Set(); const svcSeen = new Set();
   asList(doc.services).forEach((s, i) => {
     const at = `services[${i}]`;
@@ -213,6 +253,19 @@ export function validateInventory(doc, { source = 'workspace', vaultPatterns = [
         if (l.docker !== undefined && !SAFE.container.test(String(l.docker))) errors.push(`${where}: logs.docker "${l.docker}" is not a container name`);
       }
     }
+    if (s.k8s !== undefined) {
+      const k = s.k8s;
+      if (!k || typeof k !== 'object') errors.push(`${where}: k8s must be { cluster, namespace, workload: deployment/<name> | selector: <labels> }`);
+      else {
+        if (!clusterKnown(k.cluster)) errors.push(`${where}: k8s.cluster "${k.cluster}" is not a cluster in the operator's inventory`);
+        if (typeof k.namespace !== 'string' || !K8S_NAMESPACE.test(k.namespace)) errors.push(`${where}: k8s.namespace "${k.namespace}" is not a namespace name`);
+        if (k.workload === undefined && k.selector === undefined) errors.push(`${where}: k8s needs workload (deployment/<name>, statefulset/<name>, daemonset/<name>) or selector (labels)`);
+        if (k.workload !== undefined && !/^(deployment|deploy|statefulset|sts|daemonset|ds)\/[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$/.test(String(k.workload))) errors.push(`${where}: k8s.workload "${k.workload}" must be deployment/<name>, statefulset/<name> or daemonset/<name>`);
+        if (k.selector !== undefined && !/^[a-zA-Z0-9_./!=,() -]{1,500}$/.test(String(k.selector))) errors.push(`${where}: k8s.selector "${k.selector}" is not a label selector`);
+        for (const b of ['min_replicas', 'max_replicas']) if (k[b] !== undefined && (!Number.isInteger(k[b]) || k[b] < 0)) errors.push(`${where}: k8s.${b} must be a whole number`);
+        if (Number.isInteger(k.min_replicas) && Number.isInteger(k.max_replicas) && k.min_replicas > k.max_replicas) errors.push(`${where}: k8s.min_replicas is above max_replicas`);
+      }
+    }
     checkEnv(where, s.env);
     const slos = [];
     asList(s.slos).forEach((o, j) => {
@@ -226,7 +279,7 @@ export function validateInventory(doc, { source = 'workspace', vaultPatterns = [
     });
     if (errors.length > before) { errors.push(`${where}: left out of the inventory until fixed`); return; }
     svcNames.add(s.name);
-    if (!s.health && !s.metrics_job) warnings.push(`${where}: no health URL and no metrics job: nothing would notice it failing`);
+    if (!s.health && !s.metrics_job && !s.k8s) warnings.push(`${where}: no health URL and no metrics job: nothing would notice it failing`);
     inv.services.push({ ...s, tags: asList(s.tags).map(String), ...(s.depends_on !== undefined ? { depends_on: asList(s.depends_on).map(String) } : {}), slos, source });
   });
 
@@ -258,8 +311,14 @@ export function validateInventory(doc, { source = 'workspace', vaultPatterns = [
     const before = errors.length;
     if (alertNames.has(a.name)) errors.push(`${where}: alert "${a.name}" appears twice`);
     alertNames.add(a.name);
-    const kinds = ['expr', 'probe', 'logs'].filter((k) => a[k] !== undefined);
-    if (kinds.length !== 1) errors.push(`${where}: needs exactly one of expr (PromQL), probe or logs`);
+    const kinds = ['expr', 'probe', 'logs', 'k8s'].filter((k) => a[k] !== undefined);
+    if (kinds.length !== 1) errors.push(`${where}: needs exactly one of expr (PromQL), probe, logs or k8s`);
+    if (a.k8s !== undefined) {
+      const k = a.k8s;
+      if (!k || typeof k !== 'object' || !K8S_CHECK_NAMES.includes(k.check)) errors.push(`${where}: k8s needs a check (${K8S_CHECK_NAMES.join(', ')}) and a cluster`);
+      else if (!clusterKnown(k.cluster)) errors.push(`${where}: k8s.cluster "${k.cluster}" is not a cluster in the operator's inventory`);
+      if (k?.namespace !== undefined && !K8S_NAMESPACE.test(String(k.namespace))) errors.push(`${where}: k8s.namespace "${k.namespace}" is not a namespace name`);
+    }
     if (a.severity !== undefined && !SEVERITIES.includes(a.severity)) errors.push(`${where}: severity must be one of ${SEVERITIES.join(', ')}`);
     if (a.for !== undefined && !(parseDuration(a.for) >= 0)) errors.push(`${where}: for "${a.for}" is not a duration`);
     if (a.service !== undefined && !svcNames.has(a.service)) errors.push(`${where}: service "${a.service}" is not in services`);
@@ -328,10 +387,12 @@ export async function loadInventory({ host, resolve, env = process.env, vaultPat
     try { doc = parseInventoryText(ws.text, ws.rel); } catch (e) { throw new Error(`${ws.rel}: ${e.message}`); }
     docs.push({ source: 'workspace', file: ws.rel, doc });
   }
-  const out = { monitoring: {}, environments: [], hosts: [], services: [], maintenance: [], alerts: [], files: docs.map((d) => `${d.file} (${d.source})`), errors: [], warnings: [] };
+  const out = { monitoring: {}, environments: [], hosts: [], clusters: [], services: [], maintenance: [], alerts: [], files: docs.map((d) => `${d.file} (${d.source})`), errors: [], warnings: [] };
   for (const d of docs) {
-    // The workspace's services may run on the operator's hosts (checked again after the merge).
-    const r = validateInventory(d.doc, { source: d.source, vaultPatterns, external: { hosts: new Set(out.hosts.map((h) => h.name)) } });
+    // The workspace's services may run on the operator's hosts and clusters (checked again after the merge).
+    const r = validateInventory(d.doc, { source: d.source, vaultPatterns, external: { hosts: new Set(out.hosts.map((h) => h.name)), clusters: new Set(out.clusters.map((c) => c.name)) } });
+    // Clusters come only from the operator's file (validateInventory ignores a workspace's).
+    for (const c of r.inv.clusters) if (d.source === 'operator' && !out.clusters.some((x) => x.name === c.name)) out.clusters.push(c);
     out.errors.push(...r.errors.map((e) => `${d.file}: ${e}`));
     out.warnings.push(...r.warnings.map((e) => `${d.file}: ${e}`));
     const fromWorkspaceUnderOperator = d.source === 'workspace' && !!opFile;
@@ -356,6 +417,11 @@ export async function loadInventory({ host, resolve, env = process.env, vaultPat
   out.services = out.services.filter((s) => {
     if (!s.host || s.host === 'local' || out.hosts.some((h) => h.name === s.host)) return true;
     out.errors.push(`services.${s.name}: host "${s.host}" is not in the inventory's hosts (left out until fixed)`);
+    return false;
+  });
+  out.services = out.services.filter((s) => {
+    if (!s.k8s || out.clusters.some((c) => c.name === s.k8s.cluster)) return true;
+    out.errors.push(`services.${s.name}: k8s.cluster "${s.k8s.cluster}" is not a cluster in the operator's inventory (left out until fixed)`);
     return false;
   });
   for (const s of out.services) for (const d of s.depends_on ?? []) if (d !== 'local' && !out.hosts.some((h) => h.name === d) && !out.services.some((x) => x.name === d)) out.warnings.push(`services.${s.name}: depends_on "${d}" is neither a host nor a service in the inventory`);

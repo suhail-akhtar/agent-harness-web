@@ -1,0 +1,5 @@
+2026-10-22T08:13:35.512000000Z stdout F INFO checkout 2.4.1 starting (pid 1)
+2026-10-22T08:13:35.519000000Z stdout F INFO loading configuration from the environment
+2026-10-22T08:13:35.520000000Z stdout F INFO PAYMENT_GATEWAY_URL=https://payments.internal/v2
+2026-10-22T08:13:35.521000000Z stderr F ERROR config: PAYMENT_GATEWAY_TIMEOUT="30": time: missing unit in duration "30" (want e.g. 30s, 1m)
+2026-10-22T08:13:35.521000000Z stderr F FATAL invalid configuration, refusing to start; exit status 1

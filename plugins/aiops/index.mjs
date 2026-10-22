@@ -33,6 +33,7 @@ import { containerLogs, describe, docker, dockerError, formatContainer, inspect,
 import { CONTAINER_STATE_FORMAT, containerStateCmd, controlCmd, dockerLogsCmd, tailFileCmd, unitStateCmd } from './lib/commands.mjs';
 import { duScript, HOST_STATS_SCRIPT, parseDu, parseHostStats } from './lib/hoststats.mjs';
 import { INCIDENT_DIR, openIncident, renderIncident, renderPostmortem, resolveIncident, updateIncident } from './lib/incidents.mjs';
+import { register as registerK8s } from './lib/k8s.mjs';
 import { assertSafe, filterItems, findHost, findService, formatDuration, inMaintenance, loadInventory, operatorInventorySync, parseDuration, promqlShape, WORKSPACE_FILES } from './lib/inventory.mjs';
 import { runProgram } from './lib/proc.mjs';
 import { runProbe } from './lib/probe.mjs';
@@ -131,7 +132,7 @@ export default {
       docker_status: (i) => names(hostCred(op(), str(i.host))),
       ssh_exec: (i) => { const o = op(); return names(hostCredAs(o, str(i.host), roleFor(i, o))); },
       service_control: (i) => { const o = op(); return names(hostCred(o, o?.services.find((s) => s.name === str(i.service))?.host)); },
-      ops_check: () => { const o = op(); return o ? names(o.monitoring?.prometheus_credential, o.monitoring?.loki_credential, ...o.services.map((s) => hostCred(o, s.host))) : []; },
+      ops_check: () => { const o = op(); return o ? names(o.monitoring?.prometheus_credential, o.monitoring?.loki_credential, ...o.services.map((s) => hostCred(o, s.host)), ...k8s.checkCredentials()) : []; },
     };
     /** Registers a tool; one that may use credentials declares them, and its run sees only those. */
     const register = (def) => {
@@ -143,6 +144,9 @@ export default {
       const token = inv.monitoring.prometheus_credential ? await credential(inv.monitoring.prometheus_credential, ctx, 'aiops: Prometheus API', seen) : undefined;
       return promClient({ url: inv.monitoring.prometheus, token });
     };
+
+    // Kubernetes (lib/k8s.mjs): the k8s_* tools, and the built-in cluster checks ops_check evaluates.
+    const k8s = registerK8s(api, { register, credential, invOrError, configured, audit, op, prom, opProm });
 
     /**
      * A command on an inventory host over ssh (or the local machine for "local"), redacted.
@@ -179,7 +183,7 @@ export default {
         type: 'object',
         properties: {
           action: { type: 'string', enum: ['list', 'show', 'validate'] },
-          kind: { type: 'string', enum: ['all', 'hosts', 'services', 'environments', 'maintenance', 'alerts'], description: 'list: what to list (default all)' },
+          kind: { type: 'string', enum: ['all', 'hosts', 'clusters', 'services', 'environments', 'maintenance', 'alerts'], description: 'list: what to list (default all)' },
           name: { type: 'string', description: 'show: the item; list: a name substring' },
           tag: { type: 'string' }, env: { type: 'string' }, role: { type: 'string' },
         },
@@ -195,7 +199,7 @@ export default {
         const head = `Inventory: ${inv.files.join(', ') || '(no file; HARNESS_OPS_PROMETHEUS_URL only)'}; Prometheus ${inv.monitoring.prometheus ?? 'not configured'}${inv.monitoring.loki ? `, Loki ${inv.monitoring.loki}` : ''}.`;
         if (action === 'validate') {
           const lines = [head];
-          const creds = [...new Set(inv.hosts.flatMap((h) => [h.credential, h.readCredential]).filter(Boolean).concat(inv.monitoring.prometheus_credential ?? [], inv.monitoring.loki_credential ?? []))];
+          const creds = [...new Set(inv.hosts.flatMap((h) => [h.credential, h.readCredential]).concat((inv.clusters ?? []).flatMap((c) => [c.credential, c.readCredential])).filter(Boolean).concat(inv.monitoring.prometheus_credential ?? [], inv.monitoring.loki_credential ?? []))];
           let vaultNote = 'no Key Vault in this harness: credentials come from HARNESS_OPS_SECRETS';
           try {
             const listed = await listCredentials(ctx.services, vaultPatterns);
@@ -211,14 +215,14 @@ export default {
               for (const e of listed) if (creds.includes(e.name) && e.rotateBy && Date.parse(e.rotateBy) < now) inv.warnings.push(`credential "${e.name}" was due for rotation on ${e.rotateBy}`);
             }
           } catch (e) { vaultNote = `the Key Vault could not be listed: ${e.message}`; }
-          lines.push(`${inv.hosts.length} host(s), ${inv.services.length} service(s), ${inv.environments.length} environment(s), ${inv.maintenance.length} maintenance window(s), ${inv.alerts.length} alert rule(s); ${vaultNote}.`);
+          lines.push(`${inv.hosts.length} host(s), ${(inv.clusters ?? []).length} cluster(s), ${inv.services.length} service(s), ${inv.environments.length} environment(s), ${inv.maintenance.length} maintenance window(s), ${inv.alerts.length} alert rule(s); ${vaultNote}.`);
           lines.push(inv.errors.length ? `ERRORS (${inv.errors.length}):\n${inv.errors.map((e) => `- ${e}`).join('\n')}` : 'No errors.');
           if (inv.warnings.length) lines.push(`Warnings:\n${inv.warnings.map((e) => `- ${e}`).join('\n')}`);
           return { content: lines.join('\n'), is_error: inv.errors.length > 0 };
         }
         if (action === 'show') {
           const n = str(input.name);
-          const item = ['hosts', 'services', 'environments', 'maintenance', 'alerts'].map((k) => inv[k].find((x) => x.name === n)).find(Boolean);
+          const item = ['hosts', 'clusters', 'services', 'environments', 'maintenance', 'alerts'].map((k) => (inv[k] ?? []).find((x) => x.name === n)).find(Boolean);
           if (!item) return err(`No inventory item named "${n}". ops_inventory list shows the names.`);
           return `${head}\n${JSON.stringify(item, null, 2)}`;
         }
@@ -230,9 +234,10 @@ export default {
           const hs = filterItems(inv.hosts, f);
           out.push(`Hosts (${hs.length}):`, ...hs.map((h) => `- ${h.name}: ${h.user}@${h.address ?? '?'}:${h.port}${h.role ? ` role=${h.role}` : ''}${h.env ? ` env=${h.env}` : ''}${h.tags.length ? ` tags=${h.tags.join(',')}` : ''} credential=${h.credential ?? '(none)'}${h.readUser ? ` reader=${h.readUser} (read-only account: ssh_exec and host_stats run as it by default, not asked about)` : ''} [${h.source}]${inMaintenance(inv, { host: h.name, env: h.env }, now, parseCron).length ? ' IN MAINTENANCE NOW' : ''}`));
         }
+        if (kind === 'clusters' || (kind === 'all' && inv.clusters?.length)) { const cs = filterItems(inv.clusters ?? [], f); out.push(`Kubernetes clusters (${cs.length}):`, ...k8s.describeClusters({ clusters: cs })); }
         if (kind === 'all' || kind === 'services') {
           const ss = filterItems(inv.services, f);
-          out.push(`Services (${ss.length}):`, ...ss.map((s) => `- ${s.name}: host=${s.host ?? '-'}${s.env ? ` env=${s.env}` : ''}${s.container ? ` container=${s.container}` : ''}${s.unit ? ` unit=${s.unit}` : ''} health=${s.health ?? '(none)'} metrics_job=${s.metrics_job ?? '(none)'}${s.logs ? ` logs=${JSON.stringify(s.logs)}` : ''}${s.tls ? ` tls=${s.tls}` : ''}${s.depends_on?.length ? ` depends_on=${s.depends_on.join(',')}` : ''}${s.owner ? ` owner=${s.owner}` : ''}${s.slos.length ? ` slos=${s.slos.map((o) => `${o.name} ${o.objective}%/${o.window}`).join(',')}` : ''}${s.notes ? ` notes="${String(s.notes).replace(/\s+/g, ' ').slice(0, 300)}"` : ''} [${s.source}]`));
+          out.push(`Services (${ss.length}):`, ...ss.map((s) => `- ${s.name}: host=${s.host ?? '-'}${s.env ? ` env=${s.env}` : ''}${s.container ? ` container=${s.container}` : ''}${s.unit ? ` unit=${s.unit}` : ''}${s.k8s ? ` k8s=${s.k8s.cluster}/${s.k8s.namespace}/${s.k8s.workload ?? s.k8s.selector}` : ''} health=${s.health ?? '(none)'} metrics_job=${s.metrics_job ?? '(none)'}${s.logs ? ` logs=${JSON.stringify(s.logs)}` : ''}${s.tls ? ` tls=${s.tls}` : ''}${s.depends_on?.length ? ` depends_on=${s.depends_on.join(',')}` : ''}${s.owner ? ` owner=${s.owner}` : ''}${s.slos.length ? ` slos=${s.slos.map((o) => `${o.name} ${o.objective}%/${o.window}`).join(',')}` : ''}${s.notes ? ` notes="${String(s.notes).replace(/\s+/g, ' ').slice(0, 300)}"` : ''} [${s.source}]`));
         }
         if ((kind === 'all' || kind === 'environments') && inv.environments.length) out.push(`Environments: ${inv.environments.map((e) => e.name).join(', ')}`);
         if (kind === 'all' || kind === 'maintenance') out.push(`Maintenance windows (${inv.maintenance.length}):`, ...inv.maintenance.map((w) => `- ${w.name}: ${w.cron ? `cron "${w.cron}" for ${w.duration}` : `${w.start} - ${w.end}`}${w.env ? ` env=${w.env}` : ''}${w.hosts.length ? ` hosts=${w.hosts.join(',')}` : ''}${w.services.length ? ` services=${w.services.join(',')}` : ''}`));
@@ -667,8 +672,9 @@ export default {
 
     // ---------------- ops_check ----------------
     /** The alert rules of an inventory plus the implicit ones: every health URL answers, every TLS endpoint is not near expiry. */
-    function allRules(inv) {
-      const rules = [...inv.alerts];
+    function allRules(inv, ctx) {
+      // Kubernetes rules need a kubeconfig, which a quality gate never uses: none there.
+      const rules = [...inv.alerts.filter((a) => !(a.k8s && ctx?.opsGate)), ...k8s.rules(inv, ctx)];
       for (const s of inv.services) {
         if (s.health && !rules.some((r) => r.probe?.url === s.health)) rules.push({ name: `${s.name}:health`, severity: 'critical', service: s.name, probe: { type: 'http', url: s.health }, implicit: true });
         if (s.tls && !rules.some((r) => r.probe?.type === 'tls' && (r.probe.target === s.tls || r.probe.url === s.tls))) rules.push({ name: `${s.name}:tls`, severity: 'warning', service: s.name, probe: { type: 'tls', target: s.tls, warn_days: 21 }, implicit: true });
@@ -680,7 +686,7 @@ export default {
       const seen = new Set();
       const now = Date.now();
       let p;
-      const rules = allRules(inv).filter((r) => (!service || r.service === service || r.logs?.service === service) && (!severity || r.severity === severity));
+      const rules = allRules(inv, ctx).filter((r) => (!service || r.service === service || r.logs?.service === service) && (!severity || r.severity === severity));
       const results = await Promise.all(rules.map(async (r) => {
         const base = { name: r.name, severity: r.severity, service: r.service ?? r.logs?.service, implicit: !!r.implicit };
         const svc = base.service ? findService(inv, base.service) : undefined;
@@ -703,6 +709,7 @@ export default {
             const vals = firing.slice(0, 3).map((x) => `${Object.entries(x.metric).filter(([k]) => k !== '__name__').map(([k, v]) => `${k}=${v}`).join(',')}=${fmt(Number(x.values.at(-1)[1]))}`);
             return { ...base, state: firing.length ? 'firing' : pending.length ? 'pending' : 'ok', detail: firing.length ? `true for ${r.for}: ${vals.join('; ')}` : pending.length ? `true now, not yet for ${r.for}` : 'not true now', maint };
           }
+          if (r.k8s) return { ...base, ...(await k8s.evaluate(r, inv, ctx, seen)), maint };
           if (r.probe) {
             const pr = await runProbe({ timeout_ms: 8000, ...r.probe, type: r.probe.type === 'https' ? 'http' : r.probe.type }, ctx.signal);
             return { ...base, state: pr.ok ? 'ok' : 'firing', detail: pr.summary, maint };
