@@ -326,10 +326,13 @@ const incidentScripts: [RegExp, Script][] = [
   [/Find RECENT CHANGES/, steps({ calls: [{ name: 'docker_status', input: { project: 'hwtest-aiops' } }] }, { text: 'Migration 0042 ran just before the latency rose.' })],
   [/Gather HOST evidence/, steps({ calls: [{ name: 'host_stats', input: { host: 'db-1' } }] }, { text: 'Hosts look normal.' })],
   [/Form 2-4 hypotheses/, steps({ calls: [{ name: 'ssh_exec', input: { host: 'db-1', command: 'ls /data/app/indexes; cat /data/app/README.txt' } }] }, { text: json({ hypotheses: ['missing index after migration 0042: confirmed (orders_customer_id_idx absent)', 'host saturation: refuted (cpu low)'] }) })],
-  [/Decide the root cause/, (step, brief) => [
-    { calls: [{ name: 'incident', input: { action: 'update', id: /Incident (inc-[a-z0-9-]+)/.exec(brief)![1], status: 'identified', note: 'Root cause: migration 0042 recreated the orders table without the orders_customer_id_idx index, so GET /api/orders scans the whole table.' } }] },
-    { text: json({ root_cause: 'Migration 0042 recreated the orders table without the orders_customer_id_idx index, so every GET /api/orders does a full table scan.', remediation_needed: true }) },
-  ][Math.min(step, 1)]!],
+  // The root cause cites evidence ids the harness recorded for earlier calls (the rca-evidence gate checks them).
+  [/Decide the root cause/, (step, brief, last) => [
+    { calls: [{ name: 'evidence', input: { action: 'list', limit: 30 } }] },
+    { calls: [{ name: 'incident', input: { action: 'update', id: /Incident (inc-[a-z0-9-]+)/.exec(brief)![1], status: 'identified', note: `Root cause: migration 0042 recreated the orders table without the orders_customer_id_idx index, so GET /api/orders scans the whole table. ${[...new Set(last.match(/ev-[0-9a-f]{6}/g) ?? [])].slice(0, 3).map((i) => `[${i}]`).join(' ')}` } }] },
+    { text: json({ root_cause: 'Migration 0042 recreated the orders table without the orders_customer_id_idx index, so every GET /api/orders does a full table scan.', remediation_needed: true, confidence: 'medium: logs and metrics agree on the time', evidence_ids: ['cited in the incident note'] }) },
+  ][Math.min(step, 2)]!],
+  [/Try to FALSIFY/, steps({ calls: [{ name: 'prometheus_query', input: { query: 'histogram_quantile(0.95, sum by (le, route) (rate(http_request_duration_seconds_bucket{job="demoapp"}[1m])))' } }] }, { text: 'Only /api/orders is slow, and only since the migration: consistent.\n\nSURVIVES' })],
   [/Write the remediation as a runbook/, (step, brief) => {
     const file = /(\.harness\/ops\/runbooks\/remediate-inc-[a-z0-9-]+\.md)/.exec(brief)![1]!;
     const rb = '# Runbook: remediate missing orders index\n\n## When to use\nGET /api/orders slow after migration 0042.\n\n## Preconditions\n- db-1 reachable.\n\n## Steps\n1. [check] `ssh_exec(host="db-1", command="ls /data/app/indexes")` shows no orders_customer_id_idx.\n2. [approval] Approve creating the index (online, safe to repeat).\n3. [change] `ssh_exec(host="db-1", as="operator", command="sh /data/app/bin/dbctl create-index orders_customer_id_idx")`\n4. [verify] `ops_check(service="shop-api")`: ShopOrdersLatencyHigh ok; p95 under 0.5 s.\n\n## Rollback\nNot needed: an index can be dropped by the DBA if it causes harm.\n\n## Verify\nNo critical alerts for shop-api.\n';

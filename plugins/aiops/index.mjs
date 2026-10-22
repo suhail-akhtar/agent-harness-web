@@ -40,6 +40,11 @@ import { chooseStep, describeStep, MAX_RANGE_MS, parseTime, promClient, summariz
 import { checkRunbook, checkWorkflowSafety } from './lib/runbooks.mjs';
 import { CredentialError, fallbackNames, listCredentials, redact, revealCredential } from './lib/secrets.mjs';
 import { explainSshFailure, isReadOnly, presentedFingerprints, repin, sshRun } from './lib/ssh.mjs';
+import { register as registerAnomalies } from './lib/anomaly.mjs';
+import { register as registerGrafana } from './lib/grafana.mjs';
+import { register as registerMemory } from './lib/memory.mjs';
+import { register as registerTopology } from './lib/topology.mjs';
+import { register as registerTraces } from './lib/traces.mjs';
 import { budgetLeft, burnAlerts, burnRate, dedupeLines, fmt, forecast, humanSeconds } from './lib/stats.mjs';
 import { register as registerAlerts } from './lib/alerts.mjs';
 import { register as registerChanges } from './lib/changes.mjs';
@@ -1001,6 +1006,15 @@ export default {
         return { content: lines.join('\n') || 'No runbooks to check.', ...(bad ? { is_error: true } : {}) };
       },
     });
+
+    // ---------------- Grafana, traces, topology, anomalies, incident memory and evidence (lib/*.mjs) ----------------
+    // What those modules share from here: the inventory, credentials decided per call, Prometheus, logs, incidents, the audit log.
+    const shared = { configured, inventory, invOrError, credential, op, opProm, names, prom, fetchLogs, audit, incidentPath, incidentIds, loadIncident, vaultPatterns, clip };
+    registerMemory(api, shared);
+    registerGrafana(api, shared);
+    registerTraces(api, shared);
+    registerTopology(api, shared);
+    registerAnomalies(api, shared);
 
     // ---------------- gates ----------------
     const hostHasInventory = async (host) => {
