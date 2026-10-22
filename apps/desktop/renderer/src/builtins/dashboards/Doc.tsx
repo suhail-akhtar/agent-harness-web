@@ -29,7 +29,10 @@ export function DocPage({ params }: { params: Record<string, string> }): React.R
   const [error, setError] = useState<string>();
   const [edit, setEdit] = useState(params.edit === '1');
   const [selected, setSelected] = useState<string | null>(null);
-  const [page, setPage] = useState<string>();
+  const [page, setPage] = useState<string | undefined>(params.page);
+  // Opened from another dashboard (a link, a button, a drill-through): the page and the filters it carried.
+  useEffect(() => { setPage(params.page); }, [id, params.page]);
+  const carried = useMemo(() => { try { return params.ctx ? JSON.parse(params.ctx) as FilterSpec[] : undefined; } catch { return undefined; } }, [params.ctx]);
   const [viewAs, setViewAs] = useState('');
   const [dialog, setDialog] = useState<'publish' | 'alerts' | 'subs' | 'refresh' | 'theme' | 'history' | 'verify' | 'layout' | 'template' | null>(null);
   const [state, setState] = useState<ViewState>({});
@@ -91,7 +94,8 @@ export function DocPage({ params }: { params: Record<string, string> }): React.R
       </div>
       <div className="flex min-h-0 flex-1">
         <div className="min-w-0 flex-1" onClick={() => edit && setSelected(null)}>
-          <DocView doc={doc} client={bi} hierarchies={d.model?.hierarchies} dark={dark} page={page} onPage={setPage} onState={setState} renderMarkdown={renderMarkdown} renderFence={renderFence}
+          <DocView key={`${id}:${params.ctx ?? ''}`} doc={doc} client={bi} hierarchies={d.model?.hierarchies} dark={dark} page={page} onPage={setPage} onState={setState} renderMarkdown={renderMarkdown} renderFence={renderFence}
+            initialFilters={carried?.filter((f) => !d.model || d.model.tables.some((t) => f.field.startsWith(`${t.name}.`)))} onOpenDoc={(to) => navigate({ view: 'core.dashboards:doc', params: { id: to.doc, ...(to.page ? { page: to.page } : {}), ctx: JSON.stringify(to.filters) } })}
             visualActions={(v) => <IconButton size="xs" icon="sparkles" label="Ask the agent about this visual" data-ask-visual={v.id} onClick={(e) => { e.stopPropagation(); setAskVisual(v); setAsking('ask'); }} />}
             edit={edit ? {
               selected, onSelect: setSelected,

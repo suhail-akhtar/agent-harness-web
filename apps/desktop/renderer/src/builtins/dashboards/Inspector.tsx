@@ -4,7 +4,7 @@
  * page and the document (pages, drill-through fields, page and report filters). Each change is one op.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { type CondFormat, type FilterSpec, type PageSpec, VISUAL_TYPES, type VisualOptions, type VisualSpec } from '@harness/plugin-ui';
 import { Button, IconButton, Input, Select, Switch, Textarea, cx } from '@harness/ui';
 import { act, type DocDetail, modelFields, useDataStore } from './api';
@@ -47,6 +47,8 @@ export function Inspector({ docId, detail, v, onClose }: { docId: string; detail
   const msNames = (q.measures ?? []).map((m) => (typeof m === 'string' ? m : m.name));
   const o = v.options ?? {};
   const [newMeasure, setNewMeasure] = useState({ name: '', expr: '' });
+  const docs = useDataStore((s) => s.docs) ?? [];
+  useEffect(() => { if (!useDataStore.getState().docs) void useDataStore.getState().refreshDocs(); }, []);
   return (
     <div data-inspector-visual={v.id}>
       <div className="flex items-center gap-1 border-b border-hx-border-subtle px-3 py-2">
@@ -107,20 +109,24 @@ export function Inspector({ docId, detail, v, onClose }: { docId: string; detail
           <Row label="Field"><Select aria-label="Slicer field" value={o.slicer?.field ?? ''} onChange={(f) => opt({ slicer: { ...o.slicer, field: f } })} options={[{ value: '', label: 'Choose' }, ...fields]} /></Row>
           <Row label="Style"><Select aria-label="Slicer style" value={o.slicer?.style ?? 'list'} onChange={(s) => opt({ slicer: { ...o.slicer, style: s } })} options={['list', 'dropdown', 'buttons', 'range', 'relative'].map((x) => ({ value: x, label: x }))} /></Row>
           <Switch checked={o.slicer?.multi !== false} onChange={(x) => opt({ slicer: { ...o.slicer, multi: x } })} label="Several values" />
+          <Row label="Sync group"><Input aria-label="Sync group" key={o.slicer?.sync} defaultValue={o.slicer?.sync ?? ''} placeholder="none (e.g. region)" onBlur={(e) => { const g = e.target.value.trim(); if (g !== (o.slicer?.sync ?? '')) void act('doc.sync', { doc: docId, visual: v.id, group: g || null }).catch(() => {}); }} data-sync-group /></Row>
+          <p className="text-[11px] text-hx-muted">Slicers with the same sync group share their selection on every page and dashboard that has one.</p>
         </>}
         {v.type === 'text' && <Textarea aria-label="Text (Markdown)" rows={6} key={o.markdown} defaultValue={o.markdown ?? ''} onBlur={(e) => opt({ markdown: e.target.value })} />}
         {v.type === 'narrative' && <Textarea aria-label="Narrative" rows={5} key={o.text} defaultValue={o.text ?? ''} placeholder="Numbers as {{Measure}} or {{Measure[table.field=value]}}" onBlur={(e) => { if (e.target.value !== (o.text ?? '')) void act('doc.narrative', { doc: docId, visual: v.id, text: e.target.value }).catch(() => {}); }} />}
         {v.type === 'image' && <Row label="URL"><Input aria-label="Image URL" key={o.url} defaultValue={o.url ?? ''} onBlur={(e) => opt({ url: e.target.value })} /></Row>}
         {v.type === 'button' && <>
           <Row label="Label"><Input aria-label="Button label" key={o.button?.label} defaultValue={o.button?.label ?? ''} onBlur={(e) => opt({ button: { ...o.button, label: e.target.value } })} /></Row>
-          <Row label="Action"><Select aria-label="Button action" value={o.button?.action ?? 'clear'} onChange={(a) => opt({ button: { ...o.button, label: o.button?.label ?? 'Go', action: a } })} options={['clear', 'back', 'page', 'bookmark', 'url'].map((x) => ({ value: x, label: x }))} /></Row>
+          <Row label="Action"><Select aria-label="Button action" value={o.button?.action ?? 'clear'} onChange={(a) => opt({ button: { ...o.button, label: o.button?.label ?? 'Go', action: a } })} options={['clear', 'back', 'page', 'bookmark', 'url', 'doc'].map((x) => ({ value: x, label: x === 'doc' ? 'open a dashboard' : x }))} /></Row>
+          {o.button?.action === 'doc' && <Row label="Dashboard"><Select aria-label="Dashboard to open" value={o.button.target ?? ''} onChange={(t) => opt({ button: { ...o.button, target: t } })} options={[{ value: '', label: 'Choose' }, ...docs.filter((x) => x.id !== docId).map((x) => ({ value: x.id, label: x.title }))]} /></Row>}
           {(o.button?.action === 'page' || o.button?.action === 'bookmark') && <Row label="Target"><Select aria-label="Button target" value={o.button?.target ?? ''} onChange={(t) => opt({ button: { ...o.button, target: t } })} options={[{ value: '', label: 'Choose' }, ...(o.button.action === 'page' ? detail.doc.pages.map((p) => ({ value: p.id, label: p.name })) : (detail.doc.bookmarks ?? []).map((b) => ({ value: b.id, label: b.name })))]} /></Row>}
         </>}
         {v.type === 'fence' && <>
           <Row label="Renderer"><Input aria-label="Fence language" key={o.fence?.lang} defaultValue={o.fence?.lang ?? ''} placeholder="smiles, pdb, plot, dot, mermaid, diagram" onBlur={(e) => opt({ fence: { ...o.fence, lang: e.target.value } })} /></Row>
           <Textarea aria-label="Source" rows={5} key={o.fence?.source} defaultValue={o.fence?.source ?? ''} placeholder="Static source (empty: the query's rows as JSON)" onBlur={(e) => opt({ fence: { lang: o.fence?.lang ?? 'json', ...(e.target.value ? { source: e.target.value } : {}) } })} />
         </>}
-        {detail.model?.hierarchies.length ? <Row label="Drill"><Select aria-label="Hierarchy" value={o.hierarchy ?? ''} onChange={(h) => opt({ hierarchy: h || null })} options={[{ value: '', label: 'No hierarchy' }, ...detail.model.hierarchies.map((h) => ({ value: h.name, label: h.name }))]} /></Row> : null}
+        {detail.model?.hierarchies.length ? <Row label="Drill"><Select aria-label="Hierarchy" value={o.hierarchy ?? ''} onChange={(h) => opt({ hierarchy: h || null, ...(h ? {} : { drillMode: null }) })} options={[{ value: '', label: 'No hierarchy' }, ...detail.model.hierarchies.map((h) => ({ value: h.name, label: `${h.name} (${h.levels.length} levels)` }))]} /></Row> : null}
+        {o.hierarchy && <Switch checked={!!o.drillMode} onChange={(x) => opt({ drillMode: x || null })} label="Drill mode by default (a click drills down)" />}
         <Picker label="See records shows" testid="detail" values={o.detail ?? []} options={fields} onChange={(d) => opt({ detail: d })} />
       </Section>
       {!['text', 'image', 'button', 'slicer'].includes(v.type) && (
@@ -138,6 +144,13 @@ export function Inspector({ docId, detail, v, onClose }: { docId: string; detail
         ))}
         {detail.doc.pages.some((p) => p.kind === 'tooltip') && <Row label="Tooltip page"><Select aria-label="Tooltip page" value={v.tooltip ?? ''} onChange={(t) => patch({ tooltip: t || null })} options={[{ value: '', label: 'None' }, ...detail.doc.pages.filter((p) => p.kind === 'tooltip').map((p) => ({ value: p.id, label: p.name }))]} /></Row>}
       </Section>
+      {!['text', 'image', 'button', 'slicer'].includes(v.type) && (
+        <Section title="Links to dashboards">
+          <p className="text-[11.5px] text-hx-muted">A point of this visual opens these with its filters, the drilled path and the point.</p>
+          {(o.links ?? []).map((l) => <div key={l.id} className="flex items-center gap-1 text-[12.5px]" data-link-row={l.doc}><span className="min-w-0 flex-1 truncate">{l.label} → {docs.find((x) => x.id === l.doc)?.title ?? l.doc}</span><IconButton size="xs" icon="x" label={`Remove the link ${l.label}`} onClick={() => void act('doc.unlink', { doc: docId, visual: v.id, link: l.id }).catch(() => {})} /></div>)}
+          <div className="flex gap-1"><Select aria-label="Link to dashboard" value="" onChange={(t) => { const target = docs.find((x) => x.id === t); if (target) void act('doc.link', { doc: docId, visual: v.id, link: { label: target.title, doc: target.id } }).catch(() => {}); }} options={[{ value: '', label: 'Add a link to…' }, ...docs.filter((x) => x.id !== docId).map((x) => ({ value: x.id, label: x.title }))]} data-add-link /></div>
+        </Section>
+      )}
       <ArrangeSection docId={docId} detail={detail} v={v} />
       <Section title="Layout">
         <div className="grid grid-cols-4 gap-1">{(['x', 'y', 'w', 'h'] as const).map((k) => <Input key={`${k}${v.layout[k]}`} aria-label={`Layout ${k}`} type="number" defaultValue={v.layout[k]} onBlur={(e) => { const n = Number(e.target.value); if (n !== v.layout[k]) void act(k === 'x' || k === 'y' ? 'layout.drag' : 'layout.resize', { doc: docId, visual: v.id, [k]: n }).catch(() => {}); }} />)}</div>

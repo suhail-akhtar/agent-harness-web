@@ -14,12 +14,28 @@ export interface Shaped {
   series: Array<{ name: string; measure: ResultColumn; values: Array<number | null>; highlight?: Array<number | null>; key?: Scalar }>;
   dim?: ResultColumn;
   seriesDim?: ResultColumn;
+  /** An expanded drill: each category label's values per level, and the levels' fields. */
+  paths?: Record<string, Scalar[]>;
+  pathFields?: string[];
 }
 
 const num = (v: Scalar | undefined): number | null => (v === null || v === undefined || v === '' ? null : typeof v === 'number' ? v : Number.isFinite(Number(v)) ? Number(v) : null);
 
 /** Rows to categories x series: a second dim becomes the series (one measure), else each measure is a series. */
 export function shape(r: QueryResult): Shaped {
+  // An expanded drill (several hierarchy levels at once): the levels make one axis ("2024 › Q1"),
+  // and a click carries a value for each level.
+  const k = typeof r.extra?.expand === 'number' ? r.extra.expand : 0;
+  if (k >= 2) {
+    const path = r.columns.map((c, i) => [c, i] as const).filter(([c]) => c.role === 'dim').slice(0, k);
+    if (path.length === k) {
+      const keep = r.columns.map((_, i) => i).filter((i) => !path.some(([, j]) => j === i));
+      const paths: Record<string, Scalar[]> = {};
+      const rows = r.rows.map((row) => { const l = path.map(([c, i]) => formatValue(row[i] ?? null, c.format, c.grain) || '(blank)').join(' › '); paths[l] = path.map(([, i]) => row[i] ?? null); return [l, ...keep.map((i) => row[i] ?? null)]; });
+      const columns: ResultColumn[] = [{ name: '__path', label: path.map(([c]) => c.label).join(' › '), type: 'VARCHAR', role: 'dim' }, ...keep.map((i) => r.columns[i]!)];
+      return { ...shape({ ...r, columns, rows, extra: { ...r.extra, expand: 0 } }), paths, pathFields: path.map(([c]) => c.field ?? c.name) };
+    }
+  }
   const dims = r.columns.map((c, i) => [c, i] as const).filter(([c]) => c.role === 'dim');
   const ms = r.columns.map((c, i) => [c, i] as const).filter(([c]) => c.role === 'measure');
   const level = r.columns.findIndex((c) => c.role === 'level');
@@ -212,8 +228,15 @@ function niceMax(x: number): number {
 /** The filters a click on a data point means: its category (and series), as the selection. */
 export function clickFilters(r: QueryResult, p: { data?: { raw?: Scalar; key?: Scalar }; name?: string }): FilterSpec[] | undefined {
   const s = shape(r);
-  if (!s.dim?.field) return undefined;
   const raw = p.data?.raw !== undefined ? p.data.raw : undefined;
+  if (s.paths && raw !== undefined) {
+    const vals = s.paths[String(raw)];
+    if (!vals) return undefined;
+    const out: FilterSpec[] = s.pathFields!.map((field, i) => (vals[i] === null ? { field, op: 'is_null' as const } : { field, op: 'eq' as const, value: vals[i] }));
+    if (s.seriesDim?.field && p.data?.key !== undefined) out.push({ field: s.seriesDim.field, op: p.data.key === null ? 'is_null' : 'eq', ...(p.data.key === null ? {} : { value: p.data.key }) });
+    return out;
+  }
+  if (!s.dim?.field) return undefined;
   if (raw === undefined) return undefined;
   const out: FilterSpec[] = [{ field: s.dim.field, op: raw === null ? 'is_null' : 'eq', ...(raw === null ? {} : { value: raw }) }];
   if (s.seriesDim?.field && p.data?.key !== undefined) out.push({ field: s.seriesDim.field, op: p.data.key === null ? 'is_null' : 'eq', ...(p.data.key === null ? {} : { value: p.data.key }) });

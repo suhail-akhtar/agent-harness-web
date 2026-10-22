@@ -6,7 +6,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { COLUMN_TYPES, type MeasureSpec, type ModelSpec, type QueryResult, type SourceSpec, STEP_OPS, type StepSpec, TIME_CALCS, UI_ACTIONS } from '@harness/plugin-ui';
+import { COLUMN_TYPES, FILE_FORMATS, LOG_FORMATS, type MeasureSpec, type ModelSpec, type QueryResult, type SourceSpec, STEP_OPS, type StepSpec, TIME_CALCS, UI_ACTIONS } from '@harness/plugin-ui';
 import { useApp } from '../../state/app';
 import { Badge, BiVisual, Button, EmptyState, Field, Icon, IconButton, Input, Modal, Select, Spinner, Switch, Tabs, Textarea, cx, toast } from '@harness/ui';
 import { client, useData } from '../../state/data';
@@ -83,7 +83,9 @@ function AddSource({ onClose }: { onClose(): void }) {
   const save = async () => {
     const source: Record<string, unknown> = { name: f.name || 'Source', type: plugin ? 'plugin' : type };
     if (type === 'file' || type === 'sqlite') source.path = f.path;
-    if (type === 'postgres' || type === 'mysql') Object.assign(source, { host: f.host, port: f.port ? Number(f.port) : undefined, database: f.database, user: f.user, secret: f.secret || undefined });
+    if (type === 'file' && f.format) source.format = f.format;
+    if (type === 'file' && f.format === 'log') source.log = { format: f.logFormat || 'auto', ...(f.pattern ? { pattern: f.pattern } : {}) };
+    if (type === 'postgres' || type === 'mysql' || type === 'mssql' || type === 'mongodb') Object.assign(source, { host: f.host, port: f.port ? Number(f.port) : undefined, database: f.database, user: f.user || undefined, secret: f.secret || undefined });
     if (type === 'http') Object.assign(source, { url: f.url, rowsPath: f.rowsPath || undefined, secret: f.secret || undefined, auth: f.auth || 'bearer', authName: f.authName || undefined });
     if (type === 'static') { const lines = (f.csv ?? '').trim().split(/\r?\n/); source.columns = lines[0]?.split(',').map((x) => x.trim()) ?? []; source.rows = lines.slice(1).map((l) => l.split(',').map((x) => (x.trim() !== '' && Number.isFinite(Number(x)) ? Number(x) : x.trim()))); }
     if (plugin) Object.assign(source, { plugin: plugin.plugin, kind: plugin.id, params: f.params ? JSON.parse(f.params) as unknown : {} });
@@ -93,19 +95,24 @@ function AddSource({ onClose }: { onClose(): void }) {
   return (
     <Modal open onClose={onClose} title="Add a source" size="lg" footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" loading={busy} onClick={() => void save()} data-save-source>Add</Button></>}>
       <div className="grid gap-x-4 sm:grid-cols-2">
-        <Field label="Type"><Select value={type} onChange={setType} options={[{ value: 'file', label: 'File (CSV, Excel, JSON, Parquet, GeoJSON)' }, { value: 'sqlite', label: 'SQLite database' }, { value: 'postgres', label: 'Postgres' }, { value: 'mysql', label: 'MySQL' }, { value: 'http', label: 'HTTP API (JSON or CSV)' }, { value: 'static', label: 'Values typed in' }, ...registry.dataSources.map((d) => ({ value: d.qid, label: `${d.title} (${d.plugin})` }))]} data-source-type /></Field>
+        <Field label="Type"><Select value={type} onChange={setType} options={[{ value: 'file', label: 'File (CSV, Excel, JSON, XML, Parquet, logs)' }, { value: 'sqlite', label: 'SQLite database' }, { value: 'postgres', label: 'Postgres' }, { value: 'mysql', label: 'MySQL or MariaDB' }, { value: 'mssql', label: 'SQL Server' }, { value: 'mongodb', label: 'MongoDB' }, { value: 'http', label: 'HTTP API (JSON, CSV, XML, logs)' }, { value: 'static', label: 'Values typed in' }, ...registry.dataSources.map((d) => ({ value: d.qid, label: `${d.title} (${d.plugin})` }))]} data-source-type /></Field>
         <Field label="Name"><Input value={f.name} onChange={set('name')} data-source-name /></Field>
       </div>
       {(type === 'file' || type === 'sqlite') && <Field label="Path" help="A file in one of your projects, or pick one to upload into your data folder."><div className="flex gap-1"><Input value={f.path ?? ''} onChange={set('path')} placeholder="C:\\data\\sales.xlsx" data-source-path /><Button onClick={() => void pick()}>Choose…</Button></div></Field>}
-      {(type === 'postgres' || type === 'mysql') && <div className="grid gap-x-4 sm:grid-cols-2">
-        <Field label="Host"><Input value={f.host ?? ''} onChange={set('host')} /></Field><Field label="Port"><Input value={f.port ?? ''} onChange={set('port')} placeholder={type === 'postgres' ? '5432' : '3306'} /></Field>
+      {type === 'file' && <div className="grid gap-x-4 sm:grid-cols-3">
+        <Field label="Format" help="Detected from the file's name when left as is."><Select value={f.format ?? ''} onChange={(v) => setF({ ...f, format: v })} options={[{ value: '', label: 'From the extension' }, ...FILE_FORMATS.map((x) => ({ value: x, label: x }))]} data-source-format /></Field>
+        {f.format === 'log' && <Field label="Log format"><Select value={f.logFormat ?? 'auto'} onChange={(v) => setF({ ...f, logFormat: v })} options={LOG_FORMATS.map((x) => ({ value: x, label: x }))} data-source-log-format /></Field>}
+        {f.format === 'log' && (f.logFormat === 'regex' || f.logFormat === 'grok') && <Field label="Pattern" help="Named groups: (?<status>\d{3}) or %{INT:status}"><Input value={f.pattern ?? ''} onChange={set('pattern')} /></Field>}
+      </div>}
+      {(type === 'postgres' || type === 'mysql' || type === 'mssql' || type === 'mongodb') && <div className="grid gap-x-4 sm:grid-cols-2">
+        <Field label="Host"><Input value={f.host ?? ''} onChange={set('host')} /></Field><Field label="Port"><Input value={f.port ?? ''} onChange={set('port')} placeholder={({ postgres: '5432', mysql: '3306', mssql: '1433', mongodb: '27017' } as Record<string, string>)[type]} /></Field>
         <Field label="Database"><Input value={f.database ?? ''} onChange={set('database')} /></Field><Field label="User"><Input value={f.user ?? ''} onChange={set('user')} /></Field>
       </div>}
       {type === 'http' && <>
         <Field label="URL" help="The only host this source may reach."><Input value={f.url ?? ''} onChange={set('url')} placeholder="https://api.example.com/v1/orders" /></Field>
         <div className="grid gap-x-4 sm:grid-cols-3"><Field label="Rows at" help="e.g. data.items"><Input value={f.rowsPath ?? ''} onChange={set('rowsPath')} /></Field><Field label="Send the secret as"><Select value={f.auth ?? 'bearer'} onChange={(v) => setF({ ...f, auth: v })} options={['bearer', 'basic', 'header', 'query'].map((x) => ({ value: x, label: x }))} /></Field><Field label="Header / parameter"><Input value={f.authName ?? ''} onChange={set('authName')} placeholder="x-api-key" /></Field></div>
       </>}
-      {['postgres', 'mysql', 'http'].includes(type) && <Field label="Secret (key vault entry)" help={vault.length ? 'Its value is read on the server when the source is read.' : 'Add the password or token in Settings > Vault first; then pick it here.'}><Select value={f.secret ?? ''} onChange={(v) => setF({ ...f, secret: v })} options={[{ value: '', label: 'None' }, ...vault.map((n) => ({ value: n, label: n }))]} /></Field>}
+      {['postgres', 'mysql', 'mssql', 'mongodb', 'http'].includes(type) && <Field label="Secret (key vault entry)" help={vault.length ? 'Its value is read on the server when the source is read.' : 'Add the password or token in Settings > Vault first; then pick it here.'}><Select value={f.secret ?? ''} onChange={(v) => setF({ ...f, secret: v })} options={[{ value: '', label: 'None' }, ...vault.map((n) => ({ value: n, label: n }))]} /></Field>}
       {type === 'static' && <Field label="Values (CSV: a header, then rows)"><Textarea rows={6} value={f.csv ?? ''} onChange={set('csv')} placeholder={'region,target\nEMEA,1200000\nAmericas,1500000'} /></Field>}
       {plugin && <Field label="Parameters (JSON)" help={plugin.description}><Textarea rows={4} value={f.params ?? '{}'} onChange={set('params')} /></Field>}
     </Modal>
@@ -253,6 +260,7 @@ function RefreshSettings({ d }: { d: DatasetRow }) {
   return (
     <div className="space-y-1 rounded-xl border border-hx-border-subtle p-2 text-[12.5px]">
       <b className="text-[13px]">Refresh</b>
+      {d.source && <div className="flex items-center gap-1"><span className="w-28">Storage</span><Select aria-label="Storage" value={d.storage ?? 'import'} onChange={(m) => void act('data.storage', { dataset: d.name, storage: m }).catch(() => {})} options={[{ value: 'import', label: 'Import (an extract)' }, { value: 'live', label: 'Live (read when queried)' }]} data-storage /></div>}
       <div className="flex items-center gap-1"><span className="w-28">Every (seconds)</span><Input aria-label="Refresh every" type="number" value={every} onChange={(e) => setEvery(e.target.value)} placeholder="manual" /><Button size="sm" onClick={() => void act('data.schedule', { dataset: d.name, refresh: every ? { mode: 'interval', every: Number(every) } : { mode: 'manual' } }).catch(() => {})}>Save</Button></div>
       <div className="flex items-center gap-1"><span className="w-28">Incremental on</span><Select aria-label="Incremental column" value={inc} onChange={setInc} options={[{ value: '', label: 'Off (full refresh)' }, ...cols.filter((c) => /DATE|TIMESTAMP/.test(c.type)).map((c) => ({ value: c.name, label: c.name }))]} /></div>
       {inc && <div className="flex items-center gap-1"><span className="w-28">Last (days)</span><Input aria-label="Incremental window" type="number" value={win} onChange={(e) => setWin(e.target.value)} /></div>}

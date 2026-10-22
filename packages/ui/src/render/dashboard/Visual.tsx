@@ -20,7 +20,8 @@ export interface VisualEvents {
   /** A click on a data point: its filters (or null to clear). */
   onSelect?(filters: FilterSpec[] | null): void;
   /** Double click: drill down on a value. */
-  onDrill?(value: Scalar): void;
+  /** A point drilled into: its value on the axis, and its filters (a value per level in an expanded drill). */
+  onDrill?(value: Scalar, filters?: FilterSpec[]): void;
   /** Right click: a menu at (x, y) for these filters. */
   onContext?(filters: FilterSpec[], at: { x: number; y: number }): void;
   /** Hover on a point (tooltip pages). */
@@ -98,7 +99,7 @@ function ChartVisual(p: VisualProps & { result: QueryResult }): React.ReactEleme
           const c = inst.current;
           const filtersOf = (e: unknown) => clickFilters(cb.current.result, e as never);
           c.on('click', (e) => { const f = filtersOf(e); if (f) cb.current.onSelect?.(sameSel(cb.current.selection, f) ? null : f); });
-          c.on('dblclick', (e) => { const raw = (e as { data?: { raw?: Scalar } }).data?.raw; if (raw !== undefined) cb.current.onDrill?.(raw); });
+          c.on('dblclick', (e) => { const raw = (e as { data?: { raw?: Scalar } }).data?.raw; if (raw !== undefined) cb.current.onDrill?.(raw, filtersOf(e)); });
           c.on('contextmenu', (e) => { const f = filtersOf(e); const ev = (e as { event?: { event?: MouseEvent } }).event?.event; if (f && ev) { ev.preventDefault(); cb.current.onContext?.(f, { x: ev.clientX, y: ev.clientY }); } });
           c.on('mouseover', (e) => { const f = filtersOf(e); const ev = (e as { event?: { event?: MouseEvent } }).event?.event; if (f) cb.current.onHover?.(f, ev ? { x: ev.clientX, y: ev.clientY } : undefined); });
           c.on('globalout', () => cb.current.onHover?.(null));

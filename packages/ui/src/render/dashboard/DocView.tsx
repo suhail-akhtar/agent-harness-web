@@ -6,7 +6,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { type DocSpec, type FilterSpec, formatValue, type HierarchySpec, type PageSpec, type QueryResult, type Scalar, themeOf, type ViewState, type VisualSpec } from '@harness/plugin-ui';
+import { carryFilters, type DocSpec, type DrillAction, drillCrumbs, drillQuery, type DrillState, drillStep, type FilterSpec, formatValue, type HierarchySpec, type LinkSpec, type PageSpec, type QueryResult, type Scalar, themeOf, type ViewState, type VisualSpec } from '@harness/plugin-ui';
 import { cx } from '../../components/primitives.tsx';
 import { Icon } from '../../icons.tsx';
 import { BiVisual, type VisualEvents } from './Visual.tsx';
@@ -42,6 +42,37 @@ export interface DocViewProps {
   /** Visual header extras (the host's menu: pin, edit...). */
   visualActions?(v: VisualSpec, result?: QueryResult): React.ReactNode;
   toolbar?: React.ReactNode;
+  /** Filters carried in from another dashboard (a link, an "open dashboard" button, a drill-through). */
+  initialFilters?: FilterSpec[];
+  /** Opens another dashboard with a filter context (the host navigates; absent: links are not offered). */
+  onOpenDoc?(to: { doc: string; page?: string; filters: FilterSpec[]; label?: string }): void;
+}
+
+/**
+ * Slicers in a sync group share their selection across the pages and dashboards that have one (in
+ * this browser tab): the selection is kept without its field, so a group can join "sales.region"
+ * in one dashboard with "orders.region" in another.
+ */
+type SyncValue = Omit<FilterSpec, 'field'>;
+const SYNC_KEY = 'harness.bi.sync';
+export const syncStore = {
+  all(): Record<string, SyncValue> { try { return JSON.parse(sessionStorage.getItem(SYNC_KEY) ?? '{}') as Record<string, SyncValue>; } catch { return {}; } },
+  get(group: string): SyncValue | undefined { return this.all()[group]; },
+  set(group: string, f: FilterSpec | null): void {
+    const all = this.all();
+    if (f) { const { field: _f, ...rest } = f; all[group] = rest; } else delete all[group];
+    try { sessionStorage.setItem(SYNC_KEY, JSON.stringify(all)); } catch { /* storage off: in-page only */ }
+  },
+};
+/** The doc's synced slicers' filters from the store. */
+function syncedFilters(doc: DocSpec): FilterSpec[] {
+  const out: FilterSpec[] = [];
+  for (const p of doc.pages) for (const v of p.visuals) {
+    const sl = v.options?.slicer;
+    const val = sl?.sync ? syncStore.get(sl.sync) : undefined;
+    if (sl && val && !out.some((x) => x.field === sl.field)) out.push({ ...val, field: sl.field } as FilterSpec);
+  }
+  return out;
 }
 
 
@@ -52,7 +83,8 @@ export function DocView(p: DocViewProps): React.ReactElement {
   const [pageId, setPageId] = useState(p.page ?? pages[0]?.id ?? doc.pages[0]!.id);
   useEffect(() => { if (p.page && p.page !== pageId) setPageId(p.page); }, [p.page]);
   const page = doc.pages.find((x) => x.id === pageId) ?? doc.pages[0]!;
-  const [filters, setFilters] = useState<FilterSpec[]>([]);
+  // Carried-in filters win; then synced slicers' selections.
+  const [filters, setFilters] = useState<FilterSpec[]>(() => carryFilters([syncedFilters(doc), p.initialFilters]));
   const [selection, setSelection] = useState<ViewState['selection']>();
   const [drill, setDrill] = useState<NonNullable<ViewState['drill']>>({});
   const [decomp, setDecomp] = useState<NonNullable<ViewState['decomp']>>({});
@@ -109,12 +141,28 @@ export function DocView(p: DocViewProps): React.ReactElement {
   useEffect(() => { p.onState?.(state); }, [state]);
 
   const setSlicer = useCallback((field: string, f: FilterSpec | null) => { setFilters((cur) => [...cur.filter((x) => x.field !== field), ...(f ? [f] : [])]); setSelection(undefined); }, []);
+  /** A synced slicer's change: its group's other slicers here follow, and other dashboards read it when they open. */
+  const setSynced = (v: VisualSpec, field: string, f: FilterSpec | null) => {
+    const group = v.options?.slicer?.sync;
+    setSlicer(field, f);
+    if (!group) return;
+    syncStore.set(group, f);
+    for (const pg of doc.pages) for (const x of pg.visuals) { const sl = x.options?.slicer; if (sl?.sync === group && sl.field !== field) setSlicer(sl.field, f ? { ...f, field: sl.field } : null); }
+  };
+  const [drillMode, setDrillMode] = useState<Record<string, boolean>>({});
+  const drillOn = (v: VisualSpec) => !!hierarchyOf(v) && (drillMode[v.id] ?? !!v.options?.drillMode);
+  const drillAct = (v: VisualSpec, a: DrillAction) => { const h = hierarchyOf(v); if (!h) return; setDrill((d) => ({ ...d, [v.id]: drillStep(h, d[v.id], a) })); setSelection(undefined); };
+  /** A point drilled into: in an expanded view its value at each level shown. */
+  const drillDown = (v: VisualSpec, value: Scalar, fs?: FilterSpec[]) => { const h = hierarchyOf(v); if (!h) return; const vals = fs?.filter((f) => h.levels.includes(f.field)).map((f) => f.value ?? null); drillAct(v, { action: 'down', value, ...(vals?.length ? { values: vals } : {}) }); };
+  /** The context a link or a drill-through carries from a visual's point: filters in force, selection, drilled path, the point. */
+  const contextOf = (v: VisualSpec, point: FilterSpec[]) => { const h = hierarchyOf(v); return carryFilters([doc.filters, page.filters, filters, selection?.filters, h ? drillQuery(h, drill[v.id]).filters : undefined, point]); };
+  const openLink = (v: VisualSpec, l: LinkSpec, point: FilterSpec[]) => p.onOpenDoc?.({ doc: l.doc, page: l.page, filters: carryFilters([contextOf(v, point)], l.fields), label: l.label });
   const hierarchyOf = (v: VisualSpec) => (v.options?.hierarchy ? p.hierarchies?.find((h) => h.name === v.options!.hierarchy) : undefined);
   const drillTargets = (fs: FilterSpec[]) => doc.pages.filter((x) => x.kind === 'drillthrough' && x.drillFields?.some((d) => fs.some((f) => f.field === d || f.field.replace(/:.*$/, '') === d.replace(/:.*$/, ''))));
   const goDrillthrough = (target: PageSpec, fs: FilterSpec[]) => {
     setBack((b) => [...b, { page: page.id, drillthrough }]);
     // The clicked point's values, plus the slicers in force, travel into the page.
-    setDrillthrough([...filters, ...(selection?.filters ?? []), ...fs]);
+    setDrillthrough(fs);
     setPageId(target.id);
   };
   const button = (b: NonNullable<VisualSpec['options']>['button']) => {
@@ -124,6 +172,7 @@ export function DocView(p: DocViewProps): React.ReactElement {
     else if (b.action === 'back') goBack();
     else if (b.action === 'clear') { setFilters([]); setSelection(undefined); setDrill({}); }
     else if (b.action === 'url' && b.target && /^https:\/\//.test(b.target)) window.open(b.target, '_blank', 'noopener');
+    else if (b.action === 'doc' && b.target) p.onOpenDoc?.({ doc: b.target, page: b.page, filters: carryFilters([doc.filters, page.filters, filters, selection?.filters]), label: b.label });
   };
   const applyBookmark = (bm: NonNullable<DocSpec['bookmarks']>[number]) => { setPageId(bm.page); setFilters(bm.filters ?? []); setHidden(bm.hidden ?? []); setSelection(bm.selection); };
   const goBack = () => { const last = back.at(-1); if (!last) return; setBack((b) => b.slice(0, -1)); setDrillthrough(last.drillthrough); setPageId(last.page); };
@@ -146,15 +195,16 @@ export function DocView(p: DocViewProps): React.ReactElement {
             slicerValue={v.type === 'slicer' ? filters.find((f) => f.field === v.options?.slicer?.field) : undefined}
             onLoading={(on) => setLoading((l) => (l[v.id] === on ? l : { ...l, [v.id]: on }))}
             events={{
-              onSelect: (f) => setSelection(f ? { visual: v.id, filters: f } : undefined),
-              onSlicer: setSlicer,
+              // Drill mode: a click goes down the hierarchy instead of selecting.
+              onSelect: (f) => { if (f && drillOn(v)) { drillDown(v, f[0]?.value ?? null, f); return; } setSelection(f ? { visual: v.id, filters: f } : undefined); },
+              onSlicer: (field, f) => setSynced(v, field, f),
               onButton: button,
               onDecomp: (path) => setDecomp((d) => ({ ...d, [v.id]: path })),
-              onDrill: (val) => { const h = hierarchyOf(v); if (!h) return; setDrill((d) => { const cur = d[v.id] ?? { level: 0, path: [] }; if (cur.level >= h.levels.length - 1) return d; return { ...d, [v.id]: { level: cur.level + 1, path: [...cur.path.slice(0, cur.level), val] } }; }); setSelection(undefined); },
+              onDrill: (val, fs) => drillDown(v, val, fs),
               onContext: (fs, at) => setMenu({ v, filters: fs, ...at }),
               onHover: (fs, at) => { if (!v.tooltip) return; setTip(fs && at ? { v, filters: fs, ...at } : undefined); },
             }}
-            drill={drill[v.id]} hierarchy={hierarchyOf(v)} onDrillUp={() => setDrill((d) => { const cur = d[v.id]; if (!cur || cur.level === 0) return d; return { ...d, [v.id]: { level: cur.level - 1, path: cur.path.slice(0, cur.level - 1) } }; })}
+            drill={drill[v.id]} hierarchy={hierarchyOf(v)} onDrillAct={(a) => drillAct(v, a)} drillMode={drillOn(v)} onDrillMode={() => setDrillMode((m) => ({ ...m, [v.id]: !drillOn(v) }))}
             decompPath={decomp[v.id]} renderMarkdown={p.renderMarkdown} renderFence={p.renderFence} static={!!p.print || p.mode === 'static'} actions={p.visualActions} />
   );
   if (gone) return <div className="flex h-full items-center justify-center p-8 text-center text-hx-secondary" data-bi-gone>This page is no longer published.</div>;
@@ -196,8 +246,9 @@ export function DocView(p: DocViewProps): React.ReactElement {
         <div className="fixed inset-0 z-50" onClick={() => setMenu(undefined)} onContextMenu={(e) => { e.preventDefault(); setMenu(undefined); }}>
           <div role="menu" className="absolute min-w-[200px] rounded-lg border border-hx-border bg-hx-elevated p-1 text-[12.5px] shadow-[var(--hx-shadow)]" style={{ left: Math.min(menu.x, window.innerWidth - 220), top: Math.min(menu.y, window.innerHeight - 160) }} data-bi-menu>
             <div className="px-2 py-1 text-[11px] text-hx-muted">{menu.filters.map(filterText).join(' · ')}</div>
-            {drillTargets(menu.filters).map((t) => <button key={t.id} role="menuitem" type="button" className="block w-full rounded px-2 py-1 text-left hover:bg-hx-hover" onClick={() => { goDrillthrough(t, menu.filters); setMenu(undefined); }}>Drill through: {t.name}</button>)}
-            {hierarchyOf(menu.v) && <button role="menuitem" type="button" className="block w-full rounded px-2 py-1 text-left hover:bg-hx-hover" onClick={() => { const f = menu.filters[0]!; setDrill((d) => { const cur = d[menu.v.id] ?? { level: 0, path: [] }; const h = hierarchyOf(menu.v)!; return cur.level >= h.levels.length - 1 ? d : { ...d, [menu.v.id]: { level: cur.level + 1, path: [...cur.path.slice(0, cur.level), f.value ?? null] } }; }); setMenu(undefined); }}>Drill down</button>}
+            {drillTargets(contextOf(menu.v, menu.filters)).map((t) => <button key={t.id} role="menuitem" type="button" className="block w-full rounded px-2 py-1 text-left hover:bg-hx-hover" data-drillthrough={t.id} onClick={() => { goDrillthrough(t, contextOf(menu.v, menu.filters)); setMenu(undefined); }}>Drill through: {t.name}</button>)}
+            {p.onOpenDoc && (menu.v.options?.links ?? []).map((l) => <button key={l.id} role="menuitem" type="button" className="block w-full rounded px-2 py-1 text-left hover:bg-hx-hover" data-link={l.doc} onClick={() => { openLink(menu.v, l, menu.filters); setMenu(undefined); }}>Open {l.label}</button>)}
+            {hierarchyOf(menu.v) && <button role="menuitem" type="button" className="block w-full rounded px-2 py-1 text-left hover:bg-hx-hover" data-drill-down onClick={() => { drillDown(menu.v, menu.filters[0]?.value ?? null, menu.filters); setMenu(undefined); }}>Drill down</button>}
             {p.client.records && <button role="menuitem" type="button" className="block w-full rounded px-2 py-1 text-left hover:bg-hx-hover" onClick={() => { const m = menu; setMenu(undefined); setRecords({ title: m.filters.map(filterText).join(' · ') }); void p.client.records!(m.v, m.filters, state).then((r) => setRecords({ title: m.filters.map(filterText).join(' · '), result: r }), (e: Error) => setRecords({ title: '', error: e.message })); }}>See records</button>}
             <button role="menuitem" type="button" className="block w-full rounded px-2 py-1 text-left hover:bg-hx-hover" onClick={() => { setSelection({ visual: menu.v.id, filters: menu.filters }); setMenu(undefined); }}>Filter the page by this</button>
           </div>
@@ -235,7 +286,7 @@ function downloadCsv(name: string, r: QueryResult): void {
 interface FrameProps {
   v: VisualSpec; doc: DocSpec; state: ViewState; client: BiClient; version: number; dark: boolean; theme: ReturnType<typeof themeOf>;
   edit?: DocViewProps['edit']; focus: boolean; onFocus(): void; selection?: FilterSpec[]; slicerValue?: FilterSpec;
-  onLoading(on: boolean): void; events: VisualEvents; drill?: { level: number; path: Scalar[] }; hierarchy?: HierarchySpec; onDrillUp(): void;
+  onLoading(on: boolean): void; events: VisualEvents; drill?: DrillState; hierarchy?: HierarchySpec; onDrillAct(a: DrillAction): void; drillMode: boolean; onDrillMode(): void;
   decompPath?: Array<{ dim: string; value: Scalar }>; renderMarkdown?(t: string): React.ReactNode; renderFence?(l: string, s: string): React.ReactNode; static: boolean;
   actions?(v: VisualSpec, r?: QueryResult): React.ReactNode;
 }
@@ -273,10 +324,7 @@ function VisualFrame(f: FrameProps) {
           </div>
           {statics.some((d) => d.origin === 'model') && <span title="These numbers were typed by a model in a conversation, not read from a source. Bind a real source to trust them." className="rounded bg-hx-warning/15 px-1.5 text-[10.5px] font-medium text-hx-warning" data-static-badge>Typed by a model</span>}
           {result?.lineage.datasets.some((d) => d.certified) && <span title="Certified dataset" className="text-hx-success"><Icon name="shield-check" size={13} /></span>}
-          {f.hierarchy && <span className="flex items-center gap-0.5 text-[11px] text-hx-muted" data-drill-level={f.drill?.level ?? 0}>
-            <button type="button" aria-label="Drill up" disabled={!f.drill?.level} className="rounded p-0.5 hover:bg-hx-hover disabled:opacity-30" onClick={(e) => { e.stopPropagation(); f.onDrillUp(); }}><Icon name="arrow-up" size={13} /></button>
-            {f.hierarchy.levels[f.drill?.level ?? 0]?.split(':').pop()}
-          </span>}
+          {f.hierarchy && <DrillBar h={f.hierarchy} s={f.drill} mode={f.drillMode} act={f.onDrillAct} toggle={f.onDrillMode} />}
           <div className={cx('flex items-center gap-0.5', !f.focus && 'opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100')}>
             {result && <button type="button" aria-label="Where these numbers come from" aria-expanded={lineage} className="rounded p-0.5 text-hx-muted hover:bg-hx-hover hover:text-hx-primary" onClick={(e) => { e.stopPropagation(); setLineage((x) => !x); }} data-lineage-button><Icon name="info" size={13} /></button>}
             {result && <button type="button" aria-label="Download CSV" className="rounded p-0.5 text-hx-muted hover:bg-hx-hover hover:text-hx-primary" onClick={(e) => { e.stopPropagation(); downloadCsv(`${(v.title ?? v.id).replace(/[^\w -]+/g, '')}.csv`, result); }}><Icon name="download" size={13} /></button>}
@@ -331,5 +379,40 @@ function TooltipPage({ tip, doc, client, state, dark }: { tip: { v: VisualSpec; 
       <div className="mb-1 text-[11px] text-hx-muted">{tip.filters.map(filterText).join(' · ')}</div>
       {page.visuals.slice(0, 3).map((v) => <div key={v.id} style={{ height: Math.min(160, v.layout.h * 24) }}><BiVisual v={v} result={results[v.id]} theme={theme} dark={dark} static /></div>)}
     </div>
+  );
+}
+
+/** A level's short name: "sales.day:month" -> "month", "geo.country" -> "country". */
+const levelName = (field: string) => (field.includes(':') ? field.split(':').pop()! : field.split('.').pop()!);
+
+/**
+ * A visual's hierarchy controls: drill up, drill mode (a click drills down), go to the next level,
+ * expand all down one level, and the breadcrumb of the path (click a crumb to go back to it).
+ */
+function DrillBar({ h, s, mode, act, toggle }: { h: HierarchySpec; s?: DrillState; mode: boolean; act(a: DrillAction): void; toggle(): void }) {
+  const level = s?.level ?? 0;
+  const last = level >= h.levels.length - 1;
+  const btn = 'rounded p-0.5 hover:bg-hx-hover disabled:opacity-30';
+  const stop = (fn: () => void) => (e: React.MouseEvent) => { e.stopPropagation(); fn(); };
+  const crumbs = drillCrumbs(h, s);
+  return (
+    <span className="flex min-w-0 items-center gap-0.5 text-[11px] text-hx-muted" data-drill-level={level} data-drill-mode={mode ? 'on' : 'off'} data-drill-expand={s?.mode === 'expand' ? '1' : undefined}>
+      <button type="button" aria-label="Drill up" title="Drill up" disabled={!level} className={btn} onClick={stop(() => act({ action: 'up' }))} data-drill-up><Icon name="arrow-up" size={13} /></button>
+      <button type="button" aria-label="Drill mode: a click on a point drills down" title="Drill mode: a click on a point drills down" aria-pressed={mode} className={cx(btn, mode && 'bg-hx-accent-soft text-hx-accent-text')} onClick={stop(toggle)} data-drill-toggle><Icon name="arrow-down" size={13} /></button>
+      <button type="button" aria-label="Go to the next level" title="Go to the next level" disabled={last} className={btn} onClick={stop(() => act({ action: 'next' }))} data-drill-next><Icon name="chevron-down" size={13} /></button>
+      <button type="button" aria-label="Expand all down one level" title="Expand all down one level" disabled={last} className={btn} onClick={stop(() => act({ action: 'expand' }))} data-drill-expand-all><Icon name="layers" size={13} /></button>
+      {/* All > 2024 > Q1 > month: a value goes back to the level under it; the last one is the context. */}
+      <nav aria-label="Drill path" className="ml-0.5 flex min-w-0 items-center gap-0.5 truncate" data-drill-crumbs>
+        {level > 0 && <button type="button" className="rounded px-0.5 hover:bg-hx-hover hover:text-hx-primary" onClick={stop(() => act({ action: 'to', level: 0 }))} data-crumb="all">All</button>}
+        {crumbs.slice(0, level).map((c, i) => {
+          if (s?.mode === 'expand' && i >= (s.path.length)) return null;
+          const label = c.all ? `all ${levelName(c.field)}s` : formatValue(c.value ?? null, undefined, c.field.includes(':') ? c.field.split(':').pop() as 'month' : undefined) || '(blank)';
+          const back = !c.all && i + 1 < level;
+          return <React.Fragment key={i}><span aria-hidden>›</span>{back ? <button type="button" className="rounded px-0.5 hover:bg-hx-hover hover:text-hx-primary" onClick={stop(() => act({ action: 'to', level: i + 1 }))} data-crumb={i}>{label}</button> : <span data-crumb={i}>{label}</span>}</React.Fragment>;
+        })}
+        <span aria-hidden>{level > 0 ? '›' : ''}</span>
+        <span className="font-medium text-hx-secondary" data-crumb-current>{s?.mode === 'expand' && level > s.path.length ? `${levelName(h.levels[s.path.length]!)} + ${levelName(h.levels[level]!)}` : levelName(h.levels[level]!)}</span>
+      </nav>
+    </span>
   );
 }
