@@ -33,50 +33,50 @@ export async function startOpsFixture(dir: string): Promise<{ prom: string; heal
     const inv = path.join(dir, 'ops-inventory.yaml');
     const slo = (job: string, objective: number) => `      - name: availability\n        objective: ${objective}\n        window: 30d\n        errors: sum(rate(${job}_errors_total[{{window}}]))\n        total: sum(rate(${job}_requests_total[{{window}}]))`;
     fs.writeFileSync(inv, `monitoring:
-    prometheus: ${PROM}
-  environments: [prod]
-  hosts:
-    - name: db-1
-      address: 10.0.0.5
-      env: prod
-      role: database
-  services:
-    - name: storefront
-      env: prod
-      owner: team-web
-      health: ${HEALTH}/storefront
-      depends_on: [checkout, search]
-    - name: checkout
-      env: prod
-      owner: team-shop
-      health: ${HEALTH}/checkout
-      metrics_job: checkout
-      depends_on: [payments, orders-db]
-      slos:
-  ${slo('checkout', 99.9)}
-    - name: payments
-      env: prod
-      owner: team-payments
-      health: ${HEALTH}/payments
-      metrics_job: payments
-      slos:
-  ${slo('payments', 99.95)}
-    - name: search
-      env: prod
-      owner: team-web
-      health: ${HEALTH}/search
-      slos:
-  ${slo('search', 99.5)}
-    - name: orders-db
-      host: db-1
-      env: prod
-      owner: team-shop
-  alerts:
-    - name: CheckoutErrorRatio
-      expr: checkout_error_ratio > 0.05
-      severity: critical
-      service: checkout
-  `);
+  prometheus: ${PROM}
+environments: [prod]
+hosts:
+  - name: db-1
+    address: 10.0.0.5
+    env: prod
+    role: database
+services:
+  - name: storefront
+    env: prod
+    owner: team-web
+    health: ${HEALTH}/storefront
+    depends_on: [checkout, search]
+  - name: checkout
+    env: prod
+    owner: team-shop
+    health: ${HEALTH}/checkout
+    metrics_job: checkout
+    depends_on: [payments, orders-db]
+    slos:
+${slo('checkout', 99.9)}
+  - name: payments
+    env: prod
+    owner: team-payments
+    health: ${HEALTH}/payments
+    metrics_job: payments
+    slos:
+${slo('payments', 99.95)}
+  - name: search
+    env: prod
+    owner: team-web
+    health: ${HEALTH}/search
+    slos:
+${slo('search', 99.5)}
+  - name: orders-db
+    host: db-1
+    env: prod
+    owner: team-shop
+alerts:
+  - name: CheckoutErrorRatio
+    expr: checkout_error_ratio > 0.05
+    severity: critical
+    service: checkout
+`);
     inventory = inv;
   }
   return { prom: PROM, health: HEALTH, inventory, close: () => { prom.close(); health.close(); } };
