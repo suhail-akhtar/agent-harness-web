@@ -98,12 +98,14 @@ test('dashboards end to end', { timeout: 15 * 60_000 }, async (t) => {
       await page.waitForSelector('[data-home]');
       const box = page.locator('[data-composer-input]');
       // Under load the composer may not take the first Enter (models still loading): send again until a session opens.
-      for (let i = 0; i < 4; i++) {
-        if (!(await page.locator('[data-home]').count())) break;
-        if (!(await box.inputValue().catch(() => ''))) await box.fill('chart please');
+      // A send that was taken clears the composer at once; only a send that was not is repeated.
+      await box.fill('chart please');
+      for (let i = 0; i < 6; i++) {
         await box.press('Enter');
-        await page.waitForSelector('[data-home]', { state: 'detached', timeout: 10_000 }).catch(() => {});
+        await page.waitForFunction(() => !(document.querySelector('[data-composer-input]') as HTMLTextAreaElement | null)?.value, undefined, { timeout: 3_000 }).catch(() => {});
+        if (!(await box.inputValue().catch(() => ''))) break;
       }
+      await page.waitForSelector('[data-home]', { state: 'detached', timeout: 60_000 });
       const pin = page.locator('[data-block-action="core.dashboards:pin"]').first();
       await pin.waitFor({ timeout: 30_000 });
       await shot('pin-from-transcript', page.locator('[data-widget]').first());
