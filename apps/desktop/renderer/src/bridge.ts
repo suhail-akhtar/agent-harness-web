@@ -33,8 +33,10 @@ export type EngineState =
   | { status: 'crashed'; message: string; attempt: number; retryInMs: number }
   | { status: 'stopped'; message?: string };
 
-export interface AppInfo { product: ProductProfile; version: string; electron: string; chrome: string; node: string; platform: string; packaged: boolean; dataDir: string; scratch: string; previewRuntime: string; server: string; /** The product's icon (96 px). */ iconDataUrl?: string }
+export interface AppInfo { product: ProductProfile; version: string; electron: string; chrome: string; node: string; platform: string; packaged: boolean; dataDir: string; /** The harness home (~/.harness). */ home?: string; /** The home's tmp folder (each scratch conversation gets a folder in it). */ scratch: string; previewRuntime: string; server: string; /** The product's icon (96 px). */ iconDataUrl?: string; /** Driven by the end-to-end tests (the window is never shown). */ test?: boolean }
 export interface DevPluginInfo { name: string; version: string; description?: string; dir: string; ui?: import('@harness/plugin-ui').UiManifest; uiError?: string; uiHash?: string; enabled: boolean; source: 'dev' }
+export interface HomeFolder { key: string; label: string; path: string; note: string; bytes: number; files: number }
+export interface HomeInfo { home: string; settingsFile: string; tmpCleanupDays: number; folders: HomeFolder[]; oldCopy?: string; migration?: string; dataOutside?: boolean }
 export interface ServersInfo { active: string; remote: Array<{ id: string; name: string; url: string; hasToken?: boolean }>; encryption: boolean }
 
 export const desktop = {
@@ -74,4 +76,20 @@ export const desktop = {
   addProject: (dir: string) => invoke<DesktopPrefs['projects']>('projects:add', dir),
   removeProject: (dir: string) => invoke<DesktopPrefs['projects']>('projects:remove', dir),
   pathForFile: (f: File) => raw?.pathForFile(f) ?? '',
+  /** A new project folder in the home's workspaces, added to the projects. */
+  createProject: (name: string) => invoke<{ path: string; projects: DesktopPrefs['projects'] }>('projects:create', name),
+  /** A new scratch folder under the home's tmp/ (one per scratch conversation). */
+  newScratch: () => invoke<string>('home:scratch'),
+  homeInfo: () => invoke<HomeInfo>('home:info'),
+  openHomeFolder: (key: string) => invoke<string>('home:open', key),
+  setTmpDays: (days: number) => invoke<number>('home:setTmpDays', days),
+  cleanTmp: () => invoke<{ removed: string[]; kept: number; errors: string[] }>('home:cleanTmp'),
+  chooseHomeFolder: () => invoke<string | null>('home:chooseFolder'),
+  moveHome: (to: string) => invoke<{ moved: { home: string; old: string; files: number; bytes: number; sessionsRebased: number }; info: HomeInfo }>('home:move', to),
+  removeOldHome: () => invoke<HomeInfo>('home:removeOld'),
 };
+
+/** A folder for a new scratch conversation: a fresh one under the home's tmp/ (the tmp folder itself outside the app). */
+export async function scratchFolder(fallback?: string): Promise<string | undefined> {
+  try { return await desktop.newScratch(); } catch { return fallback; }
+}

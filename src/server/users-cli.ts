@@ -1,11 +1,12 @@
 // npm run users -- list | add <name> [--admin] | remove <id> | rotate <id> | disable <id> | enable <id>
-// Manages accounts in the data folder (HARNESS_DATA). Tokens are printed once.
+// Manages accounts in the data folder (HARNESS_DATA, else the harness home's data/). Tokens are printed once.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { UserStore } from './users.ts';
+import { harnessPaths } from '../util/home.ts';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const store = await new UserStore(path.resolve(process.env.HARNESS_DATA || path.join(appRoot, '.harness-data'))).load();
+const store = await new UserStore(harnessPaths({ legacy: path.join(appRoot, '.harness-data') }).dataDir).load();
 const [cmd, arg] = process.argv.slice(2);
 try {
   if (cmd === 'list' || !cmd) {

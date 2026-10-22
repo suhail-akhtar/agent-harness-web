@@ -88,13 +88,35 @@ async function openFolder() {
   navigate({ view: 'core.projects:project', params: { path: dir } });
 }
 
+/** A new project made by the app: a folder of its own in the harness home's workspaces. */
+function NewProject({ onDone }: { onDone: () => void }) {
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const create = async () => {
+    setBusy(true);
+    try { const r = await desktop.createProject(name); toast(`Created ${r.path}`, { kind: 'success' }); onDone(); navigate({ view: 'core.projects:project', params: { path: r.path } }); }
+    catch (e) { toast((e as Error).message, { kind: 'error' }); setBusy(false); }
+  };
+  return (
+    <form className="mb-5 flex items-center gap-2 rounded-xl border border-hx-border-subtle bg-hx-elevated p-3" data-new-project-form onSubmit={(e) => { e.preventDefault(); void create(); }}>
+      <Icon name="folder-plus" size={16} className="text-hx-muted" />
+      <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Project name" aria-label="Project name" data-new-project-name className="h-8 min-w-0 flex-1 rounded-lg border border-hx-border bg-hx-bg px-2 text-[13px] outline-none focus:border-hx-accent" />
+      <span className="hidden text-[11.5px] text-hx-muted sm:inline">in the harness home's workspaces</span>
+      <Button type="submit" size="sm" variant="primary" loading={busy} disabled={!name.trim()}>Create</Button>
+      <Button type="button" size="sm" variant="ghost" onClick={onDone}>Cancel</Button>
+    </form>
+  );
+}
+
 function Projects() {
   const projects = useApp((s) => s.prefs.projects);
   const sessions = useData((s) => s.sessions);
+  const [making, setMaking] = useState(false);
   return (
     <div className="hx-scroll h-full overflow-y-auto" data-projects>
       <div className="mx-auto max-w-4xl px-6 py-8">
-        <div className="mb-5 flex items-center gap-3"><h1 className="flex-1 text-[20px] font-semibold">Projects</h1><Button variant="primary" icon="folder-plus" onClick={() => void openFolder()}>Open a folder</Button></div>
+        <div className="mb-5 flex items-center gap-3"><h1 className="flex-1 text-[20px] font-semibold">Projects</h1><Button icon="plus" onClick={() => setMaking(true)} data-new-project>New project</Button><Button variant="primary" icon="folder-plus" onClick={() => void openFolder()}>Open a folder</Button></div>
+        {making && <NewProject onDone={() => setMaking(false)} />}
         {!projects.length ? <EmptyState icon="folder" title="No projects yet" action={<Button variant="primary" icon="folder-plus" onClick={() => void openFolder()}>Open a folder</Button>}>Open a folder and the agent can work in it. Each conversation started there runs in that folder.</EmptyState> : (
           <div className="grid gap-3 sm:grid-cols-2">
             {projects.map((p) => {

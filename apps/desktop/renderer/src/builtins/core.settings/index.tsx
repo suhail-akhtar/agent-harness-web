@@ -13,7 +13,7 @@ import { SEARCH_TEXT } from '../../shell/Overlays';
 Object.assign(SEARCH_TEXT, {
   'core.settings:appearance': 'theme light dark system accent colour contrast font size density width motion',
   'core.settings:general': 'send enter key steps model default mode notifications',
-  'core.settings:application': 'login tray sleep engine restart log data folder',
+  'core.settings:application': 'login tray sleep engine restart log data folder home location move harness workspaces tmp scratch clean exports',
   'core.settings:models': 'provider key api deepseek anthropic claude openai moonshot kimi zai glm base url test delegation delegate other models sub-agents cost cap',
   'core.settings:permissions': 'allow deny ask rules limits steps cost minutes effective',
   'core.settings:instructions': 'claude.md instructions personal',

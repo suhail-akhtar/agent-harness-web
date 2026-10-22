@@ -8,7 +8,7 @@ import { useApp } from '../../state/app';
 import { useData, client } from '../../state/data';
 import { allThemes } from '../../state/theme';
 import { ProductMark } from '../../components/ProductMark';
-import { desktop, platform, type ServersInfo } from '../../bridge';
+import { desktop, platform, type HomeInfo, type ServersInfo } from '../../bridge';
 import { chordFromEvent, conflicts, formatChord } from '../../registry/keybindings';
 import type { DesktopPrefs } from '@desk/prefs';
 
@@ -97,7 +97,72 @@ export function Application(): React.ReactElement {
             <Button size="sm" variant="ghost" onClick={() => void desktop.engineLogs().then(setLogs)}>Show log</Button></div>
         </Field>
         {logs && <pre className="hx-scroll my-2 max-h-64 overflow-auto rounded-lg bg-hx-code p-2 font-mono text-[11px] leading-4">{logs.join('\n')}</pre>}
-        <Field label="Data folder" help={info?.dataDir} inline><Button size="sm" icon="folder-open" onClick={() => void desktop.openDataFolder()}>Open</Button></Field>
+        <Field label="App folder" help={`Window, preferences and plugin grants on this computer: ${info?.dataDir ?? ''}`} inline><Button size="sm" icon="folder-open" onClick={() => void desktop.openDataFolder()}>Open</Button></Field>
+      </Section>
+      <Location />
+    </div>
+  );
+}
+
+const size = (b: number) => (b < 1024 ? `${b} B` : b < 1024 ** 2 ? `${(b / 1024).toFixed(1)} KB` : b < 1024 ** 3 ? `${(b / 1024 ** 2).toFixed(1)} MB` : `${(b / 1024 ** 3).toFixed(2)} GB`);
+
+/** The harness home (~/.harness): where it is, its folders with their sizes, Open, Move, and the tmp clean-up age. */
+function Location(): React.ReactElement {
+  const [h, setH] = useState<HomeInfo | null>(null);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState<string | null>(null);
+  const [days, setDays] = useState('');
+  const load = () => desktop.homeInfo().then((x) => { setH(x); setDays(String(x.tmpCleanupDays)); setErr(''); }).catch((e: Error) => setErr(e.message));
+  useEffect(() => { void load(); }, []);
+  const run = async (what: string, f: () => Promise<unknown>) => { setBusy(what); try { await f(); } catch (e) { toast((e as Error).message, { kind: 'error' }); } finally { setBusy(null); } };
+  const move = () => run('move', async () => {
+    const to = await desktop.chooseHomeFolder();
+    if (!to || !h) return;
+    const yes = await useApp.getState().ask({ title: 'Move the harness home?', body: `Everything in ${h.home} is copied to ${to} (into a "Harness" folder when that one is not empty), checked, and used from then on. The engine restarts; conversations that are running stop. The old copy stays until you remove it.`, confirmLabel: 'Move' });
+    if (!yes) return;
+    const r = await desktop.moveHome(to);
+    setH(r.info); setDays(String(r.info.tmpCleanupDays));
+    toast(`The home is now ${r.moved.home}`, { kind: 'success', detail: `${r.moved.files} files copied and checked; the old copy is kept until you remove it.` });
+  });
+  const removeOld = () => run('remove', async () => {
+    if (!h?.oldCopy) return;
+    const yes = await useApp.getState().ask({ title: 'Remove the old copy?', body: `${h.oldCopy} and everything in it is deleted. The home in use (${h.home}) is not touched.`, confirmLabel: 'Remove', danger: true });
+    if (yes) setH(await desktop.removeOldHome());
+  });
+  const saveDays = () => run('days', async () => { const n = Number(days); const v = await desktop.setTmpDays(n); setDays(String(v)); toast(`Scratch folders older than ${v} days are removed`, { kind: 'success' }); await load(); });
+  if (err) return <Section title="Location"><InfoNote tone="warning">{err}</InfoNote></Section>;
+  if (!h) return <Section title="Location"><Spinner /></Section>;
+  return (
+    <div data-location>
+      <Section title="Location">
+        <Field label="Harness home" help="Conversations, workspaces, scratch folders, exports and logs. The server and the command line use it too." inline>
+          <div className="flex items-center gap-2">
+            <code className="max-w-[260px] truncate rounded bg-hx-code px-1.5 py-0.5 text-[11.5px]" title={h.home} data-home-path>{h.home}</code>
+            <Button size="sm" icon="folder-open" onClick={() => void desktop.openHomeFolder('home')}>Open</Button>
+            <Button size="sm" icon="arrow-right" loading={busy === 'move'} disabled={!!busy} onClick={() => void move()} data-move-home>Move…</Button>
+          </div>
+        </Field>
+        {h.migration && <div className="py-2"><InfoNote tone="info">{h.migration}</InfoNote></div>}
+        {h.oldCopy && (
+          <Field label="Old copy" help={`Kept after the move: ${h.oldCopy}`} inline>
+            <Button size="sm" variant="danger" icon="trash" loading={busy === 'remove'} disabled={!!busy} onClick={() => void removeOld()} data-remove-old-home>Remove</Button>
+          </Field>
+        )}
+        {h.folders.map((f) => (
+          <div key={f.key} className="flex items-center gap-3 py-2" data-home-folder={f.key} data-bytes={f.bytes}>
+            <Icon name="folder" size={16} className="text-hx-muted" />
+            <span className="min-w-0 flex-1"><span className="block text-[13px] font-medium">{f.label} <span className="ml-1 text-[11.5px] font-normal text-hx-muted">{size(f.bytes)} · {f.files} file{f.files === 1 ? '' : 's'}</span></span><span className="block truncate text-[11.5px] text-hx-muted" title={f.path}>{f.note} · {f.path}</span></span>
+            <IconButton icon="folder-open" size="sm" label={`Open ${f.label}`} onClick={() => void desktop.openHomeFolder(f.key)} />
+          </div>
+        ))}
+        <Field label="Clean up scratch folders" help="Scratch conversations get a folder each in tmp/. Folders not changed for this many days are removed (on start and daily); nothing outside tmp/ is touched." inline>
+          <div className="flex items-center gap-2">
+            <Input type="number" min={1} max={365} value={days} onChange={(e) => setDays(e.target.value)} className="w-20" aria-label="Days" data-tmp-days />
+            <span className="text-[12px] text-hx-muted">days</span>
+            <Button size="sm" disabled={!!busy || days === String(h.tmpCleanupDays)} loading={busy === 'days'} onClick={() => void saveDays()} data-save-tmp-days>Save</Button>
+            <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => void run('clean', async () => { const r = await desktop.cleanTmp(); toast(r.removed.length ? `Removed ${r.removed.length} old scratch folder(s)` : 'Nothing old enough to remove'); await load(); })}>Clean now</Button>
+          </div>
+        </Field>
       </Section>
     </div>
   );

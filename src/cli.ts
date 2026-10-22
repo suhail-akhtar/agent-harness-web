@@ -1,10 +1,11 @@
-import os from 'node:os';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { SessionMeta } from './core/session.ts';
 import type { HarnessEvent, Message, TurnEndReason } from './core/types.ts';
 import { firstLine } from './graph/runner.ts';
 import { createHarness } from './kernel/harness.ts';
+import { ensureHome, harnessPaths } from './util/home.ts';
 
 // Headless runs: one prompt, streamed to the terminal, for scripts and benchmarks.
 //   npm run cli -- --model deepseek-flash --runtime docker|local [--image allowed-image] [--dir path] [--mode bypass] "task"
@@ -72,14 +73,20 @@ async function main() {
   }
   // With --output json, stdout carries only the result object; progress goes to stderr.
   const log = json ? (...a: unknown[]) => console.error(...a) : (...a: unknown[]) => console.log(...a);
-  const dataDir = path.resolve(arg('data', path.join(os.tmpdir(), 'harness-cli'))!);
+  // The same home as the server and the app (~/.harness, or HARNESS_HOME): its data unless --data or HARNESS_DATA says otherwise;
+  // without --dir a run works in a folder of its own under the home's tmp/ (cleaned after some days), never in the server's data.
+  const paths = harnessPaths();
+  ensureHome(paths.layout);
+  const dataDir = path.resolve(arg('data', paths.dataDir)!);
   const runtime = (arg('runtime', 'local') === 'docker' ? 'docker' : 'local') as 'docker' | 'local';
-  const dir = arg('dir');
+  const dir = arg('dir') ?? (arg('runtime', 'local') === 'local' && !arg('session') ? path.join(paths.layout.tmp, `cli-${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')}-${process.pid}`) : undefined);
+  if (dir && !arg('dir')) fs.mkdirSync(dir, { recursive: true });
   const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const h = await createHarness({
     dataDir,
     plugins: [path.join(appRoot, 'plugins'), ...(process.env.HARNESS_PLUGINS || '').split(path.delimiter).filter(Boolean)],
     shippedPlugins: [path.join(appRoot, 'plugins')],
+    installDir: paths.installDir,
     mcp: process.env.HARNESS_MCP_CONFIG || undefined,
     // One task from the command line: no plugin loops (an alert watch loop) alongside it.
     backgroundWork: false,

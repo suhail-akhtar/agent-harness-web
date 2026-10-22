@@ -9,7 +9,7 @@ import type { Attachment, Effort, Mode } from '@harness/client';
 import { Button, EmptyState, Icon, IconButton, Input, Popover, MenuList, Spinner, Tooltip, cx, toast, type MenuItem } from '@harness/ui';
 import { useApp, openSession, navigate, setCrumb } from '../../state/app';
 import { useData, client, clientInfo } from '../../state/data';
-import { desktop } from '../../bridge';
+import { desktop, scratchFolder } from '../../bridge';
 import { TopBar } from '../../shell/Bars';
 import { HomeCardHost } from '../../registry/PluginView';
 import { Composer, chipContext, type ComposerValue } from './Composer';
@@ -60,7 +60,7 @@ export function Home(): React.ReactElement {
   const noModel = models.length > 0 && !models.some((m) => m.available);
 
   const start = async (text: string, attachments: Attachment[]) => {
-    const path = where || info?.scratch;
+    const path = where || await scratchFolder(info?.scratch);
     // The model chosen, else the default now (the models may have arrived after this page did).
     let model = value.model || defaultsNow().model;
     // Just after an engine restart the list may still be on its way: ask once more before giving up.
