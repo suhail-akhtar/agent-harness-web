@@ -126,6 +126,11 @@ export class AnthropicProvider implements Provider {
     // The SDK materialises streamed tool input at block end; JSON it cannot
     // parse at all rejects here. Re-issuing the turn is the documented fix.
     if (err instanceof SyntaxError) return new ProviderError(`unparseable tool input: ${err.message}`, 0, true);
+    // ... which the SDK wraps in its own error (a Sonnet 5.5 postmortem of 6,600 characters slid into
+    // XML parameter tags halfway). Asked again; the message keeps only the parse error, not the arguments.
+    if (err instanceof Anthropic.AnthropicError && /Unable to parse tool parameter JSON/i.test(err.message)) {
+      return new ProviderError(`the model sent tool arguments that are not valid JSON (${/Error: ([^.]*?)(?: in JSON| at position|\. JSON:|$)/.exec(err.message)?.[1]?.slice(0, 160) ?? 'parse error'}); asking again`, 0, true);
+    }
     // A connection dropped mid-stream surfaces as undici's TypeError("terminated") or a socket error.
     const code = (err as { code?: string; cause?: { code?: string } })?.code ?? (err as { cause?: { code?: string } })?.cause?.code;
     if ((err instanceof TypeError && /terminated|fetch failed|socket|network/i.test(err.message)) || /^(ECONNRESET|EPIPE|ETIMEDOUT|UND_ERR_SOCKET)$/.test(code ?? '')) {

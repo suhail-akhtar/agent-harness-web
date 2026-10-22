@@ -96,3 +96,31 @@ test('anthropic: a model thinking quietly for longer than the idle time (only pi
     srv.close();
   }
 });
+
+test('anthropic: tool arguments the model broke (XML tags inside the JSON) are asked again, and the error does not carry the arguments', async () => {
+  const { AnthropicProvider } = await import('../src/providers/anthropic.ts');
+  const { getModel } = await import('../src/core/models.ts');
+  const ev = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  const srv = http.createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(ev('message_start', { type: 'message_start', message: { id: 'm1', type: 'message', role: 'assistant', model: 'claude-sonnet-5-5', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 5, output_tokens: 1 } } }));
+      res.write(ev('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 't1', name: 'incident', input: {} } }));
+      res.write(ev('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"action": "postmortem", "lucky": ["secret-ish detail"]</lucky>\n<parameter name="action_items">[]' } }));
+      res.write(ev('content_block_stop', { type: 'content_block_stop', index: 0 }));
+      res.write(ev('message_delta', { type: 'message_delta', delta: { stop_reason: 'tool_use', stop_sequence: null }, usage: { output_tokens: 40 } }));
+      res.end(ev('message_stop', { type: 'message_stop' }));
+    });
+  });
+  await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+  try {
+    const p = new AnthropicProvider('test-key', `http://127.0.0.1:${(srv.address() as { port: number }).port}`);
+    const req = { model: getModel('claude-sonnet-5-5'), system: 's', tools: [], messages: [{ role: 'user' as const, content: [{ type: 'text' as const, text: 'hi' }] }], effort: 'medium' as const, signal: new AbortController().signal, cacheKey: 'k' };
+    const err = await p.send(req).then(() => undefined, (e: unknown) => e);
+    assert.ok(err instanceof ProviderError, String(err));
+    assert.equal((err as ProviderError).retryable, true, 'the agent loop asks again');
+    assert.match((err as Error).message, /tool arguments that are not valid JSON .*asking again/);
+    assert.ok(!(err as Error).message.includes('secret-ish detail'), (err as Error).message);
+  } finally { srv.close(); }
+});
