@@ -50,7 +50,10 @@ export async function dataRoutes(ctx: DataHttpContext, req: http.IncomingMessage
     if (p === '/api/data/ops' && method === 'POST') {
       const b = await body(req);
       const ops = (Array.isArray(b.ops) ? b.ops : [b]) as Op[];
-      { send(res, 200, await applyOps(svc, home, ops, actor, {})); return true; }
+      const r = await applyOps(svc, home, ops, actor, {});
+      // A published page's full address, as this server is reached.
+      for (const x of r.results) { const d = x.data as { url?: string; fullUrl?: string } | undefined; if (x.op === 'publish' && d?.url?.startsWith('/')) d.fullUrl = `${(process.env.HARNESS_PUBLIC_URL ?? '').replace(/\/+$/, '') || `http://${req.headers.host ?? '127.0.0.1'}`}${d.url}`; }
+      { send(res, 200, r); return true; }
     }
     if (p === '/api/data/catalog' && method === 'GET') {
       const c = await home.catalog();
@@ -168,7 +171,7 @@ async function importBundle(svc: DataService, home: import('./home.ts').DataHome
 
 // ---------------- published pages ----------------
 
-const ASSET_TYPES: Record<string, string> = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.svg': 'image/svg+xml', '.png': 'image/png', '.map': 'application/json' };
+const ASSET_TYPES: Record<string, string> = { '.wasm': 'application/wasm', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.svg': 'image/svg+xml', '.png': 'image/png', '.map': 'application/json' };
 const PAGE_CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'; frame-ancestors *; base-uri 'none'; form-action 'none'";
 
 /** Fields a published page may filter on: those the document itself shows or slices by. */
@@ -221,7 +224,7 @@ function stripResult(r: QueryResult, showSql: boolean): QueryResult {
 
 /** Who may see a published page, and with which row-level security. */
 async function access(ctx: DataHttpContext, req: http.IncomingMessage, slug: string): Promise<{ entry: PublishedEntry; viewer: Viewer; doc: DocSpec; model?: ModelSpec }> {
-  const entry = (await ctx.svc.published()).find((x) => x.slug === slug);
+  const entry = (await ctx.svc.published()).find((x) => x.slug === slug && !x.remote);
   if (!entry) throw new DataError('this page is not published (or was unpublished)', 404);
   const home = ctx.svc.home(entry.owner);
   let user: string | undefined;
@@ -265,8 +268,9 @@ export async function publishedRoutes(ctx: DataHttpContext, req: http.IncomingMe
     if (!m) throw new DataError('not found', 404);
     const slug = m[1]!;
     if (!m[2]) {
-      if (!(await ctx.svc.published()).some((x) => x.slug === slug)) throw new DataError('this page is not published (or was unpublished)', 404);
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': PAGE_CSP, 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff' });
+      // Not published (or unpublished): the same shell with a 404, so a viewer's open page says so in its own words.
+      const live = (await ctx.svc.published()).some((x) => x.slug === slug && !x.remote);
+      res.writeHead(live ? 200 : 404, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': PAGE_CSP, 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff' });
       { res.end(viewerHtml('Dashboard', { base: '/p/_/' })); return true; }
     }
     const a = await access(ctx, req, slug);

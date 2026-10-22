@@ -523,7 +523,7 @@ export const UI_ACTIONS: Record<string, string> = {
   'doc.interaction': 'set_interaction', 'doc.filter': 'add_filter', 'doc.clear-filter': 'remove_filter', 'doc.bookmark': 'add_bookmark', 'doc.remove-bookmark': 'remove_bookmark',
   'doc.theme': 'set_theme', 'doc.refresh-policy': 'set_refresh', 'doc.alert': 'add_alert', 'doc.remove-alert': 'remove_alert', 'doc.subscribe': 'add_subscription', 'doc.unsubscribe': 'remove_subscription',
   'doc.narrative': 'set_narrative', 'doc.pin': 'pin', 'doc.bind': 'bind', 'doc.snapshot': 'snapshot', 'doc.publish': 'publish', 'doc.unpublish': 'unpublish', 'doc.verify': 'verify',
-  'doc.undo': 'undo', 'doc.redo': 'redo', 'doc.restore': 'restore', 'doc.export': 'export',
+  'doc.undo': 'undo', 'doc.redo': 'redo', 'doc.restore': 'restore', 'doc.export': 'export', 'doc.history': 'history', 'doc.describe': 'describe', 'data.list-docs': 'list_docs',
 };
 
 /** A visual's id-free summary for lists: "column: Revenue by regions.region". */
@@ -548,4 +548,20 @@ export function docFields(d: DocSpec): { measures: Set<string>; fields: Set<stri
   }
   for (const a of d.alerts ?? []) measures.add(a.measure);
   return { measures, fields };
+}
+
+/** A dashboard's runtime state, sent with each visual's request: slicers, selection, drill, drill-through. */
+export interface ViewState {
+  page?: string;
+  /** Slicer selections and other runtime filters (on fields of the model). */
+  filters?: FilterSpec[];
+  /** A selection in a visual (a clicked bar): filters or highlights the others per their interactions. */
+  selection?: { visual: string; filters: FilterSpec[] };
+  /** Hierarchy drill per visual: the level and the values clicked on the way down. */
+  drill?: Record<string, { level: number; path: Scalar[] }>;
+  /** Filters a drill-through brought into its page. */
+  drillthrough?: FilterSpec[];
+  /** Decomposition tree: the path of splits taken. */
+  decomp?: Record<string, Array<{ dim: string; value: Scalar }>>;
+  params?: Record<string, Scalar>;
 }

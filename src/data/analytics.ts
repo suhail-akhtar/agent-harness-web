@@ -1,5 +1,5 @@
 import { validateDashboard } from '../../packages/plugin-ui/src/dashboard.ts';
-import { type CatalogSpec, DATA_VISUALS, type DocSpec, type FilterSpec, formatValue, type InlineMeasure, type ModelSpec, OPS, type PageSpec, parseField, type QueryResult, type QuerySpec, type Scalar, type VisualSpec, visualSummary } from '../../packages/plugin-ui/src/bi.ts';
+import { type CatalogSpec, DATA_VISUALS, type DocSpec, type FilterSpec, formatValue, type InlineMeasure, type ModelSpec, OPS, type PageSpec, parseField, type QueryResult, type QuerySpec, type Scalar, type ViewState, type VisualSpec, visualSummary } from '../../packages/plugin-ui/src/bi.ts';
 import { DataError, qid, rowsHash } from './engine.ts';
 import { CATALOG_ID, type DataHome, newId } from './home.ts';
 import { type Actor, type Op, type OpOutcome, type Tx } from './ops.ts';
@@ -12,20 +12,7 @@ import { type DataService, OWNER, type Viewer } from './service.ts';
 // drill-through), and the read ops agents and the app use (describe, verify, suggest, history ...).
 // Statistics run in SQL in the engine, with the method stated next to the result.
 
-export interface ViewState {
-  page?: string;
-  /** Slicer selections and other runtime filters (on fields of the model). */
-  filters?: FilterSpec[];
-  /** A selection in a visual (a clicked bar): filters or highlights the others per their interactions. */
-  selection?: { visual: string; filters: FilterSpec[] };
-  /** Hierarchy drill per visual: the level and the values clicked on the way down. */
-  drill?: Record<string, { level: number; path: Scalar[] }>;
-  /** Filters a drill-through brought into its page. */
-  drillthrough?: FilterSpec[];
-  /** Decomposition tree: the path of splits taken. */
-  decomp?: Record<string, Array<{ dim: string; value: Scalar }>>;
-  params?: Record<string, Scalar>;
-}
+export type { ViewState };
 
 const DEFAULT_HIGHLIGHT = new Set(['bar', 'column', 'pie', 'donut', 'treemap', 'funnel']);
 
@@ -37,6 +24,16 @@ export function visualQuery(doc: DocSpec, page: PageSpec, v: VisualSpec, state: 
   let q: QuerySpec | undefined = v.query ? { ...v.query, model: v.query.model ?? doc.model } : undefined;
   if (v.type === 'slicer' && v.options?.slicer) q = { model: doc.model, dims: [v.options.slicer.field], sort: [{ by: v.options.slicer.field }], limit: 500 };
   if (!q) return {};
+  const o = v.options ?? {};
+  // A KPI against a target: the variance is a measure too, computed in SQL like the others.
+  if (v.type === 'kpi' && typeof o.target === 'string' && q.measures?.length) {
+    const m = typeof q.measures[0] === 'string' ? q.measures[0] : q.measures[0]!.name;
+    if (!q.measures.some((x) => (typeof x === 'string' ? x : x.name) === o.target)) q = { ...q, measures: [...q.measures, o.target] };
+    if (typeof q.measures?.[0] === 'string') q = { ...q, measures: [...q.measures!, { name: 'vs target', expr: `([${m}] - [${o.target}]) / NULLIF([${o.target}], 0)`, format: 'percent:1' }] };
+  }
+  if (v.type === 'waterfall' && !q.totals) q = { ...q, totals: { rows: 1 } };
+  if ((v.type === 'table' || v.type === 'matrix') && q.dims?.length && q.measures?.length && v.options?.subtotals !== false && !q.totals) q = { ...q, totals: { rows: v.type === 'matrix' ? Math.max(1, Math.min(q.dims.length, o.rows ?? 1)) : q.dims.length, ...(v.type === 'matrix' ? {} : { columns: 0 }) } };
+  for (const extra of [o.play, o.geo?.lat, o.geo?.lon]) if (extra && !q.dims?.includes(extra)) q = { ...q, dims: [...(q.dims ?? []), extra] };
   // Hierarchy drill: the level's field instead of the first dim, filtered by the path taken.
   const h = v.options?.hierarchy ? model?.hierarchies.find((x) => x.name === v.options!.hierarchy) : undefined;
   const dr = state.drill?.[v.id];
@@ -68,9 +65,13 @@ export async function visualData(svc: DataService, home: DataHome, doc: DocSpec,
   if (v.type === 'drivers') return drivers(svc, home, v, query, viewer, cat);
   if (v.type === 'narrative') return narrative(svc, home, v, query, viewer, cat);
   if (v.type === 'kpi' && v.options?.trend) {
-    // The KPI's value, its target and the trend behind it.
-    const r = await svc.query(home, query, viewer, { signal: o.signal, catalog: cat, params: state.params });
-    const t = await svc.query(home, { ...query, dims: [v.options.trend], sort: [{ by: v.options.trend }] }, viewer, { catalog: cat, params: state.params });
+    // The KPI's value, its target and the trend behind it. A target that is a time calculation
+    // (last year's value) is compared period by period: the KPI shows the latest period of the trend.
+    const trend = v.options.trend;
+    const target = typeof v.options.target === 'string' ? model?.measures.find((m) => m.name === v.options!.target) : undefined;
+    const byPeriod = !!target?.calc && !['pct_of_total', 'rank'].includes(target.calc);
+    const r = await svc.query(home, byPeriod ? { ...query, dims: [trend], sort: [{ by: trend, desc: true }], limit: 1 } : query, viewer, { signal: o.signal, catalog: cat, params: state.params });
+    const t = await svc.query(home, { ...query, measures: query.measures!.slice(0, 1), dims: [trend], sort: [{ by: trend }] }, viewer, { catalog: cat, params: state.params });
     return { ...r, extra: { ...r.extra, trend: t.rows.map((x) => [x[0]!, x[1]!]) } };
   }
   const r = await svc.query(home, query, viewer, { signal: o.signal, highlight, catalog: cat, params: state.params });
@@ -237,7 +238,7 @@ export async function pinBlock(tx: Tx, a: Op): Promise<OpOutcome> {
     return name;
   };
   const addVisual = async (v: Partial<VisualSpec>) => {
-    const r = await (await import('./ops.ts')).applyHandler(tx, { op: 'add_visual', doc: docId, ...(a.page ? { page: a.page } : {}), visual: v as Record<string, unknown> });
+    const r = await (await import('./ops.ts')).applyHandler(tx, { op: 'add_visual', doc: docId, ...(a.page ? { page: a.page } : {}), visual: { ...v, ...(v.query ? { query: { ...v.query, model: '' } } : {}) } as Record<string, unknown> }); // model '': the pinned data's own tables, whatever model the document has
     added.push(r.message);
   };
   const m = (ds: string, col: string, agg = 'sum'): InlineMeasure => ({ name: col, expr: `${agg}(${ds}.${qid(col)})` });
@@ -516,6 +517,15 @@ export async function reads(svc: DataService, home: DataHome, a: Op, actor: Acto
     case 'undo': case 'redo': case 'restore': return undoRedo(svc, home, a, actor);
     case 'publish': {
       const d = await docRef();
+      if (a.remote && typeof a.remote === 'object') {
+        // To another harness server: its rows, document and model, pushed with that server's token (a vault entry here).
+        const rm = a.remote as { url: string; secret: string; access?: 'token' | 'signed-in' };
+        if (!rm.url || !rm.secret) throw new DataError('remote is {url, secret: a key vault entry holding that server\'s token}');
+        const { pushRemote } = await import('./remote.ts');
+        const r = await pushRemote(svc, home, d.id, rm, true);
+        await svc.addRemote(home.owner, d.id, { url: rm.url, secret: rm.secret, id: r.id, slug: r.slug, by: actor.label });
+        return { op: a.op, message: `published ${d.id} on ${new URL(rm.url).host}: ${r.url} (its rows are pushed again after every refresh here; unpublish takes it down there too)`, data: { ...r, remote: rm.url } };
+      }
       const access = a.access === 'signed-in' ? 'signed-in' : 'token';
       const accounts = Array.isArray(a.accounts) ? (a.accounts as string[]) : undefined;
       if (a.role) { const m = d.spec.model ? cat.models.find((x) => x.id === d.spec.model) : undefined; if (!m?.roles.some((r) => r.name === a.role)) throw new DataError(`no role ${String(a.role)} in the model`); }

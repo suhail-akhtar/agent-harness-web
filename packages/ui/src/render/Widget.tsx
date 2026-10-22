@@ -10,6 +10,8 @@ import { IconButton } from '../components/primitives.tsx';
 import { downloadText } from './download.ts';
 
 const ExpandedContext = React.createContext(false);
+/** Extra actions a host puts on drawn blocks (a plugin's "Add to dashboard"), given the block's kind, language and source. */
+export const BlockActionsContext = React.createContext<((b: { kind: string; lang: string; source: string }) => React.ReactNode) | null>(null);
 export function useWidgetExpanded(): boolean { return React.useContext(ExpandedContext); }
 
 class Boundary extends Component<{ children: ReactNode; onError: (m: string) => void }, { error?: string }> {
@@ -27,9 +29,10 @@ export function RenderBoundary({ children, fallback }: { children: ReactNode; fa
   return <Boundary key={attempt} onError={setError}>{children}</Boundary>;
 }
 
-export interface WidgetProps { title?: string; kind: string; source: string; extension?: string; children: ReactNode; actions?: ReactNode; onFix?: (r: { kind: string; source: string; error: string }) => void }
+export interface WidgetProps { title?: string; kind: string; source: string; extension?: string; children: ReactNode; actions?: ReactNode; onFix?: (r: { kind: string; source: string; error: string }) => void; /** The fence kind and language (for host block actions). */ block?: { kind: string; lang: string } }
 
-export function Widget({ title, kind, source, extension = 'txt', children, actions, onFix }: WidgetProps): React.ReactElement {
+export function Widget({ title, kind, source, extension = 'txt', children, actions, onFix, block }: WidgetProps): React.ReactElement {
+  const blockActions = React.useContext(BlockActionsContext);
   const [collapsed, setCollapsed] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -51,6 +54,7 @@ export function Widget({ title, kind, source, extension = 'txt', children, actio
           {title ?? kind}
           {failure && <span className="ml-1.5 text-hx-danger">· did not render</span>}
         </span>
+        {block && blockActions?.({ ...block, source })}
         {actions}
         <IconButton size="xs" icon={copied ? 'check' : 'copy'} label={copied ? 'Copied' : 'Copy the source'} onClick={copy} />
         <IconButton size="xs" icon="download" label="Download the source" onClick={() => downloadText(`${kind}-${Date.now()}.${extension}`, source)} />

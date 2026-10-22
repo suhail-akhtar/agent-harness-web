@@ -43,7 +43,7 @@ export interface DataDeps {
   today?: () => string;
 }
 
-export interface PublishedEntry { slug: string; owner?: string; doc: string; access: 'token' | 'signed-in'; tokenHash?: string; accounts?: string[]; role?: string; showSql?: boolean; at: number; by: string; remote?: { url: string } }
+export interface PublishedEntry { slug: string; owner?: string; doc: string; access: 'token' | 'signed-in'; tokenHash?: string; accounts?: string[]; role?: string; showSql?: boolean; at: number; by: string; /** Published on another harness server (pushed there; served there). */ remote?: { url: string; secret: string; id: string } }
 
 type Listener = (e: { owner?: string; type: string; doc?: string; dataset?: string; [k: string]: unknown }) => void;
 
@@ -246,9 +246,19 @@ export class DataService {
   docDatasets(doc: DocSpec, cat: CatalogSpec): string[] {
     const models = new Set<string>();
     const fields = new Set<string>();
-    const scan = (q?: QuerySpec) => { if (!q) return; if (q.model) models.add(q.model); for (const f of [...(q.dims ?? []), ...(q.columns ?? [])]) fields.add(f); };
+    const names = new Set(cat.datasets.map((d) => d.name));
+    const scan = (q?: QuerySpec) => {
+      if (!q) return;
+      if (q.model) models.add(q.model);
+      for (const f of [...(q.dims ?? []), ...(q.columns ?? []), ...(q.filters ?? []).map((x) => x.field)]) fields.add(f);
+      // Inline measures name their tables in SQL (sum(sales.amount)).
+      for (const m of q.measures ?? []) if (typeof m !== 'string') for (const x of `${m.expr ?? ''} ${m.filter ?? ''}`.replace(/'(?:[^']|'')*'/g, '').matchAll(/"?([A-Za-z_]\w*)"?\s*\./g)) if (names.has(x[1]!)) fields.add(`${x[1]}.x`);
+    };
     if (doc.model) models.add(doc.model);
-    for (const p of doc.pages) for (const v of p.visuals) scan(v.query);
+    for (const p of doc.pages) for (const v of p.visuals) {
+      scan(v.query);
+      for (const f of [v.options?.slicer?.field, v.options?.trend, v.options?.play, ...(v.options?.dims ?? []), ...(v.options?.detail ?? [])]) if (f) fields.add(f);
+    }
     const out = new Set<string>();
     for (const m of models) { const mm = cat.models.find((x) => x.id === m); for (const t of mm?.tables ?? []) out.add(t.dataset); }
     for (const f of fields) { const p = parseField(f); if (p && cat.datasets.some((d) => d.name === p.table)) out.add(p.table); }
@@ -384,11 +394,13 @@ export class DataService {
     this.subscriptionRunner = onSubscription;
     this.timer = setInterval(() => { void this.tick().catch((e: Error) => this.deps.log?.(`data schedule: ${e.message}`)); }, 15_000);
     this.timer.unref?.();
+    void import('./remote.ts').then((m) => { this.offRemotes = m.followRemotes(this); });
     // Event-driven refresh: a policy {mode: 'event', event: 'topic' | 'topic:type'}.
     this.offEvents = this.deps.events?.subscribe(Number.MAX_SAFE_INTEGER, (e) => { void this.onEvent(e.topic, (e.payload as { type?: string; doc?: string })?.type, (e.payload as { doc?: string })?.doc).catch(() => {}); });
   }
   private subscriptionRunner?: (home: DataHome, doc: string, sub: NonNullable<DocSpec['subscriptions']>[number]) => Promise<void>;
-  stop(): void { clearInterval(this.timer); this.offEvents?.(); }
+  private offRemotes?: () => void;
+  stop(): void { clearInterval(this.timer); this.offEvents?.(); this.offRemotes?.(); }
 
   private async owners(): Promise<Array<string | undefined>> {
     const names = await fs.readdir(this.root).catch(() => [] as string[]);
@@ -463,7 +475,22 @@ export class DataService {
       return { entry, ...(token ? { token } : {}) };
     });
   }
+  /** Records a copy published on another server (re-pushed after each refresh, unpublished there with this one). */
+  async addRemote(owner: string | undefined, doc: string, r: { url: string; secret: string; id: string; slug: string; by: string }): Promise<void> {
+    await fs.mkdir(this.root, { recursive: true });
+    await withFileLock(this.pubFile(), async () => {
+      const all = (await this.published()).filter((p) => !(p.owner === owner && p.doc === doc && p.remote?.url === r.url));
+      await writeFileAtomic(this.pubFile(), JSON.stringify([...all, { slug: `remote-${r.slug}`, owner, doc, access: 'token', at: Date.now(), by: r.by, remote: { url: r.url, secret: r.secret, id: r.id } } satisfies PublishedEntry], null, 1));
+    });
+  }
   async unpublish(owner: string | undefined, doc: string): Promise<boolean> {
+    // Copies on other servers are taken down there too (with the same token the push used).
+    for (const p of (await this.published()).filter((x) => x.owner === owner && x.doc === doc && x.remote)) {
+      try {
+        const token = await (await this.sourceContext(this.home(owner))).secret(p.remote!.secret, `unpublish ${doc} on ${p.remote!.url}`);
+        await fetch(new URL('/api/data/ops', p.remote!.url), { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', 'x-harness': '1' }, body: JSON.stringify({ op: 'unpublish', doc: p.remote!.id }), signal: AbortSignal.timeout(30_000) });
+      } catch (e) { this.notice(owner, 'warn', `Unpublishing ${doc} on ${p.remote!.url} failed: ${(e as Error).message}`); }
+    }
     await fs.mkdir(this.root, { recursive: true });
     const gone = await withFileLock(this.pubFile(), async () => {
       const all = await this.published();

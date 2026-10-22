@@ -168,6 +168,39 @@ test('published to signed-in accounts: only the accounts it is shared with; RLS 
   } finally { await t.close(); }
 });
 
+test('published to another harness server: rows pushed with its token from the vault, refreshed there after each refresh here, unpublished there with this one', async () => {
+  const local = await setupServer();
+  const remote = await setupServer();
+  try {
+    const files = await tempDir();
+    const csv = path.join(files, 'kpi.csv');
+    await fs.writeFile(csv, 'team,points\nred,3\nblue,4\n');
+    await local.harness.data.grantRoot(local.harness.data.home(undefined), files);
+    assert.equal((await local.call(OPERATOR, 'POST', '/api/vault/entries', { name: 'remote-token', value: OPERATOR, kind: 'token' })).status, 201);
+    const ops = async (o: unknown[]) => { const r = await local.call(OPERATOR, 'POST', '/api/data/ops', { ops: o }); assert.equal(r.status, 200, JSON.stringify(r.body)); return r.body; };
+    const made = await ops([
+      { op: 'add_source', source: { id: 'src-k', name: 'Points', type: 'file', path: csv } },
+      { op: 'define', dataset: { name: 'points', source: 'src-k', steps: [{ op: 'filter', where: 'points > 0' }] } },
+      { op: 'create', doc: { type: 'dashboard', title: 'League' } },
+      { op: 'add_visual', doc: '$new', visual: { id: 'v-total', type: 'card', query: { measures: [{ name: 'Total', expr: 'sum(points.points)' }] } } },
+    ]);
+    const id = made.results.find((x: { op: string }) => x.op === 'create').data.id;
+    const pub = await ops([{ op: 'publish', doc: id, remote: { url: remote.base, secret: 'remote-token' } }]);
+    const { slug, token, url } = pub.results[0].data as { slug: string; token: string; url: string };
+    assert.ok(url.startsWith(`${remote.base}/p/${slug}#t=`));
+    const pv = async () => { const r = await fetch(`${remote.base}/p/${slug}/api/visual`, { method: 'POST', headers: { 'x-harness-share': token, 'content-type': 'application/json' }, body: JSON.stringify({ visual: 'v-total', state: {} }) }); return { status: r.status, body: await r.json() as { rows?: unknown[][] } }; };
+    const first = await pv(); assert.deepEqual(first.body.rows, [[7]], JSON.stringify(first.body));
+    // The other server got rows, not the source: no path, no step SQL of ours.
+    const cat = await remote.call(OPERATOR, 'GET', '/api/data/catalog');
+    assert.ok(!cat.text.includes(csv.replace(/\\/g, '\\\\')) && !cat.text.includes('points > 0'));
+    await fs.writeFile(csv, 'team,points\nred,3\nblue,4\ngreen,5\n');
+    await ops([{ op: 'refresh', doc: id }]);
+    await waitFor(async () => JSON.stringify((await pv()).body.rows) === '[[12]]', 'the remote copy refreshed', 30_000);
+    await ops([{ op: 'unpublish', doc: id }]);
+    assert.equal((await pv()).status, 404, 'unpublished there too');
+  } finally { await local.close(); await remote.close(); }
+});
+
 test('schedules on a fake clock: interval refresh, cron, alerts that fire once and recover, failure recorded and announced', async () => {
   const t = await setupServer();
   try {

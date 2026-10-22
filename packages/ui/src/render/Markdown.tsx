@@ -98,7 +98,7 @@ export function FencedBlock({ lang, source, streaming = false, renderFence, onFi
     default: return <CodeBlock code={source} language={lang} streaming={streaming} />;
   }
   if (!FRAMED.has(kind)) return drawn;
-  return <Widget kind={TITLES[kind] ?? kind} source={source} extension={extensionFor(kind, lang)} onFix={onFix}>{drawn}</Widget>;
+  return <Widget kind={TITLES[kind] ?? kind} source={source} extension={extensionFor(kind, lang)} onFix={onFix} block={streaming ? undefined : { kind, lang }}>{drawn}</Widget>;
 }
 
 const MdBlock = React.memo(function MdBlock({ text, streaming, renderFence, sources, onFix, prefix }: { text: string; streaming: boolean; renderFence?: FenceRenderer; sources?: Source[]; onFix?: MarkdownProps['onFix']; prefix: string }): React.ReactElement {

@@ -190,7 +190,7 @@ function place(page: PageSpec, v: Partial<VisualSpec>): VisualSpec['layout'] {
   const row = page.visuals.filter((x) => x.layout.y + x.layout.h === bottom);
   const lastRowY = row.length ? Math.min(...row.map((x) => x.layout.y)) : bottom;
   const used = page.visuals.filter((x) => x.layout.y === lastRowY).reduce((m, x) => Math.max(m, x.layout.x + x.layout.w), 0);
-  if (row.length && used + ww <= 12 && page.visuals.every((x) => x.layout.y !== lastRowY || x.layout.h === (v.layout?.h ?? h))) return { x: used, y: lastRowY, w: ww, h: v.layout?.h ?? h };
+  if (row.length && used + ww <= 12) return { x: used, y: lastRowY, w: ww, h: v.layout?.h ?? h };
   return { x: 0, y: bottom, w: ww, h: v.layout?.h ?? h };
 }
 function mergePatch<T>(cur: T, patch: Record<string, unknown>, deep: string[] = []): T {
