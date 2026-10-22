@@ -5,7 +5,7 @@
  * Pure, so the tests run it as is.
  */
 
-import type { DiagramEdge, DiagramGroup, DiagramNode, DiagramSpec, Tone } from '@harness/plugin-ui';
+import type { DiagramEdge, DiagramNode, DiagramSpec, Tone } from '@harness/plugin-ui';
 
 export interface ImportScan { root: string; files: Array<{ path: string; lang: string; lines: number; imports: string[] }>; external: Array<[string, number]>; truncated: boolean; ms?: number }
 
@@ -40,23 +40,17 @@ export function codeMapSpec(scan: ImportScan, o: { title?: string; maxNodes?: nu
     s.biggest.push({ path: f.path, lines: f.lines });
     stats.set(k, s);
   }
-  // Groups: the top-level folders that hold several boxes (when the map goes deeper than one level).
-  const top = (k: string) => (k === ROOT ? '' : k.split('/')[0]!);
-  const perTop = new Map<string, number>();
-  if (depth > 1) for (const k of stats.keys()) if (k.includes('/')) perTop.set(top(k), (perTop.get(top(k)) ?? 0) + 1);
-  const groups: DiagramGroup[] = [...perTop.entries()].filter(([, n]) => n >= 2).sort((a, b) => a[0].localeCompare(b[0])).map(([t], i) => {
-    const files = [...stats.entries()].filter(([k]) => top(k) === t).reduce((s, [, v]) => s + v.files, 0);
-    return { id: `dir:${t}`, kind: 'boundary', label: t, subtitle: `${files} files`, tone: TONES[i % TONES.length]! };
-  });
-  const grouped = new Set(groups.map((g) => g.id.slice(4)));
+  // A flat map (nested boxes with hundreds of crossing imports read worse): each folder tinted by its
+  // top-level folder, named by the rest of its path, with the top folder as its caption.
+  const tops = [...new Set([...stats.keys()].map((k) => (k === ROOT ? '' : k.split('/')[0]!)))].sort();
+  const toneOf = (k: string) => TONES[tops.indexOf(k === ROOT ? '' : k.split('/')[0]!) % TONES.length]!;
   const nodes: DiagramNode[] = [...stats.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([k, s]) => {
     const parts = k.split('/');
-    const inGroup = parts.length > 1 && grouped.has(parts[0]!);
     const lang = [...s.langs.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
     return {
-      id: k, kind: 'folder', title: k === ROOT ? '(root)' : inGroup ? parts.slice(1).join('/') : k,
+      id: k, kind: 'folder', title: k === ROOT ? '(root)' : parts.length > 1 ? parts.slice(1).join('/') : k,
+      ...(parts.length > 1 ? { caption: `${parts[0]}/` } : {}), tone: toneOf(k),
       tech: `${s.files} file${s.files === 1 ? '' : 's'} · ${fmtLines(s.lines)} lines${lang ? ` · ${lang}` : ''}`, files: s.files,
-      ...(inGroup ? { group: `dir:${parts[0]}` } : {}),
       // Its biggest files, to open from the details.
       links: s.biggest.sort((a, b) => b.lines - a.lines || a.path.localeCompare(b.path)).slice(0, 6).map((f) => ({ file: f.path, label: `${f.path.split('/').pop()} (${f.lines} lines)` })),
     };
@@ -79,6 +73,6 @@ export function codeMapSpec(scan: ImportScan, o: { title?: string; maxNodes?: nu
   return {
     version: 1, view: 'code', title: o.title ?? 'Code map',
     description: `${scan.files.length} files in ${nodes.length} folders, ${edges.reduce((s, e) => s + (e.count ?? 1), 0)} imports between folders.${ext ? ` Outside packages: ${ext}.` : ''}${scan.truncated ? ' (Large workspace: only part of it was read.)' : ''}`,
-    nodes, ...(groups.length ? { groups } : {}), ...(edges.length ? { edges } : {}),
+    nodes, ...(edges.length ? { edges } : {}),
   };
 }

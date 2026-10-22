@@ -68,7 +68,7 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
 
 /** The caption a node's card shows ("RELATIONAL DATABASE"). */
 export function captionOf(n: DiagramNode): string {
-  return NODE_CAPTIONS[n.kind] ?? 'Component';
+  return n.caption ?? NODE_CAPTIONS[n.kind] ?? 'Component';
 }
 
 /** Card lines below the title: technology, size, address. */
@@ -504,7 +504,8 @@ export function placeNew(vg: VisibleGraph, pinned: Map<string, { x: number; y: n
       if (!p || !groupChain(n.parent).has(gid)) continue;
       x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x + n.w); y1 = Math.max(y1, p.y + n.h);
     }
-    return Number.isFinite(x0) ? { x: x0 - GROUP_PAD.side, y: y0 - GROUP_PAD.top, w: x1 - x0 + GROUP_PAD.side * 2, h: y1 - y0 + GROUP_PAD.top + GROUP_PAD.bottom } : undefined;
+    const g = vg.groups.find((x) => x.id === gid);
+    return Number.isFinite(x0) ? { x: x0 - GROUP_PAD.side, y: y0 - GROUP_PAD.top, w: Math.max(x1 - x0 + GROUP_PAD.side * 2, g ? groupMinWidth(g) : 0), h: y1 - y0 + GROUP_PAD.top + GROUP_PAD.bottom } : undefined;
   };
   const horizontal = vg.dir === 'right' || vg.dir === 'left';
   const sign = vg.dir === 'left' || vg.dir === 'up' ? -1 : 1;
@@ -535,7 +536,8 @@ export function placeNew(vg: VisibleGraph, pinned: Map<string, { x: number; y: n
     const blockers: Rect[] = [];
     for (const n of vg.nodes) { const p = pos.get(n.id); if (p && n.id !== id) blockers.push({ x: p.x, y: p.y, w: n.w, h: n.h }); }
     const foreign = vg.groups.filter((g) => !mine.has(g.id)).map((g) => groupBox(g.id)).filter((b): b is Rect => !!b);
-    const free = (x: number, y: number) => { const r = { x, y, w: me.w, h: me.h }; return !blockers.some((b) => overlaps(r, b, 22)) && !foreign.some((b) => overlaps(r, b, 10)); };
+    // Its own groups grow around it (their padding and header), so it keeps that much away from the others.
+    const free = (x: number, y: number) => { const r = { x, y, w: me.w, h: me.h }; return !blockers.some((b) => overlaps(r, b, 22)) && !foreign.some((b) => overlaps(r, b, me.parent ? GROUP_PAD.top + 8 : 12)); };
     let best: [number, number] = target;
     search: for (let ring = 0; ring <= 80; ring++) {
       const step = 24;

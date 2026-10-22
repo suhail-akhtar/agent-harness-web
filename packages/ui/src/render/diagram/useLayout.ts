@@ -30,14 +30,14 @@ export function useDiagramLayout(spec: DiagramSpec | undefined, o: { collapsed?:
     if (!spec || !server) return null;
     return layoutDiagramSync(spec, { collapsed: o.collapsed });
   }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
-  const [state, setState] = useState<UseLayout>(() => ({ scene: (spec && cache.get(key)) ?? sync, busy: !!spec && !cache.has(key) && !sync }));
+  const [state, setState] = useState<UseLayout & { key: string }>(() => ({ key, scene: (spec && cache.get(key)) ?? sync, busy: !!spec && !cache.has(key) && !sync }));
   const live = useRef(0);
   useEffect(() => {
     if (!spec || server) return;
     const hit = cache.get(key);
-    if (hit) { setState({ scene: hit, busy: false }); if (!o.fresh) rememberLayout(o.stableKey, hit); return; }
+    if (hit) { setState({ key, scene: hit, busy: false }); if (!o.fresh) rememberLayout(o.stableKey, hit); return; }
     const mine = ++live.current;
-    setState((s) => ({ ...s, busy: true }));
+    setState((s) => ({ ...s, key, busy: true }));
     const before = o.stableKey ? inflight.get(o.stableKey) : undefined;
     const run = (before ?? Promise.resolve()).catch(() => {}).then(() => {
       const again = cache.get(key);
@@ -49,8 +49,10 @@ export function useDiagramLayout(spec: DiagramSpec | undefined, o: { collapsed?:
     run.then((scene) => {
       remember(cache, key, scene, 40);
       rememberLayout(o.stableKey, scene);
-      if (mine === live.current) setState({ scene, busy: false });
-    }, (e: unknown) => { if (mine === live.current) setState((s) => ({ ...s, busy: false, error: e instanceof Error ? e.message : String(e) })); });
+      if (mine === live.current) setState({ key, scene, busy: false });
+    }, (e: unknown) => { if (mine === live.current) setState((s) => ({ ...s, key, busy: false, error: e instanceof Error ? e.message : String(e) })); });
   }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
-  return server ? { scene: sync, busy: false } : state;
+  if (server) return { scene: sync, busy: false };
+  // Until the layout for these inputs is in, the one before stays on screen, marked busy.
+  return { scene: state.scene, busy: state.busy || state.key !== key, ...(state.error ? { error: state.error } : {}) };
 }

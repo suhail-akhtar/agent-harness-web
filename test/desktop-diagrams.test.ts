@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  DIAGRAM_LIMITS, PLAYBACK_START, describeDiff, diffDiagrams, flowFrame, neighbourhood, playback, resolveFlow, stringifyDiagram, subDiagram, summarizeDiagram, summaryLine, unconnected, validateDiagram, withPositions,
+  DIAGRAM_LIMITS, PLAYBACK_START, describeDiff, diffDiagrams, flowFrame, impliedEdges, neighbourhood, neighbourhoodDiagram, playback, resolveFlow, stringifyDiagram, subDiagram, summarizeDiagram, summaryLine, unconnected, validateDiagram, withPositions,
   type DiagramSpec,
 } from '../packages/plugin-ui/src/diagram.ts';
 import { codeMapSpec, folderDepth, type ImportScan } from '../apps/desktop/renderer/src/builtins/diagrams/codemap.ts';
@@ -274,6 +274,13 @@ test('neighbourhood: a node and N hops, as its own smaller diagram (groups aroun
   assert.deepEqual(sub.groups!.map((g) => g.id).sort(), ['app', 'data', 'host']);
   assert.deepEqual(sub.edges!.map((e) => e.id), ['e3', 'e5']);
   assert.equal(sub.flows!.length, 0, 'the login flow leaves the neighbourhood');
+  // As the canvas shows it: only ring-to-ring edges (a hub reads as a fan).
+  assert.deepEqual(neighbourhoodDiagram(s, 'db', 2).edges!.map((e) => e.id).sort(), ['e2', 'e3', 'e4', 'e5', 'e6', 'e7']);
+  const code = spec(DIAGRAMS.code);
+  const fan = neighbourhoodDiagram(code, 'src/core', 1);
+  assert.equal(fan.nodes.length, 6);
+  assert.ok(fan.edges!.every((e) => e.from === 'src/core' || e.to === 'src/core'), 'one hop: only the edges of the node itself');
+  assert.equal(subDiagram(code, neighbourhood(code, 'src/core', 1)).edges!.length > fan.edges!.length, true);
 });
 
 test('code map: files aggregate into folders deep enough to read, edges count imports, top folders group them', () => {
@@ -296,15 +303,24 @@ test('code map: files aggregate into folders deep enough to read, edges count im
   assert.equal(edge('src/tools', 'src/util'), 1);
   assert.equal(edge('_root', 'pkg'), 1);
   assert.equal(edge('src/core', 'src/core'), undefined, 'imports inside a folder are not edges');
-  assert.deepEqual(s.groups!.map((g) => g.id), ['dir:src']);
-  assert.equal(s.nodes.find((n) => n.id === 'src/core')!.group, 'dir:src');
-  assert.equal(s.nodes.find((n) => n.id === 'src/core')!.title, 'core');
+  assert.equal(s.groups, undefined, 'a flat map, tinted by top folder');
+  const core = s.nodes.find((n) => n.id === 'src/core')!;
+  assert.deepEqual([core.title, core.caption, core.tone], ['core', 'src/', s.nodes.find((n) => n.id === 'src/tools')!.tone]);
+  assert.notEqual(core.tone, s.nodes.find((n) => n.id === 'scripts')!.tone);
   assert.match(s.nodes.find((n) => n.id === 'src/core')!.tech!, /^2 files · 200 lines · ts$/);
   assert.deepEqual(s.nodes.find((n) => n.id === 'src/core')!.links!.map((l) => l.file), ['src/core/session.ts', 'src/core/types.ts']);
   assert.deepEqual(unconnected(s), ['scripts']);
   assert.match(s.description!, /Outside packages: react \(3\)/);
   // A tighter budget aggregates higher up.
   assert.deepEqual(codeMapSpec(scan, { maxNodes: 5 }).nodes.map((n) => n.id).sort(), ['_root', 'packages', 'pkg', 'scripts', 'src']);
+});
+
+test('implied edges: a link a longer chain already makes is left out of an overview; cycles keep theirs', () => {
+  const s = spec({ view: 'code', nodes: ['a', 'b', 'c', 'd', 'x', 'y'].map((id) => ({ id, title: id })), edges: [
+    { id: 'ab', from: 'a', to: 'b' }, { id: 'bc', from: 'b', to: 'c' }, { id: 'ac', from: 'a', to: 'c' }, { id: 'ad', from: 'a', to: 'd' },
+    { id: 'xy', from: 'x', to: 'y' }, { id: 'yx', from: 'y', to: 'x' },
+  ] });
+  assert.deepEqual([...impliedEdges(s)], ['ac']);
 });
 
 test('the ask box message names the artifact and how to change it', () => {

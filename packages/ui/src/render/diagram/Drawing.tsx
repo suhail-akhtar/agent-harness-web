@@ -32,6 +32,7 @@ const GROUP_CAPTION: Record<GroupKind, string> = { host: 'Host', network: 'Netwo
 /** The colour of a node's icon: its kind's, or (code view) its group's. */
 export function toneOf(n: SceneNode, groupTone: (id: string) => Tone | undefined, view: DiagramView): string {
   if (n.collapsed) return TONE_HEX[n.collapsed.tone ?? GROUP_TONE[n.collapsed.kind]];
+  if (n.node?.tone) return TONE_HEX[n.node.tone];
   const k = n.node?.kind ?? 'custom';
   if ((view === 'code' || k === 'folder' || k === 'file') && n.parent) { const t = groupTone(n.parent); if (t) return TONE_HEX[t]; }
   return TONE_HEX[KIND_TONE[k] ?? 'indigo'];

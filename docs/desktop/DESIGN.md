@@ -371,6 +371,12 @@ only when it draws one (no cost to sessions that never do).
   in place, the changed nodes marked `changed`.
 - **Layout:** automatic (ELK layered with orthogonal routing, in a worker; AICO's layered layout as the
   fallback), stable between edits so a small change does not move everything.
+- **Built:** the spec in `packages/plugin-ui/src/diagram.ts`, the renderer in
+  `packages/ui/src/render/diagram/`, the plugin in `apps/desktop/renderer/src/builtins/diagrams/`, the
+  `diagram` artifact kind (validated on save), `PUT /api/sessions/:id/artifacts/:aid` (a person's
+  version, with `baseVersion`), `GET /api/sessions/:id/files/imports` (the code map) and the
+  `diagrams` skill (`src/skills/client/`). A code map's overview leaves out implied and single
+  imports (a toggle shows them); Neighbourhood keeps only ring-to-ring edges, so a hub reads as a fan.
 
 ## 17. Server implementation notes (sections 11 to 13: where they differ from the above)
 

@@ -104,6 +104,10 @@ export interface DiagramNode {
   links?: DiagramLink[];
   findings?: DiagramFinding[];
   tags?: string[];
+  /** The small-caps line above the title, when the kind's own does not fit ("SRC/" for a folder). */
+  caption?: string;
+  /** The icon's colour, when the kind's does not say enough (a code map tints by top folder). */
+  tone?: Tone;
   /** Code view: counts shown on the card. */
   files?: number;
   /** Set by the renderer (the version diff), or by a model to point at what it changed. */
@@ -334,6 +338,8 @@ export function validateDiagram(raw: unknown): DiagramResult {
       }
       if (findings.length) node.findings = findings;
     }
+    const caption = text(n.caption, 40); if (caption) node.caption = caption;
+    if (TONES.includes(norm(n.tone) as Tone)) node.tone = norm(n.tone) as Tone;
     if (Array.isArray(n.tags)) { const tags = n.tags.map((t) => text(t, 40)).filter((t): t is string => !!t).slice(0, DIAGRAM_LIMITS.tags); if (tags.length) node.tags = tags; }
     if (typeof n.files === 'number' && Number.isFinite(n.files) && n.files >= 0) node.files = Math.round(n.files);
     if (n.changed === true) node.changed = true;
@@ -477,7 +483,7 @@ export interface DiagramDiff {
   marked: string[];
 }
 
-const nodeKey = (n: DiagramNode) => JSON.stringify([n.kind, n.title, n.tech ?? '', n.description ?? '', n.status ?? '', !!n.integrated, n.group ?? '', n.size ?? '', n.address ?? '', n.fields ?? [], n.links ?? [], n.findings ?? [], n.tags ?? [], n.files ?? null]);
+const nodeKey = (n: DiagramNode) => JSON.stringify([n.kind, n.title, n.tech ?? '', n.description ?? '', n.status ?? '', !!n.integrated, n.group ?? '', n.size ?? '', n.address ?? '', n.fields ?? [], n.links ?? [], n.findings ?? [], n.tags ?? [], n.files ?? null, n.caption ?? '']);
 const edgeKey = (e: DiagramEdge) => `${e.from}\u0000${e.to}\u0000${e.label ?? ''}\u0000${e.async ? 1 : 0}\u0000${e.cardinality ?? ''}`;
 
 /** What changed between two versions of a diagram (layout aside). */
@@ -620,6 +626,36 @@ export function neighbourhood(spec: DiagramSpec, center: string, hops = 1): Set<
   return seen;
 }
 
+/** Hops from a node (either direction), up to `hops`. */
+export function hopDistances(spec: DiagramSpec, center: string, hops = 1): Map<string, number> {
+  const adj = new Map<string, string[]>();
+  for (const e of spec.edges ?? []) {
+    (adj.get(e.from) ?? adj.set(e.from, []).get(e.from)!).push(e.to);
+    (adj.get(e.to) ?? adj.set(e.to, []).get(e.to)!).push(e.from);
+  }
+  const dist = new Map([[center, 0]]);
+  let frontier = [center];
+  for (let h = 1; h <= Math.max(0, Math.min(6, hops)) && frontier.length; h++) {
+    const next: string[] = [];
+    for (const f of frontier) for (const t of adj.get(f) ?? []) if (!dist.has(t)) { dist.set(t, h); next.push(t); }
+    frontier = next;
+  }
+  return dist;
+}
+
+/**
+ * A node's neighbourhood as its own diagram: the node and N hops, and only the edges from one ring
+ * to the next (with one hop: the node's own edges), so a hub's neighbourhood reads as a fan, not
+ * as every link among its neighbours.
+ */
+export function neighbourhoodDiagram(spec: DiagramSpec, center: string, hops = 1): DiagramSpec {
+  const dist = hopDistances(spec, center, hops);
+  const sub = subDiagram(spec, new Set(dist.keys()));
+  const edges = (sub.edges ?? []).filter((e) => Math.abs(dist.get(e.from)! - dist.get(e.to)!) === 1);
+  const ids = new Set(edges.map((e) => e.id));
+  return { ...sub, edges, flows: (sub.flows ?? []).filter((f) => f.steps.every((st) => (st.edge ? ids.has(st.edge) : true))) };
+}
+
 /** The part of a diagram a set of nodes makes: those nodes, the groups around them, the edges among them. */
 export function subDiagram(spec: DiagramSpec, keep: Set<string>): DiagramSpec {
   const nodes = spec.nodes.filter((n) => keep.has(n.id));
@@ -630,6 +666,37 @@ export function subDiagram(spec: DiagramSpec, keep: Set<string>): DiagramSpec {
   const edgeIds = new Set(edges.map((e) => e.id));
   const flows = (spec.flows ?? []).filter((f) => f.steps.every((s) => (s.edge ? edgeIds.has(s.edge) : keep.has(s.from!) && keep.has(s.to!))));
   return { ...spec, nodes, groups: (spec.groups ?? []).filter((g) => groupIds.has(g.id)), edges, flows, layout: spec.layout ? { ...spec.layout, positions: undefined } : undefined };
+}
+
+/**
+ * Edges a longer path already implies (a->c beside a->b->c): on a dependency map they are most of
+ * the lines and say nothing the layers do not. Edges inside a cycle are kept. (AICO's "key links".)
+ */
+export function impliedEdges(spec: DiagramSpec): Set<string> {
+  const edges = spec.edges ?? [];
+  const out = new Map<string, Array<{ to: string; id: string }>>();
+  for (const e of edges) if (e.from !== e.to) (out.get(e.from) ?? out.set(e.from, []).get(e.from)!).push({ to: e.to, id: e.id });
+  const reaches = (from: string, to: string, skip: string): boolean => {
+    const seen = new Set([from]);
+    const stack = [from];
+    while (stack.length) {
+      const v = stack.pop()!;
+      for (const x of out.get(v) ?? []) {
+        if (x.id === skip || seen.has(x.to)) continue;
+        if (x.to === to) return true;
+        seen.add(x.to); stack.push(x.to);
+      }
+    }
+    return false;
+  };
+  const implied = new Set<string>();
+  for (const e of edges) {
+    if (e.from === e.to) continue;
+    // In a cycle (to reaches from): the edge is part of the loop, kept.
+    if (reaches(e.to, e.from, '')) continue;
+    if (reaches(e.from, e.to, e.id)) implied.add(e.id);
+  }
+  return implied;
 }
 
 /** Nodes with no edge at all. */

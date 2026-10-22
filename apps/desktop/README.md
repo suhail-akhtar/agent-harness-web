@@ -62,9 +62,25 @@ stats, pivot, CSV export), diffs (unified and split), citations, "Thought for", 
 "Worked for", file cards, workflows. Science and BI blocks load on first use: `smiles` (2D
 structures), `pdb`/`sdf`/`mol`/`xyz` (3D, 3Dmol.js in a sandboxed frame), `plot` (function plots,
 zoom and pan), `dot` (Graphviz, wasm), `dashboard` (KPIs and panels, the spec in
-`@harness/plugin-ui`), `ipynb` (notebooks), `geojson` (maps without tiles). `diagram` is reserved
-for the interactive diagrams of a later `core.diagrams` plugin; until then it reads as JSON.
+`@harness/plugin-ui`), `ipynb` (notebooks), `geojson` (maps without tiles), `diagram` (below).
 A plugin renderer for a fence language or an artifact kind replaces the default.
+
+## Diagrams (`core.diagrams`)
+
+Architecture, deployment, data (ER), code and flow diagrams from one JSON spec
+(`packages/plugin-ui/src/diagram.ts`: `validateDiagram`, the version diff, flows), drawn by
+`packages/ui/src/render/diagram/`: cards with an icon per kind, status badges, dashed integrated
+systems, nested zones, ER tables with key marks, orthogonal edges laid out by ELK (elkjs, in a
+worker; AICO's layered layout as the fallback). A ```diagram block or an artifact of kind `diagram`
+shows a static picture in the transcript; "Open interactive" opens the canvas: pan, zoom, fit,
+minimap, Overview and Neighbourhood, search, collapsible groups, details in the side panel, flows
+played step by step, export to SVG and PNG, arrow keys and Enter. Dragging a box saves the positions
+as a new artifact version (`PUT /api/sessions/:id/artifacts/:aid`, refused when stale); the ask box
+sends a request to the conversation and the new version arrives in place with its changes marked.
+Layouts stay put between versions: boxes keep their places, new ones go next to their neighbours.
+"Show code map" (`/codemap`) draws the session's workspace by folder from
+`GET /api/sessions/:id/files/imports` (TS/JS/Python imports, read-only). Models learn the spec from
+the `diagrams` skill, listed only for an app that declares the `diagram` renderer.
 
 ## Environment
 
@@ -85,6 +101,9 @@ A plugin renderer for a fence language or an artifact kind replaces the default.
   `desktop-render` and `desktop-science` (every renderer, hostile input included).
 - End to end: `test/desktop-e2e.test.ts` drives the app with playwright-core against a scripted
   engine (no paid calls); it skips itself when Electron cannot start.
+- Diagrams: `test/desktop-diagrams.test.ts` (spec, layouts, flows, diff, drawing, code map, speed),
+  `desktop-diagrams-server.test.ts` (artifact kind, PUT, import scan, skill), and the Electron run
+  `desktop-diagrams-e2e.test.ts`.
 - Live smoke (costs money, not in `npm test`):
   `node --env-file=<path to .env> apps/desktop/scripts/live-smoke.mjs` runs deepseek-flash and
   claude-sonnet-5-5 at effort medium under a $0.50 cap; it never prints key values.

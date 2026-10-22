@@ -127,6 +127,8 @@ test('diagrams end to end', { timeout: 15 * 60_000 }, async (t) => {
       await page.click('[data-work-in]');
       await page.locator('[role="menuitemcheckbox"]', { hasText: path.basename(work) }).click();
       await page.keyboard.press('Escape');
+      // Screenshots: the sidebar folded to the rail, for a wider canvas.
+      if (SHOTS) await invoke('prefs:set', { sidebar: { ...((await invoke('prefs:get')) as { sidebar: object }).sidebar, collapsed: true } });
     });
 
     await step('every view: an artifact drawn in the transcript, and on its page every node and edge (ELK in the worker)', async () => {

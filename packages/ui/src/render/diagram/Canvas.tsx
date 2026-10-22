@@ -12,7 +12,7 @@
 
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react';
 import {
-  flowFrame, neighbourhood, PLAYBACK_SPEEDS, PLAYBACK_START, playback, resolveFlow, STEP_MS, subDiagram, summarizeDiagram, summaryLine, unconnected,
+  flowFrame, impliedEdges, neighbourhoodDiagram, PLAYBACK_SPEEDS, PLAYBACK_START, playback, resolveFlow, STEP_MS, summarizeDiagram, summaryLine, unconnected,
   type DiagramLink, type DiagramSpec,
 } from '@harness/plugin-ui';
 import { Icon } from '../../icons.tsx';
@@ -64,7 +64,7 @@ function cameraStore() {
   return { get: () => cam, set(c: Camera) { cam = c; for (const f of subs) f(); }, subscribe(f: () => void) { subs.add(f); return () => { subs.delete(f); }; } };
 }
 
-const MIN_K = 0.08; const MAX_K = 2.5; const LOW_LOD = 0.42;
+const MIN_K = 0.08; const MAX_K = 2.5; const LOW_LOD = 0.3;
 
 export function DiagramCanvas(props: DiagramCanvasProps): React.ReactElement {
   const { spec, title, onPositions, onAsk, askState, changed, onClearChanged, details = 'internal', onDetails, onOpenLink, stableKey, extra, className } = props;
@@ -92,7 +92,20 @@ export function DiagramCanvas(props: DiagramCanvasProps): React.ReactElement {
   }, [spec]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- what is shown: the whole diagram, or a neighbourhood of it
-  const shown = useMemo(() => (mode === 'neighbourhood' && center ? subDiagram(spec, neighbourhood(spec, center, hops)) : spec), [spec, mode, center, hops]);
+  const [allLinks, setAllLinks] = useState(false);
+  // A code map's overview leaves out the imports a longer chain implies (the Neighbourhood shows them all).
+  // With many left, single imports go too: the overview shows the main lines.
+  const implied = useMemo(() => {
+    if (spec.view !== 'code' || (spec.edges?.length ?? 0) <= 24) return new Set<string>();
+    const out = impliedEdges(spec);
+    const left = (spec.edges ?? []).filter((e) => !out.has(e.id));
+    if (left.length > 40) for (const e of left) if ((e.count ?? 1) <= 1) out.add(e.id);
+    return out;
+  }, [spec]);
+  const shown = useMemo(() => {
+    if (mode === 'neighbourhood' && center) return neighbourhoodDiagram(spec, center, hops);
+    return implied.size && !allLinks ? { ...spec, edges: (spec.edges ?? []).filter((e) => !implied.has(e.id)) } : spec;
+  }, [spec, mode, center, hops, implied, allLinks]);
   const overview = mode === 'overview';
   const { scene: base, busy } = useDiagramLayout(shown, { collapsed, stableKey: overview ? stableKey : undefined, fresh });
   const vg = useMemo(() => visibleGraph(shown, collapsed), [shown, collapsed]);
@@ -277,7 +290,8 @@ export function DiagramCanvas(props: DiagramCanvasProps): React.ReactElement {
     changed: changedSet, changedEdges, matches: matches ?? undefined, flow: flowDraw,
   }), [selection, frameNow, play.step, matches, changedSet, changedEdges, flowDraw, scene]);
 
-  const lonely = useMemo(() => unconnected(shown), [shown]);
+  // Counted on the diagram itself (a code map's hidden minor links still connect).
+  const lonely = useMemo(() => unconnected(overview ? spec : shown), [overview, spec, shown]);
   const summary = useMemo(() => summaryLine(summarizeDiagram(shown), shown.view), [shown]);
   const select = useCallback((s: DiagramSelection | null) => {
     setSelection(s);
@@ -382,6 +396,11 @@ export function DiagramCanvas(props: DiagramCanvasProps): React.ReactElement {
                 {changed.note ?? `${changed.nodes.length} changed`}
                 {onClearChanged && <button type="button" aria-label="Clear the changed marks" className="rounded p-0.5 hover:bg-hx-hover" onClick={onClearChanged}><Icon name="x" size={12} /></button>}
               </span>
+            )}
+            {overview && implied.size > 0 && (
+              <button type="button" data-diagram-implied={implied.size} onClick={() => setAllLinks((v) => !v)} className="flex h-8 items-center gap-1.5 rounded-lg border border-hx-border-subtle bg-hx-elevated/95 px-2.5 text-[12px] text-hx-secondary shadow-sm hover:text-hx-primary" title="Links a longer chain already implies, and single imports">
+                {allLinks ? `Hide ${implied.size} minor links` : `${implied.size} minor links hidden`}
+              </button>
             )}
             {flows.length > 0 && (
               <button type="button" data-diagram-flows-toggle onClick={() => setFlowsOpen((v) => !v)} className={cx('flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[12px] shadow-sm', flowsOpen ? 'border-hx-accent/50 bg-hx-accent-soft text-hx-accent-text' : 'border-hx-border-subtle bg-hx-elevated/95 text-hx-secondary hover:text-hx-primary')}>
@@ -523,7 +542,7 @@ function Minimap({ scene, store, viewport, onJump }: { scene: Scene; store: Retu
       <svg width={W} height={H} onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); jump(e); }} onPointerMove={(e) => { if (e.buttons & 1) jump(e); }} className="block cursor-pointer">
         {scene.groups.map((g) => <rect key={g.id} x={g.x * s + ox} y={g.y * s + oy} width={g.w * s} height={g.h * s} rx={2} fill="none" stroke="var(--hx-border)" />)}
         {scene.nodes.map((n) => <rect key={n.id} x={n.x * s + ox} y={n.y * s + oy} width={Math.max(1.5, n.w * s)} height={Math.max(1.5, n.h * s)} rx={1} fill="var(--hx-text-muted)" fillOpacity={0.55} />)}
-        {(() => { const x0 = Math.max(1, view.x); const y0 = Math.max(1, view.y); const x1 = Math.min(W - 1, view.x + view.w); const y1 = Math.min(H - 1, view.y + view.h); return x1 > x0 && y1 > y0 && (x1 - x0) * (y1 - y0) < W * H * 0.92 ? <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} fill="var(--hx-accent)" fillOpacity={0.06} stroke="var(--hx-accent)" strokeWidth={1.3} rx={2} data-minimap-view="" /> : null; })()}
+        {(() => { const x0 = Math.max(1, view.x); const y0 = Math.max(1, view.y); const x1 = Math.min(W - 1, view.x + view.w); const y1 = Math.min(H - 1, view.y + view.h); return x1 > x0 && y1 > y0 && (x1 - x0) * (y1 - y0) < W * H * 0.92 ? <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} fill="none" stroke="var(--hx-accent)" strokeWidth={1.3} rx={2} data-minimap-view="" /> : null; })()}
       </svg>
     </div>
   );
