@@ -143,3 +143,14 @@ test('a provider that compacts itself: the loop backs it up later instead of com
   assert.equal(h.agent.lastPromptTokens, 900);
   assert.ok(h.events.some((e) => e.kind === 'compaction' && e.before === 120_000 && e.after === 900));
 });
+
+test('anthropic: a turn is replayed verbatim (thinking and all) only to the model that wrote it; after a switch it is rebuilt without thinking', () => {
+  const payload = [{ type: 'thinking', thinking: 'plan', signature: 'sig-haiku' }, { type: 'text', text: 'Reading the file.' }, { type: 'tool_use', id: 't1', name: 'read', input: { path: 'a' } }];
+  const turn = { role: 'assistant' as const, content: [{ type: 'reasoning' as const, text: 'plan' }, { type: 'text' as const, text: 'Reading the file.' }, { type: 'tool_use' as const, id: 't1', name: 'read', input: { path: 'a' } }], raw: { provider: 'anthropic' as const, model: 'claude-haiku-5-5', payload } };
+  const msgs = (model: string) => (anthropicBody({ model: getModel(model), system: 's', tools: [], messages: [{ role: 'user', content: [{ type: 'text', text: 'go' }] }, turn], effort: 'medium' }, true) as { messages: { content: unknown }[] }).messages;
+  assert.deepEqual(msgs('claude-haiku-5-5')[1]!.content, payload);
+  assert.deepEqual(msgs('claude-sonnet-5-5')[1]!.content, [{ type: 'text', text: 'Reading the file.' }, { type: 'tool_use', id: 't1', name: 'read', input: { path: 'a' } }]);
+  const sonnet = getModel('claude-sonnet-5-5');
+  assert.equal(sonnet.effort, 'medium');
+  assert.equal(sonnet.provider, 'anthropic');
+});

@@ -1,8 +1,8 @@
 import type { Usage } from './types.ts';
 import { promptTokens } from './types.ts';
 
-// The catalog is deliberately small: the three models this harness is tuned
-// and tested for. Prices are USD per million tokens, from each provider's
+// The catalog is deliberately small: the models this harness is tuned and
+// tested for. Prices are USD per million tokens, from each provider's
 // published pricing page (checked 2026-10-19); override them with
 // HARNESS_PRICING_JSON if they change.
 
@@ -43,6 +43,19 @@ export function deepseekPeak(at: Date): boolean {
 }
 
 export const BUILTIN_MODELS: ModelSpec[] = [
+  {
+    id: 'claude-sonnet-5-5',
+    label: 'Claude Sonnet 5.5',
+    provider: 'anthropic',
+    vision: true,
+    contextWindow: 1_000_000,
+    maxOutput: 128_000,
+    // At $2 per million input tokens a long prompt is the cost: compact well before the window.
+    compactAt: 160_000,
+    effort: 'medium',
+    efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    rate: () => ({ input: 2.00, cacheRead: 0.20, cacheWrite: 2.50, output: 10.00 }),
+  },
   {
     id: 'claude-haiku-5-5',
     label: 'Claude Haiku 5.5',

@@ -126,7 +126,7 @@ export function anthropicBody(req: Pick<ProviderRequest, 'model' | 'system' | 't
     // it, so it covers both) ...
     system: [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral' } }],
     tools: req.tools.map(toAnthropicTool),
-    messages: req.messages.map(toAnthropicMessage),
+    messages: req.messages.map((m) => toAnthropicMessage(m, req.model.id)),
     // ... plus automatic caching for the growing conversation tail.
     cache_control: { type: 'ephemeral' },
     thinking: { type: 'adaptive', display: 'summarized' },
@@ -158,9 +158,11 @@ function toAnthropicTool(t: ToolSpec) {
   return { name: t.name, description: t.description, input_schema: t.input_schema, eager_input_streaming: true };
 }
 
-function toAnthropicMessage(m: Message) {
-  if (m.role === 'assistant' && m.raw?.provider === 'anthropic') {
-    // Replayed verbatim: thinking signatures, fallback blocks and all.
+function toAnthropicMessage(m: Message, modelId: string) {
+  // Replayed verbatim for the model that wrote it: thinking signatures, fallback blocks and all.
+  // Thinking blocks are tied to their model, so after a switch (Haiku -> Sonnet 5.5) the turn is
+  // rebuilt from its text and tool calls instead.
+  if (m.role === 'assistant' && m.raw?.provider === 'anthropic' && m.raw.model === modelId) {
     return { role: 'assistant', content: m.raw.payload };
   }
   const content: unknown[] = [];

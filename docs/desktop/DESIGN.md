@@ -1,0 +1,261 @@
+# Harness Desktop - design
+
+Status: the contract for the desktop work. Codename "Harness Desktop"; every name, icon and colour a
+person sees comes from a product profile (section 8), so the same core ships under any brand.
+
+## 1. Purpose
+
+One **core desktop shell** on top of the harness, where **everything is a plugin**: the chat, projects,
+settings sections, the inbox and the code view are plugins built on the same API a third party gets. A
+specialised product - an operations console, a coding studio, a security workbench, an enterprise suite
+of all of them - is this core plus a set of plugins plus a product profile. Anyone can build an
+AI-driven or agent-driven application on it without changing the core.
+
+**Scope: the core only.** This repository builds the generic shell and its built-in plugins - nothing
+specific to one domain. Domain products (operations, coding, security, anything) are derived later by
+adding plugins and a product profile, or by forking the core; the core must make that possible without
+changes to it.
+
+Principles:
+
+1. **The shell names no feature.** Sidebar entries, pages, panels, composer chips, slash commands,
+   settings sections, status items, home cards and renderers all come from plugins. Turning a plugin off
+   removes all of its contributions at once.
+2. **The built-ins use the public API.** If a built-in needs something a plugin cannot do, the API is
+   missing a contribution point; we add it rather than special-case the built-in.
+3. **One plugin package, two halves.** The server half (tools, agents, workflows, gates, routes, event
+   handlers - already in the harness) and the UI half (this document) live in one `harness-plugin.json`.
+   A plugin brings its tools *and* the pages that use them.
+4. **Same engine, local or remote.** The desktop is a client of the harness HTTP API. Locally it starts
+   the engine itself; for a team or an enterprise it connects to a server (single sign-on), or to
+   several.
+5. **Safe by construction.** The renderer never holds the engine token; plugin UI code runs isolated and
+   gets only the capabilities its manifest declares and a person (or the operator) granted; every
+   change the agent makes still goes through the harness's permissions and approvals.
+6. **Nothing interrupts work.** Updates wait for idle, notifications only when the window is in the
+   background, approvals queue in one inbox.
+
+## 2. Architecture
+
+```
+ ┌──────────────────────────── Electron app ─────────────────────────────┐
+ │ main process                                                          │
+ │   engine host ── utilityProcess: the harness server (local mode)      │
+ │   harness://app  ── serves the UI, proxies /api/* (adds the token),   │
+ │                     serves plugin UI files under a sandbox CSP        │
+ │   services: windows, tray, notifications, updater, files, terminal,   │
+ │             git, keychain, deep links, plugin trust                   │
+ │   preload ── invoke/on over an allowlist of channel prefixes          │
+ │                                                                       │
+ │ renderer (React)                                                      │
+ │   shell: sidebar, top bar, status bar, command palette, settings      │
+ │          modal, router, toasts, popovers, theme                       │
+ │   registry: every contribution from every enabled plugin              │
+ │   built-in plugins (React, first-party)                               │
+ │   plugin frames (sandboxed iframes, @harness/plugin-ui SDK over       │
+ │                  postMessage, capability-checked by the host)         │
+ └───────────────────────────────────────────────────────────────────────┘
+            │ harness://app/api/*  (local)      or      https://server/api/* (remote)
+            ▼
+     harness server: sessions, agents, workflows, plugins (server halves), vault, ...
+```
+
+Process model and security (taken from AICO, which got this right):
+
+- The engine runs in an Electron `utilityProcess` started with a random token and a loopback port. It is
+  restarted with backoff; its last log lines are kept so the "engine gate" screen shows real errors and
+  a Restart button instead of a spinner.
+- The renderer is served from the privileged scheme `harness://app/`. Requests to
+  `harness://app/api/...` are proxied by main to the engine with the token attached; the renderer never
+  sees the token. For a remote server the same proxy attaches that server's session (from the OS
+  keychain), so renderer code is identical in both modes.
+- `contextIsolation`, `sandbox: true`, no `nodeIntegration`; the preload exposes only `invoke` and `on`
+  over channel prefixes main registered; every IPC handler refuses anything but the top frame of
+  `harness://app`.
+- Plugin UI files are served from `harness://app/plugins/<id>/` with a strict CSP; frames are
+  `sandbox="allow-scripts allow-forms"` without `allow-same-origin`, so they have an opaque origin, no
+  cookies, no access to the shell's DOM and no IPC.
+
+## 3. Repository layout
+
+npm workspaces in this repository:
+
+| Path | What |
+|---|---|
+| `packages/plugin-ui` | The UI contract: manifest types and validation, contribution points, the capability list, the frame RPC protocol, and the SDK plugin frames import (`@harness/plugin-ui/sdk`). No React. |
+| `packages/client` | A typed client of the harness HTTP API and its event streams, shared by the desktop and the browser UI. |
+| `packages/ui` | The design system: tokens, theme builder, components (Button, Popover, Modal, Menu, Tabs, Toast, Tooltip, Field, CodeBlock, Markdown, Diff, EmptyState...), icons by name. |
+| `apps/desktop` | Electron main, preload, renderer shell and the built-in plugins (`apps/desktop/renderer/src/builtins/*`). |
+| `products/*.json` | Product profiles (section 8). |
+
+Stack: Electron 44, React 19, Vite 6, Tailwind 3 with CSS-variable tokens, zustand, esbuild for main and
+preload; later Monaco, xterm with node-pty, electron-builder and electron-updater. The engine stays plain
+TypeScript run by Node; the desktop bundles it.
+
+## 4. The plugin UI contract (`ui` in `harness-plugin.json`)
+
+```jsonc
+{
+  "name": "acme-notes", "version": "0.1.0",
+  // ... the server half as today (main: tools, agents, workflows, routes; permissions) ...
+  "ui": {
+    "apiVersion": 1,
+    "displayName": "Notes", "icon": "book", "category": "Productivity",
+    "trust": "frame",                 // declarative | frame | native (native = signed first-party only)
+    "capabilities": ["sessions.read", "sessions.start", "events.subscribe", "routes.call"],
+    "contributes": {
+      "navItems":   [{ "id": "notes", "title": "Notes", "icon": "book", "view": "notes", "placement": "primary", "order": 30, "badge": "notes.unread" }],
+      "views":      [{ "id": "notes", "title": "Notes", "kind": "frame", "entry": "ui/notes.html" }],
+      "panels":     [{ "id": "outline", "title": "Outline", "kind": "frame", "entry": "ui/outline.html", "where": "session" }],
+      "commands":   [{ "id": "new-note", "title": "New note", "keybinding": "Ctrl+Alt+N", "action": { "type": "open-view", "view": "notes" } }],
+      "slashCommands": [{ "name": "summarise", "description": "Summarise into a note", "action": { "type": "workflow", "workflow": "summarise-to-note" } }],
+      "composerChips": [{ "id": "notebook", "title": "Notebook", "kind": "select", "setting": "notes.notebook", "options": ["work", "personal"] }],
+      "settings":   [{ "id": "notes", "title": "Notes", "group": "plugins", "schema": { /* JSON Schema */ }, "scope": "account" }],
+      "renderers":  [{ "id": "note-card", "for": { "tool": "note_save" }, "kind": "frame", "entry": "ui/note-card.html" }],
+      "homeCards":  [{ "id": "today", "title": "Today's notes", "kind": "frame", "entry": "ui/today.html", "order": 10 }],
+      "statusItems":[{ "id": "unread", "text": "{notes.unread} unread", "command": "new-note" }],
+      "themes":     [{ "id": "paper", "label": "Paper", "mode": "light", "background": "#fbf8f1", "foreground": "#2b2722", "accent": "#b4532a" }],
+      "prompts":    [{ "id": "daily", "title": "Write today's summary", "prompt": "...", "home": true }],
+      "onboarding": [{ "id": "first-notebook", "title": "Create a notebook", "view": "notes" }]
+    }
+  }
+}
+```
+
+Contribution points (each has an `id` unique in the plugin, referenced from elsewhere as `<plugin>:<id>`):
+
+| Point | What it adds | Kinds |
+|---|---|---|
+| `navItems` | A sidebar destination (primary or under More), optional live badge | - |
+| `views` | A page | `markdown`, `links`, `prompt-board`, `form` (JSON Schema), `frame`, `native` |
+| `panels` | A side panel next to a session or a page | `frame`, `native` |
+| `commands` | Command palette entries with optional keybinding | actions below |
+| `slashCommands` | `/name` in the composer | actions below |
+| `composerChips` | A chip under the composer (toggle, select, picker) bound to a setting or a session option | - |
+| `settings` | A settings section; JSON Schema rendered natively (no code), scope `app` (this machine), `account` (server, per person) or `operator` (read-only unless admin) | `schema`, `native` |
+| `renderers` | Custom rendering of a tool result, an event kind, or a Markdown code-fence language | `frame`, `native` |
+| `homeCards` | A card on the home screen (like the morning brief) | `frame`, `native`, `markdown` |
+| `statusItems` | Status bar text with live values and a command | - |
+| `themes` | A theme from three colours (the theme builder derives the rest) | - |
+| `prompts` | Quick prompts, optionally on the home screen | - |
+| `onboarding` | Steps in the first-run wizard | - |
+
+Actions: `prompt` (prefill, never send without the person), `open-view`, `open-panel`, `open-url`,
+`browse`, `terminal` (always shown before it runs), `workflow` (opens the start dialog with inputs),
+`command`, `theme`, `route` (calls the plugin's own server route and shows the result).
+
+Trust levels:
+
+- **declarative** - JSON only (markdown, links, prompt boards, forms, settings schemas, commands, themes).
+  No code runs; no trust prompt.
+- **frame** - the plugin's HTML/JS in a sandboxed frame. The SDK calls the host over `postMessage`; the
+  host checks each call against the manifest's `capabilities` *and* the grant. A person grants a frame
+  plugin once; the grant is tied to a hash of the plugin's files, so any change asks again. The operator
+  can pre-grant or forbid by policy.
+- **native** - React modules loaded into the renderer. Only for plugins signed by a key the product
+  profile trusts (the built-ins, and an enterprise's own). Unsigned native plugins are refused.
+
+Capabilities a frame can declare (each a set of SDK calls):
+
+| Capability | SDK calls |
+|---|---|
+| (always) | `theme.get`, `theme.onChange`, `view.open`, `notify.toast`, `storage.get/set` (namespaced), `composer.prefill` |
+| `sessions.read` | `sessions.list`, `sessions.get`, `sessions.history` |
+| `sessions.start` | `sessions.start` (shown to the person when not from their click), `sessions.send` |
+| `events.subscribe` | `events.subscribe(filter)` - the global stream, filtered |
+| `approvals.respond` | `approvals.list`, `approvals.respond` (only with a user gesture in the frame) |
+| `routes.call` | `routes.call(path, body)` - this plugin's own server routes only |
+| `files.read` | `files.list/read` within the session's or project's workspace |
+| `workflows.start` | `workflows.list`, `workflows.start` (opens the dialog; the person confirms) |
+| `settings.read` / `settings.write` | this plugin's own settings |
+| `clipboard.write`, `browser.open`, `external.open` | as named |
+
+## 5. Built-in plugins
+
+All first-party, `native`, signed, on the same registry: `core.chat` (home, composer, transcript, attention
+bar, approvals), `core.projects`, `core.library` (artifacts), `core.scheduled`, `core.inbox` ("Waiting for
+you"), `core.activity` (background tasks and runs), `core.workflows`, `core.plugins` (manage, install,
+trust, catalogue), `core.settings` (the sections below), `core.code` (file tree, editor, diffs),
+`core.terminal`, `core.git`, `core.browser`, `core.memory`, `core.vault`, `core.usage`, `core.admin`
+(accounts, policy - for administrators).
+
+## 6. Settings
+
+A modal with search and sections from plugins, grouped App / Agent / Integrations / Plugins / Admin:
+Appearance (theme, contrast, density, fonts, transcript width, motion), General (send key, steps, notifications),
+Application (start at login, tray, prevent sleep, updates, data folder, backup), Models & providers (keys
+in the OS keychain or the vault, base URLs, test button, defaults per task), Permissions & modes, Limits &
+spend, Memory & instructions, Projects & trusted folders, Skills, Agents, Workflows, Hooks, MCP servers,
+Vault, Schedules, Shortcuts (rebindable, conflicts shown), Network & proxy, Servers & accounts (local,
+remote, sign-in), Privacy & data, About. Values live in one of three scopes: this machine (prefs file in
+the app's data folder), the account (the server's per-account settings), the operator (policy: shown
+locked to members).
+
+## 7. Server additions the desktop needs
+
+- `GET /api/events` - one stream for everything the person may see: session list changes, status,
+  pending requests across sessions, schedules firing, plugin events, notices. Replaces polling; drives
+  the tray, badges and the inbox.
+- `GET /api/health`, `GET /api/version`.
+- Providers and models: list, set keys (stored in the vault, never returned), base URLs, test a key, add
+  OpenAI-compatible models; per-account defaults.
+- Plugins: list with UI manifests and grants, enable/disable per account or operator, uninstall, update
+  from the catalogue, serve plugin UI files (`/api/plugins/<name>/ui/<file>`), hot reload.
+- Files: tree (lazy), read, write, create, rename, delete, search (names and content), upload; git status,
+  diff, log for a session's workspace.
+- Sessions: search, archive, fork (from a turn), pagination of history, attachments (images, files) on
+  messages, pin, rename, groups.
+- Settings: read the effective settings with their source tier; write account settings; operator settings
+  for administrators.
+- Native sign-in: OIDC with PKCE through the system browser and a loopback or deep-link redirect,
+  returning a bearer session the desktop keeps in the OS keychain.
+
+## 8. Product profiles (editions)
+
+```jsonc
+// products/harness.json - the core
+{
+  "id": "harness", "name": "Harness", "appId": "dev.harness.desktop",
+  "brand": { "icon": "assets/harness.png", "accent": "#d97757", "wordmark": "Harness" },
+  "plugins": { "bundled": ["core.*"], "enabled": ["core.*"], "required": ["core.chat", "core.settings", "core.plugins"] },
+  "nav": { "order": ["core.chat:new", "core.chat:search", "core.library:library", "core.scheduled:scheduled", "core.inbox:inbox", "core.plugins:plugins", "core.projects:projects"] },
+  "home": { "cards": ["core.inbox:attention", "core.chat:recent"] },
+  "trustedKeys": ["keys/harness.pub"],
+  "policy": { "lock": {}, "defaults": {} },
+  "server": { "mode": "local" }
+}
+```
+
+A derived product lists its plugins, nav order, home cards, theme and locked policy;
+`npm run desktop:build -- --product products/<id>.json` produces its installer with its own app id, name
+and icon, so editions install side by side. An enterprise suite is a profile that bundles several.
+
+## 9. Phases
+
+1. **Foundation.** Workspaces; `packages/plugin-ui`, `packages/client`, `packages/ui`; the server additions
+   that the core needs (events stream, health, providers and models, plugin UI serving and enable/disable,
+   files and git, attachments, session search/archive/fork); `apps/desktop`: engine host, scheme and proxy,
+   preload, window state, single instance, tray, engine gate; renderer shell (sidebar, top bar, status bar,
+   router with history, command palette, toasts, popovers, settings modal, theme builder, keybindings);
+   the registry with all contribution points; `core.chat`, `core.projects`, `core.settings`,
+   `core.plugins`, `core.inbox`. Ends with a Windows installer that starts, runs a session with approvals,
+   and loads a declarative and a frame plugin.
+2. **Built-ins to AICO's level.** Library, Scheduled, Activity, Workflows, Code (Monaco, tree, diffs),
+   Terminal, Git, Browser (lighter than AICO's), Memory, Vault, Usage, onboarding wizard, notifications,
+   updater, backup.
+3. **Platform.** SDK published with examples and templates; signing and the catalogue in the Plugins page;
+   product profiles and per-edition builds; enterprise policy; remote servers and single sign-on; several
+   servers at once.
+
+Tests at every step: unit tests for the contract (manifest validation, capability checks, registry
+resolution, theme builder); server tests for each new route; Playwright driving the Electron app for the
+shell (start, engine gate, a session with an approval, a frame plugin calling allowed and refused SDK
+calls, settings round trip); screenshots in `docs/screenshots/desktop/`.
+
+## 10. From AICO
+
+Taken (adapted to this API): engine host, the scheme and its proxy, preload and IPC frame checks, the
+`register(ctx)` feature pattern, the theme builder, popover/tooltip/modal/toast, icons by name, the plugin
+registry shape, composer behaviour (steer vs queue, chips, `@` and `/` menus, drafts), the attention bar,
+the inbox, the engine gate, update policy, notification rules. Not taken: AICO's coupling to its web
+client's store, its browser's size (ours starts small), unsigned builds.
