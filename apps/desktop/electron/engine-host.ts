@@ -15,6 +15,7 @@ import crypto from 'node:crypto';
 import net from 'node:net';
 import os from 'node:os';
 import { EventEmitter } from 'node:events';
+import { backoffMs } from './policy';
 
 export type EngineState =
   | { status: 'starting'; attempt: number }
@@ -24,7 +25,6 @@ export type EngineState =
 
 export interface EngineEndpoint { origin: string; token: string; remote?: boolean }
 
-const MAX_BACKOFF_MS = 30_000;
 
 export function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -35,8 +35,6 @@ export function freePort(): Promise<number> {
   });
 }
 
-/** Backoff after the n-th consecutive failure (pure, tested). */
-export function backoffMs(attempt: number): number { return Math.min(MAX_BACKOFF_MS, 1000 * 2 ** Math.min(Math.max(0, attempt - 1), 5)); }
 
 export interface EngineOptions {
   entry: string;

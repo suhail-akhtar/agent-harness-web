@@ -132,3 +132,6 @@ export function parseDeepLink(raw: string): { action: string; params: Record<str
   for (const [k, v] of u.searchParams) if (/^[a-zA-Z0-9_-]{1,32}$/.test(k)) params[k] = v.slice(0, 2000);
   return { action, params };
 }
+
+/** How long the engine host waits before restarting after the n-th failure in a row: 1, 2, 4 ... 30 seconds. */
+export function backoffMs(attempt: number): number { return Math.min(30_000, 1000 * 2 ** Math.min(Math.max(0, attempt - 1), 5)); }

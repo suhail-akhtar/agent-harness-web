@@ -11,7 +11,7 @@
 
 import { GlobalEvents, sessionEvents, type Fetch } from './events.ts';
 import {
-  isPending, type Approval, type Attachment, type CatalogueEntry, type Config, type Capabilities, type EffectiveSetting, type Effort, type FileContent, type FileEntry,
+  isPending, PENDING_KINDS, type Approval, type FileTree, type SearchHit, type Attachment, type CatalogueEntry, type Config, type Capabilities, type EffectiveSetting, type Effort, type FileContent, type FileEntry,
   type GitLogEntry, type GitStatus, type Health, type HarnessEvent, type HistoryPage, type McpBundle, type Me, type Mode, type ModelInfo, type PendingRequest, type PluginInfo,
   type ProviderInfo, type ProviderTest, type Schedule, type SessionDetail, type SessionMeta, type SessionsPage, type TaskView, type VaultEntry, type VersionInfo, type WorkflowInfo, type WorkflowRunView,
 } from './types.ts';
@@ -55,12 +55,12 @@ export class HarnessClient {
   /** Does the server have this (new) endpoint? False once it answered 404. */
   has(feature: string): boolean { return !this.missing.has(feature); }
 
-  async request<T>(method: string, path: string, body?: unknown, opts: { signal?: AbortSignal } = {}): Promise<T> {
+  async request<T>(method: string, path: string, body?: unknown, opts: { signal?: AbortSignal; raw?: { body: string | Uint8Array; type: string } } = {}): Promise<T> {
     const headers: Record<string, string> = { ...this.extra() };
-    if (method !== 'GET' && method !== 'HEAD') { headers['content-type'] = 'application/json'; headers['x-harness'] = '1'; }
+    if (method !== 'GET' && method !== 'HEAD') { headers['content-type'] = opts.raw?.type ?? 'application/json'; headers['x-harness'] = '1'; }
     let res: Response;
     try {
-      res = await this.fetch(this.base + path, { method, headers, body: method === 'GET' || method === 'HEAD' ? undefined : JSON.stringify(body ?? {}), signal: opts.signal });
+      res = await this.fetch(this.base + path, { method, headers, body: method === 'GET' || method === 'HEAD' ? undefined : opts.raw ? opts.raw.body as BodyInit : JSON.stringify(body ?? {}), signal: opts.signal });
     } catch (e) {
       throw new ApiError(0, `The engine did not answer: ${(e as Error).message}`);
     }
@@ -103,7 +103,7 @@ export class HarnessClient {
 
   providers = {
     list: (): Promise<ProviderInfo[] | null> => this.optional('providers', async () => { const r = await this.get<ProviderInfo[] | { providers: ProviderInfo[] }>('/api/providers'); return Array.isArray(r) ? r : r.providers; }, () => null),
-    set: (id: string, body: { apiKey?: string; baseUrl?: string }) => this.put<ProviderInfo>(`/api/providers/${encodeURIComponent(id)}`, body),
+    set: (id: string, body: { apiKey?: string; baseUrl?: string | null }) => this.put<ProviderInfo>(`/api/providers/${encodeURIComponent(id)}`, body),
     removeKey: (id: string) => this.del<{ ok: boolean }>(`/api/providers/${encodeURIComponent(id)}/key`),
     test: (id: string) => this.post<ProviderTest>(`/api/providers/${encodeURIComponent(id)}/test`),
   };
@@ -134,13 +134,13 @@ export class HarnessClient {
     patch: (id: string, b: { title?: string; model?: string; effort?: Effort; mode?: Mode; pinned?: boolean; group?: string | null }) => this.patch<SessionMeta>(`/api/sessions/${id}`, b),
     remove: (id: string) => this.del<{ ok: boolean }>(`/api/sessions/${id}`),
     /** Sends a message; attachments (new) need a server that accepts them. */
-    send: (id: string, text: string, attachments?: Attachment[]) => this.post<{ state: string }>(`/api/sessions/${id}/messages`, { text, ...(attachments?.length ? { attachments } : {}) }),
+    send: (id: string, text: string, attachments?: Attachment[]) => this.post<{ state: string; images?: number; files?: string[] }>(`/api/sessions/${id}/messages`, { text, ...(attachments?.length ? { attachments } : {}) }),
     abort: (id: string) => this.post<{ ok: boolean }>(`/api/sessions/${id}/abort`),
     respond: (id: string, b: { requestId: string; decision: string; feedback?: string; answer?: string }) => this.post<{ ok: boolean }>(`/api/sessions/${id}/respond`, b),
     archive: (id: string) => this.post<SessionMeta>(`/api/sessions/${id}/archive`),
     unarchive: (id: string) => this.post<SessionMeta>(`/api/sessions/${id}/unarchive`),
     fork: (id: string, turn?: number) => this.post<SessionMeta>(`/api/sessions/${id}/fork`, turn ? { turn } : {}),
-    history: (id: string, q: { after?: number; limit?: number } = {}) => this.optional(`history`, () => this.get<HistoryPage>(`/api/sessions/${id}/history?after=${q.after ?? 0}${q.limit ? `&limit=${q.limit}` : ''}`), async () => { const d = await this.sessions.get(id); return { messages: d.history, next: null, lastSeq: d.lastSeq }; }),
+    history: (id: string, q: { after?: number; limit?: number } = {}) => this.optional(`history`, () => this.get<HistoryPage>(`/api/sessions/${id}/history?after=${q.after ?? 0}${q.limit ? `&limit=${q.limit}` : ''}`), async () => { const d = await this.sessions.get(id); return { total: d.history.length, messages: d.history.slice(q.after ?? 0), next: null }; }),
     workflows: (id: string) => this.get<{ workflows: WorkflowInfo[]; runs: WorkflowRunView[] }>(`/api/sessions/${id}/workflows`),
     startWorkflow: (id: string, name: string, input: Record<string, string>) => this.post<unknown>(`/api/sessions/${id}/workflows`, { name, input }),
     resumeRun: (id: string, runId: string) => this.post<unknown>(`/api/sessions/${id}/runs/${runId}/resume`),
@@ -154,19 +154,21 @@ export class HarnessClient {
   // ---------------- files and git (new routes, with the old files route as a fallback) ----------------
 
   files = {
-    tree: (id: string, path = '.') => this.optional('files.tree', () => this.get<{ entries: FileEntry[] } | FileEntry[]>(`/api/sessions/${id}/files/tree?path=${encodeURIComponent(path)}`).then((r) => (Array.isArray(r) ? r : r.entries)),
-      async () => (await this.get<{ type: 'dir'; files: FileEntry[] }>(`/api/sessions/${id}/files?path=${encodeURIComponent(path)}`)).files),
+    /** One folder (depth 1-3). Falls back to the older flat listing. */
+    tree: (id: string, path = '', depth = 1): Promise<FileTree> => this.optional('files.tree', () => this.get<FileTree>(`/api/sessions/${id}/files/tree?path=${encodeURIComponent(path)}&depth=${depth}`),
+      async () => ({ path: path || '.', entries: (await this.get<{ type: 'dir'; files: FileEntry[] }>(`/api/sessions/${id}/files?path=${encodeURIComponent(path || '.')}`)).files.map((x) => ({ ...x, type: 'file' as const })) })),
     read: (id: string, path: string) => this.get<FileContent>(`/api/sessions/${id}/files?path=${encodeURIComponent(path)}`),
-    write: (id: string, path: string, content: string) => this.put<{ ok: boolean }>(`/api/sessions/${id}/files/write`, { path, content }),
-    rename: (id: string, from: string, to: string) => this.post<{ ok: boolean }>(`/api/sessions/${id}/files/rename`, { from, to }),
-    remove: (id: string, path: string) => this.post<{ ok: boolean }>(`/api/sessions/${id}/files/delete`, { path }),
-    upload: (id: string, path: string, base64: string) => this.post<{ ok: boolean }>(`/api/sessions/${id}/files/upload`, { path, base64 }),
-    search: (id: string, query: string, content = false) => this.get<{ results: Array<{ path: string; line?: number; text?: string }> }>(`/api/sessions/${id}/files/search?query=${encodeURIComponent(query)}${content ? '&content=1' : ''}`),
+    /** The file's new content as the raw body (up to 10 MB). */
+    write: (id: string, path: string, content: string | Uint8Array) => this.request<{ path: string; size: number }>('PUT', `/api/sessions/${id}/files?path=${encodeURIComponent(path)}`, undefined, { raw: { body: content, type: 'application/octet-stream' } }),
+    rename: (id: string, from: string, to: string, overwrite = false) => this.post<{ from: string; to: string }>(`/api/sessions/${id}/files/rename`, { from, to, ...(overwrite ? { overwrite } : {}) }),
+    remove: (id: string, path: string) => this.del<{ path: string }>(`/api/sessions/${id}/files?path=${encodeURIComponent(path)}`),
+    upload: (id: string, path: string, base64: string) => this.post<unknown>(`/api/sessions/${id}/files/upload`, { path, base64 }),
+    search: (id: string, q: string, content = false, limit = 100) => this.get<{ query: string; results: SearchHit[]; truncated?: boolean }>(`/api/sessions/${id}/files/search?q=${encodeURIComponent(q)}&content=${content ? 1 : 0}&limit=${limit}`),
   };
   git = {
     status: (id: string) => this.optional('git', () => this.get<GitStatus>(`/api/sessions/${id}/git/status`), () => null),
-    diff: (id: string, path?: string) => this.get<{ diff: string }>(`/api/sessions/${id}/git/diff${path ? `?path=${encodeURIComponent(path)}` : ''}`),
-    log: (id: string, limit = 30) => this.get<GitLogEntry[]>(`/api/sessions/${id}/git/log?limit=${limit}`),
+    diff: (id: string, path?: string, staged = false) => this.get<{ repo: boolean; path?: string; staged: boolean; diff: string; truncated?: boolean }>(`/api/sessions/${id}/git/diff?staged=${staged ? 1 : 0}${path ? `&path=${encodeURIComponent(path)}` : ''}`),
+    log: (id: string, limit = 30) => this.get<{ repo: boolean; commits: GitLogEntry[] }>(`/api/sessions/${id}/git/log?limit=${limit}`),
   };
 
   // ---------------- approvals ----------------
@@ -177,8 +179,15 @@ export class HarnessClient {
       const { sessions } = await this.sessions.list();
       const waiting = sessions.filter((s) => s.status === 'waiting');
       const details = await Promise.all(waiting.map((s) => this.sessions.get(s.id).catch(() => null)));
-      return details.flatMap((d) => (d ? d.pending.filter(isPending).map((request) => ({ sessionId: d.meta.id, sessionTitle: d.meta.title, request })) : []));
+      return details.flatMap((d) => (d ? d.pending.filter(isPending).map((request) => toApproval({ sessionId: d.meta.id, title: d.meta.title, request })).filter((a): a is Approval => !!a) : []));
     });
+  }
+
+  /** The full pending event behind an approval (options, plan text, inputs), from its session. */
+  async fullRequest(a: Approval): Promise<PendingRequest | undefined> {
+    if (a.request) return a.request;
+    const d = await this.sessions.get(a.sessionId);
+    return d.pending.filter(isPending).find((p) => p.requestId === a.requestId);
   }
 
   /** The global event stream (with a polling fallback). Call start() on it. */
@@ -248,17 +257,37 @@ export class HarnessClient {
   };
 }
 
+/** One approval from the server's item shape ({sessionId, requestId, kind, title, summary, tool?, at}) or a full pending event. */
+export function toApproval(x: unknown): Approval | undefined {
+  if (!x || typeof x !== 'object') return undefined;
+  const o = x as Record<string, unknown>;
+  const sessionId = String(o.sessionId ?? o.session ?? '');
+  const full = (o.request && typeof o.request === 'object' ? o.request : undefined) as PendingRequest | undefined;
+  const requestId = String(o.requestId ?? full?.requestId ?? '');
+  const kind = String(o.kind ?? full?.kind ?? '');
+  if (!sessionId || !requestId || !(PENDING_KINDS as readonly string[]).includes(kind)) return undefined;
+  return {
+    sessionId, requestId, kind: kind as PendingRequest['kind'],
+    ...(typeof o.title === 'string' ? { title: o.title } : {}),
+    ...(typeof o.summary === 'string' ? { summary: o.summary } : full ? { summary: summaryOf(full) } : {}),
+    ...(typeof o.tool === 'string' ? { tool: o.tool } : full?.kind === 'permission_request' ? { tool: full.tool } : {}),
+    at: typeof o.at === 'number' ? o.at : Date.now(),
+    ...(full ? { request: full } : {}),
+  };
+}
+
 /** Accepts the shapes /api/approvals may answer with and returns one. */
 export function normaliseApprovals(raw: unknown): Approval[] {
   const list = Array.isArray(raw) ? raw : raw && typeof raw === 'object' && Array.isArray((raw as { approvals?: unknown }).approvals) ? (raw as { approvals: unknown[] }).approvals : [];
-  const out: Approval[] = [];
-  for (const x of list) {
-    if (!x || typeof x !== 'object') continue;
-    const o = x as Record<string, unknown>;
-    const sessionId = String(o.sessionId ?? o.session ?? '');
-    const request = (o.request ?? o.event ?? o) as PendingRequest;
-    if (!sessionId || !request || typeof request !== 'object' || typeof (request as { requestId?: unknown }).requestId !== 'string' || !isPending(request as HarnessEvent)) continue;
-    out.push({ sessionId, sessionTitle: typeof o.sessionTitle === 'string' ? o.sessionTitle : typeof o.title === 'string' ? o.title : undefined, request, at: typeof o.at === 'number' ? o.at : undefined });
+  return list.map(toApproval).filter((a): a is Approval => !!a);
+}
+
+/** The one-line summary of a pending request, as the server words it. */
+export function summaryOf(e: PendingRequest): string {
+  switch (e.kind) {
+    case 'permission_request': return e.summary;
+    case 'question': return e.question;
+    case 'plan_proposed': return e.plan.slice(0, 500);
+    case 'approval_request': return `${e.title}${e.message ? `: ${e.message}` : ''}`.slice(0, 500);
   }
-  return out;
 }

@@ -96,10 +96,14 @@ export interface SessionEventEnvelope { seq: number; event: HarnessEvent; at?: n
 
 export interface SessionDetail { meta: SessionMeta; status: SessionStatus; history: Message[]; pending: HarnessEvent[]; lastSeq: number; tasks?: TaskView[] }
 export interface SessionsPage { sessions: SessionMeta[]; next: string | null }
-export interface HistoryPage { messages: Message[]; next?: number | null; lastSeq?: number }
+export interface HistoryPage { total?: number; after?: number; messages: Message[]; next?: number | null }
 
-/** A pending request with the session it belongs to (GET /api/approvals, or gathered from sessions). */
-export interface Approval { sessionId: string; sessionTitle?: string; request: PendingRequest; at?: number }
+/**
+ * A request waiting for a person, with its session (GET /api/approvals, the approvals topic's
+ * "added" shape). "request" is the full event when the client has it (from the session's pending
+ * list); the summary fields are always there.
+ */
+export interface Approval { sessionId: string; requestId: string; kind: PendingRequest['kind']; /** The session's title. */ title?: string; summary?: string; tool?: string; at: number; request?: PendingRequest }
 
 /** The global stream (GET /api/events): `data:{seq,topic,payload}`. */
 export type EventTopic = 'sessions' | 'session' | 'approvals' | 'schedules' | 'plugins' | 'notices';
@@ -113,34 +117,36 @@ export interface Capabilities {
   plugins: { name: string; version: string; description: string; contributes: string[] }[];
 }
 
-export interface Health { ok: boolean; version?: string; uptime?: number; /** Set when the server has no /api/health and the client checked another way. */ legacy?: boolean }
-export interface VersionInfo { version: string; api?: number; node?: string; [k: string]: unknown }
+export interface Health { ok: boolean; version?: string; apiVersion?: number; uptimeSec?: number; node?: string; /** Set when the server has no /api/health and the client checked another way. */ legacy?: boolean }
+export interface VersionInfo { version: string; apiVersion?: number; uiApiVersion?: number }
 
 /** A model provider (GET /api/providers, new). Keys are never returned, only whether one is set and where from. */
 export interface ProviderInfo {
-  id: string; label?: string; configured: boolean; keySource?: 'env' | 'vault' | 'settings' | string | null;
-  baseUrl?: string | null; defaultBaseUrl?: string | null; models?: string[]; keyless?: boolean; docs?: string;
+  id: string; label?: string; keyEnv?: string[]; configured: boolean; source?: 'env' | 'vault' | 'none' | string;
+  baseUrl?: string | null; baseUrlEditable?: boolean; models?: string[]; keyless?: boolean; note?: string;
 }
-export interface ProviderTest { ok: boolean; message?: string; error?: string; latencyMs?: number; models?: number }
+export interface ProviderTest { ok: boolean; latencyMs?: number; model?: string; error?: string }
 
 /** A plugin as the server lists it (GET /api/plugins, new). */
 export interface PluginInfo {
   name: string; version: string; description?: string; enabled: boolean; required?: boolean;
   source?: 'bundled' | 'installed' | 'operator' | 'catalogue' | 'dev' | string;
   contributes?: string[]; signature?: string; permissions?: Record<string, unknown>;
-  ui?: UiManifest; uiError?: string; uiHash?: string;
+  ui?: UiManifest; uiError?: string; uiHash?: string; /** Where the server serves this plugin's UI files: /api/plugins/<name>/ui/ */ uiBase?: string;
 }
 export interface CatalogueEntry { name: string; version: string; description?: string; installed?: boolean; url?: string }
 
-export interface FileEntry { path: string; size?: number; mtime?: number; type?: 'file' | 'dir' }
+export interface FileEntry { name?: string; path: string; size?: number; mtime?: number; type?: 'file' | 'dir'; heavy?: boolean; symlink?: boolean; children?: FileEntry[] }
+export interface FileTree { path: string; entries: FileEntry[]; truncated?: boolean }
+export interface SearchHit { path: string; matches?: Array<{ line: number; text: string }> }
 export interface FileContent { type: 'file'; path: string; size: number; content: string | null; note?: string }
-export interface GitStatus { branch?: string; files: { path: string; status: string }[]; ahead?: number; behind?: number }
-export interface GitLogEntry { hash: string; subject: string; author?: string; date?: string | number }
+export interface GitStatus { repo: boolean; branch?: string; upstream?: string; ahead?: number; behind?: number; files: { path: string; from?: string; index: string; worktree: string }[]; clean?: boolean }
+export interface GitLogEntry { hash: string; subject: string; author?: string; email?: string; at?: number }
 
 export interface VaultEntry { name: string; kind?: string; scope?: string; description?: string; updatedAt?: number; createdAt?: number; backend?: string; rotateBy?: number; allow?: string[] }
 export interface Schedule { id: string; title?: string; prompt: string; cron?: string; at?: number; enabled: boolean; nextRun?: number | null; lastRun?: number | null; sessionId?: string; trigger?: boolean }
 export interface McpBundle { name: string; version: string; description?: string; installedAt?: number }
-export interface EffectiveSetting { key: string; value: unknown; source: 'default' | 'operator' | 'account' | 'project' | 'session' | string; locked?: boolean }
+export interface EffectiveSetting { key: string; value: unknown; source: 'default' | 'operator' | 'account' | 'project' | string; scope?: string; locked?: boolean; max?: number; layers?: Array<{ source: string; value: unknown }> }
 
 /** A file attached to a message (POST messages, new). */
 export interface Attachment { name: string; mediaType: string; base64: string }

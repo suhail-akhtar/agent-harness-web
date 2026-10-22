@@ -20,6 +20,9 @@ export const ICON_NAMES = [
   'mail', 'history', 'stack', 'eye', 'zap', 'play', 'pause', 'stop', 'heart', 'bookmark', 'compass', 'box',
   'puzzle', 'brain', 'calculator', 'atom', 'function', 'workflow', 'robot', 'memory', 'vault', 'dollar', 'home',
   'pin', 'archive', 'trash', 'download', 'upload', 'link', 'external', 'info', 'warning', 'help', 'command',
+  // Added for the desktop shell's own commands (compatible: only new names).
+  'edit', 'keyboard', 'monitor', 'sun', 'moon', 'folder-plus', 'arrow-left', 'arrow-right', 'arrow-up', 'arrow-down',
+  'sidebar', 'panel-right', 'refresh', 'plus', 'x', 'copy', 'file-text', 'alert', 'bot', 'paperclip', 'tag', 'filter', 'share', 'save',
 ] as const;
 export type IconName = typeof ICON_NAMES[number];
 

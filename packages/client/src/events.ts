@@ -173,17 +173,21 @@ export class GlobalEvents {
   start(): void {
     this.stop();
     let lastSeq = 0;
+    let justOpened = false;
     this.stopStream = readStream({
       fetch: this.o.fetch, headers: this.o.headers,
       url: () => `${this.o.base}/api/events${lastSeq ? `?after=${lastSeq}` : ''}`,
       onState: (s) => {
-        if (s === 'open') this.setMode('stream');
+        if (s === 'open') { justOpened = true; this.setMode('stream'); }
         else if (s === 'retrying') this.setMode('retrying');
         else if (s === 'missing') this.startPolling();
       },
       onMessage: (m) => {
         const e = parseGlobal(m);
         if (!e) return;
+        // A server that restarted numbers from 1 again: the first event after reconnecting resets the count.
+        if (justOpened && e.seq && e.seq < lastSeq) lastSeq = 0;
+        justOpened = false;
         if (e.seq) { if (e.seq <= lastSeq) return; lastSeq = e.seq; }
         this.emit(e);
       },
@@ -209,7 +213,7 @@ export class GlobalEvents {
       if (sig !== this.lastSessions) { this.lastSessions = sig; this.emit({ seq: ++this.seq, topic: 'sessions', payload: { sessions } }); }
       // Pending requests only live in waiting sessions: skip the second call when none is.
       const approvals = sessions.some((s) => s.status === 'waiting') || this.lastApprovals !== '[]' ? await this.o.listApprovals() : [];
-      const asig = JSON.stringify(approvals.map((a) => [a.sessionId, a.request.requestId]));
+      const asig = JSON.stringify(approvals.map((a) => [a.sessionId, a.requestId]));
       if (asig !== this.lastApprovals) { this.lastApprovals = asig; this.emit({ seq: ++this.seq, topic: 'approvals', payload: { approvals } }); }
     } catch { /* the engine is down or restarting: the next tick tries again */ }
   }

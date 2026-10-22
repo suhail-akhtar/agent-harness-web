@@ -1,0 +1,26 @@
+@import '@harness/ui/styles.css';
+@import 'katex/dist/katex.min.css';
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root { height: 100%; width: 100%; margin: 0; overflow: hidden; }
+body {
+  font-family: var(--hx-font);
+  font-size: var(--hx-font-size, 14px);
+  background: var(--hx-bg);
+  color: var(--hx-text-primary);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+:focus-visible { outline: 2px solid var(--hx-focus); outline-offset: 1px; }
+textarea:focus-visible, input:focus-visible, select:focus-visible, [role='menu']:focus-visible, [role='dialog']:focus-visible, [tabindex='-1']:focus-visible { outline: none; }
+button:focus:not(:focus-visible) { outline: none; }
+::selection { background: var(--hx-accent-soft); }
+
+/* The window's own title bar is ours: these parts drag the window, controls inside them do not. */
+.app-drag { -webkit-app-region: drag; user-select: none; }
+.app-no-drag, .app-drag button, .app-drag input, .app-drag a, .app-drag [role='button'] { -webkit-app-region: no-drag; }
+
+html[data-density='compact'] .markdown-body { line-height: 1.55; }
+html[data-motion='reduced'] *, html[data-motion='reduced'] *::before, html[data-motion='reduced'] *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
