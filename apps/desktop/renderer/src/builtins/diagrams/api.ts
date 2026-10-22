@@ -47,13 +47,20 @@ export function useLiveArtifact(sessionId: string, id: string, opts: { compareTo
   const [waiting, setWaiting] = useState(false);
   const cur = useRef<ArtifactVersionDoc | null>(null);
   const own = useRef(new Set<number>());
+  /**
+   * What the marks are counted from: the version the person last looked at (opened, or cleared the
+   * marks on). An agent often changes a diagram in several small edits; the marks add up over them.
+   */
+  const baseline = useRef<ArtifactVersionDoc | null>(null);
   const take = useCallback((next: ArtifactVersionDoc, mark: boolean) => {
     const prev = cur.current;
     cur.current = next;
+    if (!baseline.current) baseline.current = next;
     setDoc(next);
     if (mark && prev && next.version > prev.version && !own.current.has(next.version)) {
-      const c = changedBetween(prev.content, next.content, next.version);
-      if (c) { setChanged(c); toast(`${next.meta.title}: ${c.note}`, { kind: 'info' }); }
+      const c = changedBetween(baseline.current.content, next.content, next.version);
+      setChanged(c);
+      if (c) toast(`${next.meta.title}: ${c.note}`, { kind: 'info' });
       setWaiting(false);
     }
   }, []);
@@ -65,18 +72,18 @@ export function useLiveArtifact(sessionId: string, id: string, opts: { compareTo
     } catch (e) { setError((e as Error).message); }
   }, [sessionId, id, take]);
   useEffect(() => {
-    cur.current = null; setDoc(null); setChanged(null);
+    cur.current = null; baseline.current = null; setDoc(null); setChanged(null);
     let alive = true;
     void (async () => {
       try {
         const latest = await getArtifact(sessionId, id);
         if (!alive) return;
+        // Opened from an update: the marks count from the version before it.
+        const before = opts.compareTo && opts.compareTo < latest.version ? await getArtifact(sessionId, id, opts.compareTo).catch(() => null) : null;
+        if (!alive) return;
+        if (before) baseline.current = before;
         take(latest, false);
-        // Opened from an update: show what that version changed.
-        if (opts.compareTo && opts.compareTo < latest.version) {
-          const before = await getArtifact(sessionId, id, opts.compareTo).catch(() => null);
-          if (alive && before) setChanged(changedBetween(before.content, latest.content, latest.version));
-        }
+        if (before) setChanged(changedBetween(before.content, latest.content, latest.version));
       } catch (e) { if (alive) setError((e as Error).message); }
     })();
     const off = globalBus.on((e) => {
@@ -115,5 +122,5 @@ export function useLiveArtifact(sessionId: string, id: string, opts: { compareTo
       }
     }, 500);
   }, [sessionId, id, take]);
-  return { doc, error, changed, clearChanged: () => setChanged(null), expectNewVersion: () => setWaiting(true), waiting, savePositions };
+  return { doc, error, changed, clearChanged: () => { baseline.current = cur.current; setChanged(null); }, expectNewVersion: () => setWaiting(true), waiting, savePositions };
 }

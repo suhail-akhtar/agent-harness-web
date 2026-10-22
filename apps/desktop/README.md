@@ -107,3 +107,6 @@ the `diagrams` skill, listed only for an app that declares the `diagram` rendere
 - Live smoke (costs money, not in `npm test`):
   `node --env-file=<path to .env> apps/desktop/scripts/live-smoke.mjs` runs deepseek-flash and
   claude-sonnet-5-5 at effort medium under a $0.50 cap; it never prints key values.
+  `apps/desktop/scripts/live-diagrams.mjs` (same invocation) has claude-sonnet-5-5 draw a CRM
+  deployment with zones and a login flow, asks for a cache from the canvas (the changes marked in
+  place), then the same first request on deepseek-flash; $1.50 cap (a run costs about $0.15).
