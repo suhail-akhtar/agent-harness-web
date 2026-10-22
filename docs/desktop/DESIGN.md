@@ -434,6 +434,14 @@ row-level security enforced server-side (app and published pages), usage metrics
 reports, Excel export, embed codes, versions with restore, certified datasets. (F) Natural-language
 questions answered by queries on the semantic model, with the SQL shown.
 
+Layouts, mixed per page or section: a responsive grid (drag, resize, auto-pack, its own arrangement per
+breakpoint), a free-form canvas (layers, guides, groups, locks), stacked sections, tabs and pages, a filter
+sidebar, masonry for KPI walls, a scrolling story, TV/kiosk (fixed aspect, large type, rotating pages) and
+print (A4/Letter, headers, footers, page breaks). Templates for purposes - executive overview, operations
+monitoring, sales and finance, marketing funnel, product analytics, delivery tracking, incidents and SLOs,
+lab results, data quality, and a blank of each layout - are plain specs the agent fills from the data;
+plugins can contribute more. Switching a layout keeps the widgets; the published page renders the same.
+
 Driven by agents, every bit: every change a person can make in the UI is a typed, validated operation
 (`add_visual`, `set_measure`, `add_step`, ...) that the UI and the agents' tools both call - no UI-only
 paths. Operations are checked against the model, applied atomically, recorded in the version history (person
