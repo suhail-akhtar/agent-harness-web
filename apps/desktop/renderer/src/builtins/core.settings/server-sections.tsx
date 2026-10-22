@@ -72,7 +72,7 @@ function ProviderCard({ p, admin, models, onChanged }: { p: ProviderInfo; admin:
 }
 
 export function OnboardProvider(): React.ReactElement {
-  return <div className="px-6 py-4"><p className="mb-3 text-[13px] text-hx-secondary">Add a key for at least one provider. DeepSeek and Claude Haiku are inexpensive places to start.</p><ModelsProviders onboarding /></div>;
+  return <div className="px-6 py-4"><p className="mb-3 text-[13px] text-hx-secondary">Add a key for at least one provider. DeepSeek (inexpensive) or Anthropic (Claude Sonnet) are good places to start.</p><ModelsProviders onboarding /></div>;
 }
 
 export function OnboardModel(): React.ReactElement {

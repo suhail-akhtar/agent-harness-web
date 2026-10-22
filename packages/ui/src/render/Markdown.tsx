@@ -14,7 +14,7 @@
  */
 
 import React, { useCallback, useId, useMemo } from 'react';
-import ReactMarkdown, { type Components } from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
@@ -125,6 +125,8 @@ const MdBlock = React.memo(function MdBlock({ text, streaming, renderFence, sour
       remarkPlugins={[remarkGfm, remarkMath]}
       rehypePlugins={[[rehypeKatex, { throwOnError: false, strict: false, trust: false, output: 'html' }]]}
       remarkRehypeOptions={{ clobberPrefix: prefix }}
+      // The default drops data: URLs; inline images are allowed (an <img> runs no script; safe.ts checks the type).
+      urlTransform={(url, key) => (key === 'src' && /^data:image\/(png|jpe?g|gif|webp|avif|svg\+xml)[;,]/i.test(url.trim()) ? url : defaultUrlTransform(url))}
       components={components}
     >
       {protectCurrency(text)}
