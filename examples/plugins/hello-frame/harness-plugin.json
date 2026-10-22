@@ -16,7 +16,7 @@
       "views": [{ "id": "hello", "title": "Hello", "icon": "sparkles", "kind": "frame", "entry": "ui/index.html" }],
       "panels": [{ "id": "hello-panel", "title": "Hello panel", "icon": "sparkles", "kind": "frame", "entry": "ui/panel.html", "where": "session" }],
       "renderers": [{ "id": "hello-fence", "for": { "fence": "hello" }, "kind": "frame", "entry": "ui/fence.html", "height": 80 }],
-      "commands": [{ "id": "open-hello", "title": "Open the Hello page", "category": "Examples", "action": { "type": "open-view", "view": "hello" } }]
+      "commands": [{ "id": "open-hello", "title": "Open the Hello page", "category": "Examples", "action": { "type": "open-view", "view": "hello" }, "agent": { "description": "Opens the Hello example page in the desktop app." } }]
     }
   }
 }

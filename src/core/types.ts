@@ -61,14 +61,27 @@ export interface Todo { content: string; status: 'pending' | 'in_progress' | 'co
 
 export type HarnessEvent =
   | { kind: 'turn_start'; turn: number; agent?: string }
-  | { kind: 'user_message'; text: string }
+  /** origin: not typed by the person - a linked session's brief (link) or a turn a report or message woke (auto). */
+  | { kind: 'user_message'; text: string; origin?: 'auto' | 'link' }
   | { kind: 'text_delta'; text: string; agent?: string }
   | { kind: 'reasoning_delta'; text: string; agent?: string }
   | { kind: 'assistant_message'; message: Message; agent?: string }
   | { kind: 'tool_call'; id: string; name: string; input: Record<string, unknown>; agent?: string }
   | { kind: 'tool_result'; id: string; name: string; content: string; is_error: boolean; display?: ToolDisplay; ms: number; agent?: string; images?: { media_type: string; data: string }[] }
   | { kind: 'permission_request'; requestId: string; tool: string; summary: string; input: Record<string, unknown>; suggestion?: string; agent?: string }
-  | { kind: 'question'; requestId: string; question: string; options: string[]; agent?: string }
+  /** `form`: a JSON Schema (packages/plugin-ui's subset) the answer must fill in, as an object. */
+  | { kind: 'question'; requestId: string; question: string; options: string[]; agent?: string; form?: Record<string, unknown> }
+  /** An artifact was made or got a new version (its own `kind` is markdown, html, ...). */
+  | { kind: 'artifact'; artifact: { id: string; title: string; kind: string; version: number; action: 'create' | 'update' | 'rewrite' } }
+  /** A desktop tool call for the attached client to answer (POST /api/sessions/:id/client-result). */
+  | { kind: 'client_call'; callId: string; tool: string; input: Record<string, unknown> }
+  | { kind: 'client_call_end'; callId: string; ok: boolean; reason: 'answered' | 'timeout' | 'stopped' }
+  /** A session the agent offered to start: nothing runs until the person starts it. */
+  | { kind: 'session_proposal'; id: string; title: string; brief: string; initiation: 'offer' | 'own_initiative'; context: 'fork' | 'fresh'; useWorktree?: boolean; model?: string; effort?: string; expiresAt: number }
+  | { kind: 'proposal_resolved'; id: string; status: 'started' | 'dismissed' | 'expired'; sessionId?: string }
+  /** A linked session: started from this one, its report at the end of a turn, or a message from another session. */
+  | { kind: 'side_session'; phase: 'started' | 'report' | 'message'; id: string; title: string; reason?: string; preview?: string }
+  | { kind: 'chapter'; title: string; summary?: string; index: number }
   | { kind: 'plan_proposed'; requestId: string; plan: string }
   | { kind: 'approval_request'; requestId: string; runId: string; node: string; title: string; message: string; files: { path: string; content: string }[] }
   | { kind: 'workflow'; phase: 'started' | 'node_started' | 'node_finished' | 'finished'; node?: string; run: WorkflowRunView }

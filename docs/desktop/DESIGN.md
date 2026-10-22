@@ -259,3 +259,139 @@ Taken (adapted to this API): engine host, the scheme and its proxy, preload and 
 registry shape, composer behaviour (steer vs queue, chips, `@` and `/` menus, drafts), the attention bar,
 the inbox, the engine gate, update policy, notification rules. Not taken: AICO's coupling to its web
 client's store, its browser's size (ours starts small), unsigned builds.
+
+## 11. Agents that know and drive the desktop
+
+The model must know what this app can show and do, and use it - without a word of it in the core's code
+being specific to one plugin.
+
+- **The client declares itself.** A session created by the desktop carries
+  `client: {kind: 'desktop', version, renderers, tools}`: the fence languages it renders (mermaid, math,
+  chart specs, csv, json, html/svg/react artifacts, every plugin renderer) and the desktop tools it serves.
+  The server puts that in the session's frozen system prompt (the cache prefix stays stable), so the model
+  writes a Mermaid diagram or a chart spec knowing it will be drawn, and uses artifacts for documents and
+  apps.
+- **Artifacts are first-class.** Tool `artifact {action: create|update|rewrite|get|list, id?, title, kind:
+  markdown|html|svg|react|mermaid|code|csv|json|chart|image|pdf, content, language?}`: versioned files under
+  `.harness/artifacts/<id>/v<n>` with an `artifact` event. API: `GET /api/sessions/:id/artifacts`,
+  `GET /api/sessions/:id/artifacts/:aid?version=`, and across sessions `GET /api/artifacts?query=` (the
+  Library). The desktop shows them in an Artifacts panel (preview/code, versions, diff between versions,
+  download, open full window); html/svg/react run in a sandboxed frame without same origin.
+- **Desktop tools** (served only while a desktop is attached to the session; the server forwards each call
+  to the client on the event stream as `client_call {callId, tool, input}` and the client answers
+  `POST /api/sessions/:id/client-result {callId, result}`, with a timeout):
+  `desktop_describe` (read: the live registry - plugins, views, panels, commands, settings sections,
+  renderers, themes - so the agent learns what is available), `desktop_open {view|panel|file|artifact|url}`
+  (read), `desktop_notify {title, body}` (read), `desktop_command {command, args}` (external: asked unless a
+  rule allows it; only commands a manifest marks `agent: {description, inputSchema}`), and `ask_user` with a
+  JSON-Schema form rendered as a native form.
+- **Plugins extend what agents can do in the UI** by marking commands `agent`-callable and by contributing
+  renderers; `desktop_describe` lists them, so a new plugin's features are usable by the agent the moment it
+  is enabled, and gone when it is disabled.
+
+## 12. A multi-agent platform
+
+The same powers as Claude's desktop app, on the harness:
+
+- **Sub-agents** (exists): named agents with their own tools and models, nested up to 3 levels, in the
+  background with a notification when done, continued with `send_message`. Adds: `isolation: 'worktree'`
+  (the sub-agent works in its own git worktree, removed when it changed nothing) and a catalogue of agent
+  types the model can browse.
+- **Sessions that start sessions.** Tool `start_session {title, prompt, context: fork|fresh, initiation:
+  user_asked|offer|own_initiative, use_worktree, model?, effort?}`: a full, separate session linked to its
+  parent (`meta.parent`). `offer` and `own_initiative` become a proposal card the person starts or dismisses
+  (`session_proposal` event; nothing runs until they do); `user_asked` starts at once within the account's
+  limits. When a linked session ends a turn, the parent gets a fenced `side-session` report (first 400
+  characters of its latest summary) at its next step, and an idle parent can be continued automatically
+  (setting). `list_sessions {linked}`, `send_message` to a session id (delivered as a fenced note from that
+  session), `hand_off {title, remaining_plan}` (move the current task to a new session and answer the
+  person here), `dismiss_proposal`.
+- **Limits and safety:** linked sessions inherit the account's spend and concurrency caps, a depth limit,
+  the parent's permission mode at most, and the untrusted-content guard (a report from a session that read
+  outside content is fenced as outside content).
+- **In the desktop:** an Agents panel (a live tree: session -> sub-agents -> background tasks -> linked
+  sessions, with status, cost and a click-through to each transcript), proposal cards in the chat, report
+  cards when a linked session finishes, split view (two sessions side by side), chapters (`mark_chapter`
+  draws a table of contents), the todo list, and workflow runs drawn as a graph with each node's agent.
+
+## 13. Agents on several providers, with consent
+
+Agents can work on other providers' models when the person allows it (data goes to that provider's API):
+`delegation: {allowedModels, maxCostUsd?, requireApproval?}` per account under an operator cap. `agent`,
+`start_session` and workflow agent nodes take `model`/`effort`; a model outside the list is refused; the
+first delegation to a new provider can be asked. The allowed models are listed one line each (provider,
+cost tier, context, strengths) in those tools' descriptions, so the catalogue sits in the cached prefix.
+One provider's reasoning is never replayed to another; reports cross providers fenced like any report;
+cost is counted per model.
+
+## 14. Rendering for science and business intelligence
+
+Lazily loaded, sandboxed where they run code, with no network: KaTeX with environments and mhchem
+(`\ce`, `\pu`); 2D chemical structures from SMILES, 3D molecules (mol/sdf/pdb); function plots; Graphviz;
+Vega-Lite (and ECharts) for statistics (histograms, box/violin, regression, heatmaps, annotated series);
+a `dashboard` spec (KPI cards, charts and tables in a grid; defined in packages/plugin-ui so plugins and
+models share it); tables with sort, filter, column statistics and pivots; notebooks (ipynb); GeoJSON as SVG.
+The client's declaration of what it renders stays under 150 tokens: it is in every request's cached prefix.
+
+## 15. Cost
+
+Minimal input, maximum output: the base prefix (system prompt + tools) has a token budget checked by a
+test; tools appear only where they can work (desktop tools only with a desktop attached); everything
+added during a session is appended (reminders), never edited into earlier messages; fresh child sessions
+start from a brief, not the parent's history; reports into a parent are capped and fenced; cheaper models
+take delegated sub-tasks when the person allows it.
+
+## 16. Interactive diagrams (`core.diagrams`)
+
+A built-in plugin that renders one JSON spec (defined in `packages/plugin-ui`, shared by models and
+plugins) as a live canvas, in the transcript (a `diagram` fence), as an artifact kind, and as a plugin
+view. The model is told the spec exists through the client declaration; the full spec is a skill it loads
+only when it draws one (no cost to sessions that never do).
+
+- **Views:** context (people, the system, external systems), containers, components, deployment (nested
+  groups: host / network / zone / subnet / cluster / region, with addresses and sizes), data (ER: tables
+  with typed fields, PK / FK / UK / PII marks, `n:1` relations, "+ N more" folding), code dependencies
+  (folders and files with import counts, like AICO's code graph) and free flow charts.
+- **Nodes:** a kind with its icon and caption (person, web app, mobile app, API, service, function,
+  relational database, document store, cache, queue / stream, storage, batch job, reverse proxy /
+  ingress, load balancer, secrets / key vault, external system, internet, browser, device, ...), title,
+  technology line, status badge (done, in progress, failing, planned, changed), "integrated / bought"
+  drawn dashed, size and address lines for deployment.
+- **Edges:** label (uses, https, sql, env, file, ...), synchronous solid or asynchronous dashed, counts
+  on bundled edges, direction.
+- **Flows:** ordered steps over edges ("3. connect 10.42.29.2 -> 10.42.29.3:5432 with ...") played as an
+  animation: the path draws step by step with moving dashes, the rest dims, the step label rides the edge;
+  play, pause, step, speed.
+- **Interaction:** pan, zoom, fit, minimap; Overview and Neighbourhood (a node and its neighbours) modes;
+  click a node for a Details panel (all fields, linked files, findings); search; collapse groups; drag
+  with the position kept in the spec; legend and a summary line ("3 built · 4 integrated · 8 relations ·
+  9 flows · 1 finding"); "not connected" list; export SVG / PNG; light and dark.
+- **Ask the agent:** a box on the canvas ("add a cache in front of the catalogue") sends the request with
+  the diagram's artifact id; the agent edits the spec through the `artifact` tool and the canvas updates
+  in place, the changed nodes marked `changed`.
+- **Layout:** automatic (ELK layered with orthogonal routing, in a worker; AICO's layered layout as the
+  fallback), stable between edits so a small change does not move everything.
+
+## 17. Server implementation notes (sections 11 to 13: where they differ from the above)
+
+The server side of sections 11 and 12 is built (README "Multi-agent" and "HTTP API for desktop clients").
+Where it differs from the text above, and why:
+
+- **Tool lists stay fixed.** A session's tools never change mid-session (it would break the cache), so
+  desktop tools are declared when the session's client declaration names them and answer "unavailable"
+  while no app is attached, rather than appearing and disappearing. Artifacts, chapters, desktop tools and
+  the linked-session tools are declared only for sessions with a client (linked sessions: desktop or web
+  clients, or the person's `linkedSessions.enabled`), so other sessions' prompts do not grow.
+- **The `artifact` event nests its fields** (`{kind: 'artifact', artifact: {id, title, kind, version,
+  action}}`): `kind` is every event's discriminator.
+- **Client calls also reach the global stream** (topic `client`, only to the owner's own streams), so an
+  app attached through `/api/events?client=desktop` can answer them; attachment is the declaration plus a
+  live stream opened with `?client=<kind>` by the session's owner.
+- **The client declaration may list `commands`** (agent-callable commands of the app's own native plugins,
+  whose manifests the server cannot read); a server plugin's commands are agent-callable only when its
+  manifest marks them `agent`.
+- **`start_session` has `share_workspace`**: a server folder that is not a git repository is shared only
+  when the agent asks for it; otherwise the start is refused with what to do. A sandbox's workspace is
+  copied.
+- **Delegation to other models needs the person's consent** (`delegation` in their settings, within the
+  operator's cap): sub-agents, linked sessions and workflow agent nodes with a `model`.

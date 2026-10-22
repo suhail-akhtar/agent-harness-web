@@ -47,6 +47,16 @@ import { readJson, withFileLock, writeFileAtomic } from '../util/shared-file.ts'
 import { seal, serverKey, unseal } from '../util/sealed.ts';
 import type { ChangeService } from '../ops/changes.ts';
 import { ruleMatches } from './permissions.ts';
+import { ArtifactError, type ArtifactMeta, type ArtifactService, ArtifactStore, artifactTool } from './artifacts.ts';
+import { type ClientDecl, clientPrompt, type ClientPresence, type DesktopTool } from './client.ts';
+import { delegableModels, delegationRefusal, modelCatalogue } from './delegation.ts';
+import type { LinkedSessions } from './linked.ts';
+import { DESKTOP_TOOL_IMPLS, type ClientService } from '../tools/desktop.ts';
+import { dismissProposalTool, handOffTool, listSessionsTool, makeStartSessionTool, markChapterTool, type SessionsService } from '../tools/sessions.ts';
+import { makeSendMessageTool } from '../tools/tasks.ts';
+import { worktreeChanges } from '../git/worktree.ts';
+import type { SubagentArgs } from '../agents/agents.ts';
+import { validateValue, type JsonSchema, type UiManifest } from '../../packages/plugin-ui/src/manifest.ts';
 
 export type RuntimeKind = 'docker' | 'local' | 'companion';
 
@@ -107,6 +117,28 @@ export interface SessionMeta {
   firstPrompt?: string;
   /** Made by forking another session: which one, and up to which turn. */
   forkedFrom?: { id: string; turn: number };
+  /** The app the person uses, declared when the session was made, and its block of the system prompt (both fixed). */
+  client?: ClientDecl;
+  clientPrompt?: string;
+  /** A linked session: the session that started it, and how deep it is (1: started by a top session). */
+  parent?: string;
+  linkDepth?: number;
+  /** Linked sessions this one started (newest last). */
+  linked?: string[];
+  /** Tasks handed off to a linked session (hand_off). */
+  handoffs?: { id: string; title: string; at: number }[];
+  /** Chapters marked by the agent (a table of contents). */
+  chapters?: { index: number; title: string; summary?: string; at: number; turn: number }[];
+  /** Turns started without a message from the person (a linked report, another session's message), since the last one. */
+  autoContinues?: number;
+  /** The provider cache key (a fork child shares its parent's, so the cached prefix serves both). */
+  cacheKey?: string;
+  /** Providers the person allowed this session to delegate to (delegation.requireApproval). */
+  delegatedProviders?: string[];
+  /** What agents on other models cost in this session (delegation.maxCostUsd). */
+  delegationCost?: number;
+  /** Worktrees sub-agents left with changes (removed with the session; branches with commits stay). */
+  subWorktrees?: Worktree[];
 }
 
 export interface StoredEvent { seq: number; at: number; event: HarnessEvent }
@@ -192,11 +224,22 @@ export interface SessionDeps {
   onLifecycle?: (type: 'created' | 'deleted', session: Session) => void;
   /** The change journal (ToolServices.changes). */
   changes?: ChangeService;
+  /** Linked sessions and proposals (set by the session manager). */
+  linked?: LinkedSessions;
+  /** Which clients are attached (live event-stream subscribers), for desktop tools. */
+  clients?: ClientPresence;
+  /** The plugins the server has, with their UI halves (agent-callable commands). */
+  plugins?: () => { name: string; enabled: boolean; source: string; ui?: UiManifest }[];
+  /** The account's running-session cap (set by the HTTP server): why one more turn may not start. */
+  mayRun?: (owner: string | undefined) => string | undefined;
 }
 
 /** The session is being worked on by another server (it holds the session's lease). */
 /** A request the session cannot take while it works (images need a turn of their own). */
 export class SessionBusyError extends Error {}
+
+/** An answer that does not fit the question's form (400 to whoever sent it). */
+export class FormAnswerError extends Error {}
 
 export class SessionElsewhereError extends Error {
   readonly holder: LeaseRecord;
@@ -337,12 +380,15 @@ export class Session {
     return r.kind === 'local' && r.path ? r.path : path.join(this.deps.dataDir, 'workspaces', this.meta.id);
   }
 
-  static async create(deps: SessionDeps, opts: { title?: string; model: string; effort?: Effort; mode?: PermissionMode; runtime: SessionMeta['runtime']; gitUrl?: string; owner?: string; allowHosts?: string[]; /** local with a path: work in a new git worktree of it. */ worktree?: boolean; /** default, concise, explanatory, or a workspace's or plugin's style by name. */ outputStyle?: string }): Promise<Session> {
+  static async create(deps: SessionDeps, opts: { title?: string; model: string; effort?: Effort; mode?: PermissionMode; runtime: SessionMeta['runtime']; gitUrl?: string; owner?: string; allowHosts?: string[]; /** local with a path: work in a new git worktree of it. */ worktree?: boolean; /** A new worktree of this repository (from `base`, a commit), for any runtime but a companion: a linked session's own. */ worktreeOf?: { repo: string; base?: string }; /** default, concise, explanatory, or a workspace's or plugin's style by name. */ outputStyle?: string; /** The app the person uses (validated by cleanClient). */ client?: ClientDecl }): Promise<Session> {
     const model = deps.registry.model(opts.model);
     const id = crypto.randomBytes(8).toString('hex');
     if (opts.worktree) {
       if (opts.runtime.kind !== 'local' || !opts.runtime.path) throw new WorktreeError('A worktree session needs a server folder that is a git repository.');
       opts.runtime = { ...opts.runtime, worktree: await createWorktree(opts.runtime.path, path.join(deps.dataDir, 'worktrees', id), opts.title ?? 'session') };
+    } else if (opts.worktreeOf) {
+      if (opts.runtime.kind === 'companion') throw new WorktreeError('A companion session works on someone\'s computer: no worktree is made for it here.');
+      opts.runtime = { ...opts.runtime, worktree: await createWorktree(opts.worktreeOf.repo, path.join(deps.dataDir, 'worktrees', id), opts.title ?? 'session', opts.worktreeOf.base) };
     }
     const now = Date.now();
     const s = new Session({
@@ -351,6 +397,8 @@ export class Session {
       usage: emptyUsage(), cost: 0, byModel: {}, todos: [], contextStart: 0, compactions: 0, lastPromptTokens: 0, sessionRules: [], turns: 0,
       ...(opts.owner ? { owner: opts.owner } : {}),
       ...(opts.gitUrl ? { gitUrl: opts.gitUrl } : {}),
+      // Rendered now and stored: the system prompt never changes under the session.
+      ...(opts.client ? { client: opts.client, clientPrompt: clientPrompt(opts.client, { artifacts: true }) } : {}),
     }, deps);
     await fs.mkdir(s.dir, { recursive: true });
     if (opts.runtime.network === 'allowlist') {
@@ -749,6 +797,10 @@ export class Session {
       const w = await removeWorktree(this.meta.runtime.worktree).catch((e: Error) => { console.error(`session ${this.meta.id}: worktree not removed: ${e.message}`); return undefined; });
       if (w?.kept) console.error(`session ${this.meta.id}: branch ${this.meta.runtime.worktree.branch} kept with ${w.commits} commit(s)`);
     }
+    // Sub-agents' worktrees go with it too (their branches stay when they have commits).
+    for (const w of this.meta.subWorktrees ?? []) await removeWorktree(w).catch(() => {});
+    // Calls waiting for the desktop end now.
+    for (const [id, c] of this.calls) { this.calls.delete(id); c.fail(new Error('the session was deleted')); }
   }
 
   private async getSettings(host: ToolHost): Promise<Settings> {
@@ -949,6 +1001,9 @@ export class Session {
         record: (c: Parameters<NonNullable<ToolServices['changes']>['record']>[0]) => this.deps.changes!.record({ ...c, by: c.by || (this.meta.owner ? `account:${this.meta.owner}` : 'operator'), source: c.source ?? `session:${this.meta.id}` }),
         query: (q: Parameters<NonNullable<ToolServices['changes']>['query']>[0]) => this.deps.changes!.query(q),
       } } : {}),
+      artifacts: this.artifactService(),
+      ...(main && this.meta.client ? { client: this.clientService() } : {}),
+      ...(main ? { sessions: this.sessionsService() } : {}),
       notify: async (message: string) => {
         this.emit({ kind: 'notice', level: 'info', text: `The agent says: ${message}` });
         fireHooks(this.settings, this.host, 'Notification', { type: 'agent', session: this.meta.id, title: this.meta.title, message }, this.deps.registry.hooks, (m) => this.emit({ kind: 'notice', level: 'warn', text: m }));
@@ -963,6 +1018,206 @@ export class Session {
         this.scheduleSave();
       },
     };
+  }
+
+  // ---------- artifacts ----------
+
+  /** The session's artifacts: in its workspace (a companion's files are elsewhere: then in its own data folder). */
+  artifactStore(): ArtifactStore {
+    return new ArtifactStore(this.meta.runtime.kind === 'companion' ? this.dir : this.workspace);
+  }
+
+  private artifactService(): ArtifactService {
+    const store = this.artifactStore();
+    const announce = (m: ArtifactMeta, action: 'create' | 'update' | 'rewrite') => {
+      this.emit({ kind: 'artifact', artifact: { id: m.id, title: m.title, kind: m.kind, version: m.version, action } });
+      return m;
+    };
+    /** A workspace file's bytes (an image or a PDF made by a command), through the workspace's own path checks. */
+    const fileBytes = async (p: string): Promise<Buffer> => {
+      const host = await this.getHost();
+      if (host.kind === 'companion') {
+        if (!host.readFile) throw new ArtifactError('this computer\'s files cannot be read from here');
+        const b = await host.readFile(p, AbortSignal.timeout(30_000));
+        if (!b) throw new ArtifactError(`${p} was not found on that computer`);
+        return b;
+      }
+      const real = await resolveIn(host, p);
+      const st = await fs.stat(real);
+      if (!st.isFile() || st.size > 10 * 1024 * 1024) throw new ArtifactError(`${p} is not a file of at most 10 MB`);
+      return fs.readFile(real);
+    };
+    return {
+      create: async (a) => announce(await store.create({ title: a.title, kind: a.kind, language: a.language, content: a.path ? await fileBytes(a.path) : a.content ?? '' }), 'create'),
+      update: async (id, e) => { const r = await store.update(id, e); announce(r.meta, 'update'); return r; },
+      rewrite: async (id, a) => announce(await store.rewrite(id, a.path ? await fileBytes(a.path) : a.content ?? '', a.title), 'rewrite'),
+      get: (id, v) => store.get(id, v),
+      list: () => store.list(),
+    };
+  }
+
+  // ---------- the client app: desktop tools ----------
+
+  /** Desktop tool calls waiting for the client's answer (POST /api/sessions/:id/client-result). */
+  private calls = new Map<string, { tool: string; answer(r: { ok: boolean; result?: unknown; error?: string; untrusted?: boolean }): void; fail(e: Error): void }>();
+
+  /** Whether the declared client is attached now: a live subscriber of that kind, signed in as the owner. */
+  clientAttached(): boolean {
+    const c = this.meta.client;
+    return !!c && !!this.deps.clients?.attached(this.meta.id, c.kind, this.meta.owner);
+  }
+
+  /** Forwards a desktop tool call to the attached client (a client_call event) and waits for its answer. */
+  clientCall(tool: DesktopTool, input: Record<string, unknown>, signal: AbortSignal): Promise<{ ok: boolean; result?: unknown; error?: string; untrusted?: boolean }> {
+    if (!this.meta.client?.tools.includes(tool)) return Promise.reject(new Error(`The app of this session does not serve ${tool}.`));
+    if (!this.clientAttached()) return Promise.reject(new Error(`No ${this.meta.client.kind} app is attached to this session now (it is closed, or not showing it): ${tool} is unavailable. Carry on without it.`));
+    if (signal.aborted) return Promise.reject(new Error('stopped'));
+    const callId = `call_${crypto.randomBytes(9).toString('hex')}`;
+    const ms = Math.max(50, Number(process.env.HARNESS_CLIENT_CALL_MS ?? 60_000) || 60_000);
+    return new Promise((resolve, reject) => {
+      const end = () => { clearTimeout(timer); signal.removeEventListener('abort', onAbort); this.calls.delete(callId); };
+      const timer = setTimeout(() => {
+        end();
+        this.emit({ kind: 'client_call_end', callId, ok: false, reason: 'timeout' });
+        reject(new Error(`the desktop did not answer (${tool}, ${Math.round(ms / 1000)} s); it may be busy or closed. Carry on without it.`));
+      }, ms);
+      const onAbort = () => { end(); this.emit({ kind: 'client_call_end', callId, ok: false, reason: 'stopped' }); reject(new Error('stopped')); };
+      signal.addEventListener('abort', onAbort, { once: true });
+      this.calls.set(callId, { tool, answer: (r) => { end(); resolve(r); }, fail: (e) => { end(); reject(e); } });
+      this.emit({ kind: 'client_call', callId, tool, input });
+    });
+  }
+
+  /** The client's answer to a call: once (a second answer, or one for a call that timed out, is refused). */
+  answerClientCall(callId: string, r: { ok: boolean; result?: unknown; error?: string; untrusted?: boolean }): boolean {
+    const c = this.calls.get(callId);
+    if (!c) return false;
+    this.calls.delete(callId);
+    this.emit({ kind: 'client_call_end', callId, ok: r.ok, reason: 'answered' });
+    c.answer(r);
+    return true;
+  }
+
+  private clientService(): ClientService {
+    const known = (plugin: string) => this.deps.plugins?.().find((p) => p.name === plugin);
+    return {
+      call: (tool, input, signal) => this.clientCall(tool, input, signal),
+      command: (id) => {
+        const m = /^([a-z0-9][a-z0-9._-]{0,62}):([a-z0-9][a-z0-9._-]{0,62})$/i.exec(id);
+        if (!m) return { error: `"${id}" is not a command id ("<plugin>:<command>"; desktop_describe lists them).` };
+        const p = known(m[1]!);
+        if (p) {
+          // A plugin the server has: its manifest decides (the client checks again).
+          const c = p.enabled ? p.ui?.contributes.commands.find((x) => x.id === m[2]) : undefined;
+          if (!c) return { error: `No command ${id} (the plugin is off, or has no such command).` };
+          if (!c.agent) return { error: `${id} is not agent-callable: its plugin's manifest does not mark it "agent". Ask the person to run it.` };
+          return { description: c.agent.description, ...(c.agent.inputSchema ? { inputSchema: c.agent.inputSchema } : {}), plugin: p.name };
+        }
+        const d = this.meta.client?.commands?.find((x) => x.id === id);
+        if (d) return { description: d.description, ...(d.inputSchema ? { inputSchema: d.inputSchema } : {}), plugin: m[1]! };
+        return { error: `No agent-callable command ${id}. desktop_describe lists them.` };
+      },
+      // What the server ships, and the desktop's own built-ins (core.*) when the server has no plugin of that name.
+      firstParty: (plugin) => { const p = known(plugin); return p ? p.source === 'bundled' : plugin.startsWith('core.'); },
+    };
+  }
+
+  // ---------- linked sessions ----------
+
+  private sessionsService(): SessionsService {
+    const need = (): LinkedSessions => { if (!this.deps.linked) throw new Error('Linked sessions are not available on this server.'); return this.deps.linked; };
+    return {
+      start: (a, signal) => need().start(this, a, signal),
+      list: async (f) => need().list(this, f),
+      send: (to, message) => need().send(this, to, message),
+      handOff: (title, plan) => need().handOff(this, title, plan),
+      dismiss: async (pid) => { const p = await need().dismiss(pid, this.meta.id); return `Dismissed "${p.title}" (${p.id}).`; },
+      chapter: (title, summary) => this.markChapter(title, summary),
+    };
+  }
+
+  /** mark_chapter: a chapter in the session's table of contents (meta.chapters, a chapter event). */
+  markChapter(title: string, summary?: string): string {
+    const t = title.replace(/\s+/g, ' ').trim().slice(0, 80);
+    if (!t) throw new Error('a chapter needs a title');
+    const list = (this.meta.chapters ??= []);
+    const index = (list.at(-1)?.index ?? 0) + 1;
+    const s = summary?.replace(/\s+/g, ' ').trim().slice(0, 300) || undefined;
+    list.push({ index, title: t, ...(s ? { summary: s } : {}), at: Date.now(), turn: this.meta.turns ?? 0 });
+    if (list.length > 200) list.splice(0, list.length - 200);
+    this.emit({ kind: 'chapter', title: t, ...(s ? { summary: s } : {}), index });
+    this.scheduleSave();
+    return `Chapter ${index}: ${t}`;
+  }
+
+  /** A note for the agent's next step (a reminder), whether or not a turn runs now. */
+  queueNote(note: string): void {
+    this.queued.push(note);
+  }
+
+  /** Notes from linked sessions that arrived as a turn was ending: they may still wake the session. */
+  private lateLinked = new Map<string, string>();
+
+  /**
+   * A report from a linked session, or a message from another session: a fenced note the
+   * agent sees at its next step. An idle session is woken with it (a turn starts) unless
+   * the person turned that off, it was already woken as often as allowed without a message
+   * from the person (linkedSessions.maxAutoContinues, 5), or the account's caps say no.
+   * Returns 'queued' (a turn runs), 'woken', or why it was not woken.
+   */
+  async receiveLinked(r: { event: HarnessEvent; note: string; untrusted: boolean; wakeText: string; caps?: () => string | undefined }): Promise<string> {
+    if (r.untrusted) this.markUntrusted();
+    this.emit(r.event);
+    this.queued.push(r.note);
+    if (this.abortCtl) { this.lateLinked.set(r.note, r.wakeText); return 'queued'; }
+    if (this.status !== 'idle') return 'queued';
+    const why = await this.autoWake(r.wakeText, r.caps);
+    if (why !== 'woken') this.emit({ kind: 'notice', level: 'info', text: `${r.event.kind === 'side_session' && r.event.phase === 'message' ? 'A message from another session' : 'A linked session reported'}; not continuing on its own (${why}). The agent sees it with your next message.` });
+    return why;
+  }
+
+  private async autoWake(text: string, caps?: () => string | undefined): Promise<string> {
+    const settings = await this.getSettings(await this.getHost()).catch(() => undefined);
+    const ls = settings?.linkedSessions;
+    if (ls?.autoContinue === false) return 'auto-continue is off (linkedSessions.autoContinue)';
+    const max = ls?.maxAutoContinues ?? Math.max(0, Number(process.env.HARNESS_LINKED_MAX_AUTO ?? 5) || 0);
+    if ((this.meta.autoContinues ?? 0) >= max) return `it already continued ${max} time(s) without a message from the person (linkedSessions.maxAutoContinues)`;
+    const cap = caps?.() ?? this.deps.mayRun?.(this.meta.owner) ?? this.deps.spend?.over(this.meta.owner);
+    if (cap) return cap;
+    if (this.status !== 'idle') return 'queued';
+    this.meta.autoContinues = (this.meta.autoContinues ?? 0) + 1;
+    try { await this.send(`<system-reminder>${text}</system-reminder>`, { origin: 'auto' }); } catch (e) { return (e as Error).message; }
+    return 'woken';
+  }
+
+  // ---------- delegation to other models ----------
+
+  /** Why agents on other models may not be charged more in this session (delegation.maxCostUsd), or undefined. */
+  private delegationOver(): string | undefined {
+    const cap = this.settings?.delegation?.maxCostUsd;
+    return cap !== undefined && (this.meta.delegationCost ?? 0) >= cap ? `Agents on other models have spent $${(this.meta.delegationCost ?? 0).toFixed(4)} in this session, the most allowed (delegation.maxCostUsd $${cap}).` : undefined;
+  }
+
+  /**
+   * Whether work may go to `model`: allowed by the person (delegation.allowedModels, within
+   * the operator's cap), under the delegation spend cap, and - with requireApproval - the
+   * person said yes to the first delegation to that provider in this session. Throws why not.
+   */
+  async checkDelegation(model: string, o: { ask: boolean; signal?: AbortSignal }): Promise<void> {
+    const settings = await this.getSettings(await this.getHost());
+    const reg = this.deps.registry;
+    const why = delegationRefusal(settings.delegation, this.meta.model, model, (id) => reg.listModels().find((m) => m.id === id));
+    if (why) throw new Error(why);
+    if (model === this.meta.model) return;
+    const over = this.delegationOver();
+    if (over) throw new Error(over);
+    const provider = reg.model(model).provider;
+    if (!o.ask || !settings.delegation?.requireApproval || provider === reg.model(this.meta.model).provider || (this.meta.delegatedProviders ?? []).includes(provider)) return;
+    if (this.meta.mode === 'dontAsk') throw new Error(`Sending work to ${provider} needs the person's approval (delegation.requireApproval), and this session never asks (dontAsk).`);
+    const r = await this.request('permission', { kind: 'permission_request', requestId: crypto.randomUUID(), tool: 'delegate', summary: `Send work from this session to ${provider} (${model}): what the agent passes on goes to that company's API.`, input: { model, provider }, suggestion: `delegate(${provider})` }, o.signal);
+    if (r.decision !== 'allow' && r.decision !== 'allow_always') throw new Error(`The person did not allow sending work to ${provider}${r.feedback ? `: ${r.feedback}` : ''}. Use ${this.meta.model}.`);
+    (this.meta.delegatedProviders ??= []).push(provider);
+    this.scheduleSave();
   }
 
   private getToolbox(host: ToolHost): Promise<Toolbox> {
@@ -995,7 +1250,18 @@ export class Session {
         for (const a of await loadAgentDir(path.join(host.root, rel), 'project')) if (!BUILTIN_AGENTS.some((b) => b.name === a.name)) agents.set(a.name, a);
       }
     }
-    tools.push(makeAgentTool([...agents.values()]), ...TASK_TOOLS);
+    // The other models agents may use (the person's delegation setting): listed once, in the cached tool descriptions.
+    const settings = await this.getSettings(host);
+    const own = reg.model(this.meta.model);
+    const catalogue = modelCatalogue(delegableModels(settings.delegation, own, reg.listModels()), own) || undefined;
+    // A sub-agent can get its own worktree where the session works in a server folder that is a git repository.
+    const isolation = host instanceof LocalHost && this.meta.runtime.kind === 'local' && (await run('git', ['-C', host.root, 'rev-parse', '--is-inside-work-tree'], { timeoutMs: 5000 }).catch(() => undefined))?.code === 0;
+    tools.push(makeAgentTool([...agents.values()], { catalogue, isolation }));
+    const linked = this.linkedOn(settings);
+    tools.push(...TASK_TOOLS.filter((t) => t.spec.name !== 'send_message'), makeSendMessageTool(linked));
+    // Only for sessions that use them, so every other session's prompt stays as it was.
+    if (this.meta.client) tools.push(artifactTool, markChapterTool, ...this.meta.client.tools.map((t) => DESKTOP_TOOL_IMPLS[t]));
+    if (linked) tools.push(makeStartSessionTool(catalogue), listSessionsTool, handOffTool, dismissProposalTool);
     if (reg.gates.size) tools.push(makeGatesTool(reg));
 
     // Workflows: plugins', then the project's (JSON; a shell node runs only where project commands are trusted).
@@ -1021,6 +1287,18 @@ export class Session {
     const mcp = [...server.status, ...project.status];
     for (const st of mcp.filter((x) => !x.ok)) this.emit({ kind: 'notice', level: 'warn', text: `MCP server ${st.name} (${st.scope}) is not available: ${st.error}` });
     return { tools: sortTools(tools), agents: [...agents.values()], skills, mcp, workflows: [...workflows.values()], closeProject: project.close };
+  }
+
+  /**
+   * Whether this session has the linked-session tools: on for a desktop or web client (where a
+   * person sees proposals and reports), or by the person's setting (linkedSessions.enabled) or
+   * the operator's (HARNESS_LINKED_SESSIONS=on|off). Never for a companion session.
+   */
+  private linkedOn(settings: Settings): boolean {
+    const env = process.env.HARNESS_LINKED_SESSIONS;
+    if (!this.deps.linked || env === 'off' || this.meta.runtime.kind === 'companion') return false;
+    const mine = settings.linkedSessions?.enabled;
+    return env === 'on' || mine === true || (mine !== false && (this.meta.client?.kind === 'desktop' || this.meta.client?.kind === 'web'));
   }
 
   async capabilities(): Promise<{ tools: { name: string; kind: string }[]; agents: { name: string; description: string; source?: string }[]; skills: { name: string; description: string; source: string }[]; mcp: McpStatus[]; plugins: Registry['plugins'] }> {
@@ -1097,15 +1375,15 @@ export class Session {
     const tb = await this.getToolbox(host);
     const model = this.deps.registry.model(this.meta.model);
     const cfg = {
-      name: 'main', model, provider: this.deps.registry.provider(model), effort: this.meta.effort, system: systemPrompt(this.meta.outputStyle?.prompt), tools: tb.tools, host, settings,
-      cacheKey: `hw-${this.meta.id}`, maxSteps: settings.maxSteps, readFiles: this.readFiles,
+      name: 'main', model, provider: this.deps.registry.provider(model), effort: this.meta.effort, system: systemPrompt(this.meta.outputStyle?.prompt, this.meta.clientPrompt), tools: tb.tools, host, settings,
+      cacheKey: this.meta.cacheKey ?? `hw-${this.meta.id}`, maxSteps: settings.maxSteps, readFiles: this.readFiles,
       inProcessHooks: [...this.deps.registry.hooks, ...this.gatesOnStopHook(settings)],
       hookJudge: this.hookJudge(settings),
       hookRunners: this.hookRunners(),
       autoCheck: this.autoCheck(settings),
       injectionCheck: this.injectionCheck(settings),
-      runSubagent: (a: { description: string; prompt: string; type: string }) => this.runSubagent(a, 1, this.agent),
-      askUser: (q: string, o: string[]) => this.ask(q, o),
+      runSubagent: (a: SubagentArgs) => this.runSubagent(a, 1, this.agent),
+      askUser: (q: string, o: string[], form?: Record<string, unknown>) => this.ask(q, o, form),
       proposePlan: (p: string) => this.proposePlan(p),
       enterPlanMode: (reason: string) => this.enterPlanMode(reason),
       beforeWrite: this.checkpoints ? (p: string) => this.checkpoints!.before(p) : undefined,
@@ -1233,8 +1511,8 @@ export class Session {
   }
 
   /** The agent tool: a sub-agent of `parent`, under its signal (a background agent's children stop with it), kept for send_message. */
-  private async runSubagent(a: { description: string; prompt: string; type: string }, depth = 1, parent?: Agent, signal?: AbortSignal): Promise<string> {
-    const r = await this.runAgent({ agent: a.type, description: a.description, prompt: a.prompt, signal: signal ?? this.abortCtl?.signal ?? new AbortController().signal, depth, parent, keep: true, tainted: (parent ?? this.agent)?.tainted });
+  private async runSubagent(a: SubagentArgs, depth = 1, parent?: Agent, signal?: AbortSignal, host?: ToolHost): Promise<string> {
+    const r = await this.runAgent({ agent: a.type, description: a.description, prompt: a.prompt, signal: signal ?? this.abortCtl?.signal ?? new AbortController().signal, depth, parent, keep: true, tainted: (parent ?? this.agent)?.tainted, ...(a.model ? { model: a.model, delegated: true } : {}), ...(a.effort ? { effort: a.effort } : {}), ...(a.isolation ? { isolation: a.isolation } : {}), ...(host ? { host } : {}) });
     return `${r.report}\n\n(agent id: ${r.id})`;
   }
 
@@ -1359,13 +1637,31 @@ export class Session {
     });
   }
 
-  private async startBackgroundAgent(a: { description: string; prompt: string; type: string }): Promise<string> {
+  private async startBackgroundAgent(a: SubagentArgs): Promise<string> {
     const tb = await this.getToolbox(await this.getHost());
     const def = tb.agents.find((x) => x.name === a.type) ?? tb.agents.find((x) => x.name === 'general')!;
+    // Another model is checked (and approved, if the person asks for that) now, in the turn, not later in the background.
+    if (a.model) await this.checkDelegation(a.model, { ask: true });
+    if (a.isolation) this.isolationRefusal();
     const id = `${def.name}-${++this.subagents}`;
     const parent = this.agent;
-    this.runAgentInBackground(id, a.description, (signal) => this.runAgent({ agent: def.name, label: id, description: a.description, prompt: a.prompt, signal, depth: 1, parent, keep: true }));
+    this.runAgentInBackground(id, a.description, (signal) => this.runAgent({ agent: def.name, label: id, description: a.description, prompt: a.prompt, signal, depth: 1, parent, keep: true, ...(a.model ? { model: a.model, delegated: true, approved: true } : {}), ...(a.effort ? { effort: a.effort } : {}), ...(a.isolation ? { isolation: a.isolation } : {}) }));
     return id;
+  }
+
+  /** isolation "worktree" works where the session's commands run on this server in a folder (local runtime). */
+  private isolationRefusal(): void {
+    if (this.meta.runtime.kind !== 'local' || !(this.host instanceof LocalHost)) throw new Error(`isolation "worktree" needs a session in a server folder that is a git repository; this session's runtime is ${this.meta.runtime.kind === 'local' ? 'a server folder in a Docker sandbox' : this.meta.runtime.kind}. Run the sub-agent without isolation.`);
+  }
+
+  /** A fresh worktree of the session's repository (from its current commit) for one sub-agent, on its own branch. */
+  private async subWorktree(name: string, host: LocalHost): Promise<{ w: Worktree; host: LocalHost }> {
+    this.isolationRefusal();
+    const head = await run('git', ['-C', host.root, 'rev-parse', 'HEAD'], { timeoutMs: 10_000 });
+    if (head.code !== 0) throw new Error(`isolation "worktree" needs the session's folder to be a git repository with a commit (${(head.stderr || head.stdout).trim().slice(0, 200) || 'not a repository'}). Run the sub-agent without isolation.`);
+    const repo = this.meta.runtime.worktree?.repo ?? host.root;
+    const w = await createWorktree(repo, path.join(this.deps.dataDir, 'worktrees', `${this.meta.id}-${name}`), `${this.meta.title}-${name}`, head.stdout.trim());
+    return { w, host: host.withRoot(w.dir, { writable: worktreeWritable(w), readable: [w.commonDir] }) };
   }
 
   /** send_message: continues a kept sub-agent the caller started, or tells a running one. */
@@ -1464,21 +1760,30 @@ export class Session {
    * Runs a named agent in a fresh context: a chat sub-agent, or a workflow's
    * agent node. One cache key per agent kind, so sibling runs share a prefix.
    */
-  async runAgent(a: { agent: string; prompt: string; signal: AbortSignal; label?: string; description?: string; model?: string; effort?: Effort; maxSteps?: number; allowTodos?: boolean; /** A hook's verifier: no hooks of its own (they would start it again). */ noHooks?: boolean; /** 1 for a sub-agent of the main agent, 2 for one of its own, ... */ depth?: number; /** The agent that started it (it is tainted with it, and starts tainted when it is). */ parent?: Agent; /** Kept after it ends, for send_message. */ keep?: boolean; /** Starts tainted: its brief came from an agent that read untrusted content. */ tainted?: boolean }): Promise<{ report: string; reason: string; cost: number; id: string }> {
-    const host = await this.getHost();
-    const settings = await this.getSettings(host);
-    const tb = await this.getToolbox(host);
+  async runAgent(a: { agent: string; prompt: string; signal: AbortSignal; label?: string; description?: string; model?: string; effort?: Effort; maxSteps?: number; allowTodos?: boolean; /** A hook's verifier: no hooks of its own (they would start it again). */ noHooks?: boolean; /** 1 for a sub-agent of the main agent, 2 for one of its own, ... */ depth?: number; /** The agent that started it (it is tainted with it, and starts tainted when it is). */ parent?: Agent; /** Kept after it ends, for send_message. */ keep?: boolean; /** Starts tainted: its brief came from an agent that read untrusted content. */ tainted?: boolean; /** `model` was chosen by an agent or a workflow: only a model the person allowed (delegation). */ delegated?: boolean; /** The delegation was checked (and approved) already. */ approved?: boolean; /** Works in a fresh git worktree of the session's repository. */ isolation?: 'worktree'; /** Where its tools work (a worktree agent's sub-agents share its worktree). */ host?: ToolHost }): Promise<{ report: string; reason: string; cost: number; id: string }> {
+    const sessionHost = await this.getHost();
+    const settings = await this.getSettings(sessionHost);
+    const tb = await this.getToolbox(sessionHost);
     const depth = a.depth ?? 1;
+    // Another model gets this session's data: only one the person allowed (asked first when they want that).
+    if (a.model && a.delegated && !a.approved) await this.checkDelegation(a.model, { ask: true, signal: a.signal });
     // Deeper sub-agents only as far as the operator allows; at most maxParallelSubagents at once.
     const nests = depth < settings.maxSubagentDepth;
     const release = depth > 1 || a.noHooks ? () => {} : await this.slot(settings.maxParallelSubagents, a.signal);
     let entry: SubEntry | undefined;
     let name = '';
+    let isolated: { w: Worktree; host: LocalHost } | undefined;
     try {
     const def = tb.agents.find((x) => x.name === a.agent) ?? tb.agents.find((x) => x.name === 'general')!;
     const n = ++this.subagents;
     name = a.label ?? `${def.name}-${n}`;
-    const model = this.subagentModel({ ...def, model: a.model ?? def.model }, settings);
+    // A model the agent named is used as named (it was allowed); a definition's or the operator's falls back to the session's when missing.
+    const model = a.model && a.delegated ? this.deps.registry.model(a.model) : this.subagentModel({ ...def, model: a.model ?? def.model }, settings);
+    if (a.isolation === 'worktree') {
+      if (!(sessionHost instanceof LocalHost)) this.isolationRefusal();
+      isolated = await this.subWorktree(name, sessionHost as LocalHost);
+    }
+    const host = isolated?.host ?? a.host ?? sessionHost;
     // agent and send_message only where it may start its own; never the user-facing tools.
     const banned = INTERACTIVE_TOOLS.filter((t) => !(a.allowTodos && t === 'todo_write') && !(nests && NESTING_TOOLS.includes(t)));
     const tools = tb.tools.filter((t) => (def.tools ? def.tools.includes(t.spec.name) || (a.allowTodos && t.spec.name === 'todo_write') : !banned.includes(t.spec.name)) && (!NESTING_TOOLS.includes(t.spec.name) || nests));
@@ -1486,9 +1791,13 @@ export class Session {
     const effort = wanted && model.efforts.includes(wanted) ? wanted : (model.efforts.includes(this.meta.effort) ? this.meta.effort : model.effort);
     const cost = { n: 0 };
     const self: { agent?: Agent } = {};
+    // Work on another model is counted apart (delegation.maxCostUsd), and stops at the cap.
+    const onOther = model.id !== this.meta.model;
+    const hooks = this.hooksFor(name, (c) => { cost.n += c; if (onOther) this.meta.delegationCost = (this.meta.delegationCost ?? 0) + c; });
+    if (onOther) { const base = hooks.overBudget; hooks.overBudget = () => base() ?? this.delegationOver(); }
     const sub = new Agent({
       name, model, provider: this.deps.registry.provider(model), effort,
-      ...(nests ? { runSubagent: (x: { description: string; prompt: string; type: string }) => this.runSubagent(x, depth + 1, self.agent, a.signal) } : {}),
+      ...(nests ? { runSubagent: (x: SubagentArgs) => this.runSubagent(x, depth + 1, self.agent, a.signal, host === sessionHost ? undefined : host) } : {}),
       system: SUBAGENT_PROMPT, tools, host, settings: a.noHooks ? { ...settings, hooks: {} } : settings,
       cacheKey: `hw-${this.meta.id}-${def.name}`, maxSteps: Math.min(a.maxSteps ?? (a.allowTodos ? 150 : 60), settings.maxSteps), readFiles: new Map<string, FileStamp>(),
       inProcessHooks: a.noHooks ? [] : this.deps.registry.hooks,
@@ -1496,10 +1805,11 @@ export class Session {
       ...(a.noHooks ? {} : { hookRunners: this.hookRunners() }),
       autoCheck: this.autoCheck(settings),
       injectionCheck: this.injectionCheck(settings),
-      beforeWrite: this.checkpoints ? (p: string) => this.checkpoints!.before(p) : undefined,
+      // Files in a worktree are on its branch: rewinding the session's checkpoints does not cover them.
+      beforeWrite: this.checkpoints && host === sessionHost ? (p: string) => this.checkpoints!.before(p) : undefined,
       services: await this.services(false, name),
       redactor: this.redactor,
-    }, this.hooksFor(name, (c) => { cost.n += c; }));
+    }, hooks);
     self.agent = sub;
     // A brief from an agent that read outside content may carry some of it: the sub-agent starts as tainted.
     if (a.tainted || a.parent?.tainted) sub.markTainted();
@@ -1511,15 +1821,35 @@ export class Session {
     const start = a.noHooks ? { errors: [], feedback: '' } : await runHooks(settings, host, 'SubagentStart', { agent: name, type: def.name, description: a.description ?? '' }, def.name, a.signal, this.deps.registry.hooks, { ...this.hookRunners(), judge: this.hookJudge(settings) });
     for (const e of start.errors) this.emit({ kind: 'notice', level: 'warn', text: e, agent: name });
     const extra = start.feedback ? `\n\n<subagent_start_context>\n${start.feedback}\n</subagent_start_context>` : '';
-    sub.append({ role: 'user', content: [{ type: 'text', text: `${env}${def.prompt ? `\n\n<role>\n${def.prompt}\n</role>` : ''}${extra}\n\n<brief>\n${a.prompt}\n</brief>` }] });
-    this.emit({ kind: 'notice', level: 'info', text: `Started ${name} (${def.name}, ${model.id})${a.description ? `: ${a.description}` : ''}`, agent: name });
-    return { ...await this.drive(entry, name, a.signal), id: name };
+    const where = isolated ? `\n\n<system-reminder>You work in your own git worktree (${isolated.w.dir}) on branch ${isolated.w.branch}. Commit your changes there when they are done.</system-reminder>` : '';
+    sub.append({ role: 'user', content: [{ type: 'text', text: `${env}${def.prompt ? `\n\n<role>\n${def.prompt}\n</role>` : ''}${extra}${where}\n\n<brief>\n${a.prompt}\n</brief>` }] });
+    this.emit({ kind: 'notice', level: 'info', text: `Started ${name} (${def.name}, ${model.id})${isolated ? ` in worktree ${isolated.w.branch}` : ''}${a.description ? `: ${a.description}` : ''}`, agent: name });
+    const r = await this.drive(entry, name, a.signal);
+    if (isolated) r.report += await this.closeSubWorktree(isolated);
+    return { ...r, id: name };
+    } catch (e) {
+      // A worktree made for an agent that never ran (or failed) goes when it holds nothing.
+      if (isolated) await this.closeSubWorktree(isolated).catch(() => '');
+      throw e;
     } finally {
       release();
       if (entry) entry.running = false;
       this.agentSignals.delete(name);
       this.trimSubs();
     }
+  }
+
+  /** A sub-agent's worktree after it ends: removed when unchanged, else kept and named in its report. */
+  private async closeSubWorktree(i: { w: Worktree; host: LocalHost }): Promise<string> {
+    await i.host.close().catch(() => {});
+    const ch = await worktreeChanges(i.w);
+    if (!ch.commits && !ch.dirty) {
+      await removeWorktree(i.w).catch(() => {});
+      return '\n\n(Its worktree changed nothing and was removed.)';
+    }
+    (this.meta.subWorktrees ??= []).push(i.w);
+    this.scheduleSave();
+    return `\n\n(It worked in a git worktree: ${i.w.dir}, branch ${i.w.branch}, ${ch.commits} commit(s)${ch.dirty ? ', with uncommitted changes' : ''}. Review or merge that branch; the worktree stays until the session is deleted.)`;
   }
 
   /** Runs a sub-agent until it ends (answering messages sent as it finished) and returns its report. */
@@ -1576,11 +1906,8 @@ export class Session {
     const body = JSON.stringify(this.redactor.redactDeep(run), null, 1);
     const prev = this.runWrites.get(run.id) ?? Promise.resolve();
     const next = prev.catch(() => {}).then(async () => {
-      await fs.mkdir(this.runsDir(), { recursive: true });
-      const f = path.join(this.runsDir(), `${run.id}.json`);
-      const tmp = `${f}.${crypto.randomUUID().slice(0, 8)}.tmp`;
-      await fs.writeFile(tmp, body);
-      await fs.rename(tmp, f);
+      // Retried while Windows refuses the rename (someone is reading the run: the runs list, a client).
+      await writeFileAtomic(path.join(this.runsDir(), `${run.id}.json`), body);
     });
     this.runWrites.set(run.id, next);
     return next;
@@ -1601,7 +1928,8 @@ export class Session {
     return {
       host: () => this.getHost(),
       // A session that read outside data (a webhook's alert) runs its workflow's agents as tainted too.
-      runAgent: (a) => this.runAgent({ ...a, allowTodos: true, ...(parent ? { parent } : {}), ...(this.meta.tainted ? { tainted: true } : {}) }),
+      // A node's model is a delegation like an agent's choice: only a model the person allowed (e.g. a reviewer on another provider).
+      runAgent: (a) => this.runAgent({ ...a, allowTodos: true, ...(a.model && a.model !== this.meta.model ? { delegated: true } : {}), ...(parent ? { parent } : {}), ...(this.meta.tainted ? { tainted: true } : {}) }),
       runGates: async (names, signal) => runGates(this.deps.registry, await this.getHost(), names, signal, await this.services(false)),
       approve: async ({ runId, node, title, message, files }) => {
         const host = await this.getHost();
@@ -1779,6 +2107,8 @@ export class Session {
   respond(requestId: string, r: { decision: string; feedback?: string; answer?: string }): boolean {
     const p = this.pending.get(requestId);
     if (!p) return false;
+    // A form's answer must fit its schema, whoever sends it (throws FormAnswerError; the question stays open).
+    if (p.event.kind === 'question' && p.event.form && r.answer !== undefined) r = { ...r, answer: this.formAnswer(requestId, r.answer) };
     this.pending.delete(requestId);
     this.emit({ kind: 'request_resolved', requestId, decision: r.decision });
     if (this.pending.size === 0 && this.status === 'waiting') {
@@ -1808,9 +2138,27 @@ export class Session {
     return { allow: false, feedback: r.feedback };
   }
 
-  private async ask(question: string, options: string[]): Promise<string> {
-    const r = await this.request('question', { kind: 'question', requestId: crypto.randomUUID(), question, options });
+  private async ask(question: string, options: string[], form?: Record<string, unknown>): Promise<string> {
+    const r = await this.request('question', { kind: 'question', requestId: crypto.randomUUID(), question, options, ...(form ? { form } : {}) });
     return r.answer?.trim() || r.feedback || '(no answer)';
+  }
+
+  /**
+   * An answer to a question with a form: the filled-in object (or its JSON), checked against the
+   * form's schema. Returns the answer as JSON text for the agent, or throws with what is wrong.
+   * A question without a form takes text as before.
+   */
+  formAnswer(requestId: string, answer: unknown): string | undefined {
+    const ev = this.pending.get(requestId)?.event;
+    const form = ev?.kind === 'question' ? ev.form : undefined;
+    if (!form) return typeof answer === 'string' ? answer : answer === undefined ? undefined : JSON.stringify(answer);
+    let value = answer;
+    if (typeof value === 'string') { try { value = JSON.parse(value); } catch { throw new FormAnswerError('this question has a form: answer with an object of its fields'); } }
+    const problems = validateValue(form as JsonSchema, value);
+    if (problems.length) throw new FormAnswerError(`the answer does not fit the form: ${problems.slice(0, 10).join('; ')}`);
+    const text = JSON.stringify(value);
+    if (text.length > 100_000) throw new FormAnswerError('the answer is larger than 100,000 characters');
+    return text;
   }
 
   private async proposePlan(plan: string): Promise<{ approved: boolean; feedback?: string }> {
@@ -1877,9 +2225,11 @@ export class Session {
    * Starts a turn, or queues the text for the running one. `images` go to the model with the
    * message; they need a turn of their own (a queued message is text), so a busy session refuses them.
    */
-  async send(text: string, opts: { images?: ImageBlock[] } = {}): Promise<'started' | 'queued'> {
+  async send(text: string, opts: { images?: ImageBlock[]; /** person: typed by the person (resets the count of turns started without one); auto: a linked report or message woke it; link: a linked session's first brief. */ origin?: 'person' | 'auto' | 'link' } = {}): Promise<'started' | 'queued'> {
     const t = text.trim();
     if (!t) throw new Error('empty message');
+    if (opts.origin === 'person' && this.meta.autoContinues) { this.meta.autoContinues = 0; this.scheduleSave(); }
+    const fromPerson = opts.origin !== 'auto' && opts.origin !== 'link';
     // Only background work waiting for an answer: no turn runs, so this message starts one.
     const bgOnly = this.status === 'waiting' && !this.abortCtl && [...this.pending.values()].every((p) => p.background);
     if (this.status !== 'idle' && !bgOnly) {
@@ -1894,10 +2244,12 @@ export class Session {
       this.setStatus('running');
       try { await this.takeLease(); } catch (e) { this.setStatus('idle'); throw e; }
     }
-    this.latestPrompt = t;
-    if (this.meta.title === 'New session') this.meta.title = t.replace(/\s+/g, ' ').slice(0, 60);
-    this.meta.firstPrompt ??= t.slice(0, 2000);
-    this.runTurn(t, opts.images).catch(() => {});
+    if (fromPerson) {
+      this.latestPrompt = t;
+      if (this.meta.title === 'New session') this.meta.title = t.replace(/\s+/g, ' ').slice(0, 60);
+      this.meta.firstPrompt ??= t.slice(0, 2000);
+    } else if (opts.origin === 'link') this.latestPrompt = t;
+    this.runTurn(t, opts.images, opts.origin).catch(() => {});
     return 'started';
   }
 
@@ -1926,7 +2278,7 @@ export class Session {
   /** The shell the session's commands run in (bash or powershell), for quoting a command line. */
   async workspaceShell(): Promise<string> { return (await this.getHost()).shell; }
 
-  private async runTurn(text: string, images?: ImageBlock[]): Promise<void> {
+  private async runTurn(text: string, images?: ImageBlock[], origin?: 'person' | 'auto' | 'link'): Promise<void> {
     this.abortCtl = new AbortController();
     const signal = this.abortCtl.signal;
     this.setStatus('running');
@@ -1968,7 +2320,7 @@ export class Session {
       if (prompt.feedback) body += `\n\n<system-reminder>${prompt.feedback}</system-reminder>`;
       const pre = this.queued.splice(0).filter((q) => q.startsWith('<system-reminder>'));
       agent.append({ role: 'user', content: [...pre.map((q) => ({ type: 'text' as const, text: q })), { type: 'text', text: body }, ...(images ?? [])] });
-      this.emit({ kind: 'user_message', text });
+      this.emit({ kind: 'user_message', text, ...(origin === 'auto' || origin === 'link' ? { origin } : {}) });
       reason = await agent.run(signal);
     } catch (err) {
       if (signal.aborted) reason = 'aborted';
@@ -1990,6 +2342,16 @@ export class Session {
       this.queued = this.queued.filter((q) => q.startsWith('<system-reminder>'));
       if (rest.length && reason !== 'aborted') this.send(rest.join('\n\n')).catch(() => {});
       else this.lateBackground(reason !== 'aborted');
+      // Linked notes that came as the turn ended: they may wake it, as one arriving while idle does.
+      const late = [...this.lateLinked].filter(([note]) => this.queued.includes(note));
+      this.lateLinked.clear();
+      if (late.length && reason !== 'aborted' && !rest.length) {
+        void this.autoWake(late[0]![1]).then((why) => {
+          if (why !== 'woken' && why !== 'queued') this.emit({ kind: 'notice', level: 'info', text: `A linked session's note arrived as the turn ended; not continuing on its own (${why}). The agent sees it with your next message.` });
+        });
+      }
+      // A linked session reports to the session that started it.
+      if (this.meta.parent) this.deps.linked?.turnEnded(this, reason);
     }
   }
 

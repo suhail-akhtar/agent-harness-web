@@ -19,6 +19,8 @@ export interface ModelSpec {
   vision: boolean;
   /** Shown in the UI when a capability is weak or untested. */
   notes?: string;
+  /** A few words on what it is good for, in the catalogue agents pick delegates from. */
+  strengths?: string;
   contextWindow: number;
   /** max_tokens sent per request (a cap, not a reservation). */
   maxOutput: number;

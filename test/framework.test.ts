@@ -37,7 +37,8 @@ test('agent definitions and the per-session agent tool', () => {
   assert.equal(def.effort, 'high');
   const tool = makeAgentTool([{ name: 'explore', description: 'e', prompt: '' }, def]);
   assert.deepEqual((tool.spec.input_schema.properties.type as { enum: string[] }).enum, ['explore', 'reviewer']);
-  assert.match(tool.spec.description, /reviewer: Reviews diffs/);
+  // Each agent with the tools it has (the catalogue of agent types the model browses).
+  assert.match(tool.spec.description, /- reviewer \[read, grep\]: Reviews diffs/);
 });
 
 test('skills: discovered from folders, listed in one line each, loaded on demand, contained', async () => {
