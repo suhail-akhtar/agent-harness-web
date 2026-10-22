@@ -340,3 +340,34 @@ test; tools appear only where they can work (desktop tools only with a desktop a
 added during a session is appended (reminders), never edited into earlier messages; fresh child sessions
 start from a brief, not the parent's history; reports into a parent are capped and fenced; cheaper models
 take delegated sub-tasks when the person allows it.
+
+## 16. Interactive diagrams (`core.diagrams`)
+
+A built-in plugin that renders one JSON spec (defined in `packages/plugin-ui`, shared by models and
+plugins) as a live canvas, in the transcript (a `diagram` fence), as an artifact kind, and as a plugin
+view. The model is told the spec exists through the client declaration; the full spec is a skill it loads
+only when it draws one (no cost to sessions that never do).
+
+- **Views:** context (people, the system, external systems), containers, components, deployment (nested
+  groups: host / network / zone / subnet / cluster / region, with addresses and sizes), data (ER: tables
+  with typed fields, PK / FK / UK / PII marks, `n:1` relations, "+ N more" folding), code dependencies
+  (folders and files with import counts, like AICO's code graph) and free flow charts.
+- **Nodes:** a kind with its icon and caption (person, web app, mobile app, API, service, function,
+  relational database, document store, cache, queue / stream, storage, batch job, reverse proxy /
+  ingress, load balancer, secrets / key vault, external system, internet, browser, device, ...), title,
+  technology line, status badge (done, in progress, failing, planned, changed), "integrated / bought"
+  drawn dashed, size and address lines for deployment.
+- **Edges:** label (uses, https, sql, env, file, ...), synchronous solid or asynchronous dashed, counts
+  on bundled edges, direction.
+- **Flows:** ordered steps over edges ("3. connect 10.42.29.2 -> 10.42.29.3:5432 with ...") played as an
+  animation: the path draws step by step with moving dashes, the rest dims, the step label rides the edge;
+  play, pause, step, speed.
+- **Interaction:** pan, zoom, fit, minimap; Overview and Neighbourhood (a node and its neighbours) modes;
+  click a node for a Details panel (all fields, linked files, findings); search; collapse groups; drag
+  with the position kept in the spec; legend and a summary line ("3 built · 4 integrated · 8 relations ·
+  9 flows · 1 finding"); "not connected" list; export SVG / PNG; light and dark.
+- **Ask the agent:** a box on the canvas ("add a cache in front of the catalogue") sends the request with
+  the diagram's artifact id; the agent edits the spec through the `artifact` tool and the canvas updates
+  in place, the changed nodes marked `changed`.
+- **Layout:** automatic (ELK layered with orthogonal routing, in a worker; AICO's layered layout as the
+  fallback), stable between edits so a small change does not move everything.
