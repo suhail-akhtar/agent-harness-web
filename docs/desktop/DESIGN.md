@@ -429,6 +429,15 @@ row-level security enforced server-side (app and published pages), usage metrics
 reports, Excel export, embed codes, versions with restore, certified datasets. (F) Natural-language
 questions answered by queries on the semantic model, with the SQL shown.
 
+Driven by agents, every bit: every change a person can make in the UI is a typed, validated operation
+(`add_visual`, `set_measure`, `add_step`, ...) that the UI and the agents' tools both call - no UI-only
+paths. Operations are checked against the model, applied atomically, recorded in the version history (person
+or agent, which session) and undoable. A `describe` operation gives the agent the current state by id; a
+`verify` operation runs the affected queries and reconciles totals; narrative numbers must match a measure.
+A change asked in words (the dashboard's Ask box, the chat, a comment on a visual) becomes operations, shown
+as a diff with undo; an ambiguous one is asked back. This is the rule for every core plugin: what a person
+can do, an agent can do through the same operations.
+
 ## 19. The harness home (`~/.harness`)
 
 By default everything lives under one folder the person can find and move: `~/.harness/` (or
