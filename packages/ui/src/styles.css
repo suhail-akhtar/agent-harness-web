@@ -143,3 +143,10 @@ html[data-motion='reduced'] .hx-fade-in, html[data-motion='reduced'] .hx-pop-in,
 /* Highlighted code (react-syntax-highlighter, Prism tokens): colours from the theme. */
 .hx-code { font-family: var(--hx-font-mono); font-size: 12.5px; line-height: 20px; }
 .hx-code.wrap code, .hx-code.wrap pre { white-space: pre-wrap !important; word-break: break-word; }
+
+/* A notebook's HTML output (sanitized into the page): tables like a DataFrame's, in the theme. */
+.hx-nb-html table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.hx-nb-html th, .hx-nb-html td { border: 1px solid var(--hx-border-subtle); padding: 3px 8px; text-align: right; }
+.hx-nb-html th { background: var(--hx-pill); font-weight: 600; }
+.hx-nb-html tbody tr:nth-child(even) td { background: color-mix(in srgb, var(--hx-pill) 45%, transparent); }
+.hx-nb-html img { max-width: 100%; }

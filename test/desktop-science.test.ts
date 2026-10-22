@@ -143,9 +143,36 @@ test('notebooks: cells and outputs; HTML outputs in a script-less frame; markdow
   assert.doesNotMatch(bad.html, /<script/i, 'no live script anywhere in the transcript');
   assert.match(bad.html, /&lt;script&gt;alert\(&quot;xss-nb-md/, 'a markdown cell shows raw HTML as text');
   assert.doesNotMatch(bad.html, /xss-nb-js/, 'JavaScript outputs are dropped');
-  const frame = /<iframe[^>]*data-artifact-frame="notebook-html"[^>]*>/.exec(bad.html)?.[0] ?? '';
-  assert.match(frame, /sandbox=""/, 'HTML output: no scripts at all');
-  assert.match(bad.html, /default-src &#x27;none&#x27;|default-src 'none'/);
+  // HTML outputs are sanitized into the page (it sizes itself; no frame to measure): the table stays, the script goes.
+  assert.match(ok.html, /data-notebook-html[^>]*><table><tr><th>region<\/th>/);
+  assert.doesNotMatch(bad.html, /xss-nb-html/, 'a script in an HTML output is dropped with its content');
+  assert.match(bad.html, /data-notebook-html[^>]*><b>bold<\/b>/);
+  assert.equal(/<iframe[^>]*notebook-html/.test(bad.html), false, 'no frame for notebook HTML');
+});
+
+test('the HTML sanitizer: allowlisted tags and attributes rebuilt, everything active dropped', async () => {
+  const { ui } = await loadUi();
+  const s = ui.sanitizeHtml as (h: string) => string;
+  assert.equal(s('<table border="1" class="dataframe"><thead><tr style="text-align: right;"><th>a</th></tr></thead><tbody><tr><td colspan="2">1 &amp; 2</td></tr></tbody></table>'), '<table border="1"><thead><tr><th>a</th></tr></thead><tbody><tr><td colspan="2">1 &amp; 2</td></tr></tbody></table>');
+  assert.equal(s('<b onclick="alert(1)">x</b><img src="javascript:alert(1)" onerror="alert(2)"><img src="data:image/png;base64,AAAA" alt="ok">'), '<b>x</b><img><img src="data:image/png;base64,AAAA" alt="ok">');
+  assert.equal(s('<style>body{display:none}</style><script>alert(1)</script><svg onload=alert(1)><circle/></svg>after'), 'after');
+  assert.equal(s('<a href="javascript:alert(1)">link</a> <iframe src="x"></iframe><p>a < b</p>'), 'link <p>a &lt; b</p>');
+  assert.equal(s('<div><span>open'), '<div><span>open</span></div>', 'what is left open is closed');
+  assert.equal(s('<td>"q" <x>'), '<td>&quot;q&quot; </td>');
+  assert.equal(s('<scr<script>ipt>alert(1)</script>ok'), '&lt;scrok');
+  assert.equal(s('<!-- c --><p title="x">t</p>'), '<p>t</p>');
+});
+
+test('Graphviz SVG takes the theme: a transparent page, lines and text in the text colour, filled nodes kept readable', async () => {
+  const { ui } = await loadUi();
+  const svg = '<svg><g id="graph0" class="graph"><title>G</title><polygon fill="white" stroke="none" points="0,0"/><g id="node1" class="node"><title>a</title><ellipse fill="none" stroke="black" cx="1"/><text text-anchor="middle">a</text></g><g id="node2" class="node"><title>b</title><polygon fill="lightblue" stroke="black" points="0,0"/><text text-anchor="middle">b</text></g><g id="edge1" class="edge"><title>a->b</title><path fill="none" stroke="black" d="M0,0"/><polygon fill="black" stroke="black" points="0,0"/></g><text>label</text></g></svg>';
+  const out = ui.themeGraphSvg(svg) as string;
+  assert.match(out, /class="graph"><title>G<\/title><polygon fill="none"/, 'the page is transparent');
+  assert.doesNotMatch(out, /"black"/, 'no black left');
+  assert.match(out, /<ellipse fill="none" stroke="currentColor"[^>]*\/><text fill="currentColor"/, 'an unfilled node: text in the theme colour');
+  assert.match(out, /<polygon fill="lightblue" stroke="currentColor"[^>]*\/><text fill="#1f1e1c" text-anchor/, 'a node the graph filled keeps dark text');
+  assert.match(out, /<polygon fill="currentColor" stroke="currentColor"/, 'arrowheads');
+  assert.match(out, /<text fill="currentColor">label/, 'graph labels');
 });
 
 test('dashboards: the shared spec validates with exact errors; KPIs and every panel kind are laid out', async () => {
