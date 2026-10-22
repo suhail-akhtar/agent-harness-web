@@ -9,6 +9,9 @@ import { DataError, qid } from './engine.ts';
 import { CATALOG_ID, type DataHome, newId } from './home.ts';
 import type { DataService } from './service.ts';
 import { checkStep } from './steps.ts';
+import { BUILTIN_TEMPLATES, fillTemplate, pack as packLayout, reflow, type TemplateSpec } from '../../packages/plugin-ui/src/layout.ts';
+import { LAYOUT_TYPES, type LayoutSpec } from '../../packages/plugin-ui/src/bi.ts';
+const LAYOUT_TYPES_SET = new Set<string>(LAYOUT_TYPES);
 import { implicitModel, SemanticCompiler } from './semantic.ts';
 
 // The op layer: every change to sources, datasets, models, dashboards and reports - from a person's
@@ -166,7 +169,9 @@ async function checkVisual(tx: Tx, doc: DocSpec, v: VisualSpec, page: PageSpec):
   if (v.tooltip && !doc.pages.some((p) => p.id === v.tooltip && p.kind === 'tooltip')) throw new DataError(`tooltip: no tooltip page ${v.tooltip}`);
   for (const k of Object.keys(v.interactions ?? {})) if (!page.visuals.some((x) => x.id === k)) throw new DataError(`interactions: no visual ${k} on page ${page.name}`);
   const L = v.layout;
-  if (!L || ![L.x, L.y, L.w, L.h].every((n) => Number.isInteger(n) && n >= 0) || L.w < 1 || L.h < 1 || L.x + L.w > 12) throw new DataError('layout is {x, y, w, h}: whole numbers, 12 columns (x + w <= 12)');
+  const canvas = page.layout?.type === 'canvas';
+  if (!L || ![L.x, L.y, L.w, L.h].every((n) => Number.isInteger(n) && n >= 0) || L.w < 1 || L.h < 1 || (!canvas && L.x + L.w > 12) || (canvas && (L.w > 8000 || L.h > 8000))) throw new DataError(canvas ? 'a canvas layout is {x, y, w, h, z} in whole pixels' : 'layout is {x, y, w, h}: whole numbers, 12 columns (x + w <= 12)');
+  if (v.section && v.section !== 'sidebar' && page.layout?.type === 'sections' && !page.layout?.sections?.some((s) => s.id === v.section)) throw new DataError(`no section "${v.section}" on page ${page.name} (${page.layout?.sections?.map((s) => s.id).join(', ') || 'it has none'})`);
   if (o.button?.action === 'bookmark' && !doc.bookmarks?.some((b) => b.id === o.button!.target)) throw new DataError(`button: no bookmark ${o.button.target}`);
   if (o.button?.action === 'page' && !doc.pages.some((p) => p.id === o.button!.target)) throw new DataError(`button: no page ${o.button.target}`);
 }
@@ -184,6 +189,12 @@ function findPage(doc: DocSpec, id: unknown): PageSpec {
 const DEFAULT_SIZE: Partial<Record<VisualSpec['type'], [number, number]>> = { card: [3, 4], kpi: [3, 5], gauge: [4, 7], multicard: [6, 4], slicer: [3, 6], text: [12, 3], button: [2, 2], table: [12, 9], matrix: [12, 10], narrative: [6, 5] };
 function place(page: PageSpec, v: Partial<VisualSpec>): VisualSpec['layout'] {
   const [w, h] = DEFAULT_SIZE[v.type as VisualSpec['type']] ?? [6, 8];
+  if (page.layout?.type === 'canvas') {
+    // Pixels: below everything, at the left, on top of the stack.
+    const bottom = Math.max(0, ...page.visuals.map((x) => x.layout.y + x.layout.h + 8));
+    return { x: 0, y: bottom, w: (v.layout?.w ?? w) * 100 - 8, h: (v.layout?.h ?? h) * 48 - 8, z: Math.max(0, ...page.visuals.map((x) => x.layout.z ?? 0)) + 1 };
+  }
+  if (v.section) page = { ...page, visuals: page.visuals.filter((x) => x.section === v.section) };
   const ww = Math.min(12, v.layout?.w ?? w);
   // The first gap on the lowest row with room, else a new row.
   const bottom = Math.max(0, ...page.visuals.map((x) => x.layout.y + x.layout.h));
@@ -548,7 +559,9 @@ const H: Record<string, Handler> = {
   add_visual: async (tx, a) => {
     const d = await tx.doc(a.doc);
     const page = a.page ? findPage(d, a.page) : d.pages.find((p) => !p.kind) ?? d.pages[0]!;
-    const raw = O<Partial<VisualSpec>>(a, 'visual');
+    const raw = { ...O<Partial<VisualSpec>>(a, 'visual') };
+    if (!raw.section && (page.layout?.type === 'sections' || page.layout?.type === 'tabs') && page.layout.sections?.length) raw.section = page.layout.sections[0]!.id;
+    if (!raw.section && page.layout?.type === 'sidebar' && raw.type === 'slicer') raw.section = 'sidebar';
     const v: VisualSpec = { ...(raw as VisualSpec), id: raw.id && /^v-[a-z0-9-]{1,40}$/.test(raw.id) && !page.visuals.some((x) => x.id === raw.id) ? raw.id : newId('v'), layout: raw.layout ?? place(page, raw) };
     await checkVisual(tx, d, v, page);
     page.visuals.push(v);
@@ -676,6 +689,190 @@ export async function applyHandler(tx: Tx, op: Op): Promise<OpOutcome> {
   return typeof r === 'string' ? { op: op.op, message: r } : r ?? { op: op.op, message: 'done' };
 }
 
+// ---------------- layouts ----------------
+
+const pageOf = async (tx: Tx, a: Op) => { const d = await tx.doc(a.doc); return { d, page: a.page ? findPage(d, a.page) : d.pages.find((p) => !p.kind) ?? d.pages[0]! }; };
+
+/** Templates: the built-in ones and those plugins contribute (ui.contributes.dashboardTemplates). */
+export function templates(tx: { svc: DataService }): TemplateSpec[] { return [...BUILTIN_TEMPLATES, ...(tx.svc.deps.pluginTemplates?.() ?? [])]; }
+
+/** What fills a template's placeholders: the model's measures, date, fields with few and many values. */
+async function templateFields(tx: Tx, modelId: string) {
+  const m = tx.model(modelId);
+  const state = await tx.home.state();
+  const categories: Array<[string, number]> = []; const entities: Array<[string, number]> = []; const numbers: string[] = []; const columns: Array<{ table: string; name: string }> = [];
+  for (const t of m.tables) {
+    const cols = state.datasets[tx.catalog.datasets.find((d) => d.name === t.dataset)?.id ?? '']?.columns ?? [];
+    const text = cols.filter((c) => c.type === 'VARCHAR' && !/(^id$|_id$|_code$|^code$|uuid|key$)/i.test(c.name));
+    for (const c of cols) if (c.name !== '__rn') columns.push({ table: t.name, name: c.name });
+    for (const c of cols) if (/INT|DOUBLE|DECIMAL|FLOAT/.test(c.type) && !/(^id$|_id$)/i.test(c.name)) numbers.push(`${t.name}.${c.name}`);
+    if (!text.length) continue;
+    const plan = await tx.svc.plan(tx.home, tx.catalog, [t.dataset]);
+    const r = await tx.svc.engine.run({ files: plan.files, views: plan.views, vars: plan.vars, sql: `SELECT ${text.map((c) => `approx_count_distinct(${qid(c.name)})`).join(', ')} FROM ${qid(t.dataset)}` });
+    text.forEach((c, i) => { const n = Number(r.rows[0]![i]); if (n >= 2 && n <= 12) categories.push([`${t.name}.${c.name}`, n]); else if (n > 12) entities.push([`${t.name}.${c.name}`, n]); });
+  }
+  const fact = m.tables.find((t) => m.relationships.some((r) => r.from.startsWith(`${t.name}.`)))?.name ?? m.tables[0]?.name;
+  return {
+    measures: [...m.measures.filter((x) => !x.calc && !/\[/.test(x.expr ?? '')), ...m.measures.filter((x) => !x.calc && /\[/.test(x.expr ?? ''))].map((x) => x.name),
+    date: m.date, categories: categories.sort((a, b) => a[1] - b[1]).map((c) => c[0]), entities: entities.sort((a, b) => a[1] - b[1]).map((c) => c[0]), numbers,
+    table: fact, columns: columns.filter((c) => c.table === fact),
+  };
+}
+
+const LH: Record<string, Handler> = {
+  set_layout: async (tx, a) => {
+    const { d, page } = await pageOf(tx, a);
+    const lay = O<LayoutSpec>(a, 'layout');
+    const type = lay.type ?? page.layout?.type ?? 'grid';
+    if (!LAYOUT_TYPES_SET.has(type)) throw new DataError(`layout type is one of ${[...LAYOUT_TYPES_SET].join(', ')}`);
+    if (lay.aspect && !['16:9', '21:9'].includes(lay.aspect)) throw new DataError('aspect is 16:9 or 21:9');
+    if (lay.paper && !['A4', 'Letter'].includes(lay.paper)) throw new DataError('paper is A4 or Letter');
+    if (lay.orientation && !['portrait', 'landscape'].includes(lay.orientation)) throw new DataError('orientation is portrait or landscape');
+    const same = type === (page.layout?.type ?? 'grid');
+    const next = same ? { ...page, layout: { ...page.layout, ...lay, type } } : reflow(page, { ...lay, type });
+    Object.assign(page, next);
+    for (const v of page.visuals) await checkVisual(tx, d, v, page);
+    return same ? `layout options of ${page.id}: ${JSON.stringify(lay)}` : `${page.id} is now a ${type} layout (${page.visuals.length} widgets re-flowed, none removed)`;
+  },
+  apply_template: async (tx, a) => {
+    const t = templates(tx).find((x) => x.id === a.template);
+    if (!t) throw new DataError(`no template "${String(a.template)}" (templates: ${templates(tx).map((x) => x.id).join(', ')})`);
+    let doc: DocSpec;
+    if (a.doc) doc = await tx.doc(a.doc);
+    else {
+      const r = await LH_create(tx, { op: 'create', doc: { type: t.pages[0]?.layout?.type === 'print' || t.pages[0]?.layout?.type === 'story' ? 'report' : 'dashboard', title: String(a.title ?? t.title), ...(a.model ? { model: a.model } : {}) } });
+      doc = await tx.doc((r.data as { id: string }).id);
+      doc.pages = [];
+    }
+    const modelId = String(a.model ?? doc.model ?? '');
+    const hasTokens = JSON.stringify(t.pages).includes('$');
+    if (hasTokens && !modelId) throw new DataError('a template fills its widgets from a model: give model (model {op:"suggest"} proposes one), or apply a blank-* template');
+    if (modelId && !doc.model) doc.model = tx.model(modelId).id;
+    const filled = hasTokens ? fillTemplate(t, await templateFields(tx, modelId)) : { pages: t.pages, skipped: [] as string[] };
+    const notes = [...filled.skipped];
+    const added: string[] = [];
+    for (const p of filled.pages) {
+      const page: PageSpec = { id: newId('p'), name: String(a.pageName ?? p.name), ...(p.layout ? { layout: JSON.parse(JSON.stringify(p.layout)) as LayoutSpec } : {}), visuals: [] };
+      doc.pages.push(page);
+      for (const raw of p.visuals) {
+        const v = { ...raw, id: newId('v'), ...(raw.title ? { title: raw.title.replace(/[A-Za-z_]\w*\.([A-Za-z_][\w]*)/g, (_m, c: string) => c.replace(/_/g, ' ')) } : {}) } as VisualSpec;
+        if (!v.layout) v.layout = place(page, v);
+        else if (page.layout?.type === 'canvas') v.layout = { x: v.layout.x * 100, y: v.layout.y * 48, w: v.layout.w * 100 - 8, h: v.layout.h * 48 - 8 };
+        try { await checkVisual(tx, doc, v, page); page.visuals.push(v); } catch (e) { notes.push(`${v.title ?? v.type}: ${(e as Error).message}`); }
+      }
+      added.push(`${page.id} "${page.name}" (${page.layout?.type ?? 'grid'}, ${page.visuals.length} widgets)`);
+    }
+    if (!doc.pages.length) throw new DataError('the template made no page');
+    return { op: a.op, message: `applied template ${t.id} to ${tx.docId(doc)}: ${added.join('; ')}${notes.length ? `. Left out: ${notes.join('; ')}` : ''}`, data: { id: tx.docId(doc), pages: added, skipped: notes } };
+  },
+  move_widget: async (tx, a) => {
+    const d = await tx.doc(a.doc); const { page, v } = findVisual(d, a.visual);
+    const at = a.breakpoint === 'medium' ? 'medium' : a.breakpoint === 'phone' ? 'phone' : 'wide';
+    if (a.section !== undefined) { v.section = a.section === null ? undefined : String(a.section); }
+    const move = (l: { x: number; y: number; w: number; h: number; z?: number }) => ({ ...l, ...(a.x !== undefined ? { x: Math.round(Number(a.x)) } : {}), ...(a.y !== undefined ? { y: Math.round(Number(a.y)) } : {}) });
+    if (at === 'medium') v.layouts = { ...v.layouts, medium: move(v.layouts?.medium ?? v.layout) };
+    else if (at === 'phone') v.mobile = { ...v.mobile, ...(a.order !== undefined ? { order: Number(a.order) } : {}), ...(a.hidden !== undefined ? { hidden: a.hidden === true } : {}) };
+    else { if (v.locked) throw new DataError(`${v.id} is locked (arrange {lock:false} first)`); v.layout = move(v.layout); }
+    // A group moves together on a canvas.
+    if (at === 'wide' && v.group && page.layout?.type === 'canvas') { const dx = Number(a.dx ?? 0); const dy = Number(a.dy ?? 0); if (dx || dy) for (const o of page.visuals) if (o !== v && o.group === v.group && !o.locked) o.layout = { ...o.layout, x: Math.max(0, o.layout.x + dx), y: Math.max(0, o.layout.y + dy) }; }
+    await checkVisual(tx, d, v, page);
+    return `moved ${v.id}${v.section ? ` (section ${v.section})` : ''} to ${at === 'medium' ? JSON.stringify(v.layouts!.medium) : at === 'phone' ? JSON.stringify(v.mobile) : `${v.layout.x},${v.layout.y}`}`;
+  },
+  resize_widget: async (tx, a) => {
+    const d = await tx.doc(a.doc); const { page, v } = findVisual(d, a.visual);
+    if (v.locked) throw new DataError(`${v.id} is locked`);
+    const size = (l: { x: number; y: number; w: number; h: number }) => ({ ...l, ...(a.w !== undefined ? { w: Math.round(Number(a.w)) } : {}), ...(a.h !== undefined ? { h: Math.round(Number(a.h)) } : {}) });
+    if (a.breakpoint === 'medium') v.layouts = { ...v.layouts, medium: size(v.layouts?.medium ?? v.layout) };
+    else if (a.breakpoint === 'phone') v.mobile = { ...v.mobile, h: Math.round(Number(a.h ?? v.mobile?.h ?? v.layout.h)) };
+    else v.layout = size(v.layout);
+    await checkVisual(tx, d, v, page);
+    return `resized ${v.id} to ${v.layout.w}x${v.layout.h}`;
+  },
+  arrange: async (tx, a) => {
+    const d = await tx.doc(a.doc); const { page, v } = findVisual(d, a.visual);
+    const zs = page.visuals.map((x) => x.layout.z ?? 0);
+    if (a.z !== undefined) v.layout = { ...v.layout, z: a.z === 'front' ? Math.max(0, ...zs) + 1 : a.z === 'back' ? Math.min(0, ...zs) - 1 : Math.round(Number(a.z)) };
+    if (a.lock !== undefined) v.locked = a.lock === true || undefined;
+    if (a.group !== undefined) v.group = a.group ? String(a.group) : undefined;
+    return `${v.id}: z ${v.layout.z ?? 0}${v.locked ? ', locked' : ''}${v.group ? `, group ${v.group}` : ''}`;
+  },
+  align: async (tx, a) => {
+    const d = await tx.doc(a.doc);
+    const vs = (Array.isArray(a.visuals) ? a.visuals : []).map((id) => findVisual(d, id).v);
+    if (vs.length < 2) throw new DataError('align needs two or more visuals');
+    const e = String(a.edge);
+    const ref = vs[0]!.layout;
+    for (const v of vs) {
+      if (v.locked) continue;
+      const l = v.layout;
+      if (e === 'left') l.x = Math.min(...vs.map((x) => x.layout.x));
+      else if (e === 'right') l.x = Math.max(...vs.map((x) => x.layout.x + x.layout.w)) - l.w;
+      else if (e === 'top') l.y = Math.min(...vs.map((x) => x.layout.y));
+      else if (e === 'bottom') l.y = Math.max(...vs.map((x) => x.layout.y + x.layout.h)) - l.h;
+      else if (e === 'hcenter') l.x = Math.round(ref.x + ref.w / 2 - l.w / 2);
+      else if (e === 'vcenter') l.y = Math.round(ref.y + ref.h / 2 - l.h / 2);
+      else if (e === 'size') { l.w = ref.w; l.h = ref.h; }
+      else if (e !== 'distribute') throw new DataError('edge is left, right, top, bottom, hcenter, vcenter, size or distribute');
+      l.x = Math.max(0, l.x); l.y = Math.max(0, l.y);
+    }
+    if (e === 'distribute') {
+      const sorted = [...vs].sort((x, y) => x.layout.x - y.layout.x);
+      const start = sorted[0]!.layout.x; const end = Math.max(...sorted.map((x) => x.layout.x + x.layout.w));
+      const gap = (end - start - sorted.reduce((s, x) => s + x.layout.w, 0)) / Math.max(1, sorted.length - 1);
+      let x = start;
+      for (const v of sorted) { v.layout.x = Math.round(x); x += v.layout.w + gap; }
+    }
+    for (const v of vs) await checkVisual(tx, d, v, findVisual(d, v.id).page);
+    return `aligned ${vs.map((v) => v.id).join(', ')}: ${e}`;
+  },
+  pack: async (tx, a) => {
+    const { d, page } = await pageOf(tx, a);
+    if (page.layout?.type === 'canvas') throw new DataError('a canvas keeps its positions (set_layout to grid to pack)');
+    const dir = a.direction === 'left' ? 'left' : 'up';
+    const groups = new Map<string, VisualSpec[]>();
+    for (const v of page.visuals) groups.set(v.section ?? '', [...(groups.get(v.section ?? '') ?? []), v]);
+    const packed = [...groups.values()].flatMap((g) => packLayout(g, dir));
+    page.visuals = page.visuals.map((v) => packed.find((p) => p.id === v.id)!);
+    void d;
+    return `packed ${page.id} ${dir}`;
+  },
+  add_section: async (tx, a) => {
+    const { page } = await pageOf(tx, a);
+    if (!['sections', 'tabs'].includes(page.layout?.type ?? '')) throw new DataError('sections are for a sections or tabs layout (set_layout first)');
+    const s = O<{ title: string; collapsed?: boolean }>(a, 'section');
+    if (!s.title?.trim()) throw new DataError('a section needs a title');
+    const id = newId('s');
+    page.layout = { ...page.layout!, sections: [...(page.layout!.sections ?? []), { id, title: s.title.trim(), ...(s.collapsed ? { collapsed: true } : {}) }] };
+    return { op: a.op, message: `added ${page.layout.type === 'tabs' ? 'tab' : 'section'} ${id} "${s.title}"`, data: { id } };
+  },
+  update_section: async (tx, a) => {
+    const { page } = await pageOf(tx, a);
+    const list = page.layout?.sections ?? [];
+    const i = list.findIndex((s) => s.id === a.section || s.title === a.section);
+    if (i < 0) throw new DataError(`no section "${String(a.section)}" (${list.map((s) => s.id).join(', ') || 'none'})`);
+    const p = O<{ title?: string; collapsed?: boolean; to?: number }>(a, 'patch');
+    const s = { ...list[i]!, ...(p.title ? { title: p.title } : {}), ...(p.collapsed !== undefined ? { collapsed: p.collapsed === true } : {}) };
+    const next = list.filter((_, j) => j !== i);
+    next.splice(p.to !== undefined ? Math.max(0, Math.min(next.length, Number(p.to))) : i, 0, s);
+    page.layout = { ...page.layout!, sections: next };
+    return `updated section ${s.id}`;
+  },
+  remove_section: async (tx, a) => {
+    const { page } = await pageOf(tx, a);
+    const list = page.layout?.sections ?? [];
+    const s = list.find((x) => x.id === a.section);
+    if (!s) throw new DataError(`no section "${String(a.section)}"`);
+    if (list.length === 1) throw new DataError('a sections layout keeps one section');
+    const rest = list.filter((x) => x !== s);
+    for (const v of page.visuals) if (v.section === s.id) v.section = rest[0]!.id;
+    page.visuals = [...page.visuals.filter((v) => v.section !== rest[0]!.id), ...packLayout(page.visuals.filter((v) => v.section === rest[0]!.id))];
+    page.layout = { ...page.layout!, sections: rest };
+    return `removed section ${s.id}; its widgets moved to ${rest[0]!.id}`;
+  },
+};
+const LH_create = async (tx: Tx, op: Op) => (await H.create!(tx, op)) as OpOutcome;
+Object.assign(H, LH);
+
 async function allDocs(tx: Tx): Promise<Map<string, DocSpec>> {
   const out = new Map<string, DocSpec>();
   for (const m of await tx.home.docs()) { const x = tx.docs.get(m.id); if (x?.deleted) continue; out.set(m.id, x?.spec ?? (await tx.home.doc(m.id)).spec); }
@@ -713,7 +910,8 @@ export function diffDoc(a: DocSpec | undefined, b: DocSpec | undefined): string[
   if (!a || !b) return [];
   const out: string[] = [];
   for (const k of ['title', 'description', 'model', 'theme', 'refresh', 'header', 'footer', 'filters', 'snapshot'] as const) if (JSON.stringify(a[k]) !== JSON.stringify(b[k])) out.push(`~ ${k}${k === 'snapshot' ? '' : `: ${JSON.stringify(b[k] ?? null).slice(0, 80)}`}`);
-  diffList('page', a.pages.map((p) => ({ id: p.id, name: p.name, kind: p.kind, filters: p.filters, drillFields: p.drillFields })), b.pages.map((p) => ({ id: p.id, name: p.name, kind: p.kind, filters: p.filters, drillFields: p.drillFields })), (x) => x.id, (x) => `${x.id} "${x.name}"`, out);
+  const pg = (p: PageSpec) => ({ id: p.id, name: p.name, kind: p.kind, filters: p.filters, drillFields: p.drillFields, layout: p.layout });
+  diffList('page', a.pages.map(pg), b.pages.map(pg), (x) => x.id, (x) => `${x.id} "${x.name}"${x.layout ? ` (${x.layout.type} layout)` : ''}`, out);
   diffList('visual', a.pages.flatMap((p) => p.visuals), b.pages.flatMap((p) => p.visuals), (x) => x.id, (x) => `${x.id} ${visualSummary(x)}`, out);
   diffList('bookmark', a.bookmarks, b.bookmarks, (x) => x.id, (x) => `"${x.name}"`, out);
   diffList('alert', a.alerts, b.alerts, (x) => x.id, (x) => `"${x.name}"`, out);

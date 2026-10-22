@@ -432,6 +432,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   // Data and dashboards: plugins' contributed data sources are their own routes, called in the server.
   const data = new DataService({
     dataDir: opts.dataDir, vault, events, leases, log,
+    pluginTemplates: () => [...entries.values()].filter((e) => e.enabled).flatMap((e) => ((e.ui?.contributes as { dashboardTemplates?: Array<Record<string, unknown>> } | undefined)?.dashboardTemplates ?? []).map((t) => ({ ...(t as object), id: `${e.name}:${String(t.id)}`, plugin: e.name, purpose: String(t.purpose ?? ''), description: String(t.description ?? '') }) as never)),
     rootsFor: (owner) => (owner ? [] : (process.env.HARNESS_LOCAL_ROOTS ?? '').split(path.delimiter).filter(Boolean)),
     pluginData: async (plugin, kind, params) => {
       const ds = (entries.get(plugin)?.ui?.contributes as { dataSources?: Array<{ id: string; route: string }> } | undefined)?.dataSources?.find((d) => d.id === kind);
@@ -550,7 +551,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     },
     async close() {
       scheduler?.stop();
-      data.stop();
+      await data.stop();
       await sessions.close();
       // The leases go last: other servers may take the sessions over once they are free.
       await leases?.close();

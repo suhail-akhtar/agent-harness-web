@@ -88,19 +88,38 @@ async function browser(): Promise<import('playwright-core').Browser> {
 }
 export async function closeExportBrowser(): Promise<void> { const b = await chromium?.catch(() => undefined); chromium = undefined; await b?.close().catch(() => {}); }
 
+const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.wasm': 'application/wasm', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json' };
+/** A folder over http on 127.0.0.1 (an ephemeral port): files only, nothing outside it. */
+async function serveDir(dir: string): Promise<{ url: string; close(): void }> {
+  const http = await import('node:http');
+  const root = path.resolve(dir);
+  const server = http.createServer((req, res) => {
+    const f = path.resolve(root, decodeURIComponent((req.url ?? '/').split('?')[0]!.replace(/^\/+/, '')) || 'index.html');
+    if (!f.startsWith(root + path.sep)) { res.writeHead(404); res.end(); return; }
+    fs.readFile(f).then((b) => { res.writeHead(200, { 'content-type': TYPES[path.extname(f)] ?? 'application/octet-stream' }); res.end(b); }, () => { res.writeHead(404); res.end(); });
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  return { url: `http://127.0.0.1:${(server.address() as { port: number }).port}`, close: () => { server.closeAllConnections(); server.close(); } };
+}
+
 /** Renders a static site to PDF (paginated, print styles) or PNG (the first page, full height). */
-async function render(dir: string, out: string, format: 'pdf' | 'png', title: string): Promise<void> {
+async function render(dir: string, out: string, format: 'pdf' | 'png', title: string, paged = false): Promise<void> {
   const b = await browser();
   const ctx = await b.newContext({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: format === 'png' ? 2 : 1 });
   try {
     const page = await ctx.newPage();
-    // Nothing from the network: the site is all local files.
-    await page.route(/^https?:/, (r) => r.abort());
-    await page.goto(`file://${path.join(dir, 'index.html').replace(/\\/g, '/')}${format === 'pdf' ? '?print=1' : ''}`);
+    // The site from a loopback port of its own (module scripts do not load from file://); nothing else is reachable.
+    const site = await serveDir(dir);
+    page.on('close', () => site.close());
+    await page.route((u) => !u.href.startsWith(site.url), (r) => r.abort());
+    await page.goto(`${site.url}/index.html${format === 'pdf' ? '?print=1' : ''}`);
     await page.waitForSelector('[data-bi-ready="1"]', { timeout: 60_000 });
     await page.waitForTimeout(400);
     if (format === 'png') await page.screenshot({ path: out, fullPage: true });
-    else {
+    else if (paged) {
+      // Print layouts draw their own paper pages (size, headers, footers): the PDF takes them as they are.
+      await page.pdf({ path: out, preferCSSPageSize: true, printBackground: true });
+    } else {
       const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
       await page.pdf({ path: out, format: 'A4', landscape: true, printBackground: true, displayHeaderFooter: true, margin: { top: '18mm', bottom: '16mm', left: '10mm', right: '10mm' },
         headerTemplate: `<div style="font:9px sans-serif;width:100%;padding:0 10mm;color:#555">${title.replace(/</g, '&lt;')}</div>`,
@@ -135,7 +154,7 @@ export async function exportDoc(svc: DataService, home: DataHome, id: string, fo
     if (format === 'html') { file = `${base}-site`; contentType = 'inode/directory'; }
     else {
       file = `${base}.${format}`; contentType = format === 'pdf' ? 'application/pdf' : 'image/png';
-      await render(site, path.join(dir, file), format, spec.title);
+      await render(site, path.join(dir, file), format, spec.title, spec.pages.some((p) => p.layout?.type === 'print'));
       await fs.rm(site, { recursive: true, force: true });
     }
   }

@@ -538,6 +538,11 @@ export async function reads(svc: DataService, home: DataHome, a: Op, actor: Acto
     case 'unpublish': { const ok = await svc.unpublish(home.owner, String(a.doc ?? '')); return { op: a.op, message: ok ? `unpublished ${String(a.doc)}: its link stopped working` : `${String(a.doc)} was not published` }; }
     case 'export': { const { exportDoc } = await import('./export.ts'); const r = await exportDoc(svc, home, String(a.doc ?? ''), String(a.format ?? 'xlsx') as 'xlsx'); return { op: a.op, message: `exported ${r.file} (${r.bytes} bytes)`, data: r }; }
     case 'snapshot': return snapshot(svc, home, String(a.doc ?? ''), actor);
+    case 'list_templates': {
+      const { templates } = await import('./ops.ts');
+      const list = templates({ svc });
+      return { op: a.op, message: list.map((t) => `${t.id}${t.plugin ? ` (${t.plugin})` : ''}: ${t.title} - ${t.purpose} [${t.pages.map((p) => p.layout?.type ?? 'grid').join(', ')}]`).join('\n'), data: list };
+    }
   }
   throw new DataError(`${a.op} is not a read op`);
 }

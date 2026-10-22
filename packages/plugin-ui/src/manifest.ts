@@ -219,6 +219,8 @@ export interface OnboardingContribution {
 export interface DataSourceContribution { id: string; title: string; icon?: IconName; description?: string; route: string; params?: JsonSchema }
 /** A dashboard visual drawn by a fence renderer (this plugin's or the app's), given {columns, rows, options} as its source. */
 export interface WidgetContribution { id: string; title: string; icon?: IconName; description?: string; fence: string }
+/** A dashboard template: pages with a layout and placeholder widgets ($m1, $date:month, $cat1, $entity), filled from a model. */
+export interface DashboardTemplateContribution { id: string; title: string; purpose?: string; description?: string; icon?: IconName; pages: Array<{ name: string; layout?: { type: string; [k: string]: unknown }; visuals: Array<Record<string, unknown>> }> }
 /** An action on a rendered block in a transcript (a chart, a table ...): runs `command` with {lang, source} as its args. */
 export interface BlockActionContribution { id: string; title: string; icon?: IconName; kinds: string[]; command: string }
 
@@ -239,9 +241,10 @@ export interface UiContributes {
   dataSources?: DataSourceContribution[];
   dashboardWidgets?: WidgetContribution[];
   blockActions?: BlockActionContribution[];
+  dashboardTemplates?: DashboardTemplateContribution[];
 }
 
-export const CONTRIBUTION_POINTS = ['navItems', 'views', 'panels', 'commands', 'slashCommands', 'composerChips', 'settings', 'renderers', 'homeCards', 'statusItems', 'themes', 'prompts', 'onboarding', 'dataSources', 'dashboardWidgets', 'blockActions'] as const;
+export const CONTRIBUTION_POINTS = ['navItems', 'views', 'panels', 'commands', 'slashCommands', 'composerChips', 'settings', 'renderers', 'homeCards', 'statusItems', 'themes', 'prompts', 'onboarding', 'dataSources', 'dashboardWidgets', 'blockActions', 'dashboardTemplates'] as const;
 
 export interface UiManifest {
   apiVersion: number;
@@ -544,6 +547,17 @@ export function validateUiManifest(input: unknown, opts: { trustCeiling?: UiTrus
   const widgets = arr<Record<string, unknown>>('dashboardWidgets');
   ids('widget', widgets);
   for (const w of widgets) { title('Widget', w); icon('Widget', w); if (typeof w.fence !== 'string' || !FENCE.test(w.fence)) throw new ManifestError(`Widget "${String(w.id)}" needs a "fence" language whose renderer draws it.`); }
+  const dashboardTemplates = arr<Record<string, unknown>>('dashboardTemplates');
+  ids('dashboard template', dashboardTemplates);
+  for (const t of dashboardTemplates) {
+    title('Dashboard template', t); icon('Dashboard template', t);
+    if (!Array.isArray(t.pages) || !t.pages.length || t.pages.length > 20) throw new ManifestError(`Dashboard template "${String(t.id)}" needs "pages" (1 to 20).`);
+    for (const p of t.pages as Array<Record<string, unknown>>) {
+      if (!isObj(p) || typeof p.name !== 'string' || !Array.isArray(p.visuals) || p.visuals.length > 60 || !p.visuals.every(isObj)) throw new ManifestError(`Dashboard template "${String(t.id)}": every page is {name, layout?, visuals: [...]} (at most 60 widgets).`);
+      const lt = (p.layout as { type?: unknown } | undefined)?.type;
+      if (p.layout !== undefined && !['grid', 'canvas', 'sections', 'tabs', 'sidebar', 'masonry', 'story', 'tv', 'print'].includes(String(lt))) throw new ManifestError(`Dashboard template "${String(t.id)}": layout type "${String(lt)}" is not one of grid, canvas, sections, tabs, sidebar, masonry, story, tv, print.`);
+    }
+  }
   const blockActions = arr<Record<string, unknown>>('blockActions');
   ids('block action', blockActions);
   for (const b of blockActions) {
@@ -580,7 +594,7 @@ export function validateUiManifest(input: unknown, opts: { trustCeiling?: UiTrus
       renderers: renderers as unknown as RendererContribution[], homeCards: homeCards as unknown as HomeCardContribution[],
       statusItems: statusItems as unknown as StatusItemContribution[], themes: themes as unknown as ThemeContribution[],
       prompts: prompts as unknown as PromptContribution[], onboarding: onboarding as unknown as OnboardingContribution[],
-      dataSources: dataSources as unknown as DataSourceContribution[], dashboardWidgets: widgets as unknown as WidgetContribution[], blockActions: blockActions as unknown as BlockActionContribution[],
+      dataSources: dataSources as unknown as DataSourceContribution[], dashboardWidgets: widgets as unknown as WidgetContribution[], blockActions: blockActions as unknown as BlockActionContribution[], dashboardTemplates: dashboardTemplates as unknown as DashboardTemplateContribution[],
     },
   };
 }

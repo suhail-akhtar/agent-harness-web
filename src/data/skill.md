@@ -102,3 +102,18 @@ Also: `add_filter {scope: doc|page id|visual id, filter}`, `set_theme {theme}` (
 `publish {doc, access: token|signed-in, accounts?, role?}` (a live page at /p/<slug>; viewers get no SQL or credentials), `unpublish`,
 `export {doc, format: xlsx|csv|html|pdf|png}`, `snapshot {doc}` (reports: refresh and freeze the numbers), `history`, `undo`, `redo`, `restore {version}`.
 Reports are documents with `type:"report"`: visuals flow in order, `text` visuals carry the prose (markdown), header/footer repeat on each printed page.
+
+## Layouts and templates
+
+A page has a layout (`set_layout {doc, page, layout:{type, ...}}`; switching keeps every widget, re-flowed; undo restores):
+`grid` (12 columns: `compact: up|left`, `responsive:false` + `width` for fixed; wide, `breakpoint:"medium"` and phone arrangements) ·
+`canvas` (pixels: `move_widget {x,y}`, `resize_widget {w,h}`, `arrange {z: front|back, lock, group}`, `align {visuals, edge: left|right|top|bottom|hcenter|vcenter|size|distribute}`) ·
+`sections` / `tabs` (`add_section {page, section:{title}}`, `update_section {section, patch:{title, collapsed, to}}`, `move_widget {visual, section}`) ·
+`sidebar` (`sidebar:{side, width}`; `move_widget {visual, section:"sidebar"}`) · `masonry` (`cardWidth`) · `story` (one column) ·
+`tv` (`aspect: 16:9|21:9`, `rotate` seconds per page, `scale`; no chrome) · `print` (`paper: A4|Letter`, `orientation`, `margins` mm; the document's `header`/`footer` with {title} {date} {page} {pages}).
+`pack {page, direction}` closes gaps. "Make this a TV wall" -> `set_layout {type:"tv"}`; "a printable monthly report" -> `set_layout {type:"print"}` on each page (and `set_doc {header, footer}`).
+
+Templates (`list_templates`; `apply_template {template, model, doc?}`: a new document, or a page added to `doc`; placeholders filled from the
+model's measures, date and fields; a widget with nothing to fill is left out and named): `executive`, `noc` (TV), `sales`, `funnel`, `product`,
+`delivery` (sections), `sre` (sidebar), `lab` (science visuals), `quality` (masonry, completeness per field), and `blank-<layout type>`.
+After applying one, `describe` and adjust titles and fields to the person's words; then `verify`.

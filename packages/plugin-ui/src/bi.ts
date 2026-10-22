@@ -325,7 +325,15 @@ export interface VisualSpec {
   query?: QuerySpec;
   options?: VisualOptions;
   /** 12 columns; y and h in rows of 40 px. */
-  layout: { x: number; y: number; w: number; h: number };
+  /** Grid: columns and rows of the page's grid. Canvas: pixels (with z, the stacking order). */
+  layout: { x: number; y: number; w: number; h: number; z?: number };
+  /** Arrangements for other widths of a responsive grid (the wide one is `layout`; phones use `mobile`). */
+  layouts?: { medium?: { x: number; y: number; w: number; h: number } };
+  /** Canvas: locked against dragging; a group moves together. */
+  locked?: boolean;
+  group?: string;
+  /** Sections and tabs layouts: the section (or tab) it belongs to. */
+  section?: string;
   /** Phone layout: order and height (rows), or hidden. */
   mobile?: { order?: number; h?: number; hidden?: boolean };
   /** How a selection in this visual changes the others: filter (default), highlight or none. Key: the other visual's id. */
@@ -343,6 +351,44 @@ export interface PageSpec {
   drillFields?: string[];
   filters?: FilterSpec[];
   visuals: VisualSpec[];
+  /** How the page is laid out (default: a responsive 12-column grid). */
+  layout?: LayoutSpec;
+}
+
+export const LAYOUT_TYPES = ['grid', 'canvas', 'sections', 'tabs', 'sidebar', 'masonry', 'story', 'tv', 'print'] as const;
+export type LayoutType = typeof LAYOUT_TYPES[number];
+/**
+ * A page's layout. grid: N columns that snap (auto-pack up or left; wide, medium and phone
+ * arrangements). canvas: absolute pixels, layers, guides, groups, locks. sections: collapsible
+ * bands with a grid each. tabs: tabbed panels. sidebar: a fixed column (slicers) beside the grid.
+ * masonry: cards flowing by height. story: one column top to bottom. tv: a fixed 16:9 or 21:9
+ * screen, large type, pages rotating. print: paper pages with headers, footers and page breaks.
+ */
+export interface LayoutSpec {
+  type: LayoutType;
+  /** grid, sections, tabs, sidebar, tv: columns (default 12) and row height in px (default 40). */
+  columns?: number;
+  rowHeight?: number;
+  /** grid: pack widgets up (or left) to close gaps. */
+  compact?: 'up' | 'left' | 'none';
+  /** false: a fixed width (`width` px) instead of following the window. */
+  responsive?: boolean;
+  width?: number;
+  height?: number;
+  /** canvas: snap step in px (default 8). */
+  snap?: number;
+  sections?: Array<{ id: string; title: string; collapsed?: boolean }>;
+  sidebar?: { side?: 'left' | 'right'; width?: number };
+  /** masonry: the width of a column of cards (px, default 320). */
+  cardWidth?: number;
+  /** tv: the screen's shape, seconds per page (0: no rotation), type scale. */
+  aspect?: '16:9' | '21:9';
+  rotate?: number;
+  scale?: number;
+  /** print: paper, orientation, margins (mm). */
+  paper?: 'A4' | 'Letter';
+  orientation?: 'portrait' | 'landscape';
+  margins?: number;
 }
 
 export interface BookmarkSpec { id: string; name: string; page: string; filters?: FilterSpec[]; hidden?: string[]; selection?: { visual: string; filters: FilterSpec[] } }
@@ -506,6 +552,17 @@ export const OPS: Record<string, OpInfo> = {
   restore: { family: 'dashboard', write: true, summary: 'restore a version (as a new version)', example: '{"doc":"d-1","version":3}' },
   history: { family: 'dashboard', write: false, summary: 'versions with who changed what', example: '{"doc":"d-1"}' },
   export: { family: 'dashboard', write: false, summary: 'export pdf, html, csv, xlsx (saved in the data folder)', example: '{"doc":"d-1","format":"xlsx"}' },
+  set_layout: { family: 'dashboard', write: true, summary: 'a page\'s layout type and options; widgets are re-flowed, nothing is lost', example: '{"doc":"d-1","page":"p-1","layout":{"type":"tv","aspect":"16:9","rotate":30}}' },
+  list_templates: { family: 'dashboard', write: false, summary: 'layout templates for purposes (and a blank one per layout type)', example: '{}' },
+  apply_template: { family: 'dashboard', write: true, summary: 'a page from a template, its placeholders filled from the model (or a new document with doc omitted)', example: '{"doc":"d-1","template":"executive","model":"m"}' },
+  move_widget: { family: 'dashboard', write: true, summary: 'move a widget (x, y), into a section or tab, or on a breakpoint (medium, phone)', example: '{"doc":"d-1","visual":"v-3","x":6,"y":0,"section":"s-2"}' },
+  resize_widget: { family: 'dashboard', write: true, summary: 'resize a widget (w, h)', example: '{"doc":"d-1","visual":"v-3","w":6,"h":8}' },
+  arrange: { family: 'dashboard', write: true, summary: 'canvas: z (front, back or a number), lock, group', example: '{"doc":"d-1","visual":"v-3","z":"front","lock":true}' },
+  align: { family: 'dashboard', write: true, summary: 'align widgets on an edge or centre, or distribute them', example: '{"doc":"d-1","visuals":["v-1","v-2"],"edge":"top"}' },
+  pack: { family: 'dashboard', write: true, summary: 'close the gaps of a grid page (up or left)', example: '{"doc":"d-1","page":"p-1","direction":"up"}' },
+  add_section: { family: 'dashboard', write: true, summary: 'a section (sections layout) or a tab (tabs layout)', example: '{"doc":"d-1","page":"p-1","section":{"title":"Revenue"}}' },
+  update_section: { family: 'dashboard', write: true, summary: 'rename, collapse or move a section or tab', example: '{"doc":"d-1","page":"p-1","section":"s-1","patch":{"collapsed":true}}' },
+  remove_section: { family: 'dashboard', write: true, summary: 'remove a section (its widgets move to the first)', example: '{"doc":"d-1","page":"p-1","section":"s-2"}' },
 };
 
 /** Every control in the desktop that changes something, and the op it applies (tested: each is in OPS). */
@@ -524,6 +581,9 @@ export const UI_ACTIONS: Record<string, string> = {
   'doc.theme': 'set_theme', 'doc.refresh-policy': 'set_refresh', 'doc.alert': 'add_alert', 'doc.remove-alert': 'remove_alert', 'doc.subscribe': 'add_subscription', 'doc.unsubscribe': 'remove_subscription',
   'doc.narrative': 'set_narrative', 'doc.pin': 'pin', 'doc.bind': 'bind', 'doc.snapshot': 'snapshot', 'doc.publish': 'publish', 'doc.unpublish': 'unpublish', 'doc.verify': 'verify',
   'doc.undo': 'undo', 'doc.redo': 'redo', 'doc.restore': 'restore', 'doc.export': 'export', 'doc.history': 'history', 'doc.describe': 'describe', 'data.list-docs': 'list_docs',
+  'layout.type': 'set_layout', 'layout.options': 'set_layout', 'layout.template': 'apply_template', 'layout.templates': 'list_templates', 'layout.drag': 'move_widget', 'layout.resize': 'resize_widget',
+  'layout.front': 'arrange', 'layout.back': 'arrange', 'layout.lock': 'arrange', 'layout.group': 'arrange', 'layout.align': 'align', 'layout.pack': 'pack',
+  'layout.add-section': 'add_section', 'layout.edit-section': 'update_section', 'layout.remove-section': 'remove_section', 'layout.collapse': 'update_section', 'layout.sidebar-width': 'set_layout',
 };
 
 /** A visual's id-free summary for lists: "column: Revenue by regions.region". */

@@ -39,6 +39,8 @@ export interface DataDeps {
   /** A plugin's contributed data source (its route, called in the server). */
   pluginData?: (plugin: string, kind: string, params: Record<string, unknown>) => Promise<unknown>;
   limits?: Partial<EngineLimits>;
+  /** Dashboard templates plugins contribute (ui.contributes.dashboardTemplates). */
+  pluginTemplates?: () => import('../../packages/plugin-ui/src/layout.ts').TemplateSpec[];
   /** Today for relative dates (tests). */
   today?: () => string;
 }
@@ -400,7 +402,8 @@ export class DataService {
   }
   private subscriptionRunner?: (home: DataHome, doc: string, sub: NonNullable<DocSpec['subscriptions']>[number]) => Promise<void>;
   private offRemotes?: () => void;
-  stop(): void { clearInterval(this.timer); this.offEvents?.(); this.offRemotes?.(); }
+  /** Stops the scheduler and closes the export browser (if a PDF or PNG export started one). */
+  stop(): Promise<void> { clearInterval(this.timer); this.offEvents?.(); this.offRemotes?.(); return import('./export.ts').then((m) => m.closeExportBrowser()).catch(() => {}); }
 
   private async owners(): Promise<Array<string | undefined>> {
     const names = await fs.readdir(this.root).catch(() => [] as string[]);
