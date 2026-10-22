@@ -2,7 +2,7 @@
 
 An agent harness that is also a framework. You give it requirements and it works in a workspace until the job is done: it plans, edits, runs, tests, fixes what fails and reports. It remembers what matters across sessions, researches the web with citations it checks, builds long projects feature by feature, and can publish its work as a pull request. You extend what it can do with **plugins**: tools, models, providers, sub-agents, skills, MCP services, quality gates, workflows, search backends and hooks. All of it goes through the same registry the built-ins use.
 
-It is tuned and tested on three cost-efficient models: **Claude Haiku 5.5**, **DeepSeek V4.1 Flash** (`deepseek-flash`) and **GPT-6 Luna**. The operator can add any model behind an OpenAI-compatible server (Ollama, vLLM, LM Studio, OpenRouter, Together, Groq, Azure OpenAI, Gemini) without code (see [Models and providers](#models-and-providers)), and plugins can add more.
+It is tuned and tested on three cost-efficient models: **Claude Haiku 5.5**, **DeepSeek V4.1 Flash** (`deepseek-flash`) and **GPT-6 Luna**; **Kimi K3, K2.7 Code and K2.6** (Moonshot AI) and **GLM-5.3-Flash** (Z.ai) are built in too. The operator can add any model behind an OpenAI-compatible server (Ollama, vLLM, LM Studio, OpenRouter, Together, Groq, Azure OpenAI, Gemini) without code (see [Models and providers](#models-and-providers)), and plugins can add more.
 
 **Picking the project up?** Read [docs/HANDOFF.md](docs/HANDOFF.md): its purpose, what is built, the results, how to run it on your own machine, and the next steps.
 
@@ -29,6 +29,7 @@ npm run sandbox:image:3d      # optional: the same plus Blender 4.2 LTS and Godo
 npm run sandbox:image:3d-export   # optional: the 3D image plus Godot's export templates (Linux, Web)
 npm run sandbox:image:desktop # optional: the sandbox plus a desktop (Xvfb, Firefox) for computer use
 export DEEPSEEK_API_KEY=... OPENAI_API_KEY=... ANTHROPIC_API_KEY=...   # or GW_ANTHROPIC_API_KEY
+export MOONSHOT_API_KEY=... ZAI_API_KEY=...   # optional: Kimi (Moonshot AI), GLM (Z.ai)
 npm start                     # http://127.0.0.1:4310, prints an access token
 ```
 
@@ -91,7 +92,7 @@ await s.send('Fix the failing tests');
 
 ## Models and providers
 
-Three providers are built in: Anthropic (Messages API, server-side compaction and context editing), OpenAI (Responses API) and DeepSeek (Chat Completions). A model whose provider has no key on the server is shown greyed out.
+Five providers are built in: Anthropic (Messages API, server-side compaction and context editing), OpenAI (Responses API), DeepSeek, Moonshot AI (Kimi) and Z.ai (GLM) (Chat Completions). A model whose provider has no key on the server is shown greyed out. A key comes from the server's environment, else from one an administrator set through the API (`PUT /api/providers/:id`, kept in the key vault, in force at the next request without a restart; see [HTTP API for desktop clients](#http-api-for-desktop-clients)).
 
 **Any OpenAI-compatible server, configured by the operator.** List the models in `HARNESS_MODELS_JSON` (a JSON array, or `{ "models": [...] }`) or in a file named by `HARNESS_MODELS_FILE`; each appears in the model picker and works with every tool, sub-agent and workflow. Keys stay in the server's environment: an entry names the variable that holds its key (`apiKeyEnv`), never the key. A malformed entry stops the server at start with what is wrong.
 
@@ -135,6 +136,49 @@ What the provider handles: streamed text and tool calls (arguments split across 
 
 - **Ollama:** its default context is small; start it with `OLLAMA_CONTEXT_LENGTH` at least the `contextWindow` you configure (the harness's system prompt and tool schemas alone are several thousand tokens). Pick a model with tool support (`ollama show <model>` lists `tools` under capabilities).
 - **Tested** against local stand-ins for each variation (Azure's URL and header, no usage, split tool-call deltas, a server that rejects tools, non-streaming, reasoning in all three forms) and **against a real Ollama** in Docker (`test/compat-ollama.test.ts`): a whole harness session on `qwen2.5:0.5b` (a 400 MB model, temperature 0) streamed a plain answer with real token counts, then called `read` on a file, the loop ran it, and the model answered with the code word from the file. The test runs when Docker has the `ollama/ollama` image (`HARNESS_TEST_OLLAMA=1` pulls it, several GB; `HARNESS_TEST_OLLAMA_URL` uses a running server; `HARNESS_TEST_OLLAMA_MODEL` picks another model) and removes its container and model volume afterwards.
+
+### Kimi (Moonshot AI) and GLM (Z.ai)
+
+Built in, keyed by `MOONSHOT_API_KEY` and `ZAI_API_KEY`. Both use the platform's OpenAI-compatible Chat Completions endpoint, parsed by our own SSE reader (the same stall timeout and retry rules as the others). Prices are USD per million tokens from the official pages ([Kimi pricing](https://platform.kimi.ai/docs/pricing/chat), [Kimi caching](https://platform.kimi.ai/docs/guide/context-caching), [Z.ai pricing](https://docs.z.ai/guides/overview/pricing)), checked 2026-10-22.
+
+| Model id | Context / max output sent | Input / cached / cache write / output | Effort | Compacts at |
+|---|---|---|---|---|
+| `kimi-k3` | 1,048,576 / 64K | $3.00 / $0.30 / $3.00 (5 min tier; $6.00 for 1 h) / $15.00 | low, **high**, max (`reasoning_effort`) | 120K |
+| `kimi-k2.7-code` | 262,144 / 64K | $0.95 / $0.19 / - / $4.00 | high (always thinks) | 128K |
+| `kimi-k2.6` | 262,144 / 64K | $0.95 / $0.16 / - / $4.00 | low (thinking off), **high** | 128K |
+| `glm-5.3-flash` | 1M / 64K (128K allowed) | $0.15 / $0.03 / - / $0.50 | low, **high**, max (`reasoning_effort`) | 200K |
+
+All four take images. The compaction points are chosen for cost: every step re-reads the context at the cached rate, so K3 compacts earliest.
+
+**Why Chat Completions, not the platforms' Anthropic-compatible endpoints.** Every control the harness needs is documented on Chat Completions first: Kimi's `reasoning_effort`, `thinking.keep`, `prompt_cache_key`, `prompt_cache_options` and strict tool schemas; Z.ai's `thinking.clear_thinking`, `reasoning_effort` and `tool_stream`. Usage there reports cache reads and (Kimi) cache writes separately, and our Anthropic provider relies on Claude-only betas (context editing, server-side compaction) these endpoints do not have.
+
+What the providers use:
+- **Thinking, replayed.** Each assistant turn is sent back exactly as received, `reasoning_content` included. Kimi K3 and K2.7 Code require it (Preserved Thinking is always on); K2.6 gets `thinking: {type: "enabled", keep: "all"}`; GLM gets `thinking: {type: "enabled", clear_thinking: false}` (Preserved Thinking, which Z.ai recommends for agents). Keeping earlier reasoning in the prompt also keeps the cached prefix intact. The session's effort maps to `reasoning_effort` (K3, GLM: low / high / max) or to thinking off/on (K2.6); it is fixed per session, because Kimi documents that changing it invalidates the cache.
+- **Caching.** Both platforms cache prefixes automatically. The prefix stays byte-stable: the frozen system prompt, the session's sorted tools, then an append-only history. Kimi gets `prompt_cache_key` (the session id), as its docs advise for coding agents. `HARNESS_MOONSHOT_CACHE_TTL=1h` moves K3 to the 1-hour cache tier. Cache reads and writes come from `usage.prompt_tokens_details` (`cached_tokens`, `cache_write_tokens`) and are priced separately.
+- **Tools.** Parallel calls stream as split deltas and are put back together. `tool_choice` is `auto`, the only value every one of these models accepts with thinking on. Kimi tool schemas are sent `strict: true` when they keep to Moonshot's JSON Schema subset (MFJS), else `strict: false` instead of risking a rejected request. Z.ai streams tool arguments (`tool_stream`) and accepts at most 128 tools; a session with more fails with a clear message.
+- **Images.** Kimi takes a tool result's images inside the tool message; Z.ai's tool messages are text, so the images follow as user content. Base64 only (Kimi refuses image URLs).
+- **Errors.** Insufficient balance (Kimi `exceeded_current_quota_error`, Z.ai code 1113) is not retried and says to top up. On Kimi, that message also gives the balance left (one call to `/v1/users/me/balance`, made only on that error). Rate limits and overload are retried after `Retry-After`. Kimi's daily token limit and Z.ai's plan limits (1308-1321) reset hours later, so they are not retried. A prompt longer than the window, a refused key (naming the variable and the regional base URL) and an unknown model are not retried either. Z.ai's in-stream finish reasons map as follows: `sensitive` is a refusal, `model_context_window_exceeded` stops the turn, and `network_error` is retried.
+- **Diagnostics.** `moonshotBalance()` and `moonshotEstimateTokens()` in `src/providers/moonshot.ts` (Kimi's balance and token-estimate endpoints) are used by the live check below, not on every request.
+
+Not used, on purpose:
+- **Partial mode / prefill** and **JSON mode / structured output.** The loop never prefills or asks for a response format.
+- **Kimi's dynamic tool loading.** Tools are fixed per session.
+- **Built-in web search.** Kimi's `$web_search` was retired on 2026-10-20. Z.ai's `web_search` tool sends the query out and puts results in the context without the harness's permission checks or untrusted-content guard; the harness's own `web_search` tool covers this.
+- **Z.ai's tokenizer.** It is documented for `glm-4.6` only.
+- **`kimi-k2.7-code-highspeed`.** The provider knows its parameters, but it is not in the catalog.
+
+Base URLs: `MOONSHOT_BASE_URL` (default `https://api.moonshot.ai/v1`; keys from the China platform need `https://api.moonshot.cn/v1`) and `ZAI_BASE_URL` (default `https://api.z.ai/api/paas/v4`, billed to the account balance; `https://api.z.ai/api/coding/paas/v4` uses a GLM Coding Plan's quota; BigModel keys use `https://open.bigmodel.cn/api/paas/v4`). Kimi K3 is unlocked by a first top-up of at least $1. A new Kimi account (Tier0) is limited to 1 concurrent request and 3 a minute; the harness waits out the 429s, but sub-agents will queue.
+
+**Tested** in `test/moonshot.test.ts` and `test/zai.test.ts` against local stand-ins of each platform's documented wire format. The tests cover request fields per model, split tool-call deltas, reasoning replay, usage with cached and written tokens, every error class, and a whole harness session per provider. **Live check:** `node --env-file=.env scripts/live-providers.mjs`. It runs a write-then-read round trip per model through the CLI, plus a Kimi cache check. Results on 2026-10-22:
+
+| Model | Round trip | Calls | Cost | Cached |
+|---|---|---|---|---|
+| `kimi-k2.6` | pass | 3 | $0.0175 | 59% of input |
+| `kimi-k2.7-code` | pass | 3 | $0.0165 | 66% of input |
+| `kimi-k3` | pass | 3 | $0.0447 | 66% of input (11.5K tokens written) |
+| `glm-5.3-flash` | pass | 3 | $0.0057 | none reported |
+
+The Kimi cache check (two calls sharing a 2.9K-token prefix) read 2,048 tokens from the cache on the second call; Kimi caches in whole blocks. GLM-5.3-Flash reported no cached tokens across its three calls, which were seconds apart. The parsing of `cached_tokens` is covered by the tests, so this is the server's answer.
 
 ## The loop
 
@@ -269,6 +313,10 @@ An install from a URL:
 4. loads it for new sessions.
 
 The UI's **Plugins** dialog lists what is loaded, how each plugin was admitted, and what it declared it needs.
+
+**The UI half** (for the desktop app, and any host): an optional `ui` section in `harness-plugin.json` adds navigation entries, pages, panels, commands, slash commands, settings sections, renderers, home cards, status items, themes, prompts and onboarding steps - the contract is `packages/plugin-ui` and [docs/desktop/DESIGN.md](docs/desktop/DESIGN.md) section 4. The server validates it when the plugin loads (`validateUiManifest`; `native` trust only for bundled or signature-verified plugins, else at most `frame`); a bad section is reported as `uiError` in `GET /api/plugins` and never stops the server half. A frame's files are served at `/api/plugins/<name>/ui/<entry path>`: only files under the top-level folder(s) its frame entries live in (an entry at the top level: that file alone), never a dotfile, a `..` path or a link that leads out of that folder, with `Cache-Control: no-cache` and, for HTML and SVG, `Content-Security-Policy: default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; frame-ancestors *; sandbox allow-scripts allow-forms` - frames reach the host only through `postMessage`. `uiHash` (SHA-256 over the `ui` section and every servable file) changes with any of them, so a person's grant to a frame plugin can be tied to it. The paths `ui/...`, `enable` and `disable` under `/api/plugins/<name>/` are the server's: a plugin cannot register routes there. Examples: `plugins/research` (a declarative prompt board, commands and a `/research` slash command), `plugins/quality-gates` (an account settings section from a JSON Schema) and `examples/plugins/hello-frame` (a frame page, a session panel and a renderer for ` ```hello ` fences that implement the frame protocol in an inline script, calling the plugin's own route).
+
+**Switching plugins off and on** (administrators, `POST /api/plugins/<name>/disable` and `/enable`): a plugin switched off leaves the registry at once - its tools, agents, workflows, gates, skills, hooks, routes and event handlers - so new sessions (and new tool lists) go without it, its background loops get no lease and it may not start or drive sessions; switched on, everything comes back. The choice is kept in `<data>/plugins-state.json`: a plugin off at a start is listed but not loaded (none of its code runs) until it is switched on, which loads it then. `HARNESS_REQUIRED_PLUGINS` (comma-separated names) cannot be switched off. `DELETE /api/plugins/<name>` removes a catalogue-installed plugin (its folder under `<data>/plugins`); bundled and operator plugins are switched off instead. Every change is a `plugins` event on the global stream.
 
 **Declared permissions are enforced on the channels the harness hands out.** `permissions.routes` and `permissions.sessions` are the only way to `registerRoute`, `api.sessions` and `api.events`. A plugin's `permissions.secrets` are the only secrets `api.secret(name)` returns, and the only `${VAR}`s its MCP servers' configuration expands; an undeclared secret expands to nothing. `api.fetch` reaches only the hosts in `permissions.network`, with redirects re-checked; a private address needs an exact entry. Its tools' `ctx.services.vault` reveals only the key vault entries `permissions.vault` names (globs); any other is refused and audited (see [Key Vault](#key-vault)). MCP servers never inherit the server's environment. Before this, they received every provider key on the machine. Plugin code still runs in the server process, so code that ignores these channels is not contained: that is what signing and review are for.
 
@@ -994,6 +1042,101 @@ HARNESS_HOST=0.0.0.0
 - **Companions** keep a long poll open to one server, and jobs for a companion session are sent from the server driving it: point a companion at one server's own address (its `HARNESS_NODE_URL`), or route `/api/companion/*` to one server at the load balancer.
 - **Tested** with two servers in one process on one temporary folder (`test/cluster.test.ts`): a session made on one is listed and read on the other; while one runs a turn, the other's own attempt is refused, a message sent to it is passed on to the holder and joins its turn, its event stream is the holder's, and a request already passed on gets the 409; after the turn the other server takes its turn and its model is sent the first server's history; a deleted session disappears from both; a holder that stops beating loses the session to the other after the lease time, which closes the interrupted turn and answers; with both servers' timers due at the same moment a schedule fires once, and after the leader stops the other fires the next; accounts made on both at once, spend charged on both, sign-ins and companions made on one are all seen by the other; three writers' atomic writes are never read half-written, 40 overlapping locked read-change-writes lose nothing, and a lock left by a crash is broken; a heartbeat held between its read and its write while another server takes the lease over (or while the lease is released) does not write over the takeover (or bring the lease back); a request line naming another host is still passed only to the holder's origin, a lease whose address is unsigned, signed with another secret or plain http off loopback is not passed to, a server without the secret passes nothing on, a listed peer receives no token or cookie and a cluster header bound to the method, path and query, and the receiving server refuses a header with a wrong secret, for another path, too old, or for a disabled account; vault values one server handed out in a session are hidden on the other after it reads the session again, and neither a reload nor the other server's save loses a name.
 
+## HTTP API
+
+Everything the browser UI does goes through this JSON API, and so can scripts, the desktop app and other servers. Sign in with `Authorization: Bearer <token>` (the operator's `HARNESS_TOKEN`, an account's personal token, or a desktop session), the `hw_token` cookie (`POST /api/login`), or a single sign-on browser session. Every request other than a `GET` needs the header `x-harness: 1` (a cross-site page cannot send it) and a JSON body where it takes one. Members see and change only what they own: someone else's session reads as missing (404). Requests for a session another server is working on are passed to that server (see [Running several servers](#running-several-servers)).
+
+| Route | |
+|---|---|
+| `GET /api/health` | Without signing in: `{ok, version, apiVersion}` only. Signed in: also `uptimeSec`, `node`. |
+| `GET /api/me`, `GET`/`PUT /api/me/settings`, `GET`/`PUT /api/me/instructions` | Who you are; your own settings (rules, limits, plugins' account sections) and instructions |
+| `GET /api/config` | Models, runtimes, companions, plugins, output styles |
+| `GET`/`POST /api/sessions`, `GET`/`PATCH`/`DELETE /api/sessions/:id` | Sessions (see below for search and paging) |
+| `POST /api/sessions/:id/messages`, `/abort`, `/respond`, `/rewind` | A message (with attachments, below), stop, answer a request, rewind files |
+| `GET /api/sessions/:id/events` | The session's event stream (SSE, `Last-Event-ID` / `?after=`) |
+| `GET /api/sessions/:id/files?path=` | Read a workspace file or list a folder (vault values hidden) |
+| `GET /api/sessions/:id/export`, `POST /api/sessions/import` | A session as one file, and back |
+| `GET`/`POST /api/sessions/:id/workflows`, `GET /api/sessions/:id/runs/:run`, `POST .../resume` | Workflows and their runs |
+| `GET /api/sessions/:id/capabilities`, `/checkpoints`, `/trace`, `/sources`, `GET`/`PUT .../network` | What a session has, did and may reach |
+| `/api/schedules`, `/api/triggers/:token` | Scheduled prompts and triggers |
+| `/api/memory`, `/api/memory/file` | Memory |
+| `/api/vault/...` | The key vault (see [Key Vault](#key-vault)) |
+| `/api/users` | Accounts (administrators) |
+| `/api/companions` | Companions |
+| `GET /api/plugins/catalogue`, `POST /api/plugins/install`, `/api/plugin-routes` | Plugin catalogue and routes' tokens (administrators) |
+| `/api/mcpb` | MCP bundles (administrators) |
+| `/api/plugins/<plugin>/<path>` | Plugins' own routes (before sign-in, see [Plugins](#plugins)) |
+| `/auth/config`, `/auth/login`, `/auth/callback`, `/auth/logout`, `/auth/desktop/*` | Single sign-on |
+
+### HTTP API for desktop clients
+
+What the desktop app (`docs/desktop/DESIGN.md`, section 7) needs beyond the above. `apiVersion` is 1; it goes up only for a change that would break a client.
+
+**Version and events**
+
+| Route | |
+|---|---|
+| `GET /api/version` | `{version, apiVersion, uiApiVersion}` |
+| `GET /api/events` | One stream of everything you may see, as server-sent events framed like a session's: `id: <seq>` and `data: {seq, topic, payload}`, a comment every 20 s, replay from a ring of the last 1000 (`HARNESS_EVENTS_RING`) after `Last-Event-ID` or `?after=` (an id from before a restart replays the ring); `?topics=a,b` narrows it. Topics: `sessions` (`{type: created\|updated\|deleted, session}`: made, retitled, archived, pinned, filed, deleted), `session` (`{id, status, title, lastSeq}` on status and title changes), `approvals` (`{type: added, sessionId, requestId, kind, title, summary, tool?, at}` for permission requests, questions, plans and workflow approvals in any session; `{type: resolved, sessionId, requestId, decision, at}`), `schedules` (`{type: fired\|changed, id, title, enabled, nextRun, lastRun, lastResult, sessionId, result}`), `plugins` (`{type: changed, name, what}`), `notices` (`{level, text, sessionId?}`: a session's warnings and errors, and files a person changed). Filtered per person: the sessions and schedules they may use; administrators see all. Each server streams what happens on it. |
+| `GET /api/approvals` | What waits for you now, across sessions (the `added` shape) |
+
+**Providers and models**
+
+| Route | |
+|---|---|
+| `GET /api/models` | The model catalog (as in `/api/config`) |
+| `GET /api/providers` | `[{id, label, keyEnv, configured, source: env\|vault\|none, baseUrl?, baseUrlEditable, models, keyless?}]` |
+| `PUT /api/providers/:id` | Administrators: `{apiKey?, baseUrl?}` (`baseUrl: null` or `""` goes back to the default). The key is stored as the operator-scope vault entry `provider-<id>-key` (administrators only, audited) and never returned or logged; it applies to the next request of every session, no restart. A key in the environment still wins. Base URLs are kept in `<data>/providers.json`. |
+| `DELETE /api/providers/:id/key` | Administrators: removes the stored key |
+| `POST /api/providers/:id/test` | Administrators: `{ok, latencyMs, model, error?}` from the cheapest real call: the provider's models list (Anthropic's, OpenAI's and OpenAI-compatible addresses), else a one-word request to its first model. The key never appears in the answer. |
+
+**Plugins**
+
+| Route | |
+|---|---|
+| `GET /api/plugins` | `[{name, version, description, source: bundled\|installed\|env, enabled, required, contributes, signature, permissions, ui?, uiBase?, uiError?, uiHash?}]` (see [Plugins](#plugins), the UI half) |
+| `GET /api/plugins/:name/ui/<path>` | A frame's file, `<path>` as the manifest names it (`ui/index.html`) |
+| `POST /api/plugins/:name/enable`, `/disable` | Administrators: switched on or off now and after restarts |
+| `DELETE /api/plugins/:name` | Administrators: a catalogue-installed plugin, folder and all |
+
+**A session's files and git** (local and Docker runtimes; a companion session's files are on that computer: 501)
+
+| Route | |
+|---|---|
+| `GET /api/sessions/:id/files/tree?path=&depth=1` | `{path, entries: [{name, path, type: file\|dir, size, mtime, heavy?, symlink?, children?}], truncated?}`: one folder (`depth` up to 3), at most 2000 entries each; `node_modules`, `.git` and other heavy folders are listed (`heavy: true`), never walked |
+| `PUT /api/sessions/:id/files?path=` | The raw body (up to 10 MB) as the file, parent folders made |
+| `POST /api/sessions/:id/files/rename` | `{from, to, overwrite?}` |
+| `DELETE /api/sessions/:id/files?path=` | A file or folder (a link: the link, never what it points at) |
+| `POST /api/sessions/:id/files/upload` | `{path, base64}` |
+| `GET /api/sessions/:id/files/search?q=&content=0\|1&limit=` | Names, or lines (`{path, matches: [{line, text}]}`, vault values hidden); heavy folders, links and binary files skipped |
+| `GET /api/sessions/:id/git/status`, `/git/diff?path=&staged=0\|1`, `/git/log?limit=` | `{repo, branch, upstream, ahead, behind, files: [{path, from?, index, worktree}]}`, a diff (vault values hidden), commits |
+
+Every path stays inside the workspace: resolved through links like the agent's file tools, so `..`, an absolute path elsewhere or a link that leads out is refused (400); writes are also refused on the workspace itself and anywhere in a `.git` folder (403). Git runs where the session's commands run - its sandbox, or the server folder - with no fsmonitor, hooks, external diff or textconv programs. A person's change is not an agent tool call (nobody is asked), but the session hears of it: the agent's next step is told which files the user changed (and reads them again before editing), `FileChanged` hooks run with `tool: "user"`, and the session and the global stream show a notice.
+
+**Sessions**
+
+| Route | |
+|---|---|
+| `GET /api/sessions?query=&archived=0\|1&limit=&before=` | With any of these: `{sessions, next?}`, newest first, searching titles and the first message typed; `archived` defaults to 0; `next` is the cursor for `before`. Without them: the plain array, as before. |
+| `POST /api/sessions/:id/archive`, `/unarchive` | `meta.archived` |
+| `PATCH /api/sessions/:id` | Also `pinned: boolean`, `group: string` (`""` removes it) |
+| `GET /api/sessions/:id/history?after=&limit=` | `{total, after, messages, next?}` (`limit` up to 500); the full `GET` stays |
+| `POST /api/sessions/:id/fork` | `{turn?}` (default: all): a new session of yours with the conversation up to that turn, the same model, mode and runtime settings, and a workspace of its own - never the original's folder. A sandbox's or data-folder workspace is copied when it is under `HARNESS_FORK_COPY_MB` (200; else it starts empty and says so in `note`); a server-folder session gets a new git worktree of its repository (without the original's uncommitted changes); a server folder that is not a repository (409) and a companion session (501) are refused. Untrusted content the original read still counts. |
+| `POST /api/sessions/:id/messages` | Also `attachments: [{name, mediaType, base64}]` (at most 10, 20 MB in all): PNG, JPEG, GIF and WebP images go to a model that sees images as image blocks with the message (when it starts a turn); other files, and images for a model that does not see them, are saved as `.harness/uploads/<name>` (a free name) and named in the message. Answers `{state, images, files}`. |
+
+**Settings**
+
+| Route | |
+|---|---|
+| `GET /api/settings/effective?session=` | `{settings: [{key, value, source: default\|operator\|account\|project, scope, locked, max?, layers}], project}`: every limit, rule list and operator-only setting in force for you, where its value comes from and whether you can change it (`PUT /api/me/settings`), with the project's `.harness/settings.json` when a session is named; plugins' settings sections as `plugins.<name>.<key>` (account sections stored with your settings as `plugins: {<name>: {...}}`). |
+
+**Desktop sign-in on a single sign-on server** (RFC 8252: the system browser and a loopback redirect, with PKCE)
+
+1. The app opens `GET /auth/desktop/start?redirect_uri=http://127.0.0.1:<port>/callback&state=<state>&code_challenge=<S256 of its verifier>&code_challenge_method=S256` in the system browser. Only `http://127.0.0.1`, `http://localhost` or `http://[::1]` with an explicit port are accepted (400 otherwise, before anyone is sent to the provider).
+2. The person signs in at the provider through the server's usual flow (allowlists, disabled accounts and administrators exactly as for a browser).
+3. The server sends the browser to the redirect URI with `code` (one time, 60 seconds, bound to the challenge) and the app's `state`; a refusal comes back as `error=access_denied` with the `state`.
+4. The app posts `POST /auth/desktop/token {code, code_verifier}` (JSON) and gets `{token, expiresAt, user}`. A wrong verifier burns the code. The token (`hwd_...`) is a bearer session for `/api/*`, kept hashed in `<data>/desktop-sessions.json`, checked on every request like a browser session (a disabled account or one dropped from the allowlist stops working at once), ending after 14 idle days or `HARNESS_DESKTOP_SESSION_DAYS` (30) at most; `POST /auth/logout` with it revokes it.
+
 ## Durability, checkpoints, trace
 
 - **History** is append-only JSONL. If the server stops mid-turn, every unfinished tool call gets a result saying so (the transcript stays valid). The session is idle again on restart, and with `HARNESS_AUTO_RESUME=1` it continues on its own.
@@ -1112,7 +1255,9 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 
 | Variable | Default | |
 |---|---|---|
-| `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` / `GW_ANTHROPIC_API_KEY` | | Models without a key are greyed out. |
+| `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` / `GW_ANTHROPIC_API_KEY`, `MOONSHOT_API_KEY`, `ZAI_API_KEY` | | Models without a key are greyed out. |
+| `MOONSHOT_BASE_URL` / `ZAI_BASE_URL` | `https://api.moonshot.ai/v1` / `https://api.z.ai/api/paas/v4` | Kimi China platform keys: `https://api.moonshot.cn/v1`. Z.ai GLM Coding Plan: `https://api.z.ai/api/coding/paas/v4`; BigModel (China): `https://open.bigmodel.cn/api/paas/v4`. |
+| `HARNESS_MOONSHOT_CACHE_TTL` | `5m` | `1h`: Kimi K3 writes its prompt cache to the 1-hour tier (writes cost $6 instead of $3 per million tokens; pays off when turns are more than 5 minutes apart). |
 | `HARNESS_MODELS_JSON` / `HARNESS_MODELS_FILE` | | The operator's OpenAI-compatible models (Ollama, vLLM, LM Studio, OpenRouter, Together, Groq, Azure OpenAI, Gemini, ...): a JSON array or `{ "models": [...] }`, inline / in a file. See Models and providers. Their keys are in the variables the entries name (`apiKeyEnv`). |
 | `HARNESS_CLUSTER` | off | `1`: this server shares its data folder with others (see Running several servers). |
 | `HARNESS_NODE_ID` / `HARNESS_NODE_URL` | host name and port / none | This server's unique id among them / the address the others pass a session's requests to (https, or http on loopback; without it they answer 409). |
@@ -1141,6 +1286,10 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 | `HARNESS_PLUGIN_NETWORK` | | Hosts the operator grants a plugin beyond its manifest's `permissions.network`, as JSON: `{"devops": ["github.acme.internal"], "aiops": ["prometheus.internal:9090"]}` (a GitHub Enterprise or internal monitoring address). Only the operator can widen a plugin's reach. |
 | `HARNESS_PLUGIN_CATALOGUE` | | Signed plugins to install from the UI/API: a folder, or the https URL of an `index.json`. |
 | `HARNESS_ROUTE_RATE_LIMIT` | 600 | Requests a minute per address to plugin routes (`/api/plugins/<plugin>/...`). |
+| `HARNESS_REQUIRED_PLUGINS` | | Comma-separated plugin names that cannot be switched off (`POST /api/plugins/:name/disable` answers 409). |
+| `HARNESS_EVENTS_RING` | 1000 | Events the global stream (`GET /api/events`) keeps for replay. |
+| `HARNESS_FORK_COPY_MB` | 200 | A forked session's workspace is copied up to this size; larger ones start empty. |
+| `HARNESS_DESKTOP_SESSION_DAYS` | 30 | How long a desktop sign-in's bearer session lasts at most (14 idle days end it sooner). |
 | `HARNESS_PLUGIN_SESSION_OWNERS` | none | Accounts a plugin may act for, as JSON: `{"integrations": ["usr_...", "*"]}` - it may start sessions owned by them and message and answer for their sessions. Without it a plugin reaches only the operator's sessions and the ones it started itself, and starts sessions as the operator's. Chat-started investigations owned by the person who asked, and `HARNESS_OPS_ALERTS_OWNER`, need the account listed here. |
 | `HARNESS_PLUGIN_LOOPS` | on | `off`: plugins' server-side loops do nothing here (`api.lease()` is false); the eval runner, the CLI and the test runner turn them off. |
 | `HARNESS_CHANGES_MAX_MB` | 20 | The change journal (`<data>/changes.jsonl`) keeps its newest half past this size. |

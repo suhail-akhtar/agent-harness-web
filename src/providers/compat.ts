@@ -175,7 +175,7 @@ interface ChatUsage {
   prompt_cache_hit_tokens?: number;
   prompt_cache_miss_tokens?: number;
 }
-interface ChatChunk { choices?: ChatChoice[]; usage?: ChatUsage | null; error?: { message?: string; code?: string | number } }
+export interface ChatChunk { choices?: (ChatChoice & { usage?: ChatUsage | null })[]; usage?: ChatUsage | null; error?: { message?: string; code?: string | number; type?: string } }
 
 export class CompatProvider implements Provider {
   readonly cfg: ReturnType<typeof resolveCompat>;
@@ -313,7 +313,12 @@ class ThinkSplitter {
   }
 }
 
-class Accumulator {
+/**
+ * Collects one streamed (or whole) Chat Completions answer: text, reasoning,
+ * tool calls in any of the servers' delta shapes, finish reason and usage.
+ * Shared with the built-in Chat Completions providers (Moonshot, Z.ai).
+ */
+export class Accumulator {
   content = '';
   reasoning = '';
   refusal = '';
@@ -356,7 +361,8 @@ class Accumulator {
     if (choice.finish_reason) this.finish_ = choice.finish_reason;
   }
 
-  finish(model: string, promptChars: number, replayReasoning: boolean): ProviderResponse {
+  /** `provider` tags the raw payload: only that provider replays it verbatim. */
+  finish(model: string, promptChars: number, replayReasoning: boolean, provider = 'compat'): ProviderResponse {
     this.think.flush();
     const blocks: Block[] = [];
     if (this.reasoning) blocks.push({ type: 'reasoning', text: this.reasoning });
@@ -400,7 +406,7 @@ class Accumulator {
       usage = { input: Math.ceil(promptChars / 4), cacheRead: 0, cacheWrite: 0, output: Math.ceil(out / 4), reasoning: Math.ceil(this.reasoning.length / 4) };
     }
     return {
-      message: { role: 'assistant', content: blocks, raw: { provider: 'compat', model, payload: raw } },
+      message: { role: 'assistant', content: blocks, raw: { provider, model, payload: raw } },
       stop,
       usage,
       notice: stop === 'refusal' ? (this.refusal ? `The model declined: ${this.refusal}` : 'The provider filtered this response.') : undefined,

@@ -22,9 +22,15 @@ import { type InstalledMcpb, installedMcpb, installMcpb, McpbError, saveInstalle
 import { sandboxCredentials as sandboxCredentials_ } from '../runtime/credentials.ts';
 import { BUILTIN_TOOLS } from '../tools/index.ts';
 import { BUILTIN_SEARCH, makeSearchService, type SearchService } from '../research/search.ts';
-import { Registry, type LoadedPlugin } from './registry.ts';
+import { Registry, type LoadedPlugin, type PluginParts } from './registry.ts';
 import { VaultStore } from '../vault/store.ts';
 import { createBridge, type PluginBridge } from '../plugins/host.ts';
+import { type PluginUi, readPluginUi } from '../plugins/ui.ts';
+import type { PluginManifest } from '../plugins/api.ts';
+import { readJson, withFileLock, writeFileAtomic } from '../util/shared-file.ts';
+import { within } from '../tools/paths.ts';
+import { EventHub } from './events.ts';
+import { ProviderKeys } from './provider-keys.ts';
 
 // The harness as a library: one call assembles the registry (built-ins, then
 // plugins), the MCP manager, the companion hub and the session manager.
@@ -142,7 +148,49 @@ export interface Harness {
   catalogue(): Promise<CatalogueEntry[]>;
   /** Verifies, copies and loads a catalogue plugin; new sessions get it. */
   install(name: string): Promise<LoadedPlugin>;
+  /** Every plugin found (loaded or switched off), switched on and off while the server runs. */
+  plugins: PluginManager;
+  /** The global event stream (GET /api/events). */
+  events: EventHub;
+  /** Provider keys and base URLs set through the API. */
+  providerKeys: ProviderKeys;
   close(): Promise<void>;
+}
+
+/** A plugin the server found: loaded and on, loaded and switched off, or never loaded (off since start). */
+export interface PluginEntry extends PluginUi {
+  name: string;
+  version: string;
+  description: string;
+  dir: string;
+  source: 'bundled' | 'installed' | 'env';
+  enabled: boolean;
+  /** HARNESS_REQUIRED_PLUGINS: cannot be switched off. */
+  required: boolean;
+  signature?: string;
+  /** Its registry entry while loaded (contributes, permissions). */
+  loaded?: LoadedPlugin;
+  /** Why it is not loaded (a refused signature, a failing setup). */
+  error?: string;
+}
+
+export class PluginStateError extends Error {
+  status: number;
+  constructor(status: number, message: string) { super(message); this.status = status; }
+}
+
+export interface PluginManager {
+  list(): PluginEntry[];
+  get(name: string): PluginEntry | undefined;
+  /**
+   * Switches a plugin on or off now and for later starts (<data>/plugins-state.json). Off: its
+   * tools, agents, workflows, gates, hooks, routes and event handlers leave the registry (new
+   * sessions and new tool lists do without them; its background loops get no lease); on: they
+   * come back, or the plugin loads for the first time.
+   */
+  setEnabled(name: string, enabled: boolean): Promise<PluginEntry>;
+  /** Removes a catalogue-installed plugin: switched off, closed, its folder deleted. */
+  uninstall(name: string): Promise<void>;
 }
 
 export function builtinRegistry(): Registry {
@@ -179,22 +227,62 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     }
     return (await fs.stat(path.join(dir, SIG_FILE)).catch(() => null)) ? 'signed, not checked (no trust list)' : 'unsigned';
   }
+  const installDir = path.resolve(opts.installDir ?? path.join(opts.dataDir, 'plugins'));
+  const sourceOf = (dir: string): PluginEntry['source'] => (isShipped(dir) ? 'bundled' : dir.startsWith(installDir + path.sep) ? 'installed' : 'env');
+  // Every plugin found, on or off; its registry parts while loaded (taken out and put back by setEnabled).
+  const entries = new Map<string, PluginEntry>();
+  const parts = new Map<string, PluginParts>();
+  const required = new Set((process.env.HARNESS_REQUIRED_PLUGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean));
+  const stateFile = path.join(opts.dataDir, 'plugins-state.json');
+  const disabledAtStart = new Set((await readJson<{ disabled?: string[] }>(stateFile, {})).disabled ?? []);
+  /** Native UI only for what ships with the harness or is signed by a trusted key. */
+  const trustOf = (signature: string | undefined) => (signature === 'shipped with the harness' || /^signed by /.test(signature ?? '') ? 'native' as const : 'frame' as const);
+  async function describe(dir: string, m: PluginManifest, signature: string | undefined, enabled: boolean, loaded?: LoadedPlugin, error?: string): Promise<PluginEntry> {
+    const e: PluginEntry = {
+      name: m.name, version: m.version ?? '0.0.0', description: m.description ?? '', dir, source: sourceOf(dir), enabled, required: required.has(m.name),
+      ...(signature ? { signature } : {}), ...(loaded ? { loaded } : {}), ...(error ? { error } : {}),
+      ...await readPluginUi(dir, m.ui, trustOf(signature)),
+    };
+    if (e.uiError) log(`plugin ${m.name}: its ui section is not used: ${e.uiError}`);
+    entries.set(m.name, e);
+    return e;
+  }
   async function load(dir: string): Promise<LoadedPlugin> {
     const signature = await admit(dir);
-    await loadPlugin(registry, dir, log, { dataDir: opts.dataDir });
+    const added = await loadPlugin(registry, dir, log, { dataDir: opts.dataDir });
     const p = registry.plugins.at(-1)!;
     p.signature = signature;
+    p.source = sourceOf(dir);
+    parts.set(p.name, added);
+    await describe(dir, (await readManifest(dir))!, signature, true, p);
     return p;
   }
+  async function saveState(): Promise<void> {
+    await fs.mkdir(opts.dataDir, { recursive: true });
+    await withFileLock(stateFile, async () => {
+      const off = [...entries.values()].filter((e) => !e.enabled).map((e) => e.name).sort();
+      await writeFileAtomic(stateFile, JSON.stringify({ disabled: off }, null, 1));
+    });
+  }
+  const events = new EventHub();
+  const pluginsChanged = (name: string, what: string) => events.publish('plugins', { type: 'changed', name, what }, { all: true });
 
   // Plugins reach the running harness through the bridge; what it needs (sessions, leases, the vault) is made below.
   let sessionsLate: SessionManager | undefined;
   const late: { leases?: Leases; vault?: VaultStore } = {};
-  const bridge = createBridge({ registry, dataDir: opts.dataDir, sessions: () => sessionsLate, get leases() { return late.leases; }, get vault() { return late.vault; }, log, loops: opts.backgroundWork ?? process.env.HARNESS_PLUGIN_LOOPS !== 'off' } as Parameters<typeof createBridge>[0]);
+  const bridge = createBridge({ registry, dataDir: opts.dataDir, sessions: () => sessionsLate, get leases() { return late.leases; }, get vault() { return late.vault; }, log, loops: opts.backgroundWork ?? process.env.HARNESS_PLUGIN_LOOPS !== 'off', disabled: (name: string) => entries.get(name)?.enabled === false } as Parameters<typeof createBridge>[0]);
   registry.bridge = bridge;
-  const installDir = path.resolve(opts.installDir ?? path.join(opts.dataDir, 'plugins'));
   for (const root of [...(opts.plugins ?? []), installDir]) {
     for (const dir of await findPluginDirs(path.resolve(root))) {
+      const m = await readManifest(dir).catch(() => undefined);
+      // Switched off by an administrator: listed, not loaded (no code of it runs) until switched on.
+      if (m && disabledAtStart.has(m.name) && !required.has(m.name) && !entries.has(m.name)) {
+        let signature: string | undefined, error: string | undefined;
+        try { signature = await admit(dir); } catch (e) { error = (e as Error).message; }
+        await describe(dir, m, signature, false, undefined, error);
+        log(`plugin switched off: ${dir}`);
+        continue;
+      }
       try {
         const p = await load(dir);
         log(`plugin loaded: ${dir} (${p.signature})`);
@@ -203,6 +291,61 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       }
     }
   }
+  const plugins: PluginManager = {
+    list: () => [...entries.values()].sort((a, b) => a.name.localeCompare(b.name)),
+    get: (name) => entries.get(name),
+    async setEnabled(name, enabled) {
+      const e = entries.get(name);
+      if (!e) throw new PluginStateError(404, `No plugin "${name}".`);
+      if (!enabled && e.required) throw new PluginStateError(409, `${name} is required on this server (HARNESS_REQUIRED_PLUGINS) and cannot be switched off.`);
+      if (e.enabled === enabled) return e;
+      const got = parts.get(name);
+      if (enabled) {
+        if (got && e.loaded) {
+          registry.attach(got);
+          registry.plugins.push(e.loaded);
+        } else {
+          // Never loaded (off since the server started): load it now, as at a start.
+          try { await load(e.dir); } catch (err) { e.error = (err as Error).message; throw new PluginStateError(409, `${name} could not be loaded: ${e.error}`); }
+        }
+        entries.get(name)!.enabled = true;
+        delete entries.get(name)!.error;
+      } else {
+        if (got) registry.detach(got);
+        const i = registry.plugins.findIndex((p) => p.name === name);
+        if (i >= 0) registry.plugins.splice(i, 1);
+        e.enabled = false;
+      }
+      await saveState();
+      log(`plugin ${name} switched ${enabled ? 'on' : 'off'}`);
+      pluginsChanged(name, enabled ? 'enabled' : 'disabled');
+      return entries.get(name)!;
+    },
+    async uninstall(name) {
+      const e = entries.get(name);
+      if (!e) throw new PluginStateError(404, `No plugin "${name}".`);
+      if (e.source !== 'installed') throw new PluginStateError(409, `${name} was not installed from the catalogue (it is ${e.source === 'bundled' ? 'shipped with the harness' : 'listed by the operator in HARNESS_PLUGINS'}): switch it off instead.`);
+      if (e.required) throw new PluginStateError(409, `${name} is required on this server (HARNESS_REQUIRED_PLUGINS).`);
+      if (!within(installDir, e.dir) || path.resolve(e.dir) === installDir) throw new PluginStateError(409, `${e.dir} is not under ${installDir}`);
+      const got = parts.get(name);
+      if (got) {
+        registry.detach(got);
+        for (const c of got.closers) {
+          await Promise.resolve(c()).catch(() => {});
+          const i = registry.closers.indexOf(c);
+          if (i >= 0) registry.closers.splice(i, 1);
+        }
+      }
+      const i = registry.plugins.findIndex((p) => p.name === name);
+      if (i >= 0) registry.plugins.splice(i, 1);
+      entries.delete(name);
+      parts.delete(name);
+      await fs.rm(e.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await saveState();
+      log(`plugin ${name} uninstalled`);
+      pluginsChanged(name, 'uninstalled');
+    },
+  };
   const cataloguePath = opts.catalogue ?? process.env.HARNESS_PLUGIN_CATALOGUE;
   const remoteCatalogue = !!cataloguePath && /^https?:\/\//i.test(cataloguePath);
   const catalogueDirs = async () => (cataloguePath && !remoteCatalogue ? findPluginDirs(path.resolve(cataloguePath)) : []);
@@ -275,9 +418,14 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   await scheduler?.load();
   late.leases = leases;
   late.vault = vault;
+  if (scheduler) scheduler.onEvent = (type, s, run) => events.scheduleEvent(type, s, run);
+  // Keys and base URLs set through the API: the environment's key still wins (Registry.keyInfo).
+  const providerKeys = await new ProviderKeys({ dataDir: opts.dataDir, vault, registry, log }).load();
+  registry.keySource = (id) => providerKeys.get(id);
+  registry.baseUrlFor = (id) => providerKeys.baseUrl(id);
   const sessions = new SessionManager({
     dataDir: opts.dataDir, companions, registry, mcp, onSpan: otel ? (sid, span) => otel.record(sid, span) : undefined,
-    onEvent: (s, e) => bridge.dispatch(s, e), changes: bridge.changes,
+    onEvent: (s, e) => { bridge.dispatch(s, e); events.fromSession(s, e); }, onLifecycle: (type, s) => events.sessionChanged(type, s), changes: bridge.changes,
     memory: { root: path.resolve(opts.memoryDir ?? path.join(opts.dataDir, 'memory')), mode: memoryMode }, search, spend: opts.spend,
     publish: opts.publish === null ? undefined : opts.publish ?? publishFromEnv(),
     sandboxCredentials, scheduler, vault, leases,
@@ -319,7 +467,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   }
 
   return {
-    registry, sessions, companions, mcp, scheduler, vault, dataDir: opts.dataDir, search: search?.backend, bridge,
+    registry, sessions, companions, mcp, scheduler, vault, dataDir: opts.dataDir, search: search?.backend, bridge, plugins, events, providerKeys,
     ...(leases ? { cluster: { id: leases.owner, url: leases.url, leases, ...(clusterCfg?.secret ? { secret: clusterCfg.secret } : {}), ...(clusterCfg?.peers ? { peers: clusterCfg.peers } : {}) } } : {}),
     mcpb: {
       list: () => installedMcpb(mcpbRoot),
@@ -366,25 +514,9 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       return out;
     },
     async install(name) {
-      if (!keys) throw new Error('Installing from the catalogue needs a trust list (HARNESS_PLUGIN_KEYS): plugin code runs in the server.');
-      if (remoteCatalogue) return installRemote(name);
-      let src: string | undefined;
-      for (const d of await catalogueDirs()) if ((await readManifest(d).catch(() => undefined))?.name === name) src = d;
-      if (!src) throw new Error(`No plugin "${name}" in the catalogue.`);
-      if (registry.plugins.some((p) => p.name === name)) throw new Error(`Plugin "${name}" is already loaded.`);
-      const v = await verifyPlugin(src, keys);
-      if (!v.ok) throw new Error(`Refused: ${v.reason}`);
-      if (!/^[a-z0-9][a-z0-9._-]*$/i.test(name)) throw new Error(`Bad plugin name "${name}".`);
-      const dest = path.join(installDir, name);
-      if (await fs.stat(dest).catch(() => null)) throw new Error(`${dest} already exists.`);
-      await fs.mkdir(installDir, { recursive: true });
-      await fs.cp(src, dest, { recursive: true });
-      try {
-        return await load(dest); // verified again where it will run from
-      } catch (e) {
-        await fs.rm(dest, { recursive: true, force: true });
-        throw e;
-      }
+      const p = await installFromCatalogue(name);
+      pluginsChanged(p.name, 'installed');
+      return p;
     },
     async close() {
       scheduler?.stop();
@@ -396,6 +528,28 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       for (const c of registry.closers) await Promise.resolve(c()).catch(() => {});
     },
   };
+
+  async function installFromCatalogue(name: string): Promise<LoadedPlugin> {
+    if (!keys) throw new Error('Installing from the catalogue needs a trust list (HARNESS_PLUGIN_KEYS): plugin code runs in the server.');
+    if (remoteCatalogue) return installRemote(name);
+    let src: string | undefined;
+    for (const d of await catalogueDirs()) if ((await readManifest(d).catch(() => undefined))?.name === name) src = d;
+    if (!src) throw new Error(`No plugin "${name}" in the catalogue.`);
+    if (registry.plugins.some((p) => p.name === name) || entries.has(name)) throw new Error(`Plugin "${name}" is already loaded.`);
+    const v = await verifyPlugin(src, keys);
+    if (!v.ok) throw new Error(`Refused: ${v.reason}`);
+    if (!/^[a-z0-9][a-z0-9._-]*$/i.test(name)) throw new Error(`Bad plugin name "${name}".`);
+    const dest = path.join(installDir, name);
+    if (await fs.stat(dest).catch(() => null)) throw new Error(`${dest} already exists.`);
+    await fs.mkdir(installDir, { recursive: true });
+    await fs.cp(src, dest, { recursive: true });
+    try {
+      return await load(dest); // verified again where it will run from
+    } catch (e) {
+      await fs.rm(dest, { recursive: true, force: true });
+      throw e;
+    }
+  }
 }
 
 function publishFromEnv(): SessionDeps['publish'] {

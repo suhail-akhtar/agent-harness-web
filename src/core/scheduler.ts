@@ -107,6 +107,12 @@ export class Scheduler {
    * (it holds the scheduler lease). Absent: it always does.
    */
   leader?: () => Promise<boolean>;
+  /** Told of every change and run here (the server's global event stream). */
+  onEvent?: (type: 'fired' | 'changed', s: Schedule, run?: { sessionId?: string; result: string }) => void;
+  private tell(type: 'fired' | 'changed', s: Schedule | undefined, run?: { sessionId?: string; result: string }): void {
+    if (!s) return;
+    try { this.onEvent?.(type, s, run); } catch { /* a listener never breaks the scheduler */ }
+  }
 
   /** The runner, unless the schedule's owner can no longer run work. */
   private async launch(s: Schedule, outside?: string): Promise<{ sessionId?: string; result: string }> {
@@ -183,11 +189,13 @@ export class Scheduler {
       ...(spec.cron ? { cron: spec.cron.trim() } : { at }), ...(spec.sessionId ? { sessionId: spec.sessionId } : { newSession: spec.newSession }),
       enabled: true, createdAt: now, nextRun, runs: 0,
     };
-    return this.mutate(() => {
+    const made = await this.mutate(() => {
       if (this.list(spec.owner).length >= MAX_PER_OWNER) throw new ScheduleError(`at most ${MAX_PER_OWNER} schedules per person; delete some first`);
       this.items.set(s.id, s);
       return s;
     });
+    this.tell('changed', made);
+    return made;
   }
 
   /**
@@ -205,11 +213,13 @@ export class Scheduler {
       ...(spec.sessionId ? { sessionId: spec.sessionId } : { newSession: spec.newSession }),
       enabled: true, triggerHash: hashToken(token), createdAt: now, runs: 0,
     };
-    return this.mutate(() => {
+    const made = await this.mutate(() => {
       if (this.list(spec.owner).length >= MAX_PER_OWNER) throw new ScheduleError(`at most ${MAX_PER_OWNER} schedules and triggers per person`);
       this.items.set(s.id, s);
       return { schedule: s, token };
     });
+    this.tell('changed', made.schedule);
+    return made;
   }
 
   /** Fires the trigger a token belongs to, with what the caller sent; undefined for an unknown or disabled one. */
@@ -224,11 +234,14 @@ export class Scheduler {
   }
 
   async remove(id: string): Promise<boolean> {
-    return this.mutate(() => this.items.delete(id));
+    const s = this.items.get(id);
+    const ok = await this.mutate(() => this.items.delete(id));
+    if (ok) this.tell('changed', s && { ...s, enabled: false });
+    return ok;
   }
 
   async setEnabled(id: string, enabled: boolean, now = Date.now()): Promise<Schedule | undefined> {
-    return this.mutate(() => {
+    const done = await this.mutate(() => {
       const s = this.items.get(id);
       if (!s) return undefined;
       // A one-time schedule that already ran (or whose time passed) has nothing left to run.
@@ -238,6 +251,8 @@ export class Scheduler {
       if (enabled && !s.cron && s.at !== undefined) s.nextRun = s.at;
       return s;
     });
+    this.tell('changed', done);
+    return done;
   }
 
   /**
@@ -282,7 +297,7 @@ export class Scheduler {
 
   /** Writes down a run's outcome. */
   private async record(id: string, now: number, r: { sessionId?: string; result: string }): Promise<Schedule | undefined> {
-    return this.mutate(() => {
+    const done = await this.mutate(() => {
       const s = this.items.get(id);
       if (!s) return undefined;
       s.lastRun = now;
@@ -291,5 +306,7 @@ export class Scheduler {
       if (r.sessionId && !s.sessionId && s.newSession) this.log(`schedule ${s.id} ran in new session ${r.sessionId}`);
       return s;
     });
+    this.tell('fired', done, r);
+    return done;
   }
 }

@@ -84,7 +84,7 @@ export interface PluginBridge {
   route(plugin: string, p: string): (PluginRoute & { plugin: string })[];
 }
 
-export function createBridge(o: { registry: Registry; dataDir: string; sessions: () => SessionManager | undefined; leases?: Leases; vault?: VaultStore; log: (m: string) => void; /** Plugins' server-side loops run here (lease() is false when not). */ loops?: boolean }): PluginBridge {
+export function createBridge(o: { registry: Registry; dataDir: string; sessions: () => SessionManager | undefined; leases?: Leases; vault?: VaultStore; log: (m: string) => void; /** Plugins' server-side loops run here (lease() is false when not). */ loops?: boolean; /** A plugin an administrator switched off: no lease, no sessions. */ disabled?: (plugin: string) => boolean }): PluginBridge {
   const changes = new ChangeJournal(o.dataDir);
   const routeTokens = new RouteTokens(o.dataDir);
   const actions = path.join(o.dataDir, 'plugin-actions.jsonl');
@@ -115,9 +115,11 @@ export function createBridge(o: { registry: Registry; dataDir: string; sessions:
   const redactorOf = (plugin: string) => { let r = redactors.get(plugin); if (!r) { r = new Redactor(); redactors.set(plugin, r); } return r; };
   const clean = (plugin: string, t: string) => redactorOf(plugin).redact(t);
 
+  const off = (plugin: string) => { if (o.disabled?.(plugin)) throw new Error(`the ${plugin} plugin is switched off on this server`); };
   function sessionsFor(plugin: string): PluginSessions {
     return {
       async start(st: PluginSessionStart) {
+        off(plugin);
         const mgr = need();
         await mgr.sync(true);
         const title = clean(plugin, String(st.title ?? '')).replace(/\s+/g, ' ').trim().slice(0, 80);
@@ -149,6 +151,7 @@ export function createBridge(o: { registry: Registry; dataDir: string; sessions:
         return { id: s.meta.id };
       },
       async send(id, text, so) {
+        off(plugin);
         const mgr = need();
         await mgr.sync();
         const s = mgr.get(id);
@@ -162,6 +165,7 @@ export function createBridge(o: { registry: Registry; dataDir: string; sessions:
         await audit({ plugin, action: 'send', session: id, untrusted: !!so?.untrusted, chars: text.length });
       },
       async respond(id, requestId, d) {
+        off(plugin);
         const mgr = need();
         const s = mgr.get(id);
         if (!s) return false;
@@ -208,7 +212,7 @@ export function createBridge(o: { registry: Registry; dataDir: string; sessions:
       }
     },
     async lease(plugin, name) {
-      if (o.loops === false) return false;
+      if (o.loops === false || o.disabled?.(plugin)) return false;
       if (!o.leases) return true;
       return (await o.leases.acquire(`plugin-${plugin}-${name}`.replace(/[^\w.-]/g, '_'))).ok;
     },

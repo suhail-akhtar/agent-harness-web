@@ -40,7 +40,7 @@ import { costOf } from './models.ts';
 import { loadInstructions, workspaceReader } from './instructions.ts';
 import { environmentBlock, firstMessageText, resolveOutputStyle, SUBAGENT_PROMPT, systemPrompt } from './prompt.ts';
 import { applyUserSettings, loadProjectSettings, loadUserInstructions, loadUserSettings, mergeSettings, operatorSettings, type Settings } from './settings.ts';
-import type { HarnessEvent, Message, PermissionMode, SessionStatus, Todo, ToolUseBlock, TurnEndReason, Usage, WorkflowRunView } from './types.ts';
+import type { HarnessEvent, ImageBlock, Message, PermissionMode, SessionStatus, Todo, ToolUseBlock, TurnEndReason, Usage, WorkflowRunView } from './types.ts';
 import { addUsage, emptyUsage } from './types.ts';
 import type { LeaseRecord, Leases } from '../util/lease.ts';
 import { readJson, withFileLock, writeFileAtomic } from '../util/shared-file.ts';
@@ -97,6 +97,16 @@ export interface SessionMeta {
   vaultNames?: string[];
   /** Started by a plugin (api.sessions.start): its name. */
   startedBy?: string;
+  /** Put away by its owner (hidden from the default list; nothing else changes). */
+  archived?: boolean;
+  /** Kept at the top of the owner's list. */
+  pinned?: boolean;
+  /** A group (folder) name the owner filed it under. */
+  group?: string;
+  /** The first message the person typed (for search; the history's first message carries the preamble too). */
+  firstPrompt?: string;
+  /** Made by forking another session: which one, and up to which turn. */
+  forkedFrom?: { id: string; turn: number };
 }
 
 export interface StoredEvent { seq: number; at: number; event: HarnessEvent }
@@ -178,11 +188,16 @@ export interface SessionDeps {
   leases?: Leases;
   /** Every event of every session (plugins' api.events); must not throw. */
   onEvent?: (session: Session, event: HarnessEvent) => void;
+  /** A session was made or deleted here (the global event stream). */
+  onLifecycle?: (type: 'created' | 'deleted', session: Session) => void;
   /** The change journal (ToolServices.changes). */
   changes?: ChangeService;
 }
 
 /** The session is being worked on by another server (it holds the session's lease). */
+/** A request the session cannot take while it works (images need a turn of their own). */
+export class SessionBusyError extends Error {}
+
 export class SessionElsewhereError extends Error {
   readonly holder: LeaseRecord;
   constructor(holder: LeaseRecord) {
@@ -1858,13 +1873,17 @@ export class Session {
 
   // ---------- turns ----------
 
-  /** Starts a turn, or queues the text for the running one. */
-  async send(text: string): Promise<'started' | 'queued'> {
+  /**
+   * Starts a turn, or queues the text for the running one. `images` go to the model with the
+   * message; they need a turn of their own (a queued message is text), so a busy session refuses them.
+   */
+  async send(text: string, opts: { images?: ImageBlock[] } = {}): Promise<'started' | 'queued'> {
     const t = text.trim();
     if (!t) throw new Error('empty message');
     // Only background work waiting for an answer: no turn runs, so this message starts one.
     const bgOnly = this.status === 'waiting' && !this.abortCtl && [...this.pending.values()].every((p) => p.background);
     if (this.status !== 'idle' && !bgOnly) {
+      if (opts.images?.length) throw new SessionBusyError('The session is working: images go with a message that starts a turn.');
       this.queued.push(t);
       this.latestPrompt = t;
       this.emit({ kind: 'notice', level: 'info', text: 'Message queued; the agent will see it at its next step.' });
@@ -1877,11 +1896,37 @@ export class Session {
     }
     this.latestPrompt = t;
     if (this.meta.title === 'New session') this.meta.title = t.replace(/\s+/g, ' ').slice(0, 60);
-    this.runTurn(t).catch(() => {});
+    this.meta.firstPrompt ??= t.slice(0, 2000);
+    this.runTurn(t, opts.images).catch(() => {});
     return 'started';
   }
 
-  private async runTurn(text: string): Promise<void> {
+  /**
+   * The person changed files in the workspace outside the agent (the desktop's editor, an
+   * upload): the agent hears of it at its next step, its read stamps are dropped (it reads
+   * again before editing), FileChanged hooks run with tool "user", and the session shows a notice.
+   */
+  userChangedFiles(change: 'wrote' | 'renamed' | 'deleted' | 'uploaded', paths: string[], by?: string): void {
+    if (!paths.length) return;
+    const list = paths.slice(0, 20).join(', ') + (paths.length > 20 ? ` and ${paths.length - 20} more` : '');
+    this.readFiles.clear();
+    this.queued.push(`<system-reminder>Files changed by the user (${change}) since you last looked: ${list}. Read them again before relying on or editing them.</system-reminder>`);
+    this.emit({ kind: 'notice', level: 'info', text: `${by ? `${by} ` : 'The user '}${change} ${list}.` });
+    for (const p of paths.slice(0, 20)) fireHooks(this.settings, this.host, 'FileChanged', { path: p, tool: 'user', change }, this.deps.registry.hooks, (m) => this.emit({ kind: 'notice', level: 'warn', text: m }));
+  }
+
+  /** Runs a command where the session's commands run (its sandbox, or the server folder): for the person's git views, never the agent's. */
+  async execInWorkspace(cmd: string, timeoutMs = 30_000): Promise<{ stdout: string; stderr: string; code: number | null; shell: string }> {
+    const host = await this.getHost();
+    if (host.kind === 'companion') throw new Error('the files of a companion session live on that computer');
+    const r = await host.exec(cmd, { timeoutMs });
+    return { stdout: r.stdout, stderr: r.stderr, code: r.code, shell: host.shell };
+  }
+
+  /** The shell the session's commands run in (bash or powershell), for quoting a command line. */
+  async workspaceShell(): Promise<string> { return (await this.getHost()).shell; }
+
+  private async runTurn(text: string, images?: ImageBlock[]): Promise<void> {
     this.abortCtl = new AbortController();
     const signal = this.abortCtl.signal;
     this.setStatus('running');
@@ -1922,7 +1967,7 @@ export class Session {
       }
       if (prompt.feedback) body += `\n\n<system-reminder>${prompt.feedback}</system-reminder>`;
       const pre = this.queued.splice(0).filter((q) => q.startsWith('<system-reminder>'));
-      agent.append({ role: 'user', content: [...pre.map((q) => ({ type: 'text' as const, text: q })), { type: 'text', text: body }] });
+      agent.append({ role: 'user', content: [...pre.map((q) => ({ type: 'text' as const, text: q })), { type: 'text', text: body }, ...(images ?? [])] });
       this.emit({ kind: 'user_message', text });
       reason = await agent.run(signal);
     } catch (err) {

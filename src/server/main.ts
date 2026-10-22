@@ -29,7 +29,12 @@ async function main() {
   }
   const oidc = oidcConfigFromEnv(process.env);
   const users = await new UserStore(DATA_DIR).load();
-  const sso = oidc ? { client: new OidcClient(oidc), sessions: await new BrowserSessions(DATA_DIR).load() } : undefined;
+  // The desktop app's bearer sessions (sign-in through the system browser) are kept beside the browser ones.
+  const desktopDays = Math.max(1, Number(process.env.HARNESS_DESKTOP_SESSION_DAYS ?? 30) || 30);
+  const sso = oidc ? {
+    client: new OidcClient(oidc), sessions: await new BrowserSessions(DATA_DIR).load(),
+    desktop: await new BrowserSessions(DATA_DIR, { file: 'desktop-sessions.json', idleMs: Math.min(14, desktopDays) * 86_400_000, maxMs: desktopDays * 86_400_000 }).load(),
+  } : undefined;
   const spend = await new SpendLedger(DATA_DIR, num(process.env.HARNESS_USER_DAILY_USD)).load();
   const harness = await createHarness({
     dataDir: DATA_DIR,
@@ -71,7 +76,7 @@ async function main() {
     setTimeout(() => process.exit(1), 15_000).unref();
     server.close();
     harness.close().catch((e: Error) => console.error(e.message))
-      .then(() => Promise.all([spend.flush(), sso?.sessions.flush()])).catch(() => {})
+      .then(() => Promise.all([spend.flush(), sso?.sessions.flush(), sso?.desktop.flush()])).catch(() => {})
       .finally(() => process.exit(0));
   };
   process.on('SIGINT', () => stop('SIGINT'));

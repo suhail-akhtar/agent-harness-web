@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hello frame</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1>Hello from a frame</h1>
+  <p class="muted">This page runs in a sandboxed frame with no network of its own. Everything it shows came through the host over <code>postMessage</code>.</p>
+  <p id="greeting" class="card">Waiting for the host...</p>
+  <button id="again" type="button">Ask the server half again</button>
+  <h2>Your recent sessions</h2>
+  <ul id="sessions"><li class="muted">...</li></ul>
+</main>
+<script>
+// The harness-ui/1 protocol by hand (what @harness/plugin-ui/sdk does): a call is
+// {protocol, kind: 'call', id, method, params, gesture}; the host answers with a
+// result of the same id, sends events, and starts with an init message.
+(function () {
+  var PROTOCOL = 'harness-ui/1';
+  var next = 1, pending = {}, lastGesture = 0;
+  addEventListener('pointerdown', function () { lastGesture = Date.now(); }, true);
+  addEventListener('keydown', function () { lastGesture = Date.now(); }, true);
+  function call(method, params) {
+    var id = next++;
+    return new Promise(function (resolve, reject) {
+      pending[id] = { resolve: resolve, reject: reject };
+      parent.postMessage({ protocol: PROTOCOL, kind: 'call', id: id, method: method, params: params, gesture: Date.now() - lastGesture < 1500 }, '*');
+    });
+  }
+  function theme(vars) { for (var k in vars) document.documentElement.style.setProperty(k.indexOf('--') === 0 ? k : '--' + k, vars[k]); }
+  addEventListener('message', function (e) {
+    if (e.source !== parent) return;
+    var m = e.data;
+    if (!m || m.protocol !== PROTOCOL) return;
+    if (m.kind === 'result' && pending[m.id]) { var p = pending[m.id]; delete pending[m.id]; m.ok ? p.resolve(m.value) : p.reject(new Error(m.error || 'refused')); }
+    else if (m.kind === 'event' && m.topic === 'theme') theme(m.payload);
+    else if (m.kind === 'init') { theme(m.theme || {}); start(m); }
+  });
+  function text(id, t) { document.getElementById(id).textContent = t; }
+  function greet() {
+    call('routes.call', { path: 'greeting', method: 'GET' })
+      .then(function (r) { text('greeting', (r && r.text) || JSON.stringify(r)); })
+      .catch(function (err) { text('greeting', 'The host refused: ' + err.message); });
+  }
+  function start(init) {
+    greet();
+    document.getElementById('again').addEventListener('click', greet);
+    call('sessions.list', { limit: 5 }).then(function (list) {
+      var ul = document.getElementById('sessions');
+      ul.textContent = '';
+      (list || []).slice(0, 5).forEach(function (s) { var li = document.createElement('li'); li.textContent = s.title || s.id; ul.appendChild(li); });
+      if (!ul.children.length) { var li = document.createElement('li'); li.className = 'muted'; li.textContent = 'No sessions yet.'; ul.appendChild(li); }
+    }).catch(function (err) { text('sessions', 'Not available: ' + err.message); });
+    call('frame.resize', { height: document.body.scrollHeight }).catch(function () {});
+  }
+})();
+</script>
+</body>
+</html>
