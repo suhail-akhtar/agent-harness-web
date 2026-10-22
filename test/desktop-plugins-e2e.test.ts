@@ -201,7 +201,7 @@ test('plugins journey: Engineering and Operations switched on and off live, used
       await page.waitForSelector('[data-nav="sdlc:delivery"]', { timeout: 15_000 });
       await shot('plugins-engineering-on');
       const s = await snapshot();
-      assert.deepEqual(ofPlugin(s.nav, 'sdlc'), ['sdlc:delivery']);
+      assert.deepEqual(ofPlugin(s.nav, 'sdlc'), ['sdlc:delivery', 'sdlc:start', 'sdlc:quality'], 'its module: Delivery, Start a feature, Gates');
       assert.deepEqual(ofPlugin(s.homeCards, 'sdlc'), ['sdlc:in-flight']);
       assert.deepEqual(ofPlugin(s.chips, 'sdlc').sort(), ['sdlc:target-branch', 'sdlc:test-level']);
       assert.deepEqual(ofPlugin(s.settings, 'sdlc'), ['sdlc:engineering', 'sdlc:engineering-panel'], 'the person\'s choices (with the account) and this computer\'s');
@@ -468,7 +468,7 @@ test('plugins journey: Engineering and Operations switched on and off live, used
       const s = await snapshot();
       for (const [k, v] of Object.entries(s)) assert.deepEqual(ofPlugin(v, 'sdlc'), [], `${k}: nothing of Engineering`);
       assert.ok(!s.slash.includes('/feature') && !s.slash.includes('/gates'));
-      assert.deepEqual(ofPlugin(s.nav, 'aiops'), ['aiops:incidents'], 'Operations is unaffected');
+      assert.deepEqual(ofPlugin(s.nav, 'aiops'), ['aiops:incidents', 'aiops:alerts', 'aiops:services', 'aiops:topology', 'aiops:changes'], 'Operations is unaffected');
       assert.deepEqual(ofPlugin(s.homeCards, 'aiops'), ['aiops:on-call']);
       assert.ok(s.slash.includes('/incident'));
       await frame('[data-home-card="aiops:on-call"]').locator('[data-oncall-open]').waitFor({ timeout: 20_000 });

@@ -5,6 +5,7 @@
   "main": "index.mjs",
   "ui": {
     "apiVersion": 1,
+    "guide": "GUIDE.md",
     "displayName": "Quality gates",
     "icon": "shield",
     "category": "Engineering",

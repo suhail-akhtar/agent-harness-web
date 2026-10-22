@@ -32,6 +32,41 @@
       "workflows.start",
       "settings.read"
     ],
+    "menu": {
+      "title": "Operations",
+      "icon": "activity",
+      "order": 41,
+      "items": [
+        "incidents",
+        {
+          "id": "alerts",
+          "title": "Alerts",
+          "icon": "alert",
+          "view": "alerts",
+          "badge": "aiops.firing"
+        },
+        {
+          "id": "services",
+          "title": "Services",
+          "icon": "server",
+          "view": "services"
+        },
+        {
+          "id": "topology",
+          "title": "Topology",
+          "icon": "layers",
+          "view": "topology"
+        },
+        {
+          "id": "changes",
+          "title": "Changes",
+          "icon": "history",
+          "view": "changes"
+        }
+      ]
+    },
+    "home": "home",
+    "guide": "GUIDE.md",
     "badges": [
       {
         "name": "open",
@@ -59,6 +94,14 @@
         }
       ],
       "views": [
+        {
+          "id": "home",
+          "title": "Operations",
+          "icon": "activity",
+          "description": "On call at a glance: open incidents, firing alerts, SLO error budgets, service health, quick actions.",
+          "kind": "frame",
+          "entry": "ui/home-page.html"
+        },
         {
           "id": "incidents",
           "title": "Incidents",

@@ -25,6 +25,28 @@
       "workflows.start",
       "settings.read"
     ],
+    "menu": {
+      "title": "Engineering",
+      "icon": "rocket",
+      "order": 40,
+      "items": [
+        "delivery",
+        {
+          "id": "start",
+          "title": "Start a feature",
+          "icon": "play",
+          "view": "start-feature"
+        },
+        {
+          "id": "quality",
+          "title": "Gates",
+          "icon": "shield",
+          "view": "quality"
+        }
+      ]
+    },
+    "home": "home",
+    "guide": "GUIDE.md",
     "contributes": {
       "navItems": [
         {
@@ -37,6 +59,14 @@
         }
       ],
       "views": [
+        {
+          "id": "home",
+          "title": "Engineering",
+          "icon": "rocket",
+          "description": "Features in flight with their stage, failing gates, recent deliveries, and the ways to start work.",
+          "kind": "frame",
+          "entry": "ui/home-page.html"
+        },
         {
           "id": "delivery",
           "title": "Delivery",
@@ -52,6 +82,14 @@
           "description": "Starts the build-feature workflow with your request.",
           "kind": "frame",
           "entry": "ui/start.html"
+        },
+        {
+          "id": "quality",
+          "title": "Quality gates",
+          "icon": "shield",
+          "description": "Every feature's gates (tests, type checks, lint, builds, scans), failing first.",
+          "kind": "frame",
+          "entry": "ui/quality.html"
         }
       ],
       "panels": [
@@ -73,6 +111,29 @@
           "action": {
             "type": "open-view",
             "view": "delivery"
+          },
+          "agent": {
+            "description": "Opens the Delivery board: every feature by stage (requirement, design, plan, build, gates, review, delivered) with its gates, tests and cost; with an id, that feature's detail.",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "A feature (delivery) id, to open its detail.",
+                  "maxLength": 80
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "open-quality",
+          "title": "Open the quality gates of every feature",
+          "category": "Engineering",
+          "icon": "shield",
+          "action": {
+            "type": "open-view",
+            "view": "quality"
           }
         },
         {
