@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>On call</title>
+<link rel="stylesheet" href="kit.css">
+<style>
+  body { background: transparent; }
+  .nums { display: flex; gap: 18px; margin-bottom: 8px; }
+  .num { cursor: pointer; background: transparent; border: 0; padding: 0; text-align: left; font: inherit; color: inherit; }
+  .num b { display: block; font-size: 22px; font-weight: 600; line-height: 1.1; }
+  .num.hot b { color: var(--hx-danger); }
+  .item { display: flex; gap: 8px; align-items: center; width: 100%; text-align: left; font: inherit; color: inherit; background: transparent; border: 0; border-radius: 8px; padding: 4px 6px; cursor: pointer; }
+  .item:hover { background: var(--hx-hover); }
+  .item .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; }
+</style>
+<script src="harness://app/sdk/plugin-ui.js"></script>
+<script src="kit.js"></script>
+</head>
+<body class="card-frame">
+<div id="out" class="small muted">Loading…</div>
+<script>
+// The On call home card: open incidents, firing alerts, the SLOs burning fastest. It also keeps the
+// sidebar badge and the status bar's counts current while the home page is open.
+Kit.start(async (harness) => {
+  const { h, mount, chip, age } = Kit;
+  const out = document.getElementById('out');
+  let settings = {};
+  try { settings = (await harness.settings.get()) || {}; } catch { settings = {}; }
+  const rank = { info: 0, warning: 1, critical: 2 };
+  const min = settings.minSeverity || 'info';
+  Kit.autoHeight(harness);
+  const load = async () => {
+    const s = await Kit.route(harness, 'console/summary');
+    const firing = Object.entries(s.bySeverity).filter(([k]) => rank[k] >= rank[min]).reduce((a, [, v]) => a + v, 0);
+    await harness.badge.set('open', s.open || null).catch(() => {});
+    await harness.badge.set('firing', firing || null).catch(() => {});
+    const burning = (s.slo || []).filter((o) => !o.error && typeof o.budgetLeft === 'number').sort((a, b) => a.budgetLeft - b.budgetLeft).slice(0, 3);
+    mount(out,
+      h('div', { class: 'nums' },
+        h('button', { type: 'button', class: `num ${s.open ? 'hot' : ''}`, 'data-oncall-open': String(s.open), onclick: () => harness.view.open('incidents') }, h('b', {}, String(s.open)), h('span', { class: 'muted small' }, 'open incidents')),
+        h('button', { type: 'button', class: `num ${s.bySeverity.critical ? 'hot' : ''}`, 'data-oncall-firing': String(firing), onclick: () => harness.view.open('alerts') }, h('b', {}, String(firing)), h('span', { class: 'muted small' }, `firing${s.bySeverity.critical ? ` · ${s.bySeverity.critical} critical` : ''}`))),
+      s.top.length ? s.top.slice(0, 3).map((x) => h('button', { type: 'button', class: 'item', 'data-oncall-incident': x.id, onclick: () => harness.view.open('incidents', { id: x.id }) }, chip(String(x.severity).toUpperCase(), x.severity), h('span', { class: 't' }, x.title), h('span', { class: 'muted small' }, age(x.openedAt)))) : h('div', { class: 'small muted' }, 'No open incidents.'),
+      burning.length ? h('div', { style: { marginTop: '8px' } }, h('div', { class: 'muted small' }, 'SLO error budget'), burning.map((o) => h('div', { class: 'row small', style: { gap: '6px', marginTop: '3px' } }, h('span', { style: { flex: '1' } }, `${o.service}/${o.name}`), h('div', { class: 'bar', style: { width: '80px' } }, h('span', { class: o.budgetLeft < 0.1 ? 'bad' : o.budgetLeft < 0.5 ? 'warn' : '', style: { width: `${Math.max(2, Math.min(100, Math.round(o.budgetLeft * 100)))}%` } })), h('span', { class: 'muted', style: { width: '64px', textAlign: 'right' } }, `${o.budgetLeft < 0 ? 'spent' : `${Math.round(o.budgetLeft * 100)}%`} · ${o.burn1h.toFixed(1)}x`)))) : null,
+    );
+  };
+  await Kit.live(harness, load, { topics: ['session', 'approvals'], ms: Math.max(5, Number(settings.refreshSeconds) || 30) * 1000 });
+});
+</script>
+</body>
+</html>

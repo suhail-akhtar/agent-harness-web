@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SLOs</title>
+<link rel="stylesheet" href="kit.css">
+<style>
+  body { background: transparent; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; }
+  .slo { border: 1px solid var(--hx-border-subtle); border-radius: 10px; background: var(--hx-elevated); padding: 9px 11px; font-size: 12.5px; }
+  .slo .big { font-size: 20px; font-weight: 600; }
+  .burns { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+</style>
+<script src="harness://app/sdk/plugin-ui.js"></script>
+<script src="kit.js"></script>
+</head>
+<body class="inline-frame">
+<div id="out"></div>
+<script>
+// A renderer for slo_status: one card per SLO - the error budget left, the burn rates, the burn alerts.
+Kit.start(async (harness) => {
+  const { h, mount, chip } = Kit;
+  const ctx = harness.context || {};
+  const text = String(ctx.result ?? '');
+  const out = document.getElementById('out');
+  const slos = [];
+  for (const line of text.split('\n')) {
+    const head = /^([^\s/]+)\/(\S+): objective ([\d.]+)% over (\S+); error ratio ([\d.e-]+)% -> error budget (?:([-\d.e]+)% left( \(EXHAUSTED\))?|n\/a)/.exec(line);
+    if (head) { slos.push({ service: head[1], name: head[2], objective: head[3], window: head[4], ratio: Number(head[5]), left: head[6] === undefined ? null : Number(head[6]), exhausted: !!head[7], burns: [], alerts: [] }); continue; }
+    const cur = slos.at(-1);
+    if (!cur) continue;
+    const burn = /^\s+burn rate: (.*)$/.exec(line);
+    if (burn) { cur.burns = burn[1].split(', ').map((x) => { const m = /^(\S+) ([\d.e-]+)x$/.exec(x.trim()); return m ? { w: m[1], x: Number(m[2]) } : null; }).filter(Boolean); continue; }
+    const al = /^\s+(FIRING|ok)\s+(\w+) ([\d.]+)x over (\S+) and (\S+)/.exec(line);
+    if (al) cur.alerts.push({ firing: al[1] === 'FIRING', severity: al[2], factor: al[3], long: al[4], short: al[5] });
+  }
+  if (!slos.length) mount(out, h('div', { class: 'small muted' }, ctx.result === undefined ? 'Reading the SLOs…' : text.slice(0, 1500)));
+  else mount(out, h('div', { class: 'cards' }, slos.map((o) => {
+    const left = o.left === null ? null : o.left / 100;
+    const firing = o.alerts.filter((a) => a.firing);
+    return h('div', { class: 'slo', 'data-slo-card': `${o.service}/${o.name}` },
+      h('div', { class: 'row' }, h('b', { style: { flex: '1' } }, `${o.service} / ${o.name}`), firing.length ? chip(firing[0].severity, 'bad') : chip('ok', 'ok')),
+      h('div', { class: 'muted small' }, `${o.objective}% over ${o.window} · error ratio ${o.ratio}%`),
+      h('div', { class: 'row', style: { marginTop: '6px' } }, h('span', { class: 'big' }, left === null ? 'n/a' : `${Math.round(left * 100)}%`), h('span', { class: 'muted small' }, 'of the error budget left')),
+      left === null ? null : h('div', { class: 'bar' }, h('span', { class: left < 0.1 ? 'bad' : left < 0.5 ? 'warn' : '', style: { width: `${Math.max(2, Math.min(100, Math.round(left * 100)))}%` } })),
+      h('div', { class: 'burns' }, o.burns.map((b) => chip(`${b.w} ${b.x}x`, b.x >= 14.4 ? 'bad' : b.x >= 1 ? 'warn' : ''))),
+      firing.length ? h('div', { class: 'small', style: { marginTop: '6px', color: 'var(--hx-danger)' } }, firing.map((a) => `${a.severity}: ${a.factor}x over ${a.long} and ${a.short}`).join('; ')) : null);
+  })));
+  Kit.autoHeight(harness);
+});
+</script>
+</body>
+</html>

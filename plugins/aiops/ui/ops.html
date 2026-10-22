@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Operations</title>
+<link rel="stylesheet" href="kit.css">
+<style>
+  .sevbar { width: 4px; border-radius: 2px; align-self: stretch; background: var(--hx-text-muted); }
+  .sevbar.sev1, .sevbar.sev2, .sevbar.critical { background: var(--hx-danger); } .sevbar.sev3, .sevbar.warning { background: var(--hx-warning); } .sevbar.sev4, .sevbar.info { background: var(--hx-info); }
+  .inc { display: flex; gap: 12px; align-items: stretch; }
+  .inc + .inc { margin-top: 8px; }
+  .inc .body { flex: 1; min-width: 0; }
+  .inc .title { font-weight: 500; font-size: 13.5px; }
+  .grid2 { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+  .group + .group { margin-top: 12px; }
+  .alert { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 8px 0; border-top: 1px solid var(--hx-border-subtle); }
+  .alert:first-of-type { border-top: 0; }
+  .rc { font-size: 14px; line-height: 1.5; }
+  .ledger li { margin-bottom: 8px; list-style: none; }
+  .ledger { padding: 0; margin: 0; }
+  .ledger .ex { font: 11.5px/1.45 var(--hx-font-mono); color: var(--hx-text-secondary); white-space: pre-wrap; max-height: 90px; overflow: hidden; margin-top: 2px; }
+  .slo { display: grid; grid-template-columns: minmax(0, 1fr) 90px; gap: 2px 8px; align-items: center; font-size: 12px; }
+  .svc-state { display: inline-flex; gap: 6px; align-items: center; font-size: 12.5px; }
+  svg text { font-family: var(--hx-font); }
+  .topo { width: 100%; overflow: auto; border: 1px solid var(--hx-border-subtle); border-radius: 12px; background: var(--hx-sidebar); }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--hx-text-muted); margin-top: 8px; }
+  .day { font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--hx-text-muted); margin: 14px 0 4px; }
+  .change { display: grid; grid-template-columns: 52px auto minmax(0, 1fr); gap: 10px; padding: 6px 0; border-top: 1px solid var(--hx-border-subtle); font-size: 12.5px; }
+  .approval { border: 1px solid color-mix(in srgb, var(--hx-warning) 45%, transparent); background: color-mix(in srgb, var(--hx-warning) 8%, transparent); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; }
+  details > summary { cursor: pointer; font-weight: 600; font-size: 13.5px; margin: 4px 0; }
+  @media (max-width: 980px) { .grid2 { grid-template-columns: 1fr; } }
+</style>
+<script src="harness://app/sdk/plugin-ui.js"></script>
+<script src="kit.js"></script>
+</head>
+<body>
+<div class="page">
+  <div class="head">
+    <div class="grow"><h1 id="title">Operations</h1><div class="sub" id="sub"></div></div>
+    <button type="button" class="btn" id="check">Run ops check</button>
+  </div>
+  <nav class="tabs" id="tabs" role="tablist" aria-label="Operations"></nav>
+  <main id="main"><div class="muted">Loading…</div></main>
+</div>
+<script>
+Kit.start(async (harness) => {
+  const { h, mount, chip, ago, age, time, money } = Kit;
+  const tab = String(harness.contribution || '').split(':')[1] || 'incidents';
+  const params = harness.params || {};
+  const main = document.getElementById('main');
+  let settings = {};
+  try { settings = (await harness.settings.get()) || {}; } catch { settings = {}; }
+  const refreshMs = Math.max(5, Number(settings.refreshSeconds) || 30) * 1000;
+  const minSev = settings.minSeverity || 'info';
+  const rank = { info: 0, warning: 1, critical: 2 };
+  const TABS = [['incidents', 'Incidents'], ['alerts', 'Alerts'], ['services', 'Services'], ['topology', 'Topology'], ['changes', 'Changes']];
+  let summary = null;
+  const route = (p, body) => Kit.route(harness, `console/${p}`, body);
+  const stateTone = (s) => ({ healthy: 'ok', degraded: 'warn', critical: 'bad', unknown: '' }[s] ?? '');
+  const statusTone = (s) => ({ resolved: 'ok', monitoring: 'info', mitigating: 'warn', identified: 'warn', investigating: 'bad' }[s] ?? '');
+
+  function tabs() {
+    mount(document.getElementById('tabs'), TABS.map(([id, label]) => h('button', { type: 'button', role: 'tab', class: 'tab', 'aria-selected': String(id === tab && !(id === 'incidents' && params.id)), 'data-tab': id, onclick: () => harness.view.open(id) }, label,
+      id === 'incidents' && summary ? h('span', { class: `count ${summary.open ? 'hot' : ''}` }, String(summary.open)) : null,
+      id === 'alerts' && summary ? h('span', { class: `count ${summary.firing ? 'hot' : ''}` }, String(firingCount())) : null)));
+  }
+  const firingCount = () => (summary ? Object.entries(summary.bySeverity).filter(([k]) => rank[k] >= rank[minSev]).reduce((a, [, v]) => a + v, 0) : 0);
+
+  async function loadSummary() {
+    summary = await route('summary');
+    await harness.badge.set('open', summary.open || null).catch(() => {});
+    await harness.badge.set('firing', firingCount() || null).catch(() => {});
+    mount(document.getElementById('sub'), `${summary.open} open incident(s) · ${firingCount()} firing alert(s)${minSev !== 'info' ? ` (${minSev} and up)` : ''} · ${summary.watch}`);
+    tabs();
+  }
+
+  document.getElementById('check').addEventListener('click', async () => {
+    const btn = document.getElementById('check'); btn.disabled = true;
+    try { const r = await route('ops-check', {}); await harness.notify.toast(r.text, { kind: r.firing ? 'warning' : 'success' }); await refresh(); }
+    catch (e) { await harness.notify.toast(e.message, { kind: 'error' }); } finally { btn.disabled = false; }
+  });
+
+  // ---------------- incidents ----------------
+  let incFilter = 'open';
+  async function incidents() {
+    const r = await route('incidents', { status: incFilter });
+    const seg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Which incidents' }, [['open', `Open (${r.counts.open})`], ['resolved', `Resolved (${r.counts.resolved})`], ['all', 'All']].map(([id, label]) => h('button', { type: 'button', 'aria-pressed': String(incFilter === id), onclick: () => { incFilter = id; void refresh(); } }, label)));
+    const list = r.incidents.length ? r.incidents.map((x) => h('button', { type: 'button', class: 'cardlink inc', 'data-incident': x.id, onclick: () => harness.view.open('incidents', { id: x.id }) },
+      h('span', { class: `sevbar ${x.severity}` }),
+      h('div', { class: 'body' },
+        h('div', { class: 'row' }, chip(String(x.severity).toUpperCase(), x.severity), h('span', { class: 'title' }, x.title)),
+        h('div', { class: 'row small muted', style: { marginTop: '4px' } },
+          chip(x.status, statusTone(x.status)),
+          ...(x.services || []).slice(0, 4).map((s) => h('span', {}, s)),
+          x.env ? h('span', {}, x.env) : null,
+          h('span', {}, x.open ? `open ${age(x.openedAt)}` : `resolved ${ago(x.resolvedAt || x.updatedAt)}`),
+          x.alertsTotal ? h('span', {}, `${x.alertsFiring}/${x.alertsTotal} alerts firing`) : null,
+          x.sessionId ? h('span', {}, 'investigating') : x.investigation && x.investigation !== 'none' ? h('span', {}, `investigation: ${x.investigation}`) : null),
+        x.rootCause ? h('div', { class: 'small', style: { marginTop: '4px' } }, 'Root cause: ', Kit.withEvidence(x.rootCause)) : null),
+      h('span', { class: 'muted small' }, x.id))) : [h('div', { class: 'card empty', 'data-empty': '' }, h('b', {}, incFilter === 'open' ? 'No open incidents' : 'Nothing here'), 'Alerts from your monitoring (Alertmanager, Grafana, PagerDuty, Datadog) and the watch loop open incidents here; so does /incident in a conversation.')];
+    mount(main, h('div', { class: 'row', style: { marginBottom: '12px' } }, seg), h('div', { 'data-incidents': '' }, list));
+  }
+
+  // ---------------- one incident ----------------
+  async function incident(id) {
+    const d = await route('incident', { id });
+    document.getElementById('title').textContent = d.title;
+    let approvals = [];
+    if (d.sessionId) { try { approvals = (await harness.approvals.list()).filter((a) => a.sessionId === d.sessionId); } catch { approvals = []; } }
+    const respond = async (a, decision) => {
+      try { const ok = await harness.approvals.respond(a.sessionId, a.requestId, decision); await harness.notify.toast(ok ? (decision === 'approve' ? 'Approved' : 'Rejected') : 'That request was already answered', { kind: ok ? 'success' : 'info' }); await refresh(); }
+      catch (e) { await harness.notify.toast(e.message, { kind: 'error' }); }
+    };
+    const investigate = async () => {
+      const symptom = `${d.title}${d.summary ? `\n${d.summary}` : ''}\nIncident ${d.ids.join(' / ')}; alerts: ${d.alerts.filter((a) => a.status === 'firing').map((a) => `[${a.severity}] ${a.name}${a.summary ? `: ${a.summary}` : ''}`).join('; ') || 'none firing'}`;
+      const input = { symptom, service: d.services[0] || '' };
+      if (settings.evidenceModel) input.evidenceModel = settings.evidenceModel;
+      if (settings.refuterModel) input.refuterModel = settings.refuterModel;
+      try { await harness.workflows.start('incident-response', input); } catch (e) { await harness.notify.toast(e.message, { kind: 'error' }); }
+    };
+    const inv = d.investigation;
+    const head = h('div', { class: 'card', 'data-incident-detail': d.id },
+      h('div', { class: 'row' }, chip(String(d.severity).toUpperCase(), d.severity), chip(d.status || d.state, statusTone(d.status)), ...d.services.map((s) => chip(s)), d.env ? chip(d.env) : null, h('span', { class: 'spacer' }), h('span', { class: 'muted small' }, d.ids.join(' · '))),
+      h('div', { class: 'row muted small', style: { marginTop: '8px' } }, `Opened ${time(d.openedAt)} (${age(d.openedAt)} ago)`, d.resolvedAt ? ` · resolved ${time(d.resolvedAt)}` : '', inv ? ` · investigation ${inv.status}${inv.current && inv.status !== 'succeeded' ? ` at ${inv.current}` : ''} · ${money(inv.cost)}` : d.investigationState && d.investigationState !== 'none' ? ` · investigation: ${d.investigationState}${d.deferred ? ` (${d.deferred})` : ''}` : ''),
+      d.summary ? h('p', { class: 'small', style: { margin: '8px 0 0' } }, d.summary) : null,
+      h('div', { class: 'row', style: { marginTop: '10px' } },
+        h('button', { type: 'button', class: 'btn ghost sm', onclick: () => harness.view.open('incidents') }, 'All incidents'),
+        d.sessionId ? h('button', { type: 'button', class: 'btn sm', 'data-open-investigation': '', onclick: () => harness.view.open('core.chat:session', { id: d.sessionId }) }, 'Open the investigation') : d.open ? h('button', { type: 'button', class: 'btn primary sm', 'data-investigate': '', onclick: investigate }, 'Investigate') : null));
+    const appr = approvals.map((a) => h('div', { class: 'approval', 'data-approval': a.requestId },
+      h('div', { class: 'row' }, h('b', { style: { flex: '1' } }, a.kind === 'approval_request' ? 'Waiting for your approval' : a.kind === 'question' ? 'A question for you' : 'Asks to run a tool'), h('button', { type: 'button', class: 'btn sm', onclick: () => respond(a, a.kind === 'approval_request' ? 'reject' : 'deny') }, 'Reject'), h('button', { type: 'button', class: 'btn primary sm', onclick: () => respond(a, a.kind === 'approval_request' ? 'approve' : 'allow') }, 'Approve')),
+      a.summary ? Kit.markdown(String(a.summary)) : null));
+    const rc = h('div', { class: 'card', 'data-root-cause': '' }, h('h2', { style: { marginTop: 0 } }, 'Root cause'),
+      d.rootCause ? h('div', { class: 'rc' }, Kit.withEvidence(d.rootCause)) : h('div', { class: 'muted small' }, 'Not established yet.'),
+      d.confidence ? h('div', { class: 'row', style: { marginTop: '8px' } }, chip(`Confidence: ${(/high|medium|low/i.exec(d.confidence) || [''])[0].toLowerCase() || 'stated'}`, /high/i.test(d.confidence) ? 'ok' : /medium/i.test(d.confidence) ? 'warn' : 'bad'), h('span', { class: 'small muted' }, d.confidence.replace(/^\**confidence[:\s]*\**/i, ''))) : null,
+      d.resolution ? h('p', { class: 'small' }, `Resolution: ${d.resolution}`) : null);
+    const ref = d.refuter ? h('div', { class: 'card', 'data-refuter': d.refuter.verdict || '' }, h('div', { class: 'row' }, h('h2', { style: { margin: 0, flex: '1' } }, 'Refuter'), chip(d.refuter.verdict || 'verdict', d.refuter.verdict === 'SURVIVES' ? 'ok' : d.refuter.verdict === 'REJECTED' ? 'bad' : '')),
+      h('details', {}, h('summary', { class: 'small muted' }, 'What it checked'), Kit.markdown(d.refuter.text))) : null;
+    const tl = h('div', { class: 'card' }, h('h2', { style: { marginTop: 0 } }, 'Timeline'), d.timeline.length ? h('ul', { class: 'timeline', 'data-timeline': '' }, d.timeline.map((e) => h('li', { class: `k-${e.kind}` }, h('div', { class: 'when' }, `${time(e.at)} · ${e.kind}${e.from === 'alerts' ? ' · alerts' : ''}`), h('div', { class: 'small', style: { whiteSpace: 'pre-wrap' } }, Kit.withEvidence(e.text))))) : h('div', { class: 'muted small' }, 'Nothing yet.'));
+    const alerts = d.alerts.length ? h('div', { class: 'card' }, h('h2', { style: { marginTop: 0 } }, `Alerts (${d.alerts.filter((a) => a.status === 'firing').length} firing)`), d.alerts.map(alertRow)) : null;
+    const changes = d.changes.length ? h('div', { class: 'card' }, h('h2', { style: { marginTop: 0 } }, 'Changes before it'), d.changes.slice(0, 10).map((c) => h('div', { class: 'small', style: { padding: '4px 0' } }, chip(c.kind), ' ', h('b', {}, c.target), ` ${c.minutesBefore >= 0 ? `${c.minutesBefore} min before` : `${-c.minutesBefore} min after`} · ${c.by}: ${c.summary}`))) : null;
+    const ev = d.evidenceIds.length ? h('div', { class: 'card', 'data-evidence': '' }, h('h2', { style: { marginTop: 0 } }, `Evidence (${d.evidenceIds.length})`), d.evidence.length ? h('ul', { class: 'ledger' }, d.evidence.map((e) => h('li', {}, h('div', { class: 'row small' }, h('span', { class: 'ev' }, e.id), e.missing ? h('span', { class: 'muted' }, 'not in the ledger') : [h('b', {}, e.tool), h('span', { class: 'muted' }, `${e.kind || ''} · ${time(e.at)}`), e.error ? chip('failed', 'bad') : null]), e.input ? h('div', { class: 'ex' }, e.input) : null, e.excerpt ? h('div', { class: 'ex' }, e.excerpt) : null))) : h('div', { class: 'row' }, d.evidenceIds.map((x) => h('span', { class: 'ev' }, x)))) : null;
+    const steps = inv ? h('div', { class: 'card' }, h('h2', { style: { marginTop: 0 } }, 'Investigation'), h('table', {}, h('tbody', {}, inv.steps.map((s) => h('tr', {}, h('td', {}, h('span', { class: `dot ${s.status === 'done' ? 'ok' : s.status === 'failed' ? 'bad' : s.status === 'waiting' ? 'warn' : 'info live'}` })), h('td', {}, s.title, s.outcome ? h('span', { class: 'muted' }, ` · ${s.outcome}`) : null), h('td', { class: 'muted small' }, s.endedAt ? Kit.dur(s.startedAt, s.endedAt) : 'now')))))) : null;
+    const runbook = d.runbook || d.runbookReport ? h('details', { class: 'card', open: true, 'data-runbook': '' }, h('summary', {}, 'Runbook'), Kit.markdown(d.runbook || d.runbookReport)) : null;
+    const pm = d.postmortem ? h('details', { class: 'card', open: true, 'data-postmortem': '' }, h('summary', {}, 'Postmortem'), Kit.markdown(d.postmortem)) : null;
+    mount(main, h('div', { class: 'stack' }, head, appr, h('div', { class: 'grid2' }, h('div', { class: 'stack' }, rc, ref, tl), h('div', { class: 'stack' }, alerts, ev, changes, steps)), runbook, pm));
+  }
+
+  function alertRow(a) {
+    return h('div', { class: 'alert', 'data-alert': a.name },
+      chip(a.status === 'firing' ? a.severity : 'resolved', a.status === 'firing' ? a.severity : 'ok'),
+      h('div', {}, h('div', { style: { fontWeight: '500' } }, a.name, a.flapping ? h('span', { class: 'chip warn', style: { marginLeft: '6px' } }, 'flapping') : null), a.summary ? h('div', { class: 'small' }, a.summary) : null,
+        h('div', { class: 'muted small' }, [a.source, a.value !== undefined ? `value ${a.value}` : null, a.count > 1 ? `seen ${a.count}x` : null, a.firstSeen ? `since ${age(a.startsAt || a.firstSeen)}` : null].filter(Boolean).join(' · '))),
+      a.incident ? h('button', { type: 'button', class: 'btn sm ghost', onclick: () => harness.view.open('incidents', { id: a.incident }) }, 'Incident') : h('span'));
+  }
+
+  // ---------------- alerts ----------------
+  async function alerts() {
+    const r = await route('alerts', { severity: minSev });
+    mount(main, r.groups.length ? h('div', { 'data-alert-groups': '' }, r.groups.map((g) => h('section', { class: 'card group', 'data-alert-group': g.key },
+      h('div', { class: 'row' }, h('span', { class: `dot ${g.firing ? (g.top === 'critical' ? 'bad' : 'warn') : 'ok'}` }), h('b', {}, g.service || g.key), g.env ? chip(g.env) : null, h('span', { class: 'spacer' }), h('span', { class: 'small muted' }, `${g.firing} firing · ${g.alerts.length} in 24 h`)),
+      h('div', { style: { marginTop: '6px' } }, g.alerts.map(alertRow)))), h('p', { class: 'muted small' }, r.watch)) : h('div', { class: 'card empty', 'data-empty': '' }, h('b', {}, 'No firing alerts'), r.watch || ''));
+  }
+
+  // ---------------- services ----------------
+  async function services() {
+    const r = await route('services');
+    if (!r.inventory) { mount(main, h('div', { class: 'card empty' }, h('b', {}, 'No inventory'), r.note)); return; }
+    const sloCell = (s) => (s.slos.length ? s.slos.map((o) => h('div', { class: 'slo', 'data-slo': `${s.name}/${o.name}` },
+      h('span', {}, `${o.name} ${o.objective}% / ${o.window}`),
+      o.error ? h('span', { class: 'muted small', title: o.error }, 'not read') : h('div', { class: 'bar', title: `${o.budgetLeft === null ? 'n/a' : `${Math.round(o.budgetLeft * 100)}%`} of the error budget left; burn ${o.burn1h?.toFixed(1)}x over 1 h` }, h('span', { class: o.budgetLeft === null ? '' : o.budgetLeft < 0.1 ? 'bad' : o.budgetLeft < 0.5 ? 'warn' : '', style: { width: `${Math.max(2, Math.min(100, Math.round((o.budgetLeft ?? 0) * 100)))}%` } })),
+      o.error ? null : h('span', { class: 'muted small', style: { gridColumn: '1 / -1' } }, `${o.budgetLeft === null ? 'n/a' : o.budgetLeft < 0 ? 'error budget spent' : `${Math.round(o.budgetLeft * 100)}% budget left`} · burn ${o.burn1h?.toFixed(1)}x (1 h), ${o.burn6h?.toFixed(1)}x (6 h)${o.alerts.length ? ` · ${o.alerts.join(', ')}` : ''}`))) : h('span', { class: 'muted small' }, 'no SLO'));
+    mount(main, h('table', { 'data-services': '' }, h('thead', {}, h('tr', {}, ['Service', 'Health', 'Runs on', 'Checks', 'SLOs', 'Incidents'].map((t) => h('th', {}, t)))),
+      h('tbody', {}, r.services.map((s) => h('tr', { 'data-service': s.name, 'data-state': s.state },
+        h('td', {}, h('b', {}, s.name), h('div', { class: 'muted small' }, [s.env, s.owner].filter(Boolean).join(' · '))),
+        h('td', {}, h('span', { class: 'svc-state' }, h('span', { class: `dot ${stateTone(s.state)}` }), s.state)),
+        h('td', { class: 'small' }, s.k8s || s.host || s.container || '-', s.dependsOn.length ? h('div', { class: 'muted small' }, `needs ${s.dependsOn.join(', ')}`) : null),
+        h('td', { class: 'small' }, s.rules.length ? s.rules.map((x) => h('div', { title: x.detail }, h('span', { class: `dot ${x.state === 'ok' ? 'ok' : x.state === 'firing' ? (x.severity === 'critical' ? 'bad' : 'warn') : ''}` }), ` ${x.name.replace(`${s.name}:`, '')}`)) : h('span', { class: 'muted' }, 'none')),
+        h('td', {}, sloCell(s)),
+        h('td', {}, s.openIncidents ? h('button', { type: 'button', class: 'btn sm', onclick: () => harness.view.open('incidents') }, `${s.openIncidents} open`) : h('span', { class: 'muted small' }, 'none'))))),
+    ), h('p', { class: 'muted small' }, `Checked ${ago(r.checkedAt)} by evaluating the inventory's rules on the server (no credentials).`));
+  }
+
+  // ---------------- topology ----------------
+  async function topology() {
+    const r = await route('topology');
+    if (!r.inventory || !r.nodes.length) { mount(main, h('div', { class: 'card empty' }, h('b', {}, 'No topology'), 'Add services with depends_on and host to the inventory.')); return; }
+    // Columns by dependency depth: a service left of what it depends on.
+    const level = new Map(r.nodes.map((n) => [n.id, 0]));
+    for (let pass = 0; pass < r.nodes.length; pass++) { let moved = false; for (const e of r.edges) { const want = level.get(e.from) + 1; if (want > level.get(e.to) && want < 12) { level.set(e.to, want); moved = true; } } if (!moved) break; }
+    const cols = new Map();
+    for (const n of r.nodes) { const l = level.get(n.id); if (!cols.has(l)) cols.set(l, []); cols.get(l).push(n); }
+    const W = 168, H = 50, GX = 70, GY = 22, PAD = 24;
+    const pos = new Map();
+    let maxRows = 0;
+    for (const [l, list] of [...cols.entries()].sort((a, b) => a[0] - b[0])) { list.sort((a, b) => Number(b.service) - Number(a.service) || a.id.localeCompare(b.id)); list.forEach((n, i) => pos.set(n.id, { x: PAD + l * (W + GX), y: PAD + i * (H + GY) })); maxRows = Math.max(maxRows, list.length); }
+    const width = PAD * 2 + cols.size * W + (cols.size - 1) * GX;
+    const height = PAD * 2 + maxRows * H + (maxRows - 1) * GY;
+    const NS = 'http://www.w3.org/2000/svg';
+    const s = (tag, attrs, ...kids) => { const el = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, String(v)); for (const c of kids) el.append(c instanceof Node ? c : document.createTextNode(String(c))); return el; };
+    const color = { healthy: 'var(--hx-success)', degraded: 'var(--hx-warning)', critical: 'var(--hx-danger)', unknown: 'var(--hx-border)' };
+    const svg = s('svg', { width, height, viewBox: `0 0 ${width} ${height}`, role: 'img', 'aria-label': 'Service dependencies', 'data-topology': '' });
+    const defs = s('defs', {}, s('marker', { id: 'arrow', viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' }, s('path', { d: 'M 0 0 L 10 5 L 0 10 z', fill: 'var(--hx-text-muted)' })));
+    svg.append(defs);
+    for (const e of r.edges) {
+      const a = pos.get(e.from), b = pos.get(e.to);
+      if (!a || !b) continue;
+      const x1 = a.x + W, y1 = a.y + H / 2, x2 = b.x, y2 = b.y + H / 2;
+      const mx = (x1 + x2) / 2;
+      svg.append(s('path', { d: `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2 - 2} ${y2}`, fill: 'none', stroke: 'var(--hx-text-muted)', 'stroke-width': 1.4, 'stroke-dasharray': e.kind === 'runs_on' ? '4 4' : '', 'marker-end': 'url(#arrow)', opacity: 0.8 }, s('title', {}, `${e.from} ${e.kind === 'runs_on' ? 'runs on' : 'depends on'} ${e.to}`)));
+    }
+    for (const n of r.nodes) {
+      const p = pos.get(n.id);
+      const g = s('g', { transform: `translate(${p.x} ${p.y})`, 'data-node': n.id, 'data-state': n.state });
+      g.append(s('rect', { width: W, height: H, rx: 10, fill: 'var(--hx-elevated)', stroke: color[n.state] || color.unknown, 'stroke-width': n.state === 'unknown' ? 1 : 2 }));
+      g.append(s('circle', { cx: 14, cy: H / 2, r: 5, fill: color[n.state] || 'var(--hx-text-muted)' }));
+      g.append(s('text', { x: 26, y: 21, 'font-size': 13, 'font-weight': 600, fill: 'var(--hx-text-primary)' }, n.id.length > 18 ? `${n.id.slice(0, 17)}…` : n.id));
+      g.append(s('text', { x: 26, y: 37, 'font-size': 11, fill: 'var(--hx-text-muted)' }, `${n.kinds.join(', ') || 'node'}${n.service ? ` · ${n.state}` : ''}`));
+      g.append(s('title', {}, `${n.id}: ${n.state}`));
+      svg.append(g);
+    }
+    mount(main, h('div', { class: 'topo' }, svg),
+      h('div', { class: 'legend' }, [['healthy', 'Healthy'], ['degraded', 'Degraded'], ['critical', 'Critical'], ['unknown', 'Not checked']].map(([k, t]) => h('span', {}, h('span', { class: `dot ${stateTone(k)}` }), ` ${t}`)), h('span', {}, '→ depends on'), h('span', {}, '- - → runs on')),
+      h('p', { class: 'muted small' }, `From the inventory (depends_on and hosts). ${r.nodes.length} nodes, ${r.edges.length} edges; checked ${ago(r.checkedAt)}.`));
+  }
+
+  // ---------------- changes ----------------
+  async function changes() {
+    const r = await route('changes', { hours: 72 });
+    if (!r.changes.length) { mount(main, h('div', { class: 'card empty', 'data-empty': '' }, h('b', {}, 'No changes recorded in 72 hours'), 'The devops and aiops tools record their changes, and CI/CD posts deployments to the aiops change routes.')); return; }
+    const days = new Map();
+    for (const c of r.changes) { const d = new Date(c.at).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); if (!days.has(d)) days.set(d, []); days.get(d).push(c); }
+    mount(main, h('div', { 'data-changes': '' }, [...days.entries()].map(([d, list]) => [h('div', { class: 'day' }, d), list.map((c) => h('div', { class: 'change', 'data-change': c.id },
+      h('span', { class: 'muted' }, new Date(c.at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })),
+      chip(c.kind, c.kind === 'rollback' ? 'warn' : c.kind === 'deploy' ? 'info' : ''),
+      h('div', {}, h('b', {}, c.target), c.service ? h('span', { class: 'muted' }, ` [${c.service}${c.env ? `/${c.env}` : ''}]`) : null, h('div', {}, c.summary), h('div', { class: 'muted small' }, `by ${c.by}${c.source ? ` · ${c.source}` : ''}${c.ref ? ` · ${c.ref}` : ''}`))))])));
+  }
+
+  const views = { incidents: () => (params.id ? incident(params.id) : incidents()), alerts, services, topology, changes };
+  async function refresh() {
+    await loadSummary().catch(() => {});
+    try { await views[tab](); } catch (e) { mount(main, h('div', { class: 'error' }, e.message)); }
+  }
+  if (!(tab === 'incidents' && params.id)) document.getElementById('title').textContent = TABS.find(([id]) => id === tab)?.[1] ?? 'Operations';
+  tabs();
+  await Kit.live(harness, refresh, { topics: ['approvals', 'session'], ms: refreshMs, busyMs: refreshMs });
+});
+</script>
+</body>
+</html>
