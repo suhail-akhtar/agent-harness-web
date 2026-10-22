@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notes</title>
+<style>
+  body { margin: 0; padding: 24px 28px; font: 14px/1.5 var(--hx-font, system-ui, sans-serif); color: var(--hx-text-primary, #222); background: var(--hx-bg, #fff); }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .muted { color: var(--hx-text-muted, #888); font-size: 12.5px; }
+  .card { border: 1px solid var(--hx-border, #ddd); border-radius: 12px; padding: 12px 14px; margin: 12px 0; background: var(--hx-elevated, #fff); }
+  button { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--hx-border, #ccc); background: var(--hx-elevated, #fff); color: inherit; cursor: pointer; }
+  button.primary { background: var(--hx-accent, #d97757); color: var(--hx-on-accent, #fff); border-color: transparent; }
+  input { font: inherit; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--hx-border, #ccc); background: var(--hx-bg, #fff); color: inherit; width: 60%; }
+  ul { padding-left: 18px; margin: 6px 0; }
+  .refused { color: var(--hx-danger, #c33); }
+</style>
+<!-- The SDK, served by the desktop: window.HarnessPluginUI.connect() -->
+<script src="harness://app/sdk/plugin-ui.js"></script>
+</head>
+<body>
+<h1>Notes</h1>
+<p class="muted">A plugin page in a sandboxed frame: everything below comes through the SDK.</p>
+
+<div class="card">
+  <b>Your conversations</b> <span class="muted">(sessions.read: granted)</span>
+  <ul id="sessions"><li class="muted">Loading…</li></ul>
+</div>
+
+<div class="card">
+  <b>Notes</b> <span class="muted">(storage: every frame has its own)</span>
+  <div><input id="note" placeholder="Write a note" aria-label="Note"> <button class="primary" id="save" type="button">Save</button></div>
+  <ul id="notes"></ul>
+</div>
+
+<div class="card">
+  <b>Something it may not do</b> <span class="muted">(approvals.respond: not declared, not granted)</span>
+  <div><button id="approvals" type="button">List approvals</button></div>
+  <p id="refusal" class="refused"></p>
+</div>
+
+<script>
+(async function () {
+  var h = await window.HarnessPluginUI.connect();
+  function text(id, t) { document.getElementById(id).textContent = t; }
+
+  try {
+    var list = await h.sessions.list({ limit: 5 });
+    var ul = document.getElementById('sessions');
+    ul.textContent = '';
+    list.forEach(function (s) { var li = document.createElement('li'); li.textContent = s.title || s.id; ul.appendChild(li); });
+    if (!list.length) { var li = document.createElement('li'); li.className = 'muted'; li.textContent = 'No conversations yet.'; ul.appendChild(li); }
+    document.body.dataset.sessions = String(list.length);
+  } catch (e) { text('sessions', 'Refused: ' + e.message); }
+
+  async function render() {
+    var notes = (await h.storage.get('notes')) || [];
+    var ul = document.getElementById('notes');
+    ul.textContent = '';
+    notes.forEach(function (n) { var li = document.createElement('li'); li.textContent = n; ul.appendChild(li); });
+    await h.badge.set('count', notes.length);
+  }
+  document.getElementById('save').addEventListener('click', async function () {
+    var input = document.getElementById('note');
+    if (!input.value.trim()) return;
+    var notes = (await h.storage.get('notes')) || [];
+    notes.push(input.value.trim());
+    await h.storage.set('notes', notes);
+    input.value = '';
+    await render();
+    await h.notify.toast('Note saved', { kind: 'success' });
+  });
+  document.getElementById('approvals').addEventListener('click', async function () {
+    try { await h.approvals.list(); text('refusal', 'Unexpected: the host allowed it.'); }
+    catch (e) { text('refusal', 'The host refused: ' + e.message); document.body.dataset.refused = '1'; }
+  });
+  await h.events.subscribe('sessions', function () { document.body.dataset.event = String(Date.now()); });
+  await render();
+  document.body.dataset.ready = '1';
+})();
+</script>
+</body>
+</html>

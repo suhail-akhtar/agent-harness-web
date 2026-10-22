@@ -110,8 +110,23 @@ async function proxy(request: Request, url: URL, endpoint: () => Promise<EngineE
   for (const [k, v] of request.headers) if (!STRIPPED_REQUEST_HEADERS.includes(k.toLowerCase()) && !k.toLowerCase().startsWith('sec-')) headers.set(k, v);
   headers.set('authorization', `Bearer ${e.token}`);
   const hasBody = request.method !== 'GET' && request.method !== 'HEAD';
+  const body = hasBody ? await request.arrayBuffer() : undefined;
   try {
-    const upstream = await fetch(target, { method: request.method, headers, body: hasBody ? await request.arrayBuffer() : undefined, signal: request.signal, redirect: 'manual' });
+    let upstream: Response;
+    try {
+      upstream = await fetch(target, { method: request.method, headers, body, signal: request.signal, redirect: 'manual' });
+    } catch (err) {
+      // The engine restarted under this request (a project was added, the person pressed Restart):
+      // a read waits for the new one and goes again, so the window does not see a gateway error.
+      const refused = ((err as { cause?: { code?: string } }).cause?.code ?? '') === 'ECONNREFUSED';
+      if ((hasBody && !refused) || (err as Error).name === 'AbortError') throw err;
+      await new Promise((r) => setTimeout(r, 400));
+      const again = await endpoint();
+      const retry = new URL(url.pathname + url.search, again.origin);
+      retry.searchParams.delete('token');
+      headers.set('authorization', `Bearer ${again.token}`);
+      upstream = await fetch(retry, { method: request.method, headers, body, signal: request.signal, redirect: 'manual' });
+    }
     const out = new Headers(upstream.headers);
     for (const h of STRIPPED_RESPONSE_HEADERS) out.delete(h);
     return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers: out });

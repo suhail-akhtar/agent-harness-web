@@ -8,7 +8,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { Attachment, Effort, Mode } from '@harness/client';
 import { Button, EmptyState, Icon, IconButton, Input, Popover, MenuList, Spinner, Tooltip, cx, toast, type MenuItem } from '@harness/ui';
 import { useApp, openSession, navigate } from '../../state/app';
-import { useData, client } from '../../state/data';
+import { useData, client, clientInfo } from '../../state/data';
 import { desktop } from '../../bridge';
 import { TopBar } from '../../shell/Bars';
 import { HomeCardHost } from '../../registry/PluginView';
@@ -25,6 +25,12 @@ function effortFor(v: ComposerValue, efforts: Effort[] | undefined): Effort | un
   const cur = v.effort ? EFFORT_RANK.indexOf(v.effort) : -1;
   if (cur >= want) return v.effort;
   return efforts?.find((e) => EFFORT_RANK.indexOf(e) >= want) ?? v.effort;
+}
+
+function defaultsNow(): ComposerValue { return defaultsFrom(useApp.getState().prefs, useData.getState().models); }
+function defaultsFrom(prefs: ReturnType<typeof useApp.getState>['prefs'], models: ReturnType<typeof useData.getState>['models']): ComposerValue {
+  const model = models.find((m) => m.id === prefs.defaultModel && m.available) ?? models.find((m) => m.available) ?? models[0];
+  return { model: model?.id ?? '', effort: (prefs.defaultEffort as Effort) || model?.effort, mode: (prefs.defaultMode as Mode) || 'default', think: false };
 }
 
 function useDefaults(): ComposerValue {
@@ -49,10 +55,12 @@ export function Home(): React.ReactElement {
 
   const start = async (text: string, attachments: Attachment[]) => {
     const path = where || info?.scratch;
-    if (!value.model) { toast('Choose a model first (add a key in Settings > Models & providers).', { kind: 'warning' }); return false; }
+    // The model chosen, else the default now (the models may have arrived after this page did).
+    const model = value.model || defaultsNow().model;
+    if (!model) { toast('Choose a model first (add a key in Settings > Models & providers).', { kind: 'warning' }); return false; }
     try {
-      const spec = models.find((m) => m.id === value.model);
-      const s = await client.sessions.create({ title: text.replace(/\s+/g, ' ').slice(0, 60) || 'New conversation', model: value.model, effort: effortFor(value, spec?.efforts), mode: value.mode, runtime: 'local', ...(path ? { path } : {}) });
+      const spec = useData.getState().models.find((m) => m.id === model);
+      const s = await client.sessions.create({ title: text.replace(/\s+/g, ' ').slice(0, 60) || 'New conversation', model, effort: effortFor({ ...value, model }, spec?.efforts), mode: value.mode, runtime: 'local', ...(path ? { path } : {}), client: clientInfo() });
       useData.getState().upsertSession(s);
       openSession(s.id);
       await client.sessions.send(s.id, text + chipContext(), attachments);

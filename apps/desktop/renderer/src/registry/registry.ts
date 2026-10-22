@@ -11,6 +11,7 @@ import {
   type PanelContribution, type PromptContribution, type RendererContribution, type SettingsContribution, type SlashCommandContribution,
   type StatusItemContribution, type ThemeContribution, type UiManifest, type UiTrust, type ViewContribution,
 } from '@harness/plugin-ui';
+import { parseChord } from './keybindings.ts';
 
 /** A built-in's code: components and command handlers by the names its manifest uses. */
 export interface NativeModule { components: Record<string, unknown>; handlers?: Record<string, (args?: unknown) => unknown> }
@@ -33,7 +34,7 @@ type Q<T> = T & { qid: string; plugin: string };
 export type NavItem = Q<NavItemContribution>;
 export type View = Q<ViewContribution> & { trust: UiTrust };
 export type Panel = Q<PanelContribution> & { trust: UiTrust };
-export type Command = Q<CommandContribution> & { keys?: string; defaultKeys?: string };
+export type Command = Q<CommandContribution> & { keys?: string; defaultKeys?: string; /** Its chord is taken by this command (which keeps it). */ keyConflict?: string };
 export type SlashCommand = SlashCommandContribution & { plugin: string };
 export type ComposerChip = Q<ComposerChipContribution>;
 export type SettingsSection = Q<SettingsContribution>;
@@ -72,6 +73,8 @@ export interface RegistryOptions {
   homeCards?: string[];
   /** Command id -> chord, from the person's prefs ("" unbinds). */
   keybindings?: Record<string, string>;
+  /** How Mod reads (Ctrl, or Cmd on macOS) when deciding which chords collide. */
+  platform?: string;
   /** Required plugins (the product's), always active. */
   required?: string[];
 }
@@ -132,9 +135,21 @@ export function buildRegistry(entries: PluginEntry[], o: RegistryOptions = {}): 
   r.statusItems.sort(byOrder);
   r.onboarding.sort(byOrder);
   // Two commands on one chord: the first keeps it, both are reported (Settings > Shortcuts shows them).
-  const seen = new Map<string, string[]>();
-  for (const cmd of r.commands) if (cmd.keys) { const k = normaliseChordText(cmd.keys); seen.set(k, [...(seen.get(k) ?? []), cmd.qid]); }
-  for (const [k, ids] of seen) if (ids.length > 1) r.conflicts.push({ kind: 'keybinding', key: k, ids });
+  // The core's commands come first (built-ins load first), so the core always keeps its keys; a later
+  // command on a taken chord loses it (it can still be run from the palette or rebound) and the clash is reported.
+  const taken = new Map<string, string>();
+  for (const cmd of r.commands) {
+    if (!cmd.keys) continue;
+    const c = parseChord(cmd.keys, o.platform ?? 'win32');
+    const k = c ? `${c.ctrl ? 'Ctrl+' : ''}${c.meta ? 'Meta+' : ''}${c.alt ? 'Alt+' : ''}${c.shift ? 'Shift+' : ''}${c.key}` : normaliseChordText(cmd.keys);
+    const winner = taken.get(k);
+    if (winner) {
+      const existing = r.conflicts.find((x) => x.kind === 'keybinding' && x.ids[0] === winner && x.key === cmd.keys);
+      if (existing) existing.ids.push(cmd.qid); else r.conflicts.push({ kind: 'keybinding', key: cmd.keys, ids: [winner, cmd.qid] });
+      cmd.keyConflict = winner;
+      cmd.keys = undefined;
+    } else taken.set(k, cmd.qid);
+  }
   return r;
 }
 
@@ -173,4 +188,24 @@ export function fuzzyScore(query: string, text: string): number {
     ti = found + 1;
   }
   return score;
+}
+
+/**
+ * The live registry as plain data (no components): what the window has right now, for the agent's
+ * desktop_describe tool and for diagnostics.
+ */
+export function describeRegistry(r: Registry) {
+  return {
+    plugins: r.plugins.map((p) => ({ name: p.name, version: p.version, source: p.source, enabled: p.enabled, active: r.active.includes(p), trust: p.ui?.trust, capabilities: p.ui?.capabilities ?? [], uiError: p.uiError })),
+    navItems: r.navItems.map((n) => ({ id: n.qid, title: n.title, view: n.view, placement: n.placement ?? 'primary' })),
+    views: [...r.views.values()].map((v) => ({ id: v.qid, title: v.title, kind: v.kind })),
+    panels: [...r.panels.values()].map((p) => ({ id: p.qid, title: p.title, kind: p.kind, where: p.where ?? 'any' })),
+    commands: r.commands.map((c) => ({ id: c.qid, title: c.title, keys: c.keys ?? null })),
+    slashCommands: r.slashCommands.map((s) => ({ name: s.name, plugin: s.plugin, description: s.description })),
+    settings: r.settings.map((s) => ({ id: s.qid, title: s.title, scope: s.scope, group: s.group ?? 'plugins' })),
+    renderers: { tool: [...r.renderers.tool.keys()], event: [...r.renderers.event.keys()], fence: [...r.renderers.fence.keys()] },
+    themes: r.themes.map((t) => ({ id: t.qid, label: t.label, mode: t.mode })),
+    conflicts: r.conflicts,
+    errors: r.errors,
+  };
 }

@@ -5,11 +5,11 @@
  */
 
 import { create } from 'zustand';
-import { HarnessClient, toApproval, type Approval, type GlobalEvent, type Me, type ModelInfo, type PluginInfo, type ProviderInfo, type SessionMeta, type GlobalEvents, type Config } from '@harness/client';
+import { HarnessClient, toApproval, type ClientDescriptor, type Approval, type GlobalEvent, type Me, type ModelInfo, type PluginInfo, type ProviderInfo, type SessionMeta, type GlobalEvents, type Config } from '@harness/client';
 import { validateUiManifest } from '@harness/plugin-ui';
-import { toast } from '@harness/ui';
+import { toast, fenceLanguages } from '@harness/ui';
 import { buildRegistry, type PluginEntry, type Registry } from '../registry/registry';
-import { desktop, type DevPluginInfo } from '../bridge';
+import { desktop, platform, type DevPluginInfo } from '../bridge';
 import { useApp } from './app';
 import type { Grants } from '@desk/grants';
 
@@ -76,7 +76,7 @@ export const useData = create<DataState>((set, get) => ({
     const product = info?.product;
     const server: PluginEntry[] = get().serverPlugins.filter((p) => !builtins.some((b) => b.name === p.name)).map((p) => ({ name: p.name, version: p.version, description: p.description, source: p.source ?? 'bundled', enabled: p.enabled, required: p.required, ui: p.ui, uiError: p.uiError, uiHash: p.uiHash }));
     const dev: PluginEntry[] = get().devPlugins.filter((d) => !server.some((s) => s.name === d.name)).map((d) => ({ name: d.name, version: d.version, description: d.description, source: 'dev', enabled: d.enabled, ui: d.ui, uiError: d.uiError, uiHash: d.uiHash }));
-    const registry = buildRegistry([...builtinEntries(), ...server, ...dev], { navOrder: product?.nav.order, homeCards: product?.home.cards, keybindings: prefs.keybindings, required: product?.plugins.required });
+    const registry = buildRegistry([...builtinEntries(), ...server, ...dev], { navOrder: product?.nav.order, homeCards: product?.home.cards, keybindings: prefs.keybindings, required: product?.plugins.required, platform });
     set({ registry });
   },
   upsertSession(m) {
@@ -85,6 +85,14 @@ export const useData = create<DataState>((set, get) => ({
     set({ sessions: (hide ? list : [{ ...get().sessions.find((s) => s.id === m.id), ...m }, ...list]).sort((a, b) => b.updatedAt - a.updatedAt) });
   },
 }));
+
+/** What this window renders and answers, sent when it creates a session (the server may ignore it). */
+export function clientInfo(): ClientDescriptor {
+  const { registry } = useData.getState();
+  const plugin = [...registry.renderers.fence.keys()].map((l) => l);
+  // Short on purpose (it is part of every request's cached prefix): fence names only, fixed when the session is made.
+  return { kind: 'desktop', version: useApp.getState().info?.version ?? '0.0.0', renderers: [...new Set([...fenceLanguages(), ...plugin])].sort(), tools: [] };
+}
 
 /** Every global event, for plugin frames that subscribed (events.subscribe). */
 const busListeners = new Set<(e: GlobalEvent) => void>();

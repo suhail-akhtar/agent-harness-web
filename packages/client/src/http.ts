@@ -32,10 +32,15 @@ export interface ClientOptions {
   headers?: () => Record<string, string>;
 }
 
+/** Sent when a session is created: the client kind, its version, the fence languages and kinds it renders, and the tools it answers (client_call). */
+export interface ClientDescriptor { kind: 'desktop' | 'web' | string; version: string; renderers: string[]; tools: string[] }
+
 export interface NewSession {
   title?: string; model?: string; effort?: Effort; mode?: Mode;
   runtime?: 'docker' | 'local' | 'companion'; path?: string; sandbox?: string; network?: 'none' | 'full' | 'allowlist';
   companionId?: string; worktree?: boolean; outputStyle?: string; gitUrl?: string;
+  /** What the client can draw and answer (a server that does not know it ignores it). */
+  client?: ClientDescriptor;
 }
 
 export class HarnessClient {

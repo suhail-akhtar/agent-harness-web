@@ -44,6 +44,8 @@ function PluginsPage() {
 function PluginCard({ p }: { p: PluginEntry }) {
   const grants = useData((s) => s.grants);
   const me = useData((s) => s.me);
+  // A clash this plugin lost (the core or the plugin loaded first keeps the key or the name).
+  const conflicts = useData((s) => s.registry.conflicts).filter((c) => c.ids.slice(1).some((id) => id === p.name || id.startsWith(`${p.name}:`)));
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
   const builtin = p.source === 'builtin';
@@ -80,6 +82,11 @@ function PluginCard({ p }: { p: PluginEntry }) {
           </div>
           {p.description && <p className="mt-1 line-clamp-2 text-[12.5px] text-hx-secondary">{p.description}</p>}
           {p.uiError && <div className="mt-2" data-ui-error><InfoNote tone="danger">Its UI did not load: {p.uiError}</InfoNote></div>}
+          {conflicts.length > 0 && (
+            <div className="mt-2" data-conflict>
+              <InfoNote tone="warning">{conflicts.map((c, i) => <div key={i}>{c.kind === 'slash' ? `/${c.key.replace(/^\//, '')} is already ${c.ids[0]}'s: this plugin's command is not used.` : `${c.key} is already ${c.ids[0]}'s: ${c.ids.slice(1).join(', ')} has no shortcut (rebind it in Settings > Shortcuts).`}</div>)}</InfoNote>
+            </div>
+          )}
           {decision && declared.length > 0 && (
             <div className="mt-2 text-[12px]" data-grant-state={decision.state}>
               {decision.state === 'granted' ? <span className="text-hx-success">Access granted: {decision.capabilities.join(', ')}</span> : decision.state === 'denied' ? <span className="text-hx-muted">Access refused</span> : <span className="text-hx-warning">Will ask for access when it opens{decision.changed ? ' (its files changed)' : ''}</span>}

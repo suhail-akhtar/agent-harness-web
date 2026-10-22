@@ -20,6 +20,9 @@ const BY_LANG: Record<string, FenceKind> = {
   diff: 'diff', patch: 'diff',
 };
 
+/** Every fence language with a renderer of its own (for the client descriptor a session is told about). */
+export function fenceLanguages(): string[] { return Object.keys(BY_LANG); }
+
 /** The kind for a fence language (`code` for plain highlighted code). */
 export function fenceKind(lang: string, source = ''): FenceKind {
   const l = lang.trim().toLowerCase();

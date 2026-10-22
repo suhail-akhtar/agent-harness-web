@@ -211,3 +211,6 @@ try { out.top = String(window.top.location.href); } catch (e) { out.top = 'block
 fetch('harness://app/api/sessions').then(function () { out.fetch = 'reached'; }, function () { out.fetch = 'blocked'; }).then(function () { parent.postMessage({ escapeProbe: out }, '*'); document.getElementById('r').textContent = JSON.stringify(out); });
 </script></body></html>
 \`\`\``;
+
+/** A long reply without heavy widgets: prose, tables, code and maths, for the streaming measurement. */
+export const STREAM_TEXT = [RICH.markdown, RICH.code, RICH.math, RICH.citations, RICH.markdown, RICH.code].join('\n\n');

@@ -45,6 +45,9 @@ test('registry: commands take the person\'s keybindings, conflicts are reported,
   assert.equal(r.commands.find((c) => c.qid === 'core.shell:sidebar')!.keys, 'Ctrl+Alt+S');
   assert.equal(r.commands.find((c) => c.qid === 'core.shell:sidebar')!.defaultKeys, 'Mod+B');
   assert.deepEqual(r.conflicts.find((c) => c.kind === 'keybinding')?.ids, ['core.shell:palette', 'acme:go']);
+  assert.equal(r.commands.find((c) => c.qid === 'acme:go')!.keys, undefined, 'the later command loses the chord');
+  assert.equal(r.commands.find((c) => c.qid === 'acme:go')!.keyConflict, 'core.shell:palette');
+  assert.equal(r.commands.find((c) => c.qid === 'core.shell:palette')!.keys, 'Mod+K', 'the core keeps it');
   assert.equal(r.slashCommands.filter((s) => s.name === 'plan').length, 1);
   assert.equal(r.slashCommands[0]!.plugin, 'core.shell', 'the built-in keeps /plan');
   const unbound = buildRegistry([a], { keybindings: { 'core.shell:palette': '' } });

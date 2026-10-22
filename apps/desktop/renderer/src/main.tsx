@@ -8,7 +8,9 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { setArtifactHost, toast } from '@harness/ui';
 import { App } from './shell/App';
-import { useApp, navigate, openSession, prefill } from './state/app';
+import { useApp, navigate, openSession, prefill, HOME } from './state/app';
+import { reconcile } from './registry/reconcile';
+import { describeRegistry } from './registry/registry';
 import { useData, setBuiltins, client, applyGlobal } from './state/data';
 import * as theme from './state/theme';
 import { desktop, on, type EngineState } from './bridge';
@@ -18,6 +20,8 @@ import type { DesktopPrefs } from '@desk/prefs';
 import type { GlobalEvents } from '@harness/client';
 
 setBuiltins(BUILTINS);
+// An internal surface for the agent's desktop tools (desktop_describe) and diagnostics: the live registry as data.
+(globalThis as unknown as { harnessDesktopInternal?: unknown }).harnessDesktopInternal = { describe: () => describeRegistry(useData.getState().registry) };
 
 function reapplyTheme() { theme.apply(useApp.getState().prefs, useData.getState().registry, useApp.getState().info?.product.brand.accent); }
 
@@ -47,7 +51,17 @@ async function boot() {
   useData.getState().rebuild();
   reapplyTheme();
   theme.watchSystem(() => { if (useApp.getState().prefs.theme === 'system') reapplyTheme(); });
-  useData.subscribe((s, prev) => { if (s.registry !== prev.registry) reapplyTheme(); });
+  useData.subscribe((s, prev) => {
+    if (s.registry === prev.registry) return;
+    // A plugin switched on or off live: nothing of it may linger (reconcile.ts).
+    const app = useApp.getState();
+    const r = reconcile(prev.registry, s.registry, { route: app.route, panel: app.panel, settingsSection: app.settingsSection, badges: app.badges });
+    if (r.leaveView) { navigate(HOME, { replace: true }); toast(`${r.leaveView.label} was switched off`, { kind: 'info' }); }
+    if (r.closePanel) useApp.setState({ panel: null });
+    if (r.settingsSection !== undefined) useApp.setState({ settingsSection: r.settingsSection });
+    if (r.dropBadges.length) { const b = { ...useApp.getState().badges }; for (const k of r.dropBadges) delete b[k]; useApp.setState({ badges: b }); }
+    reapplyTheme();
+  });
 
   on<EngineState>('engine:state', (s) => {
     const was = useApp.getState().engine.status;

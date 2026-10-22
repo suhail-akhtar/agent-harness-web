@@ -1,0 +1,11 @@
+{
+  "name": "broken-ui",
+  "version": "0.0.1",
+  "description": "A test plugin whose ui section is invalid: the desktop shows the error and the rest works.",
+  "ui": {
+    "contributes": {
+      "widgets": [{ "id": "w" }],
+      "views": [{ "id": "v", "title": "V", "kind": "frame", "entry": "../../outside.html" }]
+    }
+  }
+}

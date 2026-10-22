@@ -32,10 +32,9 @@ export function place(anchor: { left: number; top: number; right: number; bottom
   return { left, top, placement: used };
 }
 
+/** Renders into document.body at once (a floating box must exist in the same commit to be measured). */
 export function Portal({ children }: { children: React.ReactNode }): React.ReactElement | null {
-  const [el, setEl] = useState<HTMLElement | null>(null);
-  useEffect(() => setEl(document.body), []);
-  return el ? createPortal(children, el) : null;
+  return typeof document === 'undefined' ? null : createPortal(children, document.body);
 }
 
 export interface PopoverProps {

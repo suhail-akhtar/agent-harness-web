@@ -1,0 +1,37 @@
+{
+  "name": "notes-frame",
+  "version": "0.1.0",
+  "description": "An example UI-only plugin built with the SDK (@harness/plugin-ui/sdk, loaded as harness://app/sdk/plugin-ui.js): a notes page in a sandboxed frame that lists your conversations, keeps notes in its own storage, sets a sidebar badge, and shows what happens when it calls something it was not granted. Also a settings section, a composer chip, a slash command, a prompt and a status item, all declarative.",
+  "ui": {
+    "apiVersion": 1,
+    "displayName": "Notes",
+    "icon": "book",
+    "category": "Examples",
+    "trust": "frame",
+    "capabilities": ["sessions.read", "events.subscribe"],
+    "contributes": {
+      "navItems": [{ "id": "notes", "title": "Notes", "icon": "book", "view": "notes", "order": 60, "badge": "notes-frame.count" }],
+      "views": [
+        { "id": "notes", "title": "Notes", "icon": "book", "kind": "frame", "entry": "ui/index.html" },
+        { "id": "about", "title": "About notes", "kind": "markdown", "markdown": "# Notes\n\nA plugin page written in **Markdown**: no code runs." }
+      ],
+      "commands": [
+        { "id": "open", "title": "Open notes", "category": "Notes", "icon": "book", "keybinding": "Ctrl+Alt+N", "action": { "type": "open-view", "view": "notes" } },
+        { "id": "about", "title": "About the notes plugin", "category": "Notes", "action": { "type": "open-view", "view": "about" } }
+      ],
+      "slashCommands": [{ "name": "note", "description": "Turn the conversation so far into a short note", "action": { "type": "prompt", "prompt": "Summarise the conversation so far as a short note{args}" } }],
+      "composerChips": [{ "id": "terse", "title": "Terse", "icon": "list", "kind": "toggle", "setting": "notes-frame.terse" }],
+      "settings": [{
+        "id": "notes", "title": "Notes", "icon": "book", "group": "plugins", "scope": "app",
+        "schema": { "type": "object", "properties": {
+          "folder": { "type": "string", "title": "Notes folder", "format": "path", "description": "Where exported notes go." },
+          "maxNotes": { "type": "integer", "title": "Notes kept", "minimum": 1, "maximum": 500, "default": 50 },
+          "style": { "type": "string", "title": "Style", "enum": ["plain", "bullets"], "enumLabels": ["Plain", "Bullets"], "default": "bullets" },
+          "sync": { "type": "boolean", "title": "Keep in sync", "default": false }
+        } }
+      }],
+      "statusItems": [{ "id": "count", "text": "{notes-frame.count} notes", "tooltip": "Notes kept by the notes plugin", "command": "open", "align": "right" }],
+      "prompts": [{ "id": "daily", "title": "Today's summary", "prompt": "Write a short summary of what I worked on today.", "icon": "book", "home": true }]
+    }
+  }
+}
