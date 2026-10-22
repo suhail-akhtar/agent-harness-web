@@ -92,6 +92,88 @@ export interface PluginAPI {
    * store `generated`. `current()` reads only names declared in permissions.vault.
    */
   registerVaultRotation(handler: Omit<import('../vault/store.ts').RotationHandler, 'plugin'>): void;
+  /**
+   * An HTTP endpoint at /api/plugins/<plugin>/<path> (needs "permissions": {"routes": true}).
+   * auth 'token': the harness makes a random secret for the route, kept as a hash in the data
+   * folder; an administrator gets it once from GET /api/plugin-routes (and a new one with
+   * POST /api/plugin-routes/<plugin>/<path>/rotate); callers send it as ?token= or the
+   * x-harness-route-token header. auth 'none': the plugin checks the caller itself (a
+   * signing secret such as Slack's or GitHub's) - every request reaches the handler.
+   * Rate-limited per address like triggers; bodies up to 1 MB. Whatever a route passes on
+   * to an agent is outside data: use sessions.start/send with untrusted: true.
+   */
+  registerRoute(route: PluginRoute): void;
+  /** Every session's events, harness-wide (needs permissions.sessions). Returns the unsubscribe. */
+  readonly events: { subscribe(handler: PluginEventHandler): () => void };
+  /** Starts, drives and answers sessions (needs permissions.sessions; a server harness only). */
+  readonly sessions: PluginSessions;
+  /** The framework's change journal (<data>/changes.jsonl). */
+  readonly changes: import('../ops/changes.ts').ChangeService;
+  /**
+   * Several servers on one data folder: true when this server holds (or just took) the
+   * plugin's lease of that name - run server-side loops only then. True on a single server;
+   * false where background work is off (HarnessOptions.backgroundWork, HARNESS_PLUGIN_LOOPS=off: evals, the CLI).
+   */
+  lease(name: string): Promise<boolean>;
+  /**
+   * The key vault for the plugin's server code (a webhook's signing secret, a chat bot's
+   * token): operator-scope entries only. list(): those its permissions.vault globs cover
+   * (metadata, never values), each with whether it is granted. reveal(): the value of one
+   * an administrator granted it - the entry's allow list includes "plugin:<name>" (POST
+   * /api/vault/entries/<name>/allow) - refused otherwise; audited as plugin:<name> with the
+   * purpose. A value read here is hidden as [vault:name] in whatever the plugin passes to a
+   * session. Absent without permissions.vault, when the vault is off, or outside a server harness.
+   */
+  readonly vault?: {
+    list(): Promise<(import('../vault/store.ts').VaultEntryInfo & { granted: boolean })[]>;
+    reveal(name: string, purpose: string): Promise<string>;
+  };
+}
+
+/** What a route handler gets: the raw body (verify signatures over it), lowercased headers, the query without the token. */
+export interface PluginRouteRequest { method: string; path: string; query: Record<string, string>; headers: Record<string, string>; body: Buffer; ip: string }
+export interface PluginRouteResponse { status: number; headers?: Record<string, string>; body?: string | Buffer | object }
+export interface PluginRoute {
+  method: 'GET' | 'POST';
+  /** Relative to /api/plugins/<plugin>/ (letters, digits, . _ - and /). */
+  path: string;
+  auth: 'token' | 'none';
+  handler: (req: PluginRouteRequest) => Promise<PluginRouteResponse>;
+}
+
+export type PluginEventHandler = (e: { sessionId: string; owner?: string; title: string; event: import('../core/types.ts').HarnessEvent }) => void | Promise<void>;
+
+export interface PluginSessionStart {
+  title: string;
+  /** The account that owns it (default: the operator's, no account). */
+  owner?: string;
+  model?: string;
+  /** Default dontAsk: nobody is watching a session a plugin started. */
+  mode?: import('../core/types.ts').PermissionMode;
+  /** Default: a server folder of its own ({ kind: 'local', network: 'none' }). */
+  runtime?: import('../core/session.ts').SessionMeta['runtime'];
+  /** The first message. With untrusted, it is outside data: fenced, after `instructions`. */
+  prompt?: string;
+  /** With untrusted and a prompt: the plugin's own instructions, put before the fenced prompt. */
+  instructions?: string;
+  /** Runs a workflow instead of a prompt. With untrusted, every input value is fenced as outside data. */
+  workflow?: { name: string; input: Record<string, string> };
+  /** What it carries came from outside (a webhook, a chat): fenced, and the session counts as having read untrusted content. */
+  untrusted?: boolean;
+}
+
+export interface PluginSessions {
+  start(o: PluginSessionStart): Promise<{ id: string }>;
+  /** A message to the session (queued when it is working). With untrusted, fenced as outside data. */
+  send(id: string, text: string, o?: { untrusted?: boolean }): Promise<void>;
+  /**
+   * Answers a pending request (permission_request, question, approval_request, plan_proposed)
+   * on someone's behalf: `by` names them, and every answer is audited. False when there is
+   * no such pending request. Refused for a session outside the plugin's reach (see README) and
+   * for allowing a tool call the session's deny rules cover.
+   */
+  respond(id: string, requestId: string, d: { decision: 'approve' | 'reject' | 'allow' | 'deny' | 'answer'; feedback?: string; answer?: string; by: string }): Promise<boolean>;
+  get(id: string): { id: string; title: string; owner?: string; status: string } | undefined;
 }
 
 export interface PluginDefinition {
@@ -195,5 +277,9 @@ export interface PluginManifest {
    * vault: key vault entry names (globs, "prod-*") its tools may read through
    * ctx.services.vault (reveal, envFor); any other name is refused and audited.
    */
-  permissions?: { network?: string[]; secrets?: string[]; vault?: string[] };
+  /**
+   * sessions: api.sessions and api.events (start, drive and answer sessions; see every
+   * session's events). routes: api.registerRoute (HTTP endpoints under /api/plugins/<name>/).
+   */
+  permissions?: { network?: string[]; secrets?: string[]; vault?: string[]; sessions?: boolean; routes?: boolean };
 }

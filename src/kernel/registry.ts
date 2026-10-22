@@ -1,7 +1,8 @@
 import type { ModelSpec } from '../core/models.ts';
 import type { WorkflowDef } from '../graph/types.ts';
 import type { HookEvent, HookSpec } from '../core/settings.ts';
-import type { AgentDef, HookHandler, McpServerConfig, ProviderDef, QualityGate } from '../plugins/api.ts';
+import type { AgentDef, HookHandler, McpServerConfig, PluginEventHandler, PluginRoute, ProviderDef, QualityGate } from '../plugins/api.ts';
+import type { PluginBridge } from '../plugins/host.ts';
 import type { Provider } from '../providers/types.ts';
 import type { SearchBackend } from '../research/search.ts';
 import type { Tool } from '../tools/types.ts';
@@ -19,7 +20,7 @@ export interface LoadedPlugin {
   /** "shipped with the harness", "signed by <key>", "unsigned", ... */
   signature?: string;
   /** What it declared it needs (harness-plugin.json permissions). */
-  permissions?: { network?: string[]; secrets?: string[]; vault?: string[] };
+  permissions?: { network?: string[]; secrets?: string[]; vault?: string[]; sessions?: boolean; routes?: boolean };
 }
 
 export interface InProcessHook { event: HookEvent; matcher?: string; handler: HookHandler; plugin: string }
@@ -44,12 +45,18 @@ export class Registry {
   readonly vaultRotators: import('../vault/store.ts').RotationHandler[] = [];
   /** Plugin teardown, run by harness.close(). */
   readonly closers: (() => void | Promise<void>)[] = [];
+  /** HTTP endpoints from plugins (served at /api/plugins/<plugin>/<path>). */
+  readonly routes: (PluginRoute & { plugin: string })[] = [];
+  /** Plugins' subscribers to every session's events. */
+  readonly eventHandlers: { plugin: string; handler: PluginEventHandler }[] = [];
+  /** What plugin code reaches of the running harness (sessions, the change journal, leases); set by createHarness. */
+  bridge?: PluginBridge;
   private instances = new Map<string, Provider>();
 
   /** Saves the registry's contents; the function returned puts them back (a failed plugin load). */
   snapshot(): () => void {
     const maps: Map<string, unknown>[] = [this.models, this.providers, this.tools, this.agents, this.mcpServers, this.gates, this.workflows, this.searchBackends, this.instances];
-    const lists: unknown[][] = [this.skillDirs, this.outputStyleDirs, this.hooks, this.plugins, this.closers, this.vaultRotators];
+    const lists: unknown[][] = [this.skillDirs, this.outputStyleDirs, this.hooks, this.plugins, this.closers, this.vaultRotators, this.routes, this.eventHandlers];
     const savedMaps = maps.map((m) => new Map(m));
     const savedLists = lists.map((l) => l.slice());
     const savedShell = Object.fromEntries(Object.entries(this.shellHooks).map(([k, v]) => [k, v?.slice()]));

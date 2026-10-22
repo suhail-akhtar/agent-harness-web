@@ -13,5 +13,6 @@ if (!files.length) {
   const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? (e.name === 'fixtures' ? [] : walk(path.join(d, e.name))) : e.name.endsWith('.test.ts') ? [path.join(d, e.name)] : []));
   files = walk(path.join(root, 'test')).map((f) => path.relative(root, f)).sort();
 }
-const child = spawn(process.execPath, ['--test', '--test-force-exit', '--disable-warning=ExperimentalWarning', ...flags, ...files], { stdio: 'inherit', cwd: root });
+// Plugins' background loops (the aiops watch loop) stay off in tests unless a test turns them on.
+const child = spawn(process.execPath, ['--test', '--test-force-exit', '--disable-warning=ExperimentalWarning', ...flags, ...files], { stdio: 'inherit', cwd: root, env: { HARNESS_PLUGIN_LOOPS: 'off', ...process.env } });
 child.on('exit', (code) => process.exit(code ?? 1));

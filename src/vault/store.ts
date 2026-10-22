@@ -20,6 +20,10 @@ import { MIN_SECRET_LENGTH } from './redact.ts';
 //   user scope      one account's own (its sessions and the person); nobody else
 //                   sees the names, administrators included;
 //   session scope   one session's (and the account that owns it).
+// A plugin's server code (a webhook's handler, a background loop: no session) reads an
+// operator-scope entry only when its manifest's permissions.vault covers the name AND an
+// administrator put "plugin:<name>" on the entry's allow list (pluginReveal); never a
+// user- or session-scope entry.
 // Every use and change is appended to <data>/vault/audit.jsonl: who, which
 // session and plugin, what, which entry, why - never a value.
 
@@ -141,7 +145,7 @@ export function vaultGlob(pattern: string): (name: string) => boolean {
 
 const acct = (a?: string) => a || '_local';
 
-/** Who an operator-scope entry is for: "admins", "members" ("*" is the same) or account ids. */
+/** Who an operator-scope entry is for: "admins", "members" ("*" is the same), account ids, or "plugin:<name>" (that plugin's server code). */
 export function normalizeAllow(list: unknown): string[] {
   if (!Array.isArray(list)) throw new VaultError('allow is a list: "admins", "members" (every account) or account ids');
   const out = new Set<string>(['admins']);
@@ -150,8 +154,9 @@ export function normalizeAllow(list: unknown): string[] {
     if (!v) continue;
     if (v === '*' || v === 'members' || v === 'everyone') out.add('members');
     else if (v === 'admins' || v === 'admin') out.add('admins');
+    else if (/^plugin:[a-z0-9][a-z0-9._-]{0,63}$/i.test(v)) out.add(v.toLowerCase());
     else if (/^[A-Za-z0-9_.@-]{1,128}$/.test(v)) out.add(v);
-    else throw new VaultError(`"${v}" is not "admins", "members" or an account id`);
+    else throw new VaultError(`"${v}" is not "admins", "members" or an account id (or plugin:<name> for a plugin's server code)`);
   }
   return [...out];
 }
@@ -563,6 +568,40 @@ export class VaultStore {
 
   /** Whether a session's owner may use the vault at all. */
   enabledFor(account: string | undefined): boolean { return this.mayUse(account); }
+
+  /** Whether a plugin's server code may read this operator-scope entry: its manifest globs cover it and the entry's allow list names it. */
+  private pluginMay(e: StoredEntry, plugin: string, grants: string[]): boolean {
+    return e.scope === 'operator' && grants.some((g) => vaultGlob(g)(e.name)) && (e.allow ?? []).includes(`plugin:${plugin.toLowerCase()}`);
+  }
+
+  /**
+   * Operator-scope entries a plugin's manifest globs cover (names and metadata, never values),
+   * each with whether an administrator granted the plugin its use (allow: "plugin:<name>").
+   */
+  async pluginList(plugin: string, grants: string[]): Promise<(VaultEntryInfo & { granted: boolean })[]> {
+    await this.sync();
+    return this.entries.filter((e) => e.scope === 'operator' && grants.some((g) => vaultGlob(g)(e.name))).sort((x, y) => (x.name < y.name ? -1 : 1)).map((e) => ({ ...this.info(e), granted: this.pluginMay(e, plugin, grants) }));
+  }
+
+  /** The value of an operator-scope entry for a plugin's server code (see pluginMay); refused otherwise. Audited as plugin:<name>. */
+  async pluginReveal(plugin: string, grants: string[], name: string, purpose: string): Promise<string> {
+    await this.sync();
+    const a: VaultActor = { plugin, label: `plugin:${plugin}` };
+    const e = this.entries.find((x) => x.name === name && x.scope === 'operator');
+    if (!e || !this.pluginMay(e, plugin, grants)) {
+      const why = !e ? 'no operator-scope entry of that name' : !grants.some((g) => vaultGlob(g)(name)) ? "not in the plugin's manifest permissions.vault" : `its allow list does not name plugin:${plugin}`;
+      this.record(a, 'reveal', name, 'denied', { scope: 'operator', purpose, reason: why });
+      throw new VaultError(`${plugin} may not read the vault entry "${name}" from its server code: ${why}${e && grants.some((g) => vaultGlob(g)(name)) ? ` (an administrator grants it with POST /api/vault/entries/${name}/allow including "plugin:${plugin}")` : ''}`, e ? 403 : 404);
+    }
+    try {
+      const value = await this.readValue(e, e.current);
+      this.record(a, 'reveal', name, 'ok', { scope: 'operator', purpose: purpose || `${plugin} server code` });
+      return value;
+    } catch (err) {
+      this.record(a, 'reveal', name, 'error', { scope: 'operator', purpose, reason: (err as Error).message });
+      throw err;
+    }
+  }
 
   /**
    * The vault as one session's tools see it. `remember` is told every value handed

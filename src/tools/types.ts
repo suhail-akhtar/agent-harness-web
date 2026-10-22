@@ -47,6 +47,15 @@ export interface ToolServices {
    * a tool result.
    */
   vault?: import('../vault/store.ts').VaultService;
+  /**
+   * The change journal (<data>/changes.jsonl): record a change a call made to a real system
+   * (a deploy, an apply, a rollout, a restart), and read what changed around a time. `by`
+   * and `source` default to the session's owner and the session.
+   */
+  changes?: {
+    record(c: Omit<import('../ops/changes.ts').ChangeInput, 'by'> & { by?: string }): Promise<void>;
+    query(q: import('../ops/changes.ts').ChangeQuery): Promise<import('../ops/changes.ts').ChangeEvent[]>;
+  };
 }
 
 export interface ToolContext {

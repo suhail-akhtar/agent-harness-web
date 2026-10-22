@@ -41,6 +41,9 @@ import { checkRunbook, checkWorkflowSafety } from './lib/runbooks.mjs';
 import { CredentialError, fallbackNames, listCredentials, redact, revealCredential } from './lib/secrets.mjs';
 import { explainSshFailure, isReadOnly, presentedFingerprints, repin, sshRun } from './lib/ssh.mjs';
 import { budgetLeft, burnAlerts, burnRate, dedupeLines, fmt, forecast, humanSeconds } from './lib/stats.mjs';
+import { register as registerAlerts } from './lib/alerts.mjs';
+import { register as registerChanges } from './lib/changes.mjs';
+import { register as registerWatch, stopWatchLoops } from './lib/watch.mjs';
 
 const OUT_MAX = 24_000;
 const clip = (s, n = OUT_MAX) => (s.length <= n ? s : `${s.slice(0, Math.floor(n * 0.7))}\n[... ${s.length - n} characters omitted ...]\n${s.slice(-Math.floor(n * 0.3))}`);
@@ -908,9 +911,11 @@ export default {
         try {
           if (action === 'list') {
             const ids = await incidentIds(ctx);
-            if (!ids.length) return 'No incidents in this workspace.';
-            const all = await Promise.all(ids.map((id) => loadIncident(ctx, id).catch(() => undefined)));
-            return all.filter(Boolean).sort((a, b) => b.openedAt.localeCompare(a.openedAt)).map((i) => `${i.id} [${i.severity}, ${i.status}] ${i.title} (opened ${i.openedAt}${i.resolvedAt ? `, resolved ${i.resolvedAt}` : ''}; ${i.services.join(', ') || 'no services'})`).join('\n');
+            // Incidents the server opened from alerts (alr-...) are listed too: the alerts tool has their alerts.
+            const server = ((await opsShared.alerts?.incidents().catch(() => [])) ?? []).filter((g) => g.state !== 'resolved' || Date.parse(g.resolvedAt) > Date.now() - 7 * 86_400_000);
+            if (!ids.length && !server.length) return 'No incidents in this workspace.';
+            const all = [...await Promise.all(ids.map((id) => loadIncident(ctx, id).catch(() => undefined))), ...server];
+            return all.filter(Boolean).sort((a, b) => b.openedAt.localeCompare(a.openedAt)).map((i) => `${i.id} [${i.severity}, ${i.status}] ${i.title} (opened ${i.openedAt}${i.resolvedAt ? `, resolved ${i.resolvedAt}` : ''}; ${i.services.join(', ') || 'no services'})${i.source === 'alerts' ? ' (from alerts, on the server)' : ''}`).join('\n');
           }
           if (action === 'open') {
             const inc = openIncident({ title: input.title, severity: input.severity, services: input.services ?? [], summary: input.summary }, Date.now(), await incidentIds(ctx));
@@ -918,6 +923,7 @@ export default {
             return `Opened ${inc.id} (${inc.severity}). Add evidence and hypotheses with incident update (id ${inc.id}, note, kind).`;
           }
           const id = str(input.id);
+          if (action === 'show' && id.startsWith('alr-')) { const g = ((await opsShared.alerts?.incidents()) ?? []).find((x) => x.id === id); if (g) return renderIncident(g); }
           const inc = await loadIncident(ctx, id);
           if (action === 'show') return renderIncident(inc);
           if (action === 'update') {
@@ -1095,6 +1101,13 @@ export default {
       },
     });
 
+    // Alert ingestion and grouping, the model-free watch loop, the change timeline (each in its lib file).
+    const opsShared = { register, configured, evaluate, vaultPatterns };
+    registerChanges(api, opsShared);
+    registerAlerts(api, opsShared);
+    registerWatch(api, opsShared);
+
     api.log(`aiops: tools for sessions with an inventory; known hosts in ${knownHosts}`);
   },
+  close() { stopWatchLoops(); },
 };
