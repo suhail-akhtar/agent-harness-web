@@ -21,7 +21,7 @@ import { cleanAllowEntry, defaultAllowHosts, DockerHost, dockerAvailable, docker
 import { chooseSandbox, detectOsSandbox, type LocalSandbox } from '../runtime/os-sandbox.ts';
 import type { ToolHost } from '../runtime/host.ts';
 import { LocalHost, run } from '../runtime/host.ts';
-import { makeSkillTool, type Skill, skillsIn, skillsListing, workspaceSkills } from '../skills/skills.ts';
+import { clientSkills, makeSkillTool, type Skill, skillsIn, skillsListing, workspaceSkills } from '../skills/skills.ts';
 import { sortTools } from '../tools/index.ts';
 import type { FileStamp, Tool, ToolServices } from '../tools/types.ts';
 import { MemoryStore, projectKey } from '../memory/store.ts';
@@ -1056,6 +1056,19 @@ export class Session {
     };
   }
 
+  /**
+   * A person's new version of an artifact (the desktop saving a diagram's layout after a drag):
+   * an `artifact` event like the agent's own edits. With `baseVersion`, refused (409) when the
+   * artifact moved on meanwhile, so a stale picture never overwrites the agent's newer version.
+   */
+  async rewriteArtifact(id: string, content: string, o: { baseVersion?: number; title?: string } = {}): Promise<ArtifactMeta> {
+    const cur = await this.artifactStore().meta(id);
+    if (!cur) throw new ArtifactError(`no artifact "${id}"`, 404);
+    if (cur.kind === 'image' || cur.kind === 'pdf') throw new ArtifactError(`a ${cur.kind} artifact is not changed from here`);
+    if (o.baseVersion !== undefined && cur.version !== o.baseVersion) throw new ArtifactError(`artifact ${id} is at v${cur.version} now, not v${o.baseVersion}: read it again`, 409);
+    return this.artifactService().rewrite(id, { content, ...(o.title ? { title: o.title } : {}) });
+  }
+
   // ---------- the client app: desktop tools ----------
 
   /** Desktop tool calls waiting for the client's answer (POST /api/sessions/:id/client-result). */
@@ -1238,6 +1251,8 @@ export class Session {
     const skills: Skill[] = [];
     const seen = new Set<string>();
     for (const sd of reg.skillDirs) for (const s of await skillsIn(sd.dir, sd.source)) if (!seen.has(s.name)) { seen.add(s.name); skills.push(s); }
+    // Skills for what the person's app draws (the diagram spec, for an app that renders `diagram`): listed only there.
+    for (const s of await clientSkills(this.meta.client?.renderers ?? [])) if (!seen.has(s.name)) { seen.add(s.name); skills.push(s); }
     for (const s of await workspaceSkills(host).catch(() => [])) if (!seen.has(s.name)) { seen.add(s.name); skills.push(s); }
     if (skills.length) tools.push(makeSkillTool(skills));
 

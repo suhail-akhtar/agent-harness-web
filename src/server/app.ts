@@ -33,7 +33,7 @@ import { ArtifactError } from '../core/artifacts.ts';
 import { CLIENT_KINDS, type ClientKind, ClientDeclError, cleanClient } from '../core/client.ts';
 import { LinkedError } from '../core/linked.ts';
 import { FormAnswerError } from '../core/session.ts';
-import { cleanName as cleanAttachmentName, deletePath, fileTree, gitDiff, gitLog, gitStatus, renamePath, saveUploads, searchFiles, WorkspaceError, WRITE_LIMIT, writeFile } from './workspace-api.ts';
+import { cleanName as cleanAttachmentName, codeImports, deletePath, fileTree, gitDiff, gitLog, gitStatus, renamePath, saveUploads, searchFiles, WorkspaceError, WRITE_LIMIT, writeFile } from './workspace-api.ts';
 
 // The HTTP side: JSON API, an SSE stream per session, the built UI, and the
 // companion endpoints. Provider keys stay in this process.
@@ -1228,6 +1228,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       try {
         if (what === 'files/tree' && method === 'GET') return send(res, 200, await fileTree(s, url.searchParams.get('path') ?? '', Math.min(3, Math.max(1, Number(url.searchParams.get('depth')) || 1))));
         if (what === 'files/search' && method === 'GET') return send(res, 200, await searchFiles(s, url.searchParams.get('q') ?? '', { content: url.searchParams.get('content') === '1', limit: Number(url.searchParams.get('limit')) || undefined }));
+        if (what === 'files/imports' && method === 'GET') return send(res, 200, await codeImports(s, url.searchParams.get('path') ?? ''));
         if (what === 'files/rename' && method === 'POST') {
           const b = await readJson(req);
           const r = await renamePath(s, b.from, b.to, b.overwrite === true);
@@ -1267,6 +1268,16 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
           return void res.end(binary ? r.data : Buffer.from((await s.loadSecrets()).redact(r.data.toString('utf8'))));
         }
         return send(res, 200, { meta: r.meta, version: r.v.n, contentType: r.meta.contentType, ...(binary ? { base64: r.data.toString('base64') } : { content: (await s.loadSecrets()).redact(r.data.toString('utf8')) }) });
+      } catch (e) { if (e instanceof ArtifactError) throw new HttpError(e.status, e.message); throw e; }
+    }
+    // A person's new version of an artifact (the desktop saving a diagram's layout): {content, baseVersion?, title?}.
+    if (am && am[2] && method === 'PUT') {
+      const s = sessionFor(me, am[1]!);
+      const b = await readJson(req, 3_000_000);
+      if (typeof b.content !== 'string') throw new HttpError(400, 'content is required');
+      try {
+        const meta = await s.rewriteArtifact(am[2], b.content, { ...(typeof b.baseVersion === 'number' ? { baseVersion: b.baseVersion } : {}), ...(typeof b.title === 'string' ? { title: b.title } : {}) });
+        return send(res, 200, { meta, version: meta.version });
       } catch (e) { if (e instanceof ArtifactError) throw new HttpError(e.status, e.message); throw e; }
     }
     if (p === '/api/artifacts' && method === 'GET') {
