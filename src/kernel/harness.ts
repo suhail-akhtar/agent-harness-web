@@ -275,6 +275,14 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   const late: { leases?: Leases; vault?: VaultStore } = {};
   const bridge = createBridge({ registry, dataDir: opts.dataDir, sessions: () => sessionsLate, get leases() { return late.leases; }, get vault() { return late.vault; }, log, loops: opts.backgroundWork ?? process.env.HARNESS_PLUGIN_LOOPS !== 'off', disabled: (name: string) => entries.get(name)?.enabled === false } as Parameters<typeof createBridge>[0]);
   registry.bridge = bridge;
+  // A plugin's signal (api.signal): a `plugins` event, coalesced to one per plugin and name each second.
+  const signalled = new Map<string, number>();
+  bridge.signal = (plugin, name) => {
+    const k = `${plugin}:${name}`; const now = Date.now();
+    if ((signalled.get(k) ?? 0) > now - 1000) return;
+    signalled.set(k, now);
+    events.publish('plugins', { type: 'signal', plugin, name }, { all: true });
+  };
   for (const root of [...(opts.plugins ?? []), installDir]) {
     for (const dir of await findPluginDirs(path.resolve(root))) {
       const m = await readManifest(dir).catch(() => undefined);

@@ -6,15 +6,20 @@ import { checkSandboxRuntime, sandboxRuntime } from '../runtime/docker.ts';
 import { createApp } from './app.ts';
 import { BrowserSessions, NOBODY_ALLOWED, OidcClient, oidcConfigFromEnv, refusal } from './oidc.ts';
 import { SpendLedger, UserStore } from './users.ts';
+import { ensureHome, harnessPaths, scheduleTmpCleanup } from '../util/home.ts';
 
 // The server process: configuration from the environment, then the app.
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const appRoot = path.resolve(here, '..', '..');
-const DATA_DIR = path.resolve(process.env.HARNESS_DATA || path.join(appRoot, '.harness-data'));
+// The harness home (~/.harness, or HARNESS_HOME): data, workspaces, tmp, exports, plugins, logs.
+// HARNESS_DATA still names the data folder; the repository's .harness-data (the old default) is used while it has data and the home has none.
+const PATHS = harnessPaths({ legacy: path.join(appRoot, '.harness-data') });
+const DATA_DIR = PATHS.dataDir;
 const HOST = process.env.HARNESS_HOST || '127.0.0.1';
 const PORT = Number(process.env.HARNESS_PORT || 4310);
-const LOCAL_ROOTS = (process.env.HARNESS_LOCAL_ROOTS || '').split(path.delimiter).filter(Boolean).map((p) => path.resolve(p));
+// The home's workspaces and tmp, then HARNESS_LOCAL_ROOTS (HARNESS_HOME_ROOTS=off leaves only the latter).
+const LOCAL_ROOTS = PATHS.localRoots;
 const loopback = HOST === '127.0.0.1' || HOST === 'localhost' || HOST === '::1';
 const AUTH_OFF = process.env.HARNESS_AUTH === 'off' && loopback;
 const TOKEN = process.env.HARNESS_TOKEN || crypto.randomBytes(18).toString('base64url');
@@ -27,6 +32,8 @@ async function main() {
   if (process.env.HARNESS_SANDBOX_RUNTIME?.trim()) {
     try { await checkSandboxRuntime(sandboxRuntime()!); } catch (e) { console.error(`sandbox runtime: ${(e as Error).message}`); process.exit(1); }
   }
+  ensureHome(PATHS.layout);
+  const stopTmpCleanup = scheduleTmpCleanup(PATHS.layout, (m) => console.log(m));
   const oidc = oidcConfigFromEnv(process.env);
   const users = await new UserStore(DATA_DIR).load();
   // The desktop app's bearer sessions (sign-in through the system browser) are kept beside the browser ones.
@@ -40,6 +47,7 @@ async function main() {
     dataDir: DATA_DIR,
     plugins: PLUGIN_DIRS,
     shippedPlugins: [path.join(appRoot, 'plugins')],
+    installDir: PATHS.installDir,
     mcp: process.env.HARNESS_MCP_CONFIG || undefined,
     spend,
     // HARNESS_VAULT=admins: only sessions of administrators (and the single-user server's) get the key vault.
@@ -53,7 +61,9 @@ async function main() {
   });
   server.listen(PORT, HOST, () => {
     console.log(`harness-web listening on http://${HOST}:${PORT}`);
-    console.log(`data: ${DATA_DIR}`);
+    console.log(`home: ${PATHS.layout.home}`);
+    console.log(`data: ${DATA_DIR}${PATHS.dataFrom === 'legacy' ? ` (the older default folder: move it to ${PATHS.layout.data}, or set HARNESS_DATA to keep it)` : PATHS.dataFrom === 'env' ? ' (HARNESS_DATA)' : ''}`);
+    console.log(`local folders: ${LOCAL_ROOTS.join(path.delimiter) || 'none'}`);
     if (AUTH_OFF) console.log('auth: off (loopback only)');
     else if (!process.env.HARNESS_TOKEN) console.log(`access token (set HARNESS_TOKEN to fix it): ${TOKEN}`);
     if (users.size) console.log(`accounts: ${users.size} (npm run users -- list)`);
@@ -72,6 +82,7 @@ async function main() {
   const stop = (sig: string) => {
     if (stopping) process.exit(1);
     stopping = true;
+    stopTmpCleanup();
     console.log(`${sig}: shutting down`);
     setTimeout(() => process.exit(1), 15_000).unref();
     server.close();

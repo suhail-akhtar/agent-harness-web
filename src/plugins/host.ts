@@ -80,6 +80,8 @@ export interface PluginBridge {
   vaultList(plugin: string, grants: string[]): Promise<(VaultEntryInfo & { granted: boolean })[]>;
   /** Set by the HTTP server: refuses (with why) a new running session for an owner over the per-account limits. */
   mayRun?: (owner: string | undefined) => string | undefined;
+  /** Set by the harness: a `plugins` event {type: 'signal', plugin, name} to everyone signed in (no data; coalesced per name). */
+  signal?: (plugin: string, name: string) => void;
   /** The route a request names (plugin, path, method). */
   route(plugin: string, p: string): (PluginRoute & { plugin: string })[];
 }

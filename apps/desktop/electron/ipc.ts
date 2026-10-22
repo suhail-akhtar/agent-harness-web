@@ -38,10 +38,12 @@ export function registerIpc(ctx: DesktopContext): { grants: JsonFile<Grants> } {
     platform: process.platform,
     packaged: app.isPackaged,
     dataDir: ctx.paths.dataDir,
+    home: ctx.paths.home,
     scratch: ctx.paths.scratch,
     previewRuntime: RUNTIME_URL,
     server: ctx.prefs.get().servers.active,
     iconDataUrl: ctx.iconDataUrl(),
+    ...(process.env.HARNESS_DESKTOP_TEST === '1' ? { test: true } : {}),
   }));
   h('app:openDataFolder', () => shell.openPath(ctx.paths.dataDir));
   h('app:setLoginItem', (on: boolean) => { try { app.setLoginItemSettings({ openAtLogin: !!on }); } catch { /* unsupported */ } return app.getLoginItemSettings().openAtLogin; });
@@ -62,7 +64,7 @@ export function registerIpc(ctx: DesktopContext): { grants: JsonFile<Grants> } {
   h('prefs:set', (patch: Record<string, unknown>) => ctx.prefs.set(patch));
 
   h('win:minimize', () => ctx.window()?.minimize());
-  h('win:toggleMaximize', () => { const w = ctx.window(); if (!w) return false; if (w.isMaximized()) w.unmaximize(); else w.maximize(); return w.isMaximized(); });
+  h('win:toggleMaximize', () => { const w = ctx.window(); if (!w || ctx.quiet) return false; if (w.isMaximized()) w.unmaximize(); else w.maximize(); return w.isMaximized(); });
   h('win:close', () => ctx.window()?.close());
   h('win:isMaximized', () => ctx.window()?.isMaximized() ?? false);
   h('win:overlay', (o: { color?: string; symbolColor?: string }) => {
@@ -102,7 +104,7 @@ export function registerIpc(ctx: DesktopContext): { grants: JsonFile<Grants> } {
 
   h('notify:show', (n: { title: string; body?: string; route?: string; force?: boolean }) => {
     const w = ctx.window();
-    if (!ctx.prefs.get().notifications) return false;
+    if (!ctx.prefs.get().notifications || ctx.quiet) return false;
     // Nothing interrupts work: a notification only when the window is not in front.
     if (w && w.isFocused() && w.isVisible() && !n.force) return false;
     if (!Notification.isSupported()) return false;

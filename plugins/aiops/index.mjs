@@ -70,6 +70,18 @@ export default {
     const historyFile = path.join(api.dataDir, 'alert-history.jsonl');
     const builtinWorkflows = path.join(api.pluginDir, 'workflows');
 
+    // Workspaces that are operations projects: where a session ran one of this plugin's tools (the
+    // inventory gates apply there even with only the operator's inventory). Every tool it registers is counted.
+    const opsHosts = new WeakSet();
+    const opsRoots = new Set();
+    const hostKey = (host) => (host?.root ? `${host.kind}:${host.root}` : '');
+    const registerTool = api.registerTool.bind(api);
+    api.registerTool = (def) => {
+      const run = def.run;
+      registerTool(typeof run !== 'function' ? def : { ...def, run(input, ctx) { if (ctx?.host) { opsHosts.add(ctx.host); if (hostKey(ctx.host)) opsRoots.add(hostKey(ctx.host)); } return run.call(this, input, ctx); } });
+    };
+    const ranOpsTools = (host) => !!host && (opsHosts.has(host) || opsRoots.has(hostKey(host)));
+
     const audit = async (entry) => {
       await fs.mkdir(api.dataDir, { recursive: true });
       await fs.appendFile(auditFile, `${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`);
@@ -935,6 +947,7 @@ export default {
           if (action === 'open') {
             const inc = openIncident({ title: input.title, severity: input.severity, services: input.services ?? [], summary: input.summary }, Date.now(), await incidentIds(ctx));
             await saveIncident(ctx, inc);
+            api.signal?.('incidents');
             return `Opened ${inc.id} (${inc.severity}). Add evidence and hypotheses with incident update (id ${inc.id}, note, kind).`;
           }
           const id = str(input.id);
@@ -944,11 +957,13 @@ export default {
           if (action === 'update') {
             updateIncident(inc, { status: input.status, severity: input.severity, services: input.services, note: input.note, kind: input.kind, at: input.at });
             await saveIncident(ctx, inc);
+            api.signal?.('incidents');
             return `Updated ${inc.id}: ${inc.status}, ${inc.severity}, ${inc.timeline.length} timeline entries.`;
           }
           if (action === 'resolve') {
             resolveIncident(inc, { root_cause: input.root_cause, resolution: input.resolution, at: input.at });
             await saveIncident(ctx, inc);
+            api.signal?.('incidents');
             return `Resolved ${inc.id}. Write the postmortem with incident postmortem (id ${inc.id}).`;
           }
           if (action === 'postmortem') {
@@ -1027,18 +1042,21 @@ export default {
     registerAnomalies(api, shared);
 
     // ---------------- gates ----------------
-    const hostHasInventory = async (host) => {
-      if (process.env.HARNESS_OPS_INVENTORY) return true;
+    const workspaceInventory = async (host) => {
       for (const f of WORKSPACE_FILES) { const real = await api.workspacePath(host, f).catch(() => null); if (real && existsSync(real)) return true; }
       return false;
     };
+    // The inventory gates run (as "applicable") only in an operations project: a workspace inventory,
+    // or a session that used the ops tools here. An operator inventory alone does not make a software
+    // project (a slugify repository) answer for the operations fixture. Named explicitly, they always run.
+    const opsProject = async (host) => (await workspaceInventory(host)) || ranOpsTools(host);
     // A gate runs with no one to ask: it never uses Key Vault credentials (opsGate), and gets no vault at all.
     const gateCtx = (host, signal) => ({ host, signal, opsGate: true, readFiles: new Map(), todos: [], setTodos() {}, emit() {} });
 
     api.registerGate({
       name: 'inventory-valid',
       description: 'The ops inventory parses and is consistent: unique names, references to hosts, services and environments exist, URLs, durations and cron fields are valid, credentials are vault names this plugin may read',
-      applies: (host) => hostHasInventory(host),
+      applies: (host) => opsProject(host),
       async run({ host, signal }) {
         let inv;
         try { inv = await inventory(gateCtx(host, signal)); } catch (e) { return { pass: false, summary: 'the inventory could not be read', details: e.message }; }
@@ -1053,7 +1071,7 @@ export default {
       name: 'alerts-valid',
       description: 'Every alert rule is well formed, and every PromQL expression parses (checked by the Prometheus API when one is reachable)',
       async applies(host) {
-        if (!(await hostHasInventory(host))) return false;
+        if (!(await opsProject(host))) return false;
         try { return (await inventory(gateCtx(host, AbortSignal.timeout(10_000)))).alerts.length > 0; } catch { return true; }
       },
       async run({ host, signal }) {

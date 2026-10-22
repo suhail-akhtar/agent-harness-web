@@ -19,6 +19,7 @@ import { registerIpc, serverToken } from './ipc';
 import { DevPlugins } from './dev-plugins';
 import { normaliseProduct, type ProductProfile } from '../shared/product';
 import { projectName } from '../shared/prefs';
+import { desktopRoots, engineLogFile, migrateEngineData, registerHomeIpc, resolveDesktopHome } from './home';
 
 const distDir = __dirname;
 const desktopDir = path.resolve(distDir, '..');
@@ -32,6 +33,9 @@ function loadProduct(): ProductProfile {
   return normaliseProduct({});
 }
 const product = loadProduct();
+// Under the end-to-end tests (HARNESS_DESKTOP_TEST=1) the window is never shown, focused or flashed, and nothing
+// notifies: playwright drives it (and takes its screenshots) through CDP. HARNESS_E2E_SHOW=1 shows it to watch.
+const quiet = process.env.HARNESS_DESKTOP_TEST === '1' && process.env.HARNESS_E2E_SHOW !== '1';
 app.setName(product.name);
 if (process.platform === 'win32') app.setAppUserModelId(product.appId);
 // Tests and side-by-side editions: a data folder of their own (set before the single-instance lock, which keys on it).
@@ -43,16 +47,16 @@ if (!app.requestSingleInstanceLock()) { app.quit(); process.exit(0); }
 registerSchemePrivileges();
 
 const prefs = new PrefsStore(path.join(dataDir, 'prefs.json'));
-const engineData = path.join(dataDir, 'engine');
-const scratch = path.join(dataDir, 'workspace');
-fs.mkdirSync(scratch, { recursive: true });
+// The harness home (~/.harness): the engine's data, workspaces, scratch folders (tmp), exports, logs. Shared with the server and the CLI.
+const home = resolveDesktopHome(dataDir);
+const logToFile = engineLogFile(home);
 
 const devPluginDirs = () => [...(process.env.HARNESS_DESKTOP_DEV_PLUGINS ?? '').split(path.delimiter).filter(Boolean), ...prefs.get().devPlugins];
 const devPlugins = new DevPlugins(devPluginDirs, () => prefs.get().disabledPlugins);
 devPlugins.load();
 
-/** The folders sessions may work in: the scratch workspace and every project the person opened. */
-const localRoots = () => [scratch, ...prefs.get().projects.map((p) => p.path)].filter((p, i, a) => a.indexOf(p) === i);
+/** The folders sessions may work in: the home's workspaces and tmp, and every project the person opened elsewhere. */
+const localRoots = () => desktopRoots(home, prefs.get().projects.map((p) => p.path));
 
 function engineEntry(): string {
   if (process.env.HARNESS_DESKTOP_ENGINE) return path.resolve(process.env.HARNESS_DESKTOP_ENGINE);
@@ -62,7 +66,7 @@ function engineEntry(): string {
 
 const local = new EngineHost({
   entry: engineEntry(),
-  env: () => ({ HARNESS_DATA: engineData, HARNESS_LOCAL_ROOTS: localRoots().join(path.delimiter), HARNESS_DESKTOP: '1' }),
+  env: () => ({ HARNESS_HOME: home.layout.home, HARNESS_DATA: home.dataDir, HARNESS_LOCAL_ROOTS: localRoots().join(path.delimiter), HARNESS_DESKTOP: '1' }),
 });
 let engine: Engine = local;
 let mainWindow: BrowserWindow | null = null;
@@ -74,11 +78,12 @@ const ctx: DesktopContext = {
   prefs,
   engine: () => engine,
   product,
-  paths: { dataDir, engineData, scratch, rendererDir: path.join(distDir, 'renderer'), sdkDir: path.join(distDir, 'sdk'), repoRoot },
+  paths: { dataDir, get engineData() { return home.dataDir; }, get scratch() { return home.layout.tmp; }, get home() { return home.layout.home; }, rendererDir: path.join(distDir, 'renderer'), sdkDir: path.join(distDir, 'sdk'), repoRoot },
   devPlugins,
   emit(channel, payload) { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload); },
   handle: makeHandle(),
-  reveal() { if (!mainWindow) { createWindow(); return; } if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); },
+  quiet,
+  reveal() { if (!mainWindow) { createWindow(); return; } if (quiet) return; if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); },
   iconDataUrl() { const i = appIcon(); return i && !i.isEmpty() ? i.resize({ width: 96, height: 96, quality: 'best' }).toDataURL() : undefined; },
   async useServer(id) {
     const current = prefs.get().servers.active;
@@ -103,7 +108,7 @@ const ctx: DesktopContext = {
 };
 
 local.on('state', (s) => ctx.emit('engine:state', s));
-local.on('log', (line) => ctx.emit('engine:log', line));
+local.on('log', (line) => { ctx.emit('engine:log', line); logToFile(line); });
 
 // A project opened outside the engine's roots: restart it with the new roots (the server reads them at start).
 let rootsSig = localRoots().join('|');
@@ -138,10 +143,19 @@ function createWindow(): void {
     minWidth: 480, minHeight: 480, show: false, title: product.name, icon: appIcon(), backgroundColor: bg,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
     titleBarOverlay: process.platform === 'darwin' ? undefined : { color: bg, symbolColor: dark ? '#ecebe6' : '#1f1e1c', height: 40 },
-    webPreferences: { preload: path.join(distDir, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false, nodeIntegrationInSubFrames: false, webviewTag: false, spellcheck: true },
+    ...(quiet ? { paintWhenInitiallyHidden: true, skipTaskbar: true, focusable: true } : {}),
+    webPreferences: { preload: path.join(distDir, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false, nodeIntegrationInSubFrames: false, webviewTag: false, spellcheck: true, ...(quiet ? { backgroundThrottling: false } : {}) },
   });
-  if (b.maximized) mainWindow.maximize();
-  mainWindow.once('ready-to-show', () => { if (!process.env.HARNESS_DESKTOP_HIDDEN) mainWindow?.show(); });
+  if (b.maximized && !quiet) mainWindow.maximize();
+  mainWindow.once('ready-to-show', () => { if (!process.env.HARNESS_DESKTOP_HIDDEN && !quiet) mainWindow?.show(); });
+  if (quiet) {
+    // A window never shown makes no compositor frames by itself, so the hit-test data of plugin frames
+    // (out-of-process iframes) goes stale and a click lands on the old layout. A one-pixel capture that
+    // keeps the page hidden makes it render a frame: every 150 ms, while the tests drive it.
+    const w = mainWindow;
+    const beat = setInterval(() => { if (w.isDestroyed()) { clearInterval(beat); return; } void w.webContents.capturePage({ x: 0, y: 0, width: 1, height: 1 }, { stayHidden: true, stayAwake: true }).catch(() => {}); }, 150);
+    w.on('closed', () => clearInterval(beat));
+  }
   void mainWindow.loadURL(`${APP_ORIGIN}/`);
   const save = () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -152,7 +166,7 @@ function createWindow(): void {
   mainWindow.on('move', save);
   mainWindow.on('maximize', () => { save(); ctx.emit('win:maximized', true); });
   mainWindow.on('unmaximize', () => { save(); ctx.emit('win:maximized', false); });
-  mainWindow.on('focus', () => { mainWindow?.flashFrame(false); ctx.emit('win:focus', true); });
+  mainWindow.on('focus', () => { if (!quiet) mainWindow?.flashFrame(false); ctx.emit('win:focus', true); });
   mainWindow.on('blur', () => ctx.emit('win:focus', false));
   mainWindow.on('close', (e) => { if (!quitting && prefs.get().keepInTray && tray) { e.preventDefault(); mainWindow?.hide(); } });
   mainWindow.on('closed', () => { mainWindow = null; });
@@ -170,7 +184,7 @@ function createWindow(): void {
 
 function createTray(): void {
   const icon = appIcon();
-  if (!icon || process.env.HARNESS_DESKTOP_NO_TRAY) return;
+  if (!icon || process.env.HARNESS_DESKTOP_NO_TRAY || quiet) return;
   tray = new Tray(icon.resize({ width: 16, height: 16 }));
   tray.setToolTip(product.name);
   tray.setContextMenu(Menu.buildFromTemplate([
@@ -215,7 +229,11 @@ app.whenReady().then(async () => {
     return prefs.get().projects;
   });
   ctx.handle('projects:remove', (dir: string) => { prefs.set({ projects: prefs.get().projects.filter((x) => x.path !== dir) }); return prefs.get().projects; });
+  // Settings > Application > Location, scratch folders and new projects; the tmp clean-up (on start and daily).
+  registerHomeIpc(ctx, home, { stopEngine: () => (engine === local ? local.stop(false) : Promise.resolve()), restartEngine: async () => { rootsSig = localRoots().join('|'); if (engine === local) void local.start(); } });
   installMenu();
+  // Older versions kept the engine's data in the app's user data: moved into the home once (a backup stays), before the engine starts.
+  await migrateEngineData(home, dataDir, (m) => { console.log(m); logToFile(`[desktop] ${m}`); });
   const active = prefs.get().servers.active;
   if (active !== 'local' && prefs.get().servers.remote.some((s) => s.id === active)) await ctx.useServer(active).catch(() => { void local.start(); });
   else void local.start();

@@ -22,6 +22,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import { assertNotBlank, capture } from './fixtures/desktop/png.ts';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
@@ -65,6 +66,7 @@ test('plugins journey: Engineering and Operations switched on and off live, used
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !/_API_KEY$|^GW_|^HARNESS_|^NODE_TEST_CONTEXT$/.test(k)) env[k] = v;
   Object.assign(env, {
     HARNESS_DESKTOP_DATA: data,
+    HARNESS_DESKTOP_TEST: '1', ...(process.env.HARNESS_E2E_SHOW ? { HARNESS_E2E_SHOW: process.env.HARNESS_E2E_SHOW } : {}),
     HARNESS_DESKTOP_ENGINE: path.join(root, 'test', 'fixtures', 'desktop', 'plugins-engine.ts'),
     HARNESS_DESKTOP_NO_TRAY: '1',
     HARNESS_PLUGINS: ['quality-gates', 'sdlc', 'aiops'].map((p) => path.join(root, 'plugins', p)).join(path.delimiter),
@@ -91,8 +93,8 @@ test('plugins journey: Engineering and Operations switched on and off live, used
   });
   page.on('crash', () => errors.push({ phase, text: 'the renderer crashed' }));
   let shotN = 0;
-  const shot = async (name: string, el?: import('playwright-core').Locator) => { await page.waitForTimeout(350); shotN++; await (el ?? page).screenshot({ path: path.join(SHOTS, `${String(shotN).padStart(2, '0')}-${name}.png`) }); };
-  const setSize = (w: number, h: number) => app.evaluate(({ BrowserWindow }, s) => { const win = BrowserWindow.getAllWindows()[0]!; win.unmaximize(); win.setSize(s.w, s.h); }, { w, h });
+  const shot = async (name: string, el?: import('playwright-core').Locator) => { await page.waitForTimeout(350); shotN++; const png = await capture(app, el); assertNotBlank(png, name); fs.writeFileSync(path.join(SHOTS, `${String(shotN).padStart(2, '0')}-${name}.png`), png); };
+  const setSize = (w: number, h: number) => app.evaluate(({ BrowserWindow }, s) => { const win = BrowserWindow.getAllWindows()[0]!; if (win.isMaximized()) win.unmaximize(); win.setSize(s.w, s.h); }, { w, h });
   const invoke = (channel: string, ...args: unknown[]) => page.evaluate(([c, a]) => (window as unknown as { harnessDesktop: { invoke: (c: string, ...x: unknown[]) => Promise<unknown> } }).harnessDesktop.invoke(c as string, ...(a as unknown[])), [channel, args] as const);
   const api = (method: string, p: string, body?: unknown, headers: Record<string, string> = {}) => page.evaluate(async ([m, u, b, hd]) => { const r = await fetch(u as string, { method: m as string, headers: { 'content-type': 'application/json', 'x-harness': '1', ...(hd as Record<string, string>) }, body: b === undefined ? undefined : JSON.stringify(b) }); return { status: r.status, body: await r.json().catch(() => null) }; }, [method, p, body, headers] as const);
   const ready = () => page.waitForSelector('[data-engine-status="ready"]', { timeout: 90_000 });
@@ -155,7 +157,7 @@ test('plugins journey: Engineering and Operations switched on and off live, used
   const step = (name: string, fn: () => Promise<void>) => t.test(name, async () => {
     phase = name;
     try { await fn(); } catch (e) {
-      await page.screenshot({ path: path.join(os.tmpdir(), `hd-journey-fail-${name.slice(0, 40).replace(/[^a-z0-9]+/gi, '-')}.png`) }).catch(() => {});
+      await capture(app).then((png) => fs.writeFileSync(path.join(os.tmpdir(), `hd-journey-fail-${name.slice(0, 40).replace(/[^a-z0-9]+/gi, '-')}.png`), png)).catch(() => {});
       for (let i = 0; i < 3; i++) await page.keyboard.press('Escape').catch(() => {});
       throw e;
     }
@@ -202,7 +204,7 @@ test('plugins journey: Engineering and Operations switched on and off live, used
       assert.deepEqual(ofPlugin(s.nav, 'sdlc'), ['sdlc:delivery']);
       assert.deepEqual(ofPlugin(s.homeCards, 'sdlc'), ['sdlc:in-flight']);
       assert.deepEqual(ofPlugin(s.chips, 'sdlc').sort(), ['sdlc:target-branch', 'sdlc:test-level']);
-      assert.deepEqual(ofPlugin(s.settings, 'sdlc'), ['sdlc:engineering']);
+      assert.deepEqual(ofPlugin(s.settings, 'sdlc'), ['sdlc:engineering', 'sdlc:engineering-panel'], 'the person\'s choices (with the account) and this computer\'s');
       for (const c of ['cmd:sdlc:open-delivery', 'cmd:sdlc:start-feature', 'cmd:sdlc:run-gates', 'nav:sdlc:delivery']) assert.ok(s.palette.includes(c), c);
       for (const c of ['/feature', '/review', '/gates']) assert.ok(s.slash.includes(c), c);
       assert.deepEqual(ofPlugin(s.nav, 'aiops'), [], 'Operations is still off');
@@ -304,6 +306,12 @@ test('plugins journey: Engineering and Operations switched on and off live, used
         { name: 'CheckoutLatencyHigh', severity: 'warning', service: 'checkout', env: 'prod', summary: 'p95 1.8 s (objective 400 ms)', startsAt: at(11) },
         { name: 'SearchIndexLag', severity: 'info', service: 'search', env: 'prod', summary: 'the index is 25 minutes behind', startsAt: at(30) },
       ] }), 202);
+      // No Operations page is open (nor granted yet): the badge and the status items come from its badge source
+      // (ui.badges: its own route, read by the app), at once on the signal its alert route sends.
+      assert.equal(await page.locator('[data-view^="aiops:"]').count(), 0);
+      await page.waitForSelector('[data-badge="aiops.open"]:has-text("2")', { timeout: 15_000 });
+      await page.waitForSelector('[data-status-item="aiops:firing-alerts"]:has-text("3 firing")', { timeout: 15_000 });
+      assert.match(await page.locator('[data-status-item="aiops:open-incidents"]').innerText(), /2 open incidents/);
       await page.click('[data-nav="aiops:incidents"]');
       await page.waitForSelector('[data-trust-gate="aiops"]');
       await page.click('[data-grant]');
@@ -400,6 +408,7 @@ test('plugins journey: Engineering and Operations switched on and off live, used
       // The record in Operations: root cause, confidence, refuter, evidence, runbook, postmortem.
       await page.click('[data-nav="aiops:incidents"]');
       const list = view('aiops:incidents');
+      await list.locator('body[data-ready="1"]').waitFor({ timeout: 20_000 });
       await list.locator('.seg button', { hasText: 'All' }).click();
       await list.locator('[data-incident^="inc-"]').first().click();
       const d = view('aiops:incidents');
@@ -412,6 +421,28 @@ test('plugins journey: Engineering and Operations switched on and off live, used
       await setSize(1360, 1300);
       await page.evaluate(() => { document.documentElement.style.zoom = '0.75'; });
       try { await shot('incident-record'); } finally { await page.evaluate(() => { document.documentElement.style.zoom = ''; }); await setSize(1360, 860); }
+    });
+
+    await step('4. an agent opens an incident in the app (desktop_command: an agent-callable command, asked first, its args checked)', async () => {
+      const list = (await api('POST', '/api/plugins/aiops/console/incidents', { status: 'all' })).body as { incidents: { id: string }[] };
+      const id = list.incidents.find((x) => x.id.startsWith('inc-'))!.id;
+      await home();
+      await page.click(`[data-session-row="${opsSession}"] button`);
+      await page.waitForSelector(`[data-session="${opsSession}"]`);
+      await send(`Show incident ${id} in the app`);
+      // An action in the person's app: asked in default mode, naming the command.
+      const ask = page.locator(`[data-session="${opsSession}"] [data-attention] [data-pending="permission_request"]`).first();
+      await ask.waitFor({ timeout: 30_000 });
+      assert.match(await ask.innerText(), /aiops:open-incident/);
+      await shot('agent-desktop-command-asked');
+      await ask.locator('[data-decision="allow"]').click();
+      // The window goes to the incident; the agent hears where.
+      const d = view('aiops:incidents');
+      await d.locator(`[data-incident-detail="${id}"]`).waitFor({ timeout: 30_000 });
+      await shot('agent-opened-incident');
+      await page.click(`[data-session-row="${opsSession}"] button`);
+      await idle(opsSession);
+      assert.match(await page.locator(`[data-session="${opsSession}"] [data-assistant-message]`).last().innerText(), /In the app: [\s\S]*Opened Incidents \(id inc-/, 'the agent heard what the app did (fenced as outside data: this engine loads aiops from a folder, not as shipped)');
     });
 
     await step('5. Engineering off: everything of it goes at once, nothing lingers, Operations untouched', async () => {

@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { KITCHEN_SINK } from './fixtures/desktop/rich.ts';
 import { SCIENCE_KITCHEN_SINK } from './fixtures/desktop/science.ts';
 import { BIO_KITCHEN_SINK } from './fixtures/desktop/biology.ts';
+import { assertNotBlank, capture } from './fixtures/desktop/png.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const desktop = path.join(root, 'apps', 'desktop');
@@ -66,6 +67,7 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !/_API_KEY$|^GW_|^HARNESS_/.test(k)) env[k] = v;
   Object.assign(env, {
     HARNESS_DESKTOP_DATA: data,
+    HARNESS_DESKTOP_TEST: '1', ...(process.env.HARNESS_E2E_SHOW ? { HARNESS_E2E_SHOW: process.env.HARNESS_E2E_SHOW } : {}),
     HARNESS_DESKTOP_ENGINE: path.join(root, 'test', 'fixtures', 'desktop', 'scripted-engine.ts'),
     HARNESS_DESKTOP_NO_TRAY: '1',
     HARNESS_PLUGINS: [path.join(root, 'examples', 'plugins', 'notes-frame'), path.join(root, 'examples', 'plugins', 'hello-frame'), path.join(root, 'examples', 'plugins', 'quick-links'), path.join(root, 'test', 'fixtures', 'desktop', 'plugins', 'broken-ui')].join(path.delimiter),
@@ -85,8 +87,8 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
   page.on('console', (m) => { const where = m.location().url ?? ''; if (m.type() === 'error' && !/\/plugins\/|^harness:\/\/preview|^about:srcdoc/.test(where)) errors.push({ phase, text: `console: ${m.text()} (${where})` }); });
   page.on('crash', () => errors.push({ phase, text: 'the renderer crashed' }));
   page.on('close', () => errors.push({ phase, text: 'the window closed' }));
-  const shot = async (name: string, el?: import('playwright-core').Locator) => { if (!SHOTS) return; await page.waitForTimeout(250); await (el ?? page).screenshot({ path: path.join(SHOTS, `${name}.png`) }); };
-  const setSize = (w: number, h: number) => app.evaluate(({ BrowserWindow }, s) => { const win = BrowserWindow.getAllWindows()[0]!; win.unmaximize(); win.setSize(s.w, s.h); }, { w, h });
+  const shot = async (name: string, el?: import('playwright-core').Locator) => { if (!SHOTS) return; await page.waitForTimeout(250); const png = await capture(app, el); assertNotBlank(png, name); fs.writeFileSync(path.join(SHOTS, `${name}.png`), png); };
+  const setSize = (w: number, h: number) => app.evaluate(({ BrowserWindow }, s) => { const win = BrowserWindow.getAllWindows()[0]!; if (win.isMaximized()) win.unmaximize(); win.setSize(s.w, s.h); }, { w, h });
   const invoke = (channel: string, ...args: unknown[]) => page.evaluate(([c, a]) => (window as unknown as { harnessDesktop: { invoke: (c: string, ...x: unknown[]) => Promise<unknown> } }).harnessDesktop.invoke(c as string, ...(a as unknown[])), [channel, args] as const);
   const api = (method: string, p: string, body?: unknown) => page.evaluate(async ([m, u, b]) => { const r = await fetch(u as string, { method: m as string, headers: { 'content-type': 'application/json', 'x-harness': '1' }, body: b === undefined ? undefined : JSON.stringify(b) }); return { status: r.status, body: await r.json().catch(() => null) }; }, [method, p, body] as const);
   const ready = () => page.waitForSelector('[data-engine-status="ready"]', { timeout: 90_000 });
@@ -97,7 +99,7 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
   const step = (name: string, fn: () => Promise<void>) => t.test(name, async () => {
     phase = name;
     try { await fn(); } catch (e) {
-      await page.screenshot({ path: path.join(os.tmpdir(), `hd-e2e-fail-${name.slice(0, 40).replace(/[^a-z0-9]+/gi, '-')}.png`) }).catch(() => {});
+      await capture(app).then((png) => fs.writeFileSync(path.join(os.tmpdir(), `hd-e2e-fail-${name.slice(0, 40).replace(/[^a-z0-9]+/gi, '-')}.png`), png)).catch(() => {});
       for (let i = 0; i < 3; i++) await page.keyboard.press('Escape').catch(() => {});
       throw e;
     }
@@ -115,6 +117,10 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       await ready();
       await page.waitForSelector('[data-home]');
       assert.match(await page.locator('[data-greeting]').innerText(), /Where should we begin\?/);
+      // The window is never shown under the tests; it still paints: a screenshot has real content.
+      assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.isVisible()), !!process.env.HARNESS_E2E_SHOW, 'hidden unless HARNESS_E2E_SHOW=1');
+      await page.waitForTimeout(300);
+      assertNotBlank(await capture(app), 'the home page');
     });
 
     await step('the sidebar comes from the registry, the built-ins and plugins alike', async () => {
@@ -504,17 +510,32 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
         el.scrollTop = el.scrollHeight;
       });
       const scrolling = await page.evaluate(() => (window as unknown as { __long: number[] }).__long.splice(0));
-      // Layout shifts while the answer streams in (what moves without the person doing anything).
+      // The test's own scrolling settles first: rows mounted by the last scroll are measured and the list stops
+      // moving (under load that takes a while, and its corrections are not the answer's doing).
+      const settled = await page.evaluate(async () => {
+        const el = document.querySelector('[data-virtual-list]') as HTMLElement;
+        const sig = () => `${el.scrollTop}|${el.scrollHeight}|${[...el.querySelectorAll('[data-row]')].map((r) => `${Math.round(r.getBoundingClientRect().top)}:${Math.round(r.getBoundingClientRect().height)}`).join(',')}`;
+        const frame = () => new Promise((res) => requestAnimationFrame(() => setTimeout(res, 0)));
+        const end = performance.now() + 10_000;
+        let last = sig(); let still = 0;
+        while (still < 30 && performance.now() < end) { await frame(); const now = sig(); still = now === last ? still + 1 : 0; last = now; }
+        return still >= 30;
+      });
+      // Layout shifts while the answer streams in (what moves without the person doing anything): only those after
+      // the send, in the transcript, not after input. A shift left over from settling is reported, not counted.
       await page.evaluate(() => {
-        const w = window as unknown as { __shift: number; __shifts: string[] };
-        w.__shift = 0; w.__shifts = [];
+        const w = window as unknown as { __shift: number; __early: number; __from: number; __shifts: string[] };
+        w.__shift = 0; w.__early = 0; w.__from = Infinity; w.__shifts = [];
         type Shift = PerformanceEntry & { value: number; hadRecentInput: boolean; sources?: Array<{ node?: Node; previousRect: DOMRectReadOnly; currentRect: DOMRectReadOnly }> };
         const name = (n?: Node) => { const el = n instanceof Element ? n : n?.parentElement; if (!el) return '?'; const a = [...el.attributes].filter((x) => x.name.startsWith('data-')).map((x) => `${x.name}=${x.value.slice(0, 20)}`).join(' '); return `${el.tagName.toLowerCase()}[${a}]`; };
         new PerformanceObserver((l) => { for (const e of l.getEntries() as Shift[]) if (!e.hadRecentInput) {
           // What matters: the transcript's text moving under the reader. The composer shrinking after a send is the person's own doing.
           const inTranscript = (e.sources ?? []).some((x) => { const el = x.node instanceof Element ? x.node : x.node?.parentElement; return !!el?.closest('[data-virtual-list] [data-row]'); });
-          if (inTranscript) w.__shift += e.value; if (e.value > 0.005) w.__shifts.push(`${e.value.toFixed(3)}: ${(e.sources ?? []).map((x) => `${name(x.node)} y ${Math.round(x.previousRect.y)}->${Math.round(x.currentRect.y)} h ${Math.round(x.previousRect.height)}->${Math.round(x.currentRect.height)}`).join('; ')}`); } }).observe({ type: 'layout-shift', buffered: false });
+          if (inTranscript) { if (e.startTime >= w.__from) w.__shift += e.value; else w.__early += e.value; }
+          if (e.value > 0.005) w.__shifts.push(`${e.startTime >= w.__from ? '' : '(before the send) '}${e.value.toFixed(3)}: ${(e.sources ?? []).map((x) => `${name(x.node)} y ${Math.round(x.previousRect.y)}->${Math.round(x.currentRect.y)} h ${Math.round(x.previousRect.height)}->${Math.round(x.currentRect.height)}`).join('; ')}`); } }).observe({ type: 'layout-shift', buffered: false });
       });
+      await page.waitForTimeout(300);
+      await page.evaluate(() => { (window as unknown as { __from: number }).__from = performance.now(); });
       await send('stream a long answer please');
       await page.waitForSelector(`[data-session="${id}"][data-status="running"]`, { timeout: 15_000 }).catch(() => {});
       await page.waitForSelector(`[data-session="${id}"][data-status="idle"]`, { timeout: 60_000 });
@@ -523,7 +544,8 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       const shift = await page.evaluate(() => (window as unknown as { __shift: number }).__shift);
       const shifts = await page.evaluate(() => (window as unknown as { __shifts: string[] }).__shifts);
       if (shifts.length) t.diagnostic(`layout shifts: ${shifts.slice(0, 8).join(' | ')}`);
-      t.diagnostic(`long tasks while scrolling: ${JSON.stringify(scrolling)}; while streaming: ${JSON.stringify(streaming)}; layout shift while streaming: ${shift.toFixed(4)}`);
+      const early = await page.evaluate(() => (window as unknown as { __early: number }).__early);
+      t.diagnostic(`long tasks while scrolling: ${JSON.stringify(scrolling)}; while streaming: ${JSON.stringify(streaming)}; layout shift while streaming: ${shift.toFixed(4)} (settled first: ${settled}; before the send, not counted: ${early.toFixed(4)})`);
       assert.ok(shift < 0.1, `transcript layout shift while streaming: ${shift}`);
       assert.ok(Math.max(0, ...scrolling) <= 100, `scrolling: ${JSON.stringify(scrolling)}`);
       assert.ok(Math.max(0, ...streaming) <= 100, `streaming: ${JSON.stringify(streaming)}`);
@@ -781,6 +803,57 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       assert.deepEqual(errors.slice(before), [], 'no console errors or exceptions');
     });
 
+    await step('the harness home: Location in Settings > Application, scratch and new projects in it, the clean-up age saved, a move', async () => {
+      // The app's home (inside its test data folder: HARNESS_DESKTOP_DATA without HARNESS_HOME).
+      const home = path.join(data, 'home');
+      const until = async (f: () => boolean, what: string, ms = 15_000) => { const end = Date.now() + ms; while (!f()) { if (Date.now() > end) throw new Error(`timed out: ${what}`); await page.waitForTimeout(100); } };
+      for (const f of ['data', 'workspaces/default', 'tmp', 'exports', 'plugins', 'logs', 'settings.json', '.harness-home']) assert.ok(fs.existsSync(path.join(home, f)), f);
+      assert.ok(fs.readdirSync(path.join(home, 'data', 'sessions')).length > 0, 'the engine keeps its data in the home');
+      assert.ok(fs.statSync(path.join(home, 'logs', 'engine.log')).size > 0, 'the engine log');
+      // A scratch conversation gets a folder of its own under tmp/.
+      const scratch = await invoke('home:scratch') as string;
+      assert.ok(scratch.startsWith(path.join(home, 'tmp') + path.sep) && fs.existsSync(scratch), scratch);
+      // A new project made in the app lives in the home's workspaces.
+      await page.click('[data-nav="core.projects:projects"]');
+      await page.click('[data-new-project]');
+      await page.fill('[data-new-project-name]', 'Shop API');
+      await page.locator('[data-new-project-form] button[type="submit"]').click();
+      await until(() => fs.existsSync(path.join(home, 'workspaces', 'shop-api')), 'the project folder');
+      assert.ok(((await invoke('prefs:get')) as { projects: { path: string }[] }).projects.some((x) => x.path === path.join(home, 'workspaces', 'shop-api')));
+      // Settings > Application > Location: the home, its folders with sizes, the clean-up age.
+      await page.keyboard.press('Control+Comma');
+      await page.click('[data-settings-section="core.settings:application"]');
+      await page.waitForSelector('[data-location] [data-home-path]');
+      assert.equal(await page.locator('[data-home-path]').innerText(), home);
+      assert.deepEqual(await page.$$eval('[data-home-folder]', (els) => els.map((e) => e.getAttribute('data-home-folder'))), ['data', 'workspaces', 'tmp', 'exports', 'plugins', 'logs']);
+      assert.ok(Number(await page.getAttribute('[data-home-folder="data"]', 'data-bytes')) > 0);
+      await page.locator('[data-location]').scrollIntoViewIfNeeded();
+      await shot('settings-location');
+      await page.fill('[data-tmp-days]', '3');
+      await page.click('[data-save-tmp-days]');
+      await until(() => JSON.parse(fs.readFileSync(path.join(home, 'settings.json'), 'utf8')).tmpCleanupDays === 3, 'the clean-up age saved');
+      await page.keyboard.press('Escape');
+      // Move (the folder picker is the system's; the move goes through the channel its button uses): copied, checked, switched, the engine back.
+      const target = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hd-home-move-')));
+      const moved = await invoke('home:move', target) as { moved: { home: string; files: number } };
+      assert.equal(moved.moved.home, target);
+      await ready();
+      assert.ok(fs.existsSync(path.join(target, 'workspaces', 'shop-api')) && fs.existsSync(path.join(target, 'data', 'sessions')));
+      assert.equal(JSON.parse(fs.readFileSync(path.join(data, 'home-location'), 'utf8')).home, target, 'the pointer the app reads at its next start');
+      assert.ok(((await invoke('prefs:get')) as { projects: { path: string }[] }).projects.some((x) => x.path === path.join(target, 'workspaces', 'shop-api')), 'projects made in the home moved with it');
+      await page.waitForSelector('[data-session-row]', { timeout: 30_000 });
+      await page.keyboard.press('Control+Comma');
+      await page.click('[data-settings-section="core.settings:application"]');
+      await page.waitForSelector(`[data-home-path]:has-text("${path.basename(target)}")`);
+      // The old copy stays until the person removes it.
+      assert.ok(fs.existsSync(home));
+      await page.click('[data-remove-old-home]');
+      await page.locator('[role="dialog"] button[data-autofocus]', { hasText: 'Remove' }).click();
+      await until(() => !fs.existsSync(home), 'the old copy removed');
+      await page.waitForSelector('[data-remove-old-home]', { state: 'detached' });
+      await page.keyboard.press('Escape');
+    });
+
     // Expected: the refusals the frame probe provokes on purpose, the engine's own crash (requests cut
     // while it is down), and the memory section on an engine without memory. Nothing else, and no exceptions.
     const unexpected = errors.filter((e) => !(
@@ -789,6 +862,8 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       // Adding a folder restarts the engine with the new roots, which cuts the open event streams (they reconnect).
       || (/a session in a folder/.test(e.phase) && /ERR_FAILED \(harness:\/\/app\/api\/(events|sessions\/[^/]+\/events)/.test(e.text))
       || (/\/api\/memory\?/.test(e.text) && /404/.test(e.text))
+      // Moving the home restarts the engine, which cuts the open event streams (they reconnect).
+      || (/harness home/.test(e.phase) && /ERR_FAILED|Failed to load resource/.test(e.text))
     ));
     assert.deepEqual(unexpected, [], 'no unexpected errors in the window');
     assert.deepEqual(errors.filter((e) => /switched on and off live/.test(e.phase)), [], 'switching plugins logs nothing at all');

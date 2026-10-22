@@ -13,7 +13,8 @@
  *     decline.
  */
 
-import { CALLS, PROTOCOL, STORAGE_KEY, STORAGE_LIMITS, needsConfirm, needsGesture, refuseCall, type Capability, type CallMessage, type ResultMessage, EVENT_TOPICS } from '@harness/plugin-ui';
+import { CALLS, PROTOCOL, REGISTRY_KINDS, STORAGE_KEY, STORAGE_LIMITS, needsConfirm, needsGesture, qualify, refuseCall, type Capability, type CallMessage, type ResultMessage, EVENT_TOPICS } from '@harness/plugin-ui';
+import type { Registry } from './registry.ts';
 
 export type Impl = Partial<Record<string, (params: Record<string, unknown>) => unknown>>;
 
@@ -46,6 +47,19 @@ export function badParams(method: string, p: Record<string, unknown>): string | 
     case 'view.open': return str('view', 130);
     case 'panel.open': return str('panel', 130);
     case 'badge.set': return typeof p.name === 'string' && /^[a-zA-Z0-9_.-]{1,40}$/.test(p.name) && (p.value === null || typeof p.value === 'number' || (typeof p.value === 'string' && p.value.length <= 20)) ? undefined : 'a badge is a short name and a number, short text or null';
+    case 'registry.has': {
+      const keys = ['plugin', 'view', 'panel', 'renderer', 'command'].filter((k) => p[k] !== undefined);
+      if (keys.length !== 1) return 'ask about exactly one of plugin, view, panel, renderer or command';
+      return typeof p[keys[0]!] === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,129}$/.test(p[keys[0]!] as string) ? undefined : `"${keys[0]}" must be an id (at most 130 characters)`;
+    }
+    case 'registry.list': return (REGISTRY_KINDS as readonly string[]).includes(String(p.kind)) ? undefined : `kind is one of ${REGISTRY_KINDS.join(', ')}`;
+    case 'render.show': {
+      if (typeof p.fence !== 'string' || !/^[a-z][a-z0-9-]{1,40}$/.test(p.fence)) return '"fence" is a code-fence language (e.g. "diagram")';
+      if (typeof p.source !== 'string' || p.source.length > 1_500_000) return '"source" is text (at most 1,500,000 characters)';
+      const r = p.rect as Record<string, unknown> | undefined;
+      const num = (v: unknown, lo: number, hi: number) => typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi;
+      return r && typeof r === 'object' && num(r.x, -20_000, 100_000) && num(r.y, -20_000, 100_000) && num(r.width, 0, 10_000) && num(r.height, 0, 10_000) ? undefined : '"rect" is { x, y, width, height } in the frame\'s pixels';
+    }
     case 'frame.resize': return typeof p.height === 'number' && p.height >= 0 && p.height <= 4000 ? undefined : 'height is 0-4000 pixels';
     case 'routes.call': {
       if (typeof p.path !== 'string' || !/^[a-z0-9][a-z0-9/_.-]{0,127}$/i.test(p.path) || p.path.includes('..')) return 'path must be one of this plugin\'s own route paths';
@@ -95,6 +109,36 @@ export async function handleFrameCall(data: unknown, ctx: FrameCallContext): Pro
   const fn = ctx.impl[msg.method];
   if (!fn) return result(msg.id, false, undefined, `${msg.method} is not available here`);
   try { return result(msg.id, true, await fn(params)); } catch (e) { return result(msg.id, false, undefined, (e as Error)?.message ?? String(e)); }
+}
+
+/**
+ * registry.has / registry.list: what else is installed, as ids and yes/no only (never another
+ * plugin's titles or descriptions: no third-party text reaches a frame this way). A view, panel or
+ * command without a plugin prefix is the asking plugin's own; a renderer is a fence language, or
+ * "fence:", "artifact:", "tool:" or "event:" with its key.
+ */
+export function registryAnswer(r: Registry, plugin: string, method: string, p: Record<string, unknown>): boolean | string[] {
+  if (method === 'registry.list') {
+    switch (String(p.kind)) {
+      case 'plugins': return r.active.map((x) => x.name);
+      case 'views': return [...r.views.keys()].filter((k) => !/:onboard/.test(k));
+      case 'panels': return [...r.panels.keys()];
+      case 'commands': return r.commands.map((c) => c.qid);
+      case 'renderers': return (['fence', 'artifact', 'tool', 'event'] as const).flatMap((k) => [...r.renderers[k].keys()].map((x) => `${k}:${x}`));
+      default: return [];
+    }
+  }
+  const s = (k: string) => (typeof p[k] === 'string' ? p[k] as string : undefined);
+  if (s('plugin')) return r.active.some((x) => x.name === s('plugin'));
+  if (s('view')) return r.views.has(qualify(plugin, s('view')!));
+  if (s('panel')) return r.panels.has(qualify(plugin, s('panel')!));
+  if (s('command')) return r.commands.some((c) => c.qid === qualify(plugin, s('command')!));
+  if (s('renderer')) {
+    const m = /^(fence|artifact|tool|event):(.+)$/.exec(s('renderer')!);
+    const [kind, key] = m ? [m[1] as 'fence' | 'artifact' | 'tool' | 'event', m[2]!] : ['fence' as const, s('renderer')!];
+    return r.renderers[kind].has(kind === 'fence' ? key.toLowerCase() : key);
+  }
+  return false;
 }
 
 /** Every method a frame may call (for the docs and the tests). */

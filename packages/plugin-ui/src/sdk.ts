@@ -9,7 +9,7 @@
  * Calls the frame was not granted fail with the host's reason; nothing here grants anything.
  */
 
-import { type CallMessage, type EventMessage, type HostMessage, type InitMessage, PROTOCOL, type ThemeVars } from './rpc.ts';
+import { type CallMessage, type EventMessage, type HostMessage, type InitMessage, PROTOCOL, type RegistryKind, type RegistryQuery, type ThemeVars } from './rpc.ts';
 
 export interface HostLike { postMessage(message: unknown, targetOrigin: string): void }
 export interface WindowLike {
@@ -35,6 +35,14 @@ export interface Harness {
   composer: { prefill(text: string, opts?: { newChat?: boolean }): Promise<void> };
   frame: { resize(height?: number): Promise<void> };
   badge: { set(name: string, value: number | string | null): Promise<void> };
+  /** What else is installed: `has({ renderer: 'diagram' })`, `has({ plugin: 'aiops' })`, `list('renderers')` (ids only). */
+  registry: { has(q: RegistryQuery): Promise<boolean>; list(kind: RegistryKind): Promise<string[]> };
+  /**
+   * A block drawn by one of the host's renderers (a fence language, e.g. "diagram") over a rectangle
+   * of this frame (its CSS pixels; keep it current on scroll and resize). Fails when the host has no
+   * such renderer: draw it yourself then. One block per frame; hide() removes it.
+   */
+  render: { show(o: { fence: string; source: string; rect: { x: number; y: number; width: number; height: number } }): Promise<void>; hide(): Promise<void> };
   sessions: {
     list(opts?: { query?: string; limit?: number }): Promise<unknown[]>;
     get(id: string): Promise<unknown>;
@@ -115,6 +123,8 @@ export function connect(win: WindowLike = globalThis as unknown as WindowLike, o
         composer: { prefill: (text, o) => call('composer.prefill', { text, ...o }) },
         frame: { resize: (height) => call('frame.resize', { height: height ?? win.document?.body?.scrollHeight ?? 0 }) },
         badge: { set: (name, value) => call('badge.set', { name, value }) },
+        registry: { has: (q) => call('registry.has', q), list: (kind) => call('registry.list', { kind }) },
+        render: { show: (o) => call('render.show', o), hide: () => call('render.hide', {}) },
         sessions: {
           list: (o) => call('sessions.list', o ?? {}), get: (id) => call('sessions.get', { id }),
           history: (id, o) => call('sessions.history', { id, ...o }), start: (o) => call('sessions.start', o),

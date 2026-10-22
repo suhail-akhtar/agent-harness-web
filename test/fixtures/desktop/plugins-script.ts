@@ -90,6 +90,10 @@ export class ScriptedProvider implements Provider {
       if (/Open an incident for:/.test(asked)) turn = incidentFlow(sinceAsk, last, req.messages.slice(req.messages.findLastIndex((m) => m.role === 'user' && /Open an incident for:/.test(textOf(m.content)))));
       else if (gate || /Run every applicable quality gate again|Run the quality gates \(quality_gates tool\)/.test(asked)) {
         turn = !afterTool ? { calls: [{ name: 'quality_gates', input: gate ? { gates: JSON.parse(gate[2]!) as string[] } : {} }] } : { text: `The gates ran again:\n\n${resultText(last).split('\n').filter((l) => /^(PASS|FAIL|WARN)/.test(l)).map((l) => `- ${l}`).join('\n') || 'none applied'}` };
+      } else if (/^Show incident (\S+) in the app/.test(asked)) {
+        // The Operations page through the app (desktop_command, an agent-callable command of the aiops manifest).
+        const id = /^Show incident (\S+) in the app/.exec(asked)![1]!;
+        turn = sinceAsk === 0 ? { calls: [{ name: 'desktop_command', input: { command: 'aiops:open-incident', args: { id } } }] } : { text: `In the app: ${resultText(last).replace(/\s+/g, ' ').slice(0, 600)}` };
       } else if (/^Review the (changes|delivered changes)/.test(asked)) turn = { text: 'Reviewed against docs/requirements.md: no BLOCKING or MAJOR finding.\n\nAPPROVE' };
       else if (/incident-response workflow/.test(asked)) turn = { text: 'I would start the incident-response workflow with this symptom; it gathers evidence read-only and asks you before any change.' };
       else turn = { text: afterTool ? 'Done.' : 'Hello! This is the scripted engine.' };

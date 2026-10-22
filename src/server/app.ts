@@ -28,7 +28,7 @@ import { resolveUiFile, UI_CSP, UI_CSP_DOCUMENT } from '../plugins/ui.ts';
 import { SessionBusyError } from '../core/session.ts';
 import type { ImageBlock, Message } from '../core/types.ts';
 import { DESKTOP_TOKEN_PREFIX, DesktopAuthError, DesktopSignIn, withParams } from './desktop-auth.ts';
-import { effectiveSettings } from './settings-api.ts';
+import { cleanPluginSettings, effectiveSettings } from './settings-api.ts';
 import { ArtifactError } from '../core/artifacts.ts';
 import { CLIENT_KINDS, type ClientKind, ClientDeclError, cleanClient } from '../core/client.ts';
 import { LinkedError } from '../core/linked.ts';
@@ -858,7 +858,15 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       if (method !== 'PUT') throw new HttpError(405, 'method not allowed');
       const b = await readJson(req);
       let body: unknown;
-      if (settingsRoute) body = await saveUserSettings(dataDir, me.id, b);
+      if (settingsRoute) {
+        // Plugins' values: only each plugin's account-scope keys, checked against their schemas.
+        if (b && typeof b === 'object' && 'plugins' in b) {
+          const c = cleanPluginSettings((b as Record<string, unknown>).plugins, harness.plugins.list(), (await loadUserSettings(dataDir, me.id)).plugins);
+          if (c.errors.length) throw new HttpError(400, c.errors.join('; '));
+          (b as Record<string, unknown>).plugins = c.plugins;
+        }
+        body = await saveUserSettings(dataDir, me.id, b);
+      }
       else {
         if (typeof b.content !== 'string') throw new HttpError(400, 'content is required');
         try { await saveUserInstructions(dataDir, me.id, b.content); } catch (e) { throw new HttpError(400, (e as Error).message); }

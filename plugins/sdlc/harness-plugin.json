@@ -172,12 +172,12 @@
           "title": "Engineering",
           "icon": "rocket",
           "group": "agent",
-          "scope": "app",
+          "scope": "account",
           "order": 45,
           "schema": {
             "type": "object",
             "title": "Engineering defaults",
-            "description": "How features start from the Delivery board and the Start a feature form on this computer. A role's model other than the conversation's is a delegation: it is used only where your delegation setting (Settings > Agents) allows that model, and refused otherwise.",
+            "description": "How you start features from the Delivery board and the Start a feature form: kept with your account, so every computer you sign in from uses them. A role's model other than the conversation's is a delegation: it is used only where your delegation setting (Settings > Agents) allows that model, and refused otherwise.",
             "properties": {
               "approval": {
                 "type": "string",
@@ -202,6 +202,62 @@
                 "default": "",
                 "order": 2
               },
+              "strictness": {
+                "type": "string",
+                "title": "Review strictness",
+                "description": "What /review and the board's Review button ask for.",
+                "enum": [
+                  "lenient",
+                  "standard",
+                  "strict"
+                ],
+                "enumLabels": [
+                  "Blocking issues only",
+                  "Blocking and major",
+                  "Everything, minor included"
+                ],
+                "default": "standard",
+                "order": 3
+              },
+              "analystModel": {
+                "type": "string",
+                "title": "Model: analyst and architect",
+                "description": "Empty: the conversation's model.",
+                "maxLength": 80,
+                "default": "",
+                "order": 4
+              },
+              "engineerModel": {
+                "type": "string",
+                "title": "Model: planner and engineer",
+                "description": "Empty: the conversation's model.",
+                "maxLength": 80,
+                "default": "",
+                "order": 5
+              },
+              "reviewerModel": {
+                "type": "string",
+                "title": "Model: code and security reviewers",
+                "description": "A second opinion from another provider is a good use of delegation. Empty: the conversation's model.",
+                "maxLength": 80,
+                "default": "",
+                "order": 6
+              }
+            }
+          }
+        },
+        {
+          "id": "engineering-panel",
+          "title": "Engineering on this computer",
+          "icon": "shield",
+          "group": "agent",
+          "scope": "app",
+          "order": 46,
+          "schema": {
+            "type": "object",
+            "title": "Quality gates panel",
+            "description": "What the Quality gates panel and the Delivery board show on this computer.",
+            "properties": {
               "gates": {
                 "type": "array",
                 "title": "Gates the panel runs again",
@@ -225,7 +281,7 @@
                   ]
                 },
                 "default": [],
-                "order": 3
+                "order": 1
               },
               "advisory": {
                 "type": "string",
@@ -240,48 +296,7 @@
                   "Leave them out"
                 ],
                 "default": "show",
-                "order": 4
-              },
-              "strictness": {
-                "type": "string",
-                "title": "Review strictness",
-                "description": "What /review and the board's Review button ask for.",
-                "enum": [
-                  "lenient",
-                  "standard",
-                  "strict"
-                ],
-                "enumLabels": [
-                  "Blocking issues only",
-                  "Blocking and major",
-                  "Everything, minor included"
-                ],
-                "default": "standard",
-                "order": 5
-              },
-              "analystModel": {
-                "type": "string",
-                "title": "Model: analyst and architect",
-                "description": "Empty: the conversation's model.",
-                "maxLength": 80,
-                "default": "",
-                "order": 6
-              },
-              "engineerModel": {
-                "type": "string",
-                "title": "Model: planner and engineer",
-                "description": "Empty: the conversation's model.",
-                "maxLength": 80,
-                "default": "",
-                "order": 7
-              },
-              "reviewerModel": {
-                "type": "string",
-                "title": "Model: code and security reviewers",
-                "description": "A second opinion from another provider is a good use of delegation. Empty: the conversation's model.",
-                "maxLength": 80,
-                "default": "",
-                "order": 8
+                "order": 2
               }
             }
           }

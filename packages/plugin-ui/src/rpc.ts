@@ -45,6 +45,12 @@ export const CALLS: Record<string, CallSpec> = {
   'composer.prefill': { capability: null },
   'frame.resize': { capability: null },
   'badge.set': { capability: null },
+  // What else is installed (another plugin, a view, a renderer): ids and yes/no only, no third-party text.
+  'registry.has': { capability: null },
+  'registry.list': { capability: null },
+  // Draws a block with one of the host's renderers (a fence language such as "diagram") over a rectangle of the frame.
+  'render.show': { capability: null },
+  'render.hide': { capability: null },
   'sessions.list': { capability: 'sessions.read' },
   'sessions.get': { capability: 'sessions.read' },
   'sessions.history': { capability: 'sessions.read' },
@@ -87,6 +93,12 @@ export function needsConfirm(method: string): boolean { return !!CALLS[method]?.
 export const STORAGE_KEY = /^[a-zA-Z0-9_.-]{1,64}$/;
 /** At most this many bytes per stored value, and this many keys per plugin. */
 export const STORAGE_LIMITS = { valueBytes: 256 * 1024, keys: 200 };
+
+/** What registry.list lists (ids only). */
+export const REGISTRY_KINDS = ['plugins', 'views', 'panels', 'renderers', 'commands'] as const;
+export type RegistryKind = typeof REGISTRY_KINDS[number];
+/** What registry.has asks about: exactly one of these. A renderer is a fence language ("diagram"), or "fence:", "artifact:", "tool:" or "event:" with its key. */
+export interface RegistryQuery { plugin?: string; view?: string; panel?: string; renderer?: string; command?: string }
 
 /** Events a frame can subscribe to with events.subscribe (the global stream's topics). */
 export const EVENT_TOPICS = ['sessions', 'session', 'approvals', 'schedules', 'plugins', 'notices'] as const;

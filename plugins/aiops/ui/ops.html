@@ -84,7 +84,10 @@ Kit.start(async (harness) => {
   // ---------------- incidents ----------------
   let incFilter = 'open';
   async function incidents() {
-    const r = await route('incidents', { status: incFilter });
+    // A refresh started before the filter changed answers late: only the current filter's answer is drawn.
+    const want = incFilter;
+    const r = await route('incidents', { status: want });
+    if (want !== incFilter) return;
     const seg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Which incidents' }, [['open', `Open (${r.counts.open})`], ['resolved', `Resolved (${r.counts.resolved})`], ['all', 'All']].map(([id, label]) => h('button', { type: 'button', 'aria-pressed': String(incFilter === id), onclick: () => { incFilter = id; void refresh(); } }, label)));
     const list = r.incidents.length ? r.incidents.map((x) => h('button', { type: 'button', class: 'cardlink inc', 'data-incident': x.id, onclick: () => harness.view.open('incidents', { id: x.id }) },
       h('span', { class: `sevbar ${x.severity}` }),
@@ -182,9 +185,44 @@ Kit.start(async (harness) => {
   }
 
   // ---------------- topology ----------------
+  // With core.diagrams in the app (a "diagram" fence renderer), the host draws the topology as an
+  // interactive diagram over a placeholder here; otherwise (or if that fails) this page draws its own SVG.
+  const KIND = (id) => (/(^|-)(db|pg|postgres|mysql|sql)(-|$)/.test(id) ? 'relational-db' : /(cache|redis)/.test(id) ? 'cache' : /(queue|kafka|rabbit|mq)/.test(id) ? 'queue' : /(proxy|ingress|nginx|lb|gateway)/.test(id) ? 'reverse-proxy' : 'service');
+  function diagramSpec(r) {
+    const hosts = new Set(r.nodes.filter((n) => !n.service && n.kinds.includes('host')).map((n) => n.id));
+    const on = new Map(r.edges.filter((e) => e.kind === 'runs_on' && hosts.has(e.to)).map((e) => [e.from, e.to]));
+    return {
+      version: 1, view: 'deployment', title: 'Service dependencies',
+      groups: [...hosts].map((id) => ({ id: `host:${id}`, kind: 'host', label: id })),
+      nodes: r.nodes.filter((n) => !hosts.has(n.id)).map((n) => ({
+        id: n.id, kind: n.service ? KIND(n.id) : 'custom', title: n.id, tech: n.kinds.join(', ') || undefined,
+        ...(n.state === 'healthy' ? { status: 'done' } : n.state === 'critical' ? { status: 'failing' } : {}),
+        ...(n.state === 'degraded' ? { findings: [{ severity: 'medium', title: 'Degraded: a rule fires or an incident is open' }] } : {}),
+        ...(on.has(n.id) ? { group: `host:${on.get(n.id)}` } : {}),
+        tags: [n.state],
+      })),
+      edges: r.edges.filter((e) => e.kind !== 'runs_on').map((e, i) => ({ id: `e${i + 1}`, from: e.from, to: e.to, label: 'depends on', kind: 'depends' })),
+    };
+  }
+  let followBlock = null;
+  async function hostDiagram(r) {
+    if (!harness.registry || !(await harness.registry.has({ renderer: 'diagram' }).catch(() => false))) return false;
+    const box = h('div', { class: 'topo', 'data-topology-diagram': '', style: `height:${Math.max(360, Math.min(900, 120 + r.nodes.length * 60))}px` });
+    mount(main, box, h('p', { class: 'muted small' }, `Drawn by the diagrams plugin from the inventory (depends_on and hosts). ${r.nodes.length} nodes, ${r.edges.length} edges; checked ${ago(r.checkedAt)}.`));
+    const source = JSON.stringify(diagramSpec(r));
+    const show = () => { const b = box.getBoundingClientRect(); return harness.render.show({ fence: 'diagram', source, rect: { x: b.left, y: b.top, width: b.width, height: b.height } }); };
+    try { await show(); } catch { return false; }
+    if (followBlock) { window.removeEventListener('scroll', followBlock, true); window.removeEventListener('resize', followBlock); }
+    let pending = false;
+    followBlock = () => { if (pending) return; pending = true; requestAnimationFrame(() => { pending = false; if (box.isConnected) void show().catch(() => {}); }); };
+    window.addEventListener('scroll', followBlock, true);
+    window.addEventListener('resize', followBlock);
+    return true;
+  }
   async function topology() {
     const r = await route('topology');
     if (!r.inventory || !r.nodes.length) { mount(main, h('div', { class: 'card empty' }, h('b', {}, 'No topology'), 'Add services with depends_on and host to the inventory.')); return; }
+    if (await hostDiagram(r)) return;
     // Columns by dependency depth: a service left of what it depends on.
     const level = new Map(r.nodes.map((n) => [n.id, 0]));
     for (let pass = 0; pass < r.nodes.length; pass++) { let moved = false; for (const e of r.edges) { const want = level.get(e.from) + 1; if (want > level.get(e.to) && want < 12) { level.set(e.to, want); moved = true; } } if (!moved) break; }
