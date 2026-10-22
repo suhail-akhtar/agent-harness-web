@@ -8,7 +8,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
-import { ESCAPE_ARTIFACT, HOSTILE, KITCHEN_SINK, RICH } from './fixtures/desktop/rich.ts';
+import { ESCAPE_ARTIFACT, HOSTILE, KITCHEN_SINK, RICH, STREAM_TEXT } from './fixtures/desktop/rich.ts';
 import { ICON_NAMES } from '../packages/plugin-ui/src/index.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -116,7 +116,78 @@ test('streaming: an unfinished fence waits instead of failing; finished blocks a
   assert.deepEqual(ui.splitBlocks('a\n\nb\n\n```js\nx\n\ny\n```\n\n- 1\n\n- 2'), ['a', 'b', '```js\nx\n\ny\n```', '- 1\n\n- 2']);
   assert.ok(ui.isOpenBlock('```js\nx'));
   assert.ok(!ui.isOpenBlock('```js\nx\n```'));
-  assert.deepEqual(ui.splitBlocks('x [^1]\n\n[^1]: y'), ['x [^1]\n\n[^1]: y'], 'footnotes keep the reply whole');
+  assert.deepEqual(ui.splitBlocks('x [^1]\n\n[^1]: y'), ['x [^1]', '[^1]: y'], 'footnotes no longer keep the reply whole');
+});
+
+test('streaming: a block once complete keeps its key and its text as text is appended', async () => {
+  await load();
+  const texts = [STREAM_TEXT, KITCHEN_SINK, '- a\n\n- b\n\n1. c\n\n12. d\n\npara\n\n* e\n\n+ f\n\n    code\n\n> q\n\n$$\nx\n\ny\n$$\n\n~~~\nz\n\n~~~\n\nend'];
+  for (const full of texts) {
+    const final = ui.splitBlocks(full) as string[];
+    const finalPlan = new Map((ui.planBlocks(full) as { blocks: Array<{ key: string; text: string }> }).blocks.map((b) => [b.key, b.text]));
+    const seen = new Map<string, Set<string>>();
+    for (let n = 1; n <= full.length; n++) {
+      const prefix = full.slice(0, n);
+      // The raw split: every block but the last is final.
+      const blocks = ui.splitBlocks(ui.settledText(prefix)) as string[];
+      for (let i = 0; i < blocks.length - 1; i++) assert.equal(blocks[i], final[i], `block ${i} of a ${n}-character prefix is final`);
+      // What is rendered: keyed by position; a block that is not the tail changes only when a definition it uses arrives.
+      const plan = ui.planBlocks(prefix, { streaming: true }) as { blocks: Array<{ key: string; text: string; open: boolean }> };
+      plan.blocks.forEach((b, i) => {
+        if (i === plan.blocks.length - 1) return;
+        assert.ok(finalPlan.has(b.key), `${b.key} is still there at the end`);
+        const own = (s: string) => s.replace(/\n\n\[[^\n]*\]:[\s\S]*$/, '');
+        if (b.text !== finalPlan.get(b.key)) assert.equal(own(b.text), own(finalPlan.get(b.key)!), `${b.key} changes only for a definition it refers to`);
+        assert.ok(!b.open, 'only the tail can be open');
+        seen.set(b.key, (seen.get(b.key) ?? new Set()).add(b.text));
+      });
+    }
+    for (const [key, set] of seen) assert.ok(set.size <= 2, `${key} rendered at most twice once complete (${set.size})`);
+  }
+});
+
+test('streaming: an undecided last line is held back; footnotes and link references work across blocks', async () => {
+  await load();
+  assert.equal(ui.settledText('- a\n\n-'), '- a\n\n', 'a "-" under a list after a blank line waits');
+  assert.equal(ui.settledText('- a\n\n12.'), '- a\n\n');
+  assert.equal(ui.settledText('- a\n\n- b'), '- a\n\n- b');
+  assert.equal(ui.settledText('para\n\n-'), 'para\n\n-', 'not under a list: it starts a block either way');
+  assert.equal(ui.settledText('- a\n- b'), '- a\n- b');
+  assert.equal(ui.settledText('- a\n1'), '- a\n1', 'no blank line: it is in the block already');
+  assert.equal(ui.settledText('```\n- a\n\n-'), '```\n- a\n\n-', 'inside a fence');
+  assert.equal(ui.settledText('- [ ] Notes reviewed\n  -'), '- [ ] Notes reviewed\n', 'a "-" under a line of text may underline it as a heading');
+  assert.equal(ui.settledText('Title\n=='), 'Title\n');
+  assert.equal(ui.settledText('Text.\n\n[^1'), 'Text.\n\n', 'a definition may be starting');
+  assert.equal(ui.settledText('Text.\n\n[^1]: Note'), 'Text.\n\n[^1]: Note');
+  // An open ```math or $$ at the tail waits (no half-formula drawn as an error); the blocks before it are drawn.
+  for (const open of ['Energy $E$ is:\n\n```math\n\\frac{1}{', 'Energy $E$ is:\n\n$$\n\\frac{1}{']) {
+    const h = server.renderToStaticMarkup(React.createElement(ui.Markdown, { text: open, streaming: true }));
+    assert.match(h, /Formula arriving/);
+    assert.doesNotMatch(h, /katex-error/);
+    assert.match(h, /class="katex"/, 'inline maths in a finished block');
+  }
+  // Streaming, a reference is numbered before its definition arrives, so it does not change width when it does.
+  const early = ui.planBlocks('See this.[^1]\n\nMore', { streaming: true });
+  assert.equal(early.blocks[0].text, 'See this.[^1]\n\n[^1]: …');
+  assert.deepEqual(early.footnotes, ['1']);
+  // The reply's footnotes: one section after the last block, numbered in the order of their first reference.
+  const text = 'One.[^b]\n\nTwo.[^a] See [the docs].\n\n[^a]: First.\n\n[^b]: Second.\n\n[the docs]: https://example.com/docs';
+  const p = ui.planBlocks(text);
+  assert.deepEqual(p.blocks.map((b: { key: string }) => b.key), ['b0', 'b1'], 'definitions render nothing themselves; keys keep their positions');
+  assert.match(p.blocks[0].text, /\[\^b\]: Second\./);
+  assert.doesNotMatch(p.blocks[0].text, /\[\^a\]:/, 'only the definitions a block uses');
+  assert.match(p.blocks[1].text, /\[the docs\]: https:/);
+  assert.deepEqual(p.footnotes, ['b', 'a']);
+  const h = md(text);
+  assert.equal((h.match(/class="footnotes"/g) ?? []).length, 1, 'one footnotes section');
+  assert.match(h, /data-footnote-ref="true"[^>]*>1<\/a>[\s\S]*data-footnote-ref="true"[^>]*>2<\/a>/, 'numbered across the reply');
+  assert.match(h, /<li id="m[^"]*-fn-b">[\s\S]*Second[\s\S]*<li id="m[^"]*-fn-a">[\s\S]*First/);
+  assert.match(h, /<a href="https:\/\/example.com\/docs"/, 'a link reference resolves in another block');
+  // While streaming no footnotes section is drawn (it would come and go), and the reply is split all the same.
+  const s = server.renderToStaticMarkup(React.createElement(ui.Markdown, { text: STREAM_TEXT, streaming: true }));
+  assert.doesNotMatch(s, /class="footnotes"/);
+  assert.equal((md(STREAM_TEXT).match(/class="footnotes"/g) ?? []).length, 1);
+  assert.ok(ui.planBlocks(STREAM_TEXT).blocks.length > 10, 'a reply with footnotes is still split');
 });
 
 test('hostile input is neutralised: no script, no handlers, no javascript: links, KaTeX refuses \\href, SVG is scrubbed', async () => {

@@ -31,7 +31,9 @@ export const CodeBlock = React.memo(function CodeBlock({ code, language = '', fi
   const body = code.replace(/\n$/, '');
   const lines = useMemo(() => body.split('\n').length, [body]);
   const [wrap, setWrap] = useState(false);
-  const [open, setOpen] = useState(false);
+  // A block the reader watched arrive stays unfolded when it completes: folding it then would pull the
+  // whole answer down by hundreds of pixels under them. One drawn complete starts folded.
+  const [open, setOpen] = useState(!!streaming);
   const [copied, setCopied] = useState(false);
   const grammar = grammarFor(language);
   const collapsed = !open && !streaming && lines > collapseAt;
