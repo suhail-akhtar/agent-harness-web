@@ -1,0 +1,39 @@
+{
+  "name": "runbook-k8s-restart",
+  "description": "Restart a Kubernetes workload safely (rollout restart): a read-only baseline (rollout status, pods, restarts, events, the crashed containers' last logs - lost on restart), human approval, the restart with k8s_control (it waits for the rollout), then verification against the baseline. Fails, with the evidence, when the rollout does not complete healthy.",
+  "inputs": {
+    "workload": { "description": "deployment/<name>, statefulset/<name> or daemonset/<name> (or leave empty and give service).", "default": "" },
+    "namespace": { "description": "Its namespace (empty: from the service).", "default": "" },
+    "service": { "description": "An inventory service with a k8s mapping (instead of workload/namespace).", "default": "" },
+    "cluster": { "description": "The inventory cluster (empty: the service's, or the only one).", "default": "" },
+    "reason": { "description": "Why it needs a restart.", "default": "" }
+  },
+  "start": "precheck",
+  "maxAgentRuns": 4,
+  "nodes": {
+    "precheck": {
+      "type": "agent", "title": "Pre-checks (baseline)", "agent": "sre", "maxSteps": 25,
+      "prompt": "Pre-checks for a rollout restart of {{input.workload}} {{input.service}} (namespace {{input.namespace}}, cluster {{input.cluster}}; reason: {{input.reason}}). Read-only (kubernetes-triage skill): k8s_health for the workload (rollout status, revision, pods, restarts, events), k8s_logs for it with errors: true (the crashed containers' previous logs are lost on restart - keep the messages), and ops_inventory for maintenance windows.\n\nReport: the baseline (desired/ready/available replicas, restarts, the problem lines), whether it is in a maintenance window, and whether a restart is likely to help - a crash loop from bad config or a bad image, or a Pending pod, will NOT be fixed by a restart: say so plainly.",
+      "next": "approve"
+    },
+    "approve": {
+      "type": "approval", "title": "Approve the restart",
+      "message": "Rollout restart {{input.workload}} {{input.service}} (namespace {{input.namespace}}, cluster {{input.cluster}})? Reason: {{input.reason}}\n\nBaseline:\n{{state.precheck}}",
+      "next": { "on": { "approve": "restart", "reject": "stopped" } }
+    },
+    "restart": {
+      "type": "agent", "title": "Restart", "agent": "sre", "change": true, "maxSteps": 8,
+      "prompt": "A person approved a rollout restart of {{input.workload}} {{input.service}} (namespace {{input.namespace}}, cluster {{input.cluster}}). Run k8s_control once with action restart and exactly that target (target = the workload, or service; namespace; cluster if given; reason \"{{input.reason}}\"), and nothing else.\n\nReport: the tool's before/after output.",
+      "next": "verify"
+    },
+    "verify": {
+      "type": "agent", "title": "Verify", "agent": "sre", "verify": true, "maxSteps": 20,
+      "prompt": "Verify the restart of {{input.workload}} {{input.service}} against the baseline:\n{{state.precheck}}\n\nRestart result:\n{{state.restart}}\n\nRead-only: k8s_health for the workload (rollout complete? every replica available? restarts reset? new warning events?) and ops_check for its service if it has one. VERIFIED when the rollout completed, all replicas are available and no new problem appears; otherwise FAILED.\n\nReport: the checks and their numbers against the baseline.",
+      "decide": ["VERIFIED", "FAILED"],
+      "next": { "on": { "VERIFIED": "done" }, "default": "failed" }
+    },
+    "done": { "type": "end", "title": "Restarted and healthy", "status": "success" },
+    "stopped": { "type": "end", "title": "Not approved: nothing changed", "status": "failed" },
+    "failed": { "type": "end", "title": "Restarted but not healthy", "status": "failed" }
+  }
+}

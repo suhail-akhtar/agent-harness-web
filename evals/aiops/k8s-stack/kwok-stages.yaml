@@ -1,0 +1,763 @@
+# kwok stages for the aiops Kubernetes tests (test/aiops-k8s.test.ts) and the
+# k8s-crashloop eval (kwokctl create cluster --config this file; custom stages
+# replace kwok's defaults, so the defaults are here too): kwok's default stages
+# (kwok v0.8.0, Apache-2.0) with pod-ready skipping the pods meant to fail, plus
+#   hwtest-pod-crashloop         pods annotated hwtest/crash: "true" show CrashLoopBackOff (restarts 7, last exit 1)
+#   hwtest-pod-crashloop-config  pods whose env has PAYMENT_GATEWAY_TIMEOUT="30" (the eval's bad config) likewise
+#   hwtest-pod-fail              pods annotated hwtest/fail: "true" fail (exit 2): a failed Job - except the pods of a
+#                                re-run (a job named <name>-r<digits>, as k8s_control rerun-job names it), which complete
+# and container logs served from files (ClusterLogs; /hwtest-logs in the kwok container).apiVersion: kwok.x-k8s.io/v1alpha1
+kind: Stage
+metadata:
+  name: node-initialize
+spec:
+  immediateNextStage: false
+  next:
+    statusTemplate: |
+      {{ $now := Now }}
+      {{ $lastTransitionTime := or .metadata.creationTimestamp $now }}
+      conditions:
+      {{ range NodeConditions }}
+      - lastHeartbeatTime: {{ $now | Quote }}
+        lastTransitionTime: {{ $lastTransitionTime | Quote }}
+        message: {{ .message | Quote }}
+        reason: {{ .reason | Quote }}
+        status: {{ .status | Quote }}
+        type: {{ .type  | Quote}}
+      {{ end }}
+
+      {{ $hasInternalIP := false }}
+      {{ $hasHostname := false }}
+      {{ range .status.addresses }}
+        {{ if eq .type "InternalIP" }}
+          {{ $hasInternalIP = true }}
+        {{ end }}
+        {{ if eq .type "Hostname" }}
+          {{ $hasHostname = true }}
+        {{ end }}
+      {{ end }}
+      {{ if or (not $hasInternalIP) (not $hasHostname) }}
+      addresses:
+      {{ end }}
+      {{ if not $hasInternalIP }}
+      {{ with NodeIP }}
+      - address: {{ . | Quote }}
+        type: InternalIP
+      {{ end }}
+      {{ end }}
+      {{ if not $hasHostname }}
+      {{ with NodeName }}
+      - address: {{ . | Quote }}
+        type: Hostname
+      {{ end }}
+      {{ end }}
+
+      {{ with NodePort }}
+      daemonEndpoints:
+        kubeletEndpoint:
+          Port: {{ . }}
+      {{ end }}
+
+      allocatable:
+      {{ with .status.allocatable }}
+      {{ YAML . 1 }}
+      {{ else }}
+        cpu: 1k
+        memory: 1Ti
+        pods: 1M
+      {{ end }}
+      capacity:
+      {{ with .status.capacity }}
+      {{ YAML . 1 }}
+      {{ else }}
+        cpu: 1k
+        memory: 1Ti
+        pods: 1M
+      {{ end }}
+
+      {{ $nodeInfo := .status.nodeInfo }}
+      {{ $kwokVersion := printf "kwok-%s" Version }}
+      nodeInfo:
+        architecture: {{ or $nodeInfo.architecture "amd64" }}
+        bootID: {{ or $nodeInfo.bootID `""` }}
+        containerRuntimeVersion: {{ or $nodeInfo.containerRuntimeVersion $kwokVersion }}
+        kernelVersion: {{ or $nodeInfo.kernelVersion $kwokVersion }}
+        kubeProxyVersion: {{ or $nodeInfo.kubeProxyVersion $kwokVersion }}
+        kubeletVersion: {{ or $nodeInfo.kubeletVersion $kwokVersion }}
+        machineID: {{ or $nodeInfo.machineID `""` }}
+        operatingSystem: {{ or $nodeInfo.operatingSystem "linux" }}
+        osImage: {{ or $nodeInfo.osImage `""` }}
+        systemUUID: {{ or $nodeInfo.systemUUID `""` }}
+      phase: Running
+  resourceRef:
+    apiGroup: v1
+    kind: Node
+  selector:
+    matchExpressions:
+    - jq:
+        key: .status.conditions.[] | select( .type == "Ready" ) | .status
+        operator: NotIn
+        values:
+        - "True"
+  steps:
+  - patch:
+      root: status
+      subresource: status
+      template: |
+        {{ $now := Now }}
+        {{ $lastTransitionTime := or .metadata.creationTimestamp $now }}
+        conditions:
+        {{ range NodeConditions }}
+        - lastHeartbeatTime: {{ $now | Quote }}
+          lastTransitionTime: {{ $lastTransitionTime | Quote }}
+          message: {{ .message | Quote }}
+          reason: {{ .reason | Quote }}
+          status: {{ .status | Quote }}
+          type: {{ .type  | Quote}}
+        {{ end }}
+
+        {{ $hasInternalIP := false }}
+        {{ $hasHostname := false }}
+        {{ range .status.addresses }}
+          {{ if eq .type "InternalIP" }}
+            {{ $hasInternalIP = true }}
+          {{ end }}
+          {{ if eq .type "Hostname" }}
+            {{ $hasHostname = true }}
+          {{ end }}
+        {{ end }}
+        {{ if or (not $hasInternalIP) (not $hasHostname) }}
+        addresses:
+        {{ end }}
+        {{ if not $hasInternalIP }}
+        {{ with NodeIP }}
+        - address: {{ . | Quote }}
+          type: InternalIP
+        {{ end }}
+        {{ end }}
+        {{ if not $hasHostname }}
+        {{ with NodeName }}
+        - address: {{ . | Quote }}
+          type: Hostname
+        {{ end }}
+        {{ end }}
+
+        {{ with NodePort }}
+        daemonEndpoints:
+          kubeletEndpoint:
+            Port: {{ . }}
+        {{ end }}
+
+        allocatable:
+        {{ with .status.allocatable }}
+        {{ YAML . 1 }}
+        {{ else }}
+          cpu: 1k
+          memory: 1Ti
+          pods: 1M
+        {{ end }}
+        capacity:
+        {{ with .status.capacity }}
+        {{ YAML . 1 }}
+        {{ else }}
+          cpu: 1k
+          memory: 1Ti
+          pods: 1M
+        {{ end }}
+
+        {{ $nodeInfo := .status.nodeInfo }}
+        {{ $kwokVersion := printf "kwok-%s" Version }}
+        nodeInfo:
+          architecture: {{ or $nodeInfo.architecture "amd64" }}
+          bootID: {{ or $nodeInfo.bootID `""` }}
+          containerRuntimeVersion: {{ or $nodeInfo.containerRuntimeVersion $kwokVersion }}
+          kernelVersion: {{ or $nodeInfo.kernelVersion $kwokVersion }}
+          kubeProxyVersion: {{ or $nodeInfo.kubeProxyVersion $kwokVersion }}
+          kubeletVersion: {{ or $nodeInfo.kubeletVersion $kwokVersion }}
+          machineID: {{ or $nodeInfo.machineID `""` }}
+          operatingSystem: {{ or $nodeInfo.operatingSystem "linux" }}
+          osImage: {{ or $nodeInfo.osImage `""` }}
+          systemUUID: {{ or $nodeInfo.systemUUID `""` }}
+        phase: Running
+status: {}
+
+---
+apiVersion: kwok.x-k8s.io/v1alpha1
+kind: Stage
+metadata:
+  name: node-heartbeat-with-lease
+spec:
+  delay:
+    durationMilliseconds: 600000
+    jitterDurationMilliseconds: 610000
+  immediateNextStage: false
+  next:
+    statusTemplate: |
+      {{ $now := Now }}
+      {{ $lastTransitionTime := or .metadata.creationTimestamp $now }}
+      conditions:
+      {{ range NodeConditions }}
+      - lastHeartbeatTime: {{ $now | Quote }}
+        lastTransitionTime: {{ $lastTransitionTime | Quote }}
+        message: {{ .message | Quote }}
+        reason: {{ .reason | Quote }}
+        status: {{ .status | Quote }}
+        type: {{ .type | Quote }}
+      {{ end }}
+
+      addresses:
+      {{ with .status.addresses }}
+      {{ YAML . 1 }}
+      {{ else }}
+      {{ with NodeIP }}
+      - address: {{ . | Quote }}
+        type: InternalIP
+      {{ end }}
+      {{ with NodeName }}
+      - address: {{ . | Quote }}
+        type: Hostname
+      {{ end }}
+      {{ end }}
+
+      {{ with NodePort }}
+      daemonEndpoints:
+        kubeletEndpoint:
+          Port: {{ . }}
+      {{ end }}
+  resourceRef:
+    apiGroup: v1
+    kind: Node
+  selector:
+    matchExpressions:
+    - jq:
+        key: .status.phase
+        operator: In
+        values:
+        - Running
+    - jq:
+        key: .status.conditions.[] | select( .type == "Ready" ) | .status
+        operator: In
+        values:
+        - "True"
+  steps:
+  - patch:
+      root: status
+      subresource: status
+      template: |
+        {{ $now := Now }}
+        {{ $lastTransitionTime := or .metadata.creationTimestamp $now }}
+        conditions:
+        {{ range NodeConditions }}
+        - lastHeartbeatTime: {{ $now | Quote }}
+          lastTransitionTime: {{ $lastTransitionTime | Quote }}
+          message: {{ .message | Quote }}
+          reason: {{ .reason | Quote }}
+          status: {{ .status | Quote }}
+          type: {{ .type | Quote }}
+        {{ end }}
+
+        addresses:
+        {{ with .status.addresses }}
+        {{ YAML . 1 }}
+        {{ else }}
+        {{ with NodeIP }}
+        - address: {{ . | Quote }}
+          type: InternalIP
+        {{ end }}
+        {{ with NodeName }}
+        - address: {{ . | Quote }}
+          type: Hostname
+        {{ end }}
+        {{ end }}
+
+        {{ with NodePort }}
+        daemonEndpoints:
+          kubeletEndpoint:
+            Port: {{ . }}
+        {{ end }}
+status: {}
+
+---
+apiVersion: kwok.x-k8s.io/v1alpha1
+kind: Stage
+metadata:
+  name: pod-ready
+spec:
+  immediateNextStage: false
+  next:
+    statusTemplate: |
+      {{ $now := Now }}
+
+      conditions:
+      - lastTransitionTime: {{ $now | Quote }}
+        status: "True"
+        type: Initialized
+      - lastTransitionTime: {{ $now | Quote }}
+        status: "True"
+        type: Ready
+      - lastTransitionTime: {{ $now | Quote }}
+        status: "True"
+        type: ContainersReady
+      {{ range .spec.readinessGates }}
+      - lastTransitionTime: {{ $now | Quote }}
+        status: "True"
+        type: {{ .conditionType | Quote }}
+      {{ end }}
+
+      containerStatuses:
+      {{ range .spec.containers }}
+      - image: {{ .image | Quote }}
+        name: {{ .name | Quote }}
+        ready: true
+        restartCount: 0
+        state:
+          running:
+            startedAt: {{ $now | Quote }}
+      {{ end }}
+
+      initContainerStatuses:
+      {{ range .spec.initContainers }}
+      - image: {{ .image | Quote }}
+        name: {{ .name | Quote }}
+        ready: true
+        restartCount: 0
+        {{ if eq .restartPolicy "Always" }}
+        started: true
+        state:
+          running:
+            startedAt: {{ $now | Quote }}
+        {{ else }}
+        state:
+          terminated:
+            exitCode: 0
+            finishedAt: {{ $now | Quote }}
+            reason: Completed
+            startedAt: {{ $now | Quote }}
+        {{ end }}
+      {{ end }}
+      {{ $hostIPs := NodeIPsWith .spec.nodeName }}
+      {{ with $hostIPs }}
+      hostIP: {{ index . 0 | Quote }}
+      hostIPs:
+      {{ range . }}
+      - ip: {{ . | Quote }}
+      {{ end }}
+      {{ end }}
+      {{ $podIPs := PodIPsWith .spec.nodeName ( or .spec.hostNetwork false ) ( or .metadata.uid "" ) ( or .metadata.name "" ) ( or .metadata.namespace "" ) }}
+      {{ with $podIPs }}
+      podIP: {{ index . 0 | Quote }}
+      podIPs:
+      {{ range . }}
+      - ip: {{ . | Quote }}
+      {{ end }}
+      {{ end }}
+      phase: Running
+      startTime: {{ $now | Quote }}
+  resourceRef:
+    apiGroup: v1
+    kind: Pod
+  selector:
+    matchExpressions:
+    - jq:
+        key: .metadata.deletionTimestamp
+        operator: DoesNotExist
+    - jq:
+        key: .status.phase
+        operator: In
+        values:
+        - Pending
+    - jq:
+        key: .status.conditions.[] | select( .type == "Ready" ) | .status
+        operator: NotIn
+        values:
+        - "True"
+    - jq:
+        key: '.metadata.annotations["hwtest/crash"]'
+        operator: DoesNotExist
+    - jq:
+        key: '(.metadata.annotations["hwtest/fail"] // "") + "|" + ((.metadata.labels["job-name"] // "") | test("-r[0-9]+$") | tostring)'
+        operator: NotIn
+        values:
+        - "true|false"
+    - jq:
+        key: '[.spec.containers[].env[]? | select(.name == "PAYMENT_GATEWAY_TIMEOUT" and .value == "30")] | length'
+        operator: In
+        values:
+        - "0"
+  steps:
+  - patch:
+      root: status
+      subresource: status
+      template: |
+        {{ $now := Now }}
+
+        conditions:
+        - lastTransitionTime: {{ $now | Quote }}
+          status: "True"
+          type: Initialized
+        - lastTransitionTime: {{ $now | Quote }}
+          status: "True"
+          type: Ready
+        - lastTransitionTime: {{ $now | Quote }}
+          status: "True"
+          type: ContainersReady
+        {{ range .spec.readinessGates }}
+        - lastTransitionTime: {{ $now | Quote }}
+          status: "True"
+          type: {{ .conditionType | Quote }}
+        {{ end }}
+
+        containerStatuses:
+        {{ range .spec.containers }}
+        - image: {{ .image | Quote }}
+          name: {{ .name | Quote }}
+          ready: true
+          restartCount: 0
+          state:
+            running:
+              startedAt: {{ $now | Quote }}
+        {{ end }}
+
+        initContainerStatuses:
+        {{ range .spec.initContainers }}
+        - image: {{ .image | Quote }}
+          name: {{ .name | Quote }}
+          ready: true
+          restartCount: 0
+          {{ if eq .restartPolicy "Always" }}
+          started: true
+          state:
+            running:
+              startedAt: {{ $now | Quote }}
+          {{ else }}
+          state:
+            terminated:
+              exitCode: 0
+              finishedAt: {{ $now | Quote }}
+              reason: Completed
+              startedAt: {{ $now | Quote }}
+          {{ end }}
+        {{ end }}
+        {{ $hostIPs := NodeIPsWith .spec.nodeName }}
+        {{ with $hostIPs }}
+        hostIP: {{ index . 0 | Quote }}
+        hostIPs:
+        {{ range . }}
+        - ip: {{ . | Quote }}
+        {{ end }}
+        {{ end }}
+        {{ $podIPs := PodIPsWith .spec.nodeName ( or .spec.hostNetwork false ) ( or .metadata.uid "" ) ( or .metadata.name "" ) ( or .metadata.namespace "" ) }}
+        {{ with $podIPs }}
+        podIP: {{ index . 0 | Quote }}
+        podIPs:
+        {{ range . }}
+        - ip: {{ . | Quote }}
+        {{ end }}
+        {{ end }}
+        phase: Running
+        startTime: {{ $now | Quote }}
+status: {}
+
+---
+apiVersion: kwok.x-k8s.io/v1alpha1
+kind: Stage
+metadata:
+  name: pod-complete
+spec:
+  immediateNextStage: false
+  next:
+    statusTemplate: |
+      {{ $now := Now }}
+      {{ $root := . }}
+      containerStatuses:
+      {{ range $index, $item := .spec.containers }}
+      {{ $origin := index $root.status.containerStatuses $index }}
+      - image: {{ $item.image | Quote }}
+        name: {{ $item.name | Quote }}
+        ready: false
+        restartCount: 0
+        started: false
+        state:
+          terminated:
+            exitCode: 0
+            finishedAt: {{ $now | Quote }}
+            reason: Completed
+            startedAt: {{ $now | Quote }}
+      {{ end }}
+      phase: Succeeded
+  resourceRef:
+    apiGroup: v1
+    kind: Pod
+  selector:
+    matchExpressions:
+    - jq:
+        key: .metadata.deletionTimestamp
+        operator: DoesNotExist
+    - jq:
+        key: .status.phase
+        operator: In
+        values:
+        - Running
+    - jq:
+        key: .metadata.ownerReferences.[].kind
+        operator: In
+        values:
+        - Job
+  steps:
+  - patch:
+      root: status
+      subresource: status
+      template: |
+        {{ $now := Now }}
+        {{ $root := . }}
+        containerStatuses:
+        {{ range $index, $item := .spec.containers }}
+        {{ $origin := index $root.status.containerStatuses $index }}
+        - image: {{ $item.image | Quote }}
+          name: {{ $item.name | Quote }}
+          ready: false
+          restartCount: 0
+          started: false
+          state:
+            terminated:
+              exitCode: 0
+              finishedAt: {{ $now | Quote }}
+              reason: Completed
+              startedAt: {{ $now | Quote }}
+        {{ end }}
+        phase: Succeeded
+status: {}
+
+---
+apiVersion: kwok.x-k8s.io/v1alpha1
+kind: Stage
+metadata:
+  name: pod-delete
+spec:
+  immediateNextStage: false
+  next:
+    delete: true
+  resourceRef:
+    apiGroup: v1
+    kind: Pod
+  selector:
+    matchExpressions:
+    - jq:
+        key: .metadata.deletionTimestamp
+        operator: Exists
+  steps:
+  - delete: true
+status: {}
+---
+apiVersion: kwok.x-k8s.io/v1alpha1
+kind: Stage
+metadata:
+  name: hwtest-pod-crashloop
+spec:
+  resourceRef:
+    apiGroup: v1
+    kind: Pod
+  selector:
+    matchExpressions:
+    - jq:
+        key: .metadata.deletionTimestamp
+        operator: DoesNotExist
+    - jq:
+        key: .status.phase
+        operator: In
+        values:
+        - Pending
+    - jq:
+        key: .spec.nodeName
+        operator: Exists
+    - jq:
+        key: '"crash=" + (.metadata.annotations["hwtest/crash"] // "")'
+        operator: In
+        values:
+        - "crash=true"
+  next:
+    statusTemplate: |
+      {{ $now := Now }}
+      conditions:
+      - lastTransitionTime: {{ $now | Quote }}
+        status: "True"
+        type: Initialized
+      - lastTransitionTime: {{ $now | Quote }}
+        status: "False"
+        type: Ready
+        reason: ContainersNotReady
+      - lastTransitionTime: {{ $now | Quote }}
+        status: "False"
+        type: ContainersReady
+        reason: ContainersNotReady
+      containerStatuses:
+      {{ range .spec.containers }}
+      - image: {{ .image | Quote }}
+        name: {{ .name | Quote }}
+        ready: false
+        restartCount: 7
+        started: false
+        lastState:
+          terminated:
+            exitCode: 1
+            reason: Error
+            startedAt: {{ $now | Quote }}
+            finishedAt: {{ $now | Quote }}
+        state:
+          waiting:
+            reason: CrashLoopBackOff
+            message: back-off 5m0s restarting failed container
+      {{ end }}
+      {{ $podIPs := PodIPsWith .spec.nodeName ( or .spec.hostNetwork false ) ( or .metadata.uid "" ) ( or .metadata.name "" ) ( or .metadata.namespace "" ) }}
+      {{ with $podIPs }}
+      podIP: {{ index . 0 | Quote }}
+      {{ end }}
+      phase: Running
+      startTime: {{ $now | Quote }}
+---
+apiVersion: kwok.x-k8s.io/v1alpha1
+kind: Stage
+metadata:
+  name: hwtest-pod-crashloop-config
+spec:
+  resourceRef:
+    apiGroup: v1
+    kind: Pod
+  selector:
+    matchExpressions:
+    - jq:
+        key: .metadata.deletionTimestamp
+        operator: DoesNotExist
+    - jq:
+        key: .status.phase
+        operator: In
+        values:
+        - Pending
+    - jq:
+        key: .spec.nodeName
+        operator: Exists
+    - jq:
+        key: '[.spec.containers[].env[]? | select(.name == "PAYMENT_GATEWAY_TIMEOUT" and .value == "30")] | length'
+        operator: In
+        values:
+        - "1"
+  next:
+    statusTemplate: |
+      {{ $now := Now }}
+      conditions:
+      - lastTransitionTime: {{ $now | Quote }}
+        status: "True"
+        type: Initialized
+      - lastTransitionTime: {{ $now | Quote }}
+        status: "False"
+        type: Ready
+        reason: ContainersNotReady
+      - lastTransitionTime: {{ $now | Quote }}
+        status: "False"
+        type: ContainersReady
+        reason: ContainersNotReady
+      containerStatuses:
+      {{ range .spec.containers }}
+      - image: {{ .image | Quote }}
+        name: {{ .name | Quote }}
+        ready: false
+        restartCount: 7
+        started: false
+        lastState:
+          terminated:
+            exitCode: 1
+            reason: Error
+            startedAt: {{ $now | Quote }}
+            finishedAt: {{ $now | Quote }}
+        state:
+          waiting:
+            reason: CrashLoopBackOff
+            message: back-off 5m0s restarting failed container
+      {{ end }}
+      {{ $podIPs := PodIPsWith .spec.nodeName ( or .spec.hostNetwork false ) ( or .metadata.uid "" ) ( or .metadata.name "" ) ( or .metadata.namespace "" ) }}
+      {{ with $podIPs }}
+      podIP: {{ index . 0 | Quote }}
+      {{ end }}
+      phase: Running
+      startTime: {{ $now | Quote }}
+---
+apiVersion: kwok.x-k8s.io/v1alpha1
+kind: Stage
+metadata:
+  name: hwtest-pod-fail
+spec:
+  resourceRef:
+    apiGroup: v1
+    kind: Pod
+  selector:
+    matchExpressions:
+    - jq:
+        key: .metadata.deletionTimestamp
+        operator: DoesNotExist
+    - jq:
+        key: .status.phase
+        operator: In
+        values:
+        - Pending
+    - jq:
+        key: .spec.nodeName
+        operator: Exists
+    - jq:
+        key: '(.metadata.annotations["hwtest/fail"] // "") + "|" + ((.metadata.labels["job-name"] // "") | test("-r[0-9]+$") | tostring)'
+        operator: In
+        values:
+        - "true|false"
+  next:
+    statusTemplate: |
+      {{ $now := Now }}
+      conditions:
+      - lastTransitionTime: {{ $now | Quote }}
+        status: "False"
+        type: Ready
+        reason: PodFailed
+      containerStatuses:
+      {{ range .spec.containers }}
+      - image: {{ .image | Quote }}
+        name: {{ .name | Quote }}
+        ready: false
+        restartCount: 0
+        started: false
+        state:
+          terminated:
+            exitCode: 2
+            reason: Error
+            startedAt: {{ $now | Quote }}
+            finishedAt: {{ $now | Quote }}
+      {{ end }}
+      phase: Failed
+      startTime: {{ $now | Quote }}
+---
+apiVersion: kwok.x-k8s.io/v1alpha1
+kind: ClusterLogs
+metadata:
+  name: hwtest-app-logs
+spec:
+  selector:
+    matchNamespaces:
+    - hwtest
+  logs:
+  - containers:
+    - app
+    logsFile: /hwtest-logs/app.log
+    previousLogsFile: /hwtest-logs/app-previous.log
+    follow: false
+---
+apiVersion: kwok.x-k8s.io/v1alpha1
+kind: ClusterLogs
+metadata:
+  name: hwtest-eval-logs
+spec:
+  selector:
+    matchNamespaces:
+    - shop
+  logs:
+  - containers:
+    - checkout
+    logsFile: /hwtest-logs/checkout.log
+    previousLogsFile: /hwtest-logs/checkout-previous.log
+    follow: false

@@ -1,0 +1,38 @@
+{
+  "name": "runbook-k8s-rerun-job",
+  "description": "Re-run a failed Kubernetes Job: why it failed (its pods' logs and events) and whether running it again is safe (idempotent, the cause gone), human approval, a new Job from its spec with k8s_control (it waits for it to finish), then verification.",
+  "inputs": {
+    "job": { "description": "The failed Job's name.", "required": true },
+    "namespace": { "description": "Its namespace.", "required": true },
+    "cluster": { "description": "The inventory cluster (empty: the only one).", "default": "" },
+    "reason": { "description": "Why it is safe to run again.", "default": "" }
+  },
+  "start": "precheck",
+  "maxAgentRuns": 4,
+  "nodes": {
+    "precheck": {
+      "type": "agent", "title": "Why it failed", "agent": "sre", "maxSteps": 25,
+      "prompt": "Pre-checks for re-running job {{input.job}} in {{input.namespace}} (cluster {{input.cluster}}; reason: {{input.reason}}). Read-only: k8s_describe job/{{input.job}} (conditions, backoff limit, failed pods), k8s_logs for its pods (selector job-name={{input.job}}, errors: true), k8s_events for it.\n\nReport: why it failed (the error lines), whether the cause is transient (a dependency that was down, a timeout) or will fail again (a bug, bad input, missing config), and whether running it twice is safe (idempotent?). Say plainly if a re-run will not help.",
+      "next": "approve"
+    },
+    "approve": {
+      "type": "approval", "title": "Approve the re-run",
+      "message": "Re-run job {{input.job}} in {{input.namespace}} (cluster {{input.cluster}}) as a new Job? Reason: {{input.reason}}\n\n{{state.precheck}}",
+      "next": { "on": { "approve": "rerun", "reject": "stopped" } }
+    },
+    "rerun": {
+      "type": "agent", "title": "Re-run", "agent": "sre", "change": true, "maxSteps": 8,
+      "prompt": "A person approved re-running job {{input.job}} in {{input.namespace}} (cluster {{input.cluster}}). Run k8s_control once with action rerun-job, target job/{{input.job}}, namespace {{input.namespace}}, reason \"{{input.reason}}\", and nothing else.\n\nReport: the tool's output (the new job's name and result).",
+      "next": "verify"
+    },
+    "verify": {
+      "type": "agent", "title": "Verify", "agent": "sre", "verify": true, "maxSteps": 20,
+      "prompt": "Verify the re-run of job {{input.job}} in {{input.namespace}}.\n\nWhy it failed:\n{{state.precheck}}\n\nRe-run:\n{{state.rerun}}\n\nRead-only: k8s_describe the new job (named in the re-run's output): Complete, succeeded >= its completions, no failed pods; k8s_logs of its pod if it failed. VERIFIED when the new job completed; otherwise FAILED.\n\nReport: the checks.",
+      "decide": ["VERIFIED", "FAILED"],
+      "next": { "on": { "VERIFIED": "done" }, "default": "failed" }
+    },
+    "done": { "type": "end", "title": "Re-run completed", "status": "success" },
+    "stopped": { "type": "end", "title": "Not approved: nothing changed", "status": "failed" },
+    "failed": { "type": "end", "title": "The re-run did not complete", "status": "failed" }
+  }
+}

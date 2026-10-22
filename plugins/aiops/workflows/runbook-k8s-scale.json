@@ -1,0 +1,40 @@
+{
+  "name": "runbook-k8s-scale",
+  "description": "Scale a Kubernetes deployment or statefulset to a number of replicas within guard rails: a baseline (replicas, usage against requests and limits, an HPA that would undo it, the inventory's min/max), human approval, the scale with k8s_control (it refuses anything outside the guard rails, more than 3x at once, or a workload an HPA manages, and waits for the replicas), then verification.",
+  "inputs": {
+    "workload": { "description": "deployment/<name> or statefulset/<name> (or leave empty and give service).", "default": "" },
+    "namespace": { "description": "Its namespace (empty: from the service).", "default": "" },
+    "service": { "description": "An inventory service with a k8s mapping.", "default": "" },
+    "cluster": { "description": "The inventory cluster (empty: the service's, or the only one).", "default": "" },
+    "replicas": { "description": "The replica count wanted.", "required": true },
+    "reason": { "description": "Why.", "default": "" }
+  },
+  "start": "precheck",
+  "maxAgentRuns": 4,
+  "nodes": {
+    "precheck": {
+      "type": "agent", "title": "Pre-checks (baseline and guard rails)", "agent": "sre", "maxSteps": 25,
+      "prompt": "Pre-checks for scaling {{input.workload}} {{input.service}} (namespace {{input.namespace}}, cluster {{input.cluster}}) to {{input.replicas}} replicas (reason: {{input.reason}}). Read-only: k8s_health for the workload (replicas now, availability, events), k8s_metrics for it (usage against requests and limits: does more replicas help, or is it something else?), k8s_describe of an HPA that targets it if there is one (a manual scale would be undone), and ops_inventory show for the service and cluster (min_replicas/max_replicas, scale).\n\nReport: replicas now -> {{input.replicas}}, the guard rails and whether {{input.replicas}} is within them, whether an HPA manages it, whether nodes have room (Pending pods after scaling up are a risk), and whether scaling is likely to help.",
+      "next": "approve"
+    },
+    "approve": {
+      "type": "approval", "title": "Approve the scale",
+      "message": "Scale {{input.workload}} {{input.service}} (namespace {{input.namespace}}, cluster {{input.cluster}}) to {{input.replicas}} replicas? Reason: {{input.reason}}\n\nBaseline:\n{{state.precheck}}",
+      "next": { "on": { "approve": "scale", "reject": "stopped" } }
+    },
+    "scale": {
+      "type": "agent", "title": "Scale", "agent": "sre", "change": true, "maxSteps": 8,
+      "prompt": "A person approved scaling {{input.workload}} {{input.service}} (namespace {{input.namespace}}, cluster {{input.cluster}}) to {{input.replicas}} replicas. Run k8s_control once with action scale, that target and replicas {{input.replicas}}, reason \"{{input.reason}}\", and nothing else. If it refuses (guard rails, an HPA), do not try another way: report the refusal.\n\nReport: the tool's before/after output.",
+      "next": "verify"
+    },
+    "verify": {
+      "type": "agent", "title": "Verify", "agent": "sre", "verify": true, "maxSteps": 20,
+      "prompt": "Verify the scale of {{input.workload}} {{input.service}} to {{input.replicas}}.\n\nBaseline:\n{{state.precheck}}\n\nScale result:\n{{state.scale}}\n\nRead-only: k8s_health for the workload ({{input.replicas}} replicas wanted and that many available, no Pending pods, no new warning events) and ops_check for its service if it has one. VERIFIED when it runs {{input.replicas}} available replicas and nothing is worse; otherwise FAILED (a refused scale is FAILED: nothing changed).\n\nReport: the checks and their numbers.",
+      "decide": ["VERIFIED", "FAILED"],
+      "next": { "on": { "VERIFIED": "done" }, "default": "failed" }
+    },
+    "done": { "type": "end", "title": "Scaled and healthy", "status": "success" },
+    "stopped": { "type": "end", "title": "Not approved: nothing changed", "status": "failed" },
+    "failed": { "type": "end", "title": "Not scaled, or not healthy", "status": "failed" }
+  }
+}

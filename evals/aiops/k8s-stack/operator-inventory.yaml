@@ -1,0 +1,18 @@
+# The operator's inventory for the Kubernetes eval cases (HARNESS_OPS_INVENTORY):
+# the kwok cluster of evals/aiops/k8s-stack (kwok.mjs) with its two kubeconfigs
+# from the vault - the read-only one (a ServiceAccount bound to view-only RBAC:
+# the k8s_* reads use it, not asked about) and the operator one (the cluster
+# admin's client certificate: k8s_control only, always asked). Only an
+# operator's inventory may declare clusters. Run with
+#   HARNESS_OPS_INVENTORY=evals/aiops/k8s-stack/operator-inventory.yaml
+#   HARNESS_OPS_SECRETS=@evals/aiops/k8s-stack/.state/secrets.json   (where the harness has no Key Vault)
+environments: [prod]
+
+clusters:
+  - name: shop-prod
+    env: prod
+    context: hwtest
+    credential: ops-k8s-hwtest-operator
+    readCredential: ops-k8s-hwtest-reader
+    namespaces: [shop]
+    scale: { min: 1, max: 10 }

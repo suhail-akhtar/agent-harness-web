@@ -4,7 +4,7 @@
 //     traces_service_graph_request_total{client, server}; Jaeger's dependencies API),
 // (c) Kubernetes objects (Services and what they select, ownerReferences up to
 //     the Deployment, env URLs naming other Services, ready endpoint counts),
-//     when a source of them is wired in (shared.k8sObjects),
+//     read from every operator cluster with a read-only kubeconfig (shared.k8sObjects, lib/k8s.mjs),
 // (d) Prometheus up{job, instance}: jobs, their instance counts, the hosts they run on.
 // An edge A -> B means A depends on B (calls it, needs it, runs on it). Queries:
 // what depends on X (blast radius), what X depends on (where a root cause may
@@ -322,7 +322,7 @@ export function register(api, shared) {
 
   opsTool(api, shared, {
     name: 'topology',
-    description: 'The service dependency graph, merged from the inventory (depends_on, the host a service runs on), traces (Tempo service-graph metrics in Prometheus, Jaeger dependencies), Kubernetes (Services, workloads, env URLs; when wired in) and Prometheus (up by job and instance). An edge A -> B means A depends on B. "graph": nodes and edges with their sources, request rates and error ratios; "dependents": what depends on a service, transitively (blast radius); "dependencies": what it depends on (where a root cause may sit: walk these and check each); "spof": single points of failure (one instance, a shared host, cut vertices) ranked by what depends on them; "mermaid": the graph (or the part around a service) as Mermaid text for a report.',
+    description: 'The service dependency graph, merged from the inventory (depends_on, the host a service runs on), traces (Tempo service-graph metrics in Prometheus, Jaeger dependencies), Kubernetes (Services, workloads, env URLs; from clusters in the operator's inventory with a read-only kubeconfig) and Prometheus (up by job and instance). An edge A -> B means A depends on B. "graph": nodes and edges with their sources, request rates and error ratios; "dependents": what depends on a service, transitively (blast radius); "dependencies": what it depends on (where a root cause may sit: walk these and check each); "spof": single points of failure (one instance, a shared host, cut vertices) ranked by what depends on them; "mermaid": the graph (or the part around a service) as Mermaid text for a report.',
     parameters: {
       type: 'object',
       properties: {
@@ -337,7 +337,7 @@ export function register(api, shared) {
     kind: 'network', parallelSafe: true, untrusted: true,
     kindsFor: () => [opProm() ? 'read' : 'network'],
     sendsOut: () => !opProm(),
-    vaultNames: () => names(...promCredOf(), ...jaegerCred()),
+    vaultNames: () => names(...promCredOf(), ...jaegerCred(), ...(shared.k8sReadCredentials?.() ?? [])),
     availableIn: configured,
     summarize: (i) => `topology ${str(i.action)}${i.service ? ` ${str(i.service)}` : ''}`,
     async run(input, ctx) {

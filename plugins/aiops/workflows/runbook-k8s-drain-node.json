@@ -1,0 +1,37 @@
+{
+  "name": "runbook-k8s-drain-node",
+  "description": "Cordon and drain a Kubernetes node (before maintenance, or when it is unhealthy): a baseline of what runs on it and which PodDisruptionBudgets apply, whether the rest of the cluster has room, human approval, the drain with k8s_control (it cordons, then evicts through the Eviction API so disruption budgets are respected - never forced), then verification that it is empty and the workloads are available elsewhere.",
+  "inputs": {
+    "node": { "description": "The node's name.", "required": true },
+    "cluster": { "description": "The inventory cluster (empty: the only one).", "default": "" },
+    "reason": { "description": "Why (maintenance, NotReady, disk pressure...).", "default": "" }
+  },
+  "start": "precheck",
+  "maxAgentRuns": 4,
+  "nodes": {
+    "precheck": {
+      "type": "agent", "title": "Pre-checks (what runs there)", "agent": "sre", "maxSteps": 25,
+      "prompt": "Pre-checks for draining node {{input.node}} (cluster {{input.cluster}}; reason: {{input.reason}}). Read-only: k8s_describe node/{{input.node}} (conditions, capacity, the pods on it), k8s_health for the cluster (other nodes Ready and schedulable? room for the moved pods?), and the PodDisruptionBudgets of the workloads on it (k8s_describe poddisruptionbudget/<name>: disruptions allowed now).\n\nReport: the pods on the node by workload (DaemonSet pods stay), pods without a controller or with emptyDir data (a drain refuses them unless told), the budgets that could block it, and whether the other nodes can take the pods.",
+      "next": "approve"
+    },
+    "approve": {
+      "type": "approval", "title": "Approve the drain",
+      "message": "Cordon and drain node {{input.node}} (cluster {{input.cluster}})? Reason: {{input.reason}}\n\nBaseline:\n{{state.precheck}}",
+      "next": { "on": { "approve": "drain", "reject": "stopped" } }
+    },
+    "drain": {
+      "type": "agent", "title": "Drain", "agent": "sre", "change": true, "maxSteps": 8,
+      "prompt": "A person approved draining node {{input.node}} (cluster {{input.cluster}}). Run k8s_control once with action drain, target node/{{input.node}}, reason \"{{input.reason}}\" - without force_unowned or delete_emptydir_data unless the approved baseline said those pods may go - and nothing else. If disruption budgets block it, do not force anything: report what is blocked.\n\nReport: the tool's output.",
+      "next": "verify"
+    },
+    "verify": {
+      "type": "agent", "title": "Verify", "agent": "sre", "verify": true, "maxSteps": 20,
+      "prompt": "Verify the drain of node {{input.node}}.\n\nBaseline:\n{{state.precheck}}\n\nDrain result:\n{{state.drain}}\n\nRead-only: k8s_describe node/{{input.node}} (cordoned, no pods but DaemonSet ones) and k8s_health for the cluster (the moved workloads available elsewhere, or Pending - and why). VERIFIED when the node is cordoned and empty of evictable pods and no workload lost availability it had before; otherwise FAILED (blocked by a budget is FAILED: say which).\n\nReport: the checks.",
+      "decide": ["VERIFIED", "FAILED"],
+      "next": { "on": { "VERIFIED": "done" }, "default": "failed" }
+    },
+    "done": { "type": "end", "title": "Node drained", "status": "success" },
+    "stopped": { "type": "end", "title": "Not approved: nothing changed", "status": "failed" },
+    "failed": { "type": "end", "title": "Not fully drained", "status": "failed" }
+  }
+}

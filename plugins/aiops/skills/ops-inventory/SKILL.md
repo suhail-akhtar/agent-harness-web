@@ -4,13 +4,15 @@ description: The ops inventory format (.harness/ops/inventory.yaml) - hosts with
 ---
 # The ops inventory
 
-The AIOps tools (ops_inventory, prometheus_query, logs_search, probe, host_stats, docker_status, ssh_exec, service_control, ops_check, slo_status, capacity_forecast, incident, runbook) appear in sessions whose workspace has `.harness/ops/inventory.yaml` (or `.yml` / `.json`), or when the operator sets `HARNESS_OPS_INVENTORY`. After creating the file, start a new session to get them. Check it with `ops_inventory validate` or the `inventory-valid` gate.
+The AIOps tools (ops_inventory, prometheus_query, logs_search, probe, host_stats, docker_status, ssh_exec, service_control, ops_check, slo_status, capacity_forecast, incident, runbook, and for Kubernetes k8s_health, k8s_events, k8s_logs, k8s_describe, k8s_metrics, k8s_control) appear in sessions whose workspace has `.harness/ops/inventory.yaml` (or `.yml` / `.json`), or when the operator sets `HARNESS_OPS_INVENTORY`. After creating the file, start a new session to get them. Check it with `ops_inventory validate` or the `inventory-valid` gate.
 
 The operator's file (HARNESS_OPS_INVENTORY) is trusted. When it exists, hosts and monitoring endpoints come only from it; the workspace file can add services, alerts, SLOs and maintenance windows (its services may run on the operator's hosts).
 
 Credentials (`credential`, `prometheus_credential`, `loki_credential`) count only in the operator's file. In a workspace file they are ignored with a warning: a workspace may name a host or an endpoint, never a vault entry to send to it. So ssh (ssh_exec, host_stats, logs over ssh) and authenticated Prometheus/Loki need the operator's inventory. Every tool call that uses a credential is asked about (the vault permission rules, e.g. `vault(ops-web-1-key)`), and a call uses only the credentials attached to what it names: a workspace service on an operator host reaches it only when the call names the host (`logs_search` with `host` and `container` or `file`). Quality gates never use credentials.
 
 **Least privilege: a read-only account per host.** In the operator's file a host can also name a read-only account: `readUser` (an OS user the operator restricted - no sudo, only read-only groups, no write access to the data) and `readCredential` (its vault name, `ops-*`). `ssh_exec` and `host_stats` then run as that account by default (`as: "reader"`): the host itself refuses its changes, so these calls are not asked about (they are still audited, their output is still untrusted, and the credential still goes through the vault rules). `ssh_exec` with `as: "operator"` uses `user` and `credential` and is asked about as before - for approved changes only. A workspace file cannot declare a reader (ignored with a warning): otherwise a repository could make commands run unasked. The operator makes sure the account really is read-only: no sudo, not in the data owner's group, no docker group (docker is root), and, where exfiltration from the host matters, restricted outbound network (a reader command that names a network client such as curl or ssh is still confirmed after untrusted content, but that is a hint, not a boundary).
+
+**Kubernetes clusters** (`clusters:`) come only from the operator's file - a cluster is reached with a kubeconfig from the vault, so a workspace may not declare one (ignored with a warning). The same least-privilege model as hosts: `readCredential` is a **read-only kubeconfig** (a ServiceAccount token bound to a view-only ClusterRole: get/list/watch, pods/log, no Secrets) - `k8s_health`, `k8s_events`, `k8s_logs`, `k8s_describe`, `k8s_metrics` use it and are not asked about (still audited by the vault rules, output still untrusted); `credential` is the **operator kubeconfig** - only `k8s_control` (restart, rollback, scale, cordon/drain, delete a stuck pod, re-run a job) uses it, and every call is asked. A cluster with only a `readCredential` is read-only. The kubeconfig must be self-contained (`kubectl config view --raw --flatten --minify`): a token or a client certificate, the cluster CA as `certificate-authority-data`; exec/auth-provider plugins, files by path and `insecure-skip-tls-verify` are refused, and the API server's certificate is always verified. The tools talk to the API directly from the server: no kubectl, no image. A service maps to its workload with `k8s:` (cluster, namespace, workload or selector, and scale guard rails); a workspace service may name an operator cluster. Each cluster gets the built-in checks in `ops_check` (`k8s:<cluster>:pod-crashlooping`, `deployment-unavailable`, `node-not-ready`, `pvc-pending`, `job-failed`, `hpa-maxed`; `checks: false` turns them off) and each mapped service a `<service>:k8s` check; quality gates skip them (they never use credentials).
 
 A service may say what it needs with `depends_on` (host or service names: its database host, a shared volume's host) and free-text `notes`; investigations look there too.
 
@@ -39,7 +41,23 @@ hosts:
     env: prod
     tags: [web, linux]
 
+clusters:                       # operator's file only
+  - name: prod-eu
+    env: prod
+    context: prod-eu            # optional: the kubeconfig context (default: its current-context)
+    credential: ops-k8s-prod-eu-operator      # operator kubeconfig (k8s_control, asked)
+    readCredential: ops-k8s-prod-eu-reader    # read-only kubeconfig (the k8s_* reads, not asked)
+    namespaces: [shop, payments]              # of interest: reads default to them, changes only there
+    prometheus_labels: cluster="prod-eu"      # optional: scopes k8s_metrics' PromQL to this cluster
+    scale: { min: 1, max: 30 }                # optional guard rails for k8s_control scale (default 1..50)
+    # checks: false                           # no built-in k8s checks in ops_check
+
 services:
+  - name: checkout
+    env: prod
+    k8s: { cluster: prod-eu, namespace: shop, workload: deployment/checkout, min_replicas: 2, max_replicas: 12 }
+    # or selector: "app=checkout" instead of workload
+    owner: team-payments
   - name: shop-api
     host: web-1                 # or local (the harness's Docker engine, when the operator allows the container)
     env: prod
@@ -81,6 +99,9 @@ alerts:
   - name: ShopApiErrors
     logs: { service: shop-api, pattern: "ERROR|Exception", window: 5m, threshold: 10 }
     severity: warning
+  - name: ShopPodsCrashing      # a built-in Kubernetes check, scoped to a namespace
+    k8s: { cluster: prod-eu, check: pod-crashlooping, namespace: shop }
+    severity: critical
 ```
 
 ## Rules the validator applies
@@ -90,6 +111,7 @@ alerts:
 - `readUser` and `readCredential` come together, in the operator's file, with a valid user name and an `ops-*` vault name; a `readUser` equal to `user` is no read-only account (warned and ignored).
 - `depends_on` names hosts or services (an unknown name is a warning).
 - User names, addresses, container and unit names and log file paths are checked strictly (no leading `-`, no spaces or shell characters).
-- An alert has exactly one of `expr`, `probe`, `logs`; PromQL is parsed by Prometheus in the `alerts-valid` gate.
+- An alert has exactly one of `expr`, `probe`, `logs`, `k8s`; PromQL is parsed by Prometheus in the `alerts-valid` gate; `k8s.check` is one of pod-crashlooping, deployment-unavailable, node-not-ready, pvc-pending, job-failed, hpa-maxed on a cluster of the operator's inventory.
+- A cluster needs `credential` and/or `readCredential` (`ops-*` vault names; the same name for both is no reader - warned); `namespaces` are namespace names; `prometheus_labels` are label matchers (`cluster="x"`); `scale` is `{min, max}`. A service's `k8s` names an operator cluster, a namespace, and `workload` (deployment/statefulset/daemonset `/<name>`) or `selector`; a service whose cluster is unknown is left out.
 - Implicit alerts: every service `health` URL must answer (critical) and every `tls` endpoint must have 21+ days left (warning) - ops_check evaluates them without a rule.
 - A service with neither `health` nor `metrics_job` is reported: nothing would notice it failing.

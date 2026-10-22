@@ -1,0 +1,40 @@
+{
+  "name": "runbook-k8s-rollback",
+  "description": "Roll a Kubernetes deployment back to its previous revision (or a chosen one): the evidence that the current revision is bad (rollout history with what changed, crashing pods, their previous container logs, events), human approval naming the revision rolled back to, the rollback with k8s_control (it waits for the rollout), then verification.",
+  "inputs": {
+    "workload": { "description": "deployment/<name> (or leave empty and give service).", "default": "" },
+    "namespace": { "description": "Its namespace (empty: from the service).", "default": "" },
+    "service": { "description": "An inventory service with a k8s mapping.", "default": "" },
+    "cluster": { "description": "The inventory cluster (empty: the service's, or the only one).", "default": "" },
+    "revision": { "description": "The revision to roll back to (empty: the previous one).", "default": "" },
+    "reason": { "description": "Why.", "default": "" }
+  },
+  "start": "precheck",
+  "maxAgentRuns": 4,
+  "nodes": {
+    "precheck": {
+      "type": "agent", "title": "Evidence and target revision", "agent": "sre", "maxSteps": 25,
+      "prompt": "Pre-checks for rolling back {{input.workload}} {{input.service}} (namespace {{input.namespace}}, cluster {{input.cluster}}, revision {{input.revision}}; reason: {{input.reason}}). Read-only (kubernetes-triage skill): k8s_health for the workload - its revision history and what changed between the last two revisions; k8s_logs with errors: true (the previous containers' logs say why they died); k8s_events for it.\n\nReport: the current revision and the one a rollback goes to (the previous one unless a revision was given), what differs between them (image, env, resources), the evidence that the current revision is the cause, and whether the target revision was healthy (it ran before without these problems). If the evidence does NOT point at the latest change, say so plainly.",
+      "next": "approve"
+    },
+    "approve": {
+      "type": "approval", "title": "Approve the rollback",
+      "message": "Roll back {{input.workload}} {{input.service}} (namespace {{input.namespace}}, cluster {{input.cluster}}) to revision {{input.revision}} (empty: the previous one, as the pre-check names it)? Reason: {{input.reason}}\n\n{{state.precheck}}",
+      "next": { "on": { "approve": "rollback", "reject": "stopped" } }
+    },
+    "rollback": {
+      "type": "agent", "title": "Roll back", "agent": "sre", "change": true, "maxSteps": 8,
+      "prompt": "A person approved rolling back {{input.workload}} {{input.service}} (namespace {{input.namespace}}, cluster {{input.cluster}}). Run k8s_control once with action rollback for exactly that deployment (and revision {{input.revision}} if one is given; otherwise none - the previous revision), reason \"{{input.reason}}\", and nothing else.\n\nReport: the tool's before/after output.",
+      "next": "verify"
+    },
+    "verify": {
+      "type": "agent", "title": "Verify", "agent": "sre", "verify": true, "maxSteps": 20,
+      "prompt": "Verify the rollback of {{input.workload}} {{input.service}}.\n\nBefore:\n{{state.precheck}}\n\nRollback result:\n{{state.rollback}}\n\nRead-only: k8s_health for the workload (rollout complete on the new revision, every replica available, no pod crash-looping, the template is the old one) and ops_check for its service if it has one. VERIFIED when it rolled out healthy; otherwise FAILED.\n\nReport: the checks and their numbers.",
+      "decide": ["VERIFIED", "FAILED"],
+      "next": { "on": { "VERIFIED": "done" }, "default": "failed" }
+    },
+    "done": { "type": "end", "title": "Rolled back and healthy", "status": "success" },
+    "stopped": { "type": "end", "title": "Not approved: nothing changed", "status": "failed" },
+    "failed": { "type": "end", "title": "Rolled back but not healthy", "status": "failed" }
+  }
+}

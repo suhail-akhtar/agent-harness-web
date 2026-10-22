@@ -1,0 +1,38 @@
+{
+  "name": "runbook-k8s-delete-pod",
+  "description": "Delete a stuck Kubernetes pod so its controller replaces it (a pod crash-looping with backoff while its siblings are healthy, failed, or stuck terminating): the evidence that it is this pod and not the workload (its siblings, its previous container log, its node), human approval, the deletion with k8s_control (refused for a healthy pod or one without a controller; it waits for the replacement), then verification.",
+  "inputs": {
+    "pod": { "description": "The pod's name.", "required": true },
+    "namespace": { "description": "Its namespace.", "required": true },
+    "cluster": { "description": "The inventory cluster (empty: the only one).", "default": "" },
+    "reason": { "description": "Why.", "default": "" }
+  },
+  "start": "precheck",
+  "maxAgentRuns": 4,
+  "nodes": {
+    "precheck": {
+      "type": "agent", "title": "Pre-checks (is it this pod?)", "agent": "sre", "maxSteps": 25,
+      "prompt": "Pre-checks for deleting pod {{input.pod}} in {{input.namespace}} (cluster {{input.cluster}}; reason: {{input.reason}}). Read-only (kubernetes-triage skill): k8s_describe pod/{{input.pod}} (state, last termination, node, owner), k8s_logs for it (the previous container's log), k8s_events for it, and k8s_health for its workload: are its sibling pods healthy? If every pod of the workload fails the same way, deleting one will not help (the cause is the workload: config, image, a dependency) - say so plainly.\n\nReport: the pod's state, the evidence, its owner, its siblings' state, and whether a replacement is likely to come up healthy.",
+      "next": "approve"
+    },
+    "approve": {
+      "type": "approval", "title": "Approve the deletion",
+      "message": "Delete pod {{input.pod}} in {{input.namespace}} (cluster {{input.cluster}}) so its controller replaces it? Reason: {{input.reason}}\n\n{{state.precheck}}",
+      "next": { "on": { "approve": "delete", "reject": "stopped" } }
+    },
+    "delete": {
+      "type": "agent", "title": "Delete the pod", "agent": "sre", "change": true, "maxSteps": 8,
+      "prompt": "A person approved deleting pod {{input.pod}} in {{input.namespace}} (cluster {{input.cluster}}). Run k8s_control once with action delete-pod, target pod/{{input.pod}}, namespace {{input.namespace}}, reason \"{{input.reason}}\" (force only if the approved pre-check found it stuck terminating), and nothing else.\n\nReport: the tool's before/after output.",
+      "next": "verify"
+    },
+    "verify": {
+      "type": "agent", "title": "Verify", "agent": "sre", "verify": true, "maxSteps": 20,
+      "prompt": "Verify the deletion of pod {{input.pod}} in {{input.namespace}}.\n\nBefore:\n{{state.precheck}}\n\nResult:\n{{state.delete}}\n\nRead-only: k8s_health for its workload (the replacement pod running and ready, all replicas available, no new crash loop). VERIFIED when the replacement is healthy and the workload fully available; otherwise FAILED.\n\nReport: the checks.",
+      "decide": ["VERIFIED", "FAILED"],
+      "next": { "on": { "VERIFIED": "done" }, "default": "failed" }
+    },
+    "done": { "type": "end", "title": "Replaced and healthy", "status": "success" },
+    "stopped": { "type": "end", "title": "Not approved: nothing changed", "status": "failed" },
+    "failed": { "type": "end", "title": "The replacement is not healthy", "status": "failed" }
+  }
+}

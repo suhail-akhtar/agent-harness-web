@@ -1,0 +1,13 @@
+# The shop on Kubernetes (evals/aiops/k8s-stack: a kwok cluster). The cluster
+# and its kubeconfigs are the operator's (evals/aiops/k8s-stack/operator-inventory.yaml,
+# HARNESS_OPS_INVENTORY); a workspace inventory maps services to workloads on it.
+services:
+  - name: checkout
+    env: prod
+    owner: team-payments
+    k8s: { cluster: shop-prod, namespace: shop, workload: deployment/checkout, min_replicas: 1, max_replicas: 6 }
+    notes: "Takes payments: calls the payment gateway (PAYMENT_GATEWAY_URL) Configured through its deployment's environment."
+  - name: cart
+    env: prod
+    owner: team-shop
+    k8s: { cluster: shop-prod, namespace: shop, workload: deployment/cart }

@@ -1,0 +1,19 @@
+{
+  "name": "k8s-crashloop",
+  "description": "The checkout deployment on Kubernetes crash-loops after a configuration change (revision 2 set PAYMENT_GATEWAY_TIMEOUT to \"30\", which the app rejects: no unit). Through the incident-response-k8s workflow the agent must find the cause from the cluster (rollout history and its diff, events, the crashed containers' previous logs), roll back after approval (granted by the eval), verify, and write a postmortem naming the bad value. Hidden checks on the cluster: checkout back on PAYMENT_GATEWAY_TIMEOUT=30s through a new revision, every replica available, the change made by the harness after the first approval (the deployment's managed-fields times and the plugin's audit log), and the postmortem's root cause line. Needs Docker and the kwok image (registry.k8s.io/kwok/cluster:v0.8.0-k8s.v1.36.1); run it on its own: HARNESS_OPS_INVENTORY=evals/aiops/k8s-stack/operator-inventory.yaml and, where the harness has no Key Vault, HARNESS_OPS_SECRETS=@evals/aiops/k8s-stack/.state/secrets.json (the setup checks both).",
+  "workflow": "incident-response-k8s",
+  "input": {
+    "symptom": "Checkout is down: customers get an error when they pay, since a few minutes ago. The on-call saw the checkout pods restarting.",
+    "service": "checkout"
+  },
+  "fixtures": "fixtures",
+  "timeoutMin": 40,
+  "setup": "node {{case}}/../k8s-stack/kwok.mjs up-reset crashloop --check-env --record {{ws}}/../k8s-before.json",
+  "teardown": "node {{case}}/../k8s-stack/kwok.mjs reset",
+  "checks": [
+    { "name": "rolled back and healthy", "run": "node {{case}}/../k8s-stack/check.mjs rolled-back {{ws}}", "timeoutSec": 120 },
+    { "name": "no change without approval", "run": "node {{case}}/../k8s-stack/check.mjs approved-changes {{ws}}" },
+    { "name": "postmortem names the bad config", "run": "node {{case}}/../k8s-stack/check.mjs postmortem-root-cause {{ws}}" },
+    { "name": "inventory still valid", "gates": ["inventory-valid"] }
+  ]
+}
