@@ -5,14 +5,18 @@
  * of @harness/ui, and a plugin's renderer for a fence language, a tool or an event replaces the default.
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { duration, summarize, toRows, workedLabel, type ArtifactFile, type Item, type Row, type ToolItem } from '@harness/client';
-import { type ArtifactRenderer, Badge, Button, CodeBlock, DiffView, EmptyState, FencedBlock, Icon, IconButton, ImageStrip, ImageView, JsonView, Markdown, Reasoning, Spinner, VirtualList, copyRich, copyText, cx, toast, type FenceRenderer, type VirtualListHandle, type Source } from '@harness/ui';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { duration, summarize, toRows, workedLabel, type ArtifactFile, type ArtifactRef, type Item, type Row, type ToolItem } from '@harness/client';
+import { Badge, Button, CodeBlock, DiffView, EmptyState, Icon, IconButton, ImageStrip, ImageView, JsonView, Markdown, Popover, Reasoning, Spinner, Tabs, VirtualList, copyRich, copyText, cx, toast, type FenceRenderer, type VirtualListHandle, type Source } from '@harness/ui';
 import { useData, client } from '../../state/data';
 import { useApp } from '../../state/app';
 import { rendererFor } from '../../registry/registry';
 import { PluginFrame } from '../../registry/Frame';
+import { useArtifactRenderer, useEventComponent, useFenceRenderer } from '../../registry/renderers';
 import { FilePreview } from '../../components/FilePreview';
+import { WorkflowGraph } from '../../components/WorkflowGraph';
+
+export { useArtifactRenderer, useFenceRenderer };
 
 export interface TranscriptProps {
   sessionId: string;
@@ -25,30 +29,6 @@ export interface TranscriptProps {
 
 const extOf = (p: string) => (/\.([a-z0-9]+)$/i.exec(p)?.[1] ?? '').toLowerCase();
 
-/** The plugin renderers as a fence hook for Markdown. */
-export function useFenceRenderer(): FenceRenderer {
-  const registry = useData((s) => s.registry);
-  return useCallback((lang: string, source: string) => {
-    const r = rendererFor(registry, 'fence', lang.toLowerCase());
-    if (!r) return undefined;
-    if (r.kind === 'frame' && r.entry) return <div className="my-3 overflow-hidden rounded-xl border border-hx-border-subtle" data-plugin-renderer={r.qid}><PluginFrame plugin={r.plugin} contribution={r.qid} entry={r.entry} height={r.height ?? 120} context={{ fence: lang, source }} /></div>;
-    const C = r.component ? registry.active.find((p) => p.name === r.plugin)?.native?.components[r.component] as React.ComponentType<{ source: string; lang: string }> | undefined : undefined;
-    return C ? <C source={source} lang={lang} /> : undefined;
-  }, [registry]);
-}
-
-/** The plugin renderers for artifact kinds (html, svg, react, diagram ...), for @harness/ui's Artifact (setArtifactHost). */
-export function useArtifactRenderer(): ArtifactRenderer {
-  const registry = useData((s) => s.registry);
-  return useCallback((kind, source, o) => {
-    const r = rendererFor(registry, 'artifact', kind);
-    if (!r) return undefined;
-    if (r.kind === 'frame' && r.entry) return <PluginFrame plugin={r.plugin} contribution={r.qid} entry={r.entry} height={r.height ?? 360} fill={o.fill} context={{ artifact: kind, source, title: o.title }} />;
-    const C = r.component ? registry.active.find((p) => p.name === r.plugin)?.native?.components[r.component] as React.ComponentType<{ kind: string; source: string; title: string; fill?: boolean }> | undefined : undefined;
-    return C ? <C kind={kind} source={source} title={o.title} fill={o.fill} /> : undefined;
-  }, [registry]);
-}
-
 export function Transcript({ sessionId, items, running, onRetry, sources, footer }: TranscriptProps): React.ReactElement {
   const rows = useMemo(() => toRows(items, running), [items, running]);
   const list = useRef<VirtualListHandle>(null);
@@ -57,9 +37,11 @@ export function Transcript({ sessionId, items, running, onRetry, sources, footer
   const lastAnswerKey = useMemo(() => { for (let i = rows.length - 1; i >= 0; i--) { const r = rows[i]!; if (r.kind === 'item' && r.item.kind === 'assistant') return r.key; } return ''; }, [rows]);
   const fence = useFenceRenderer();
   const stepsPref = useApp((s) => s.prefs.steps);
+  const chapters = useMemo(() => rows.flatMap((r) => (r.kind === 'item' && r.item.kind === 'chapter' ? [{ key: r.key, index: r.item.index, title: r.item.title, summary: r.item.summary }] : [])), [rows]);
   if (!rows.length) return <div className="flex flex-1 items-center justify-center"><EmptyState icon="chat" title="Nothing here yet">Send a message to start.</EmptyState></div>;
   return (
     <div className="relative min-h-0 flex-1">
+      {chapters.length > 0 && <Contents chapters={chapters} onJump={(k) => list.current?.scrollToKey(k)} />}
       <VirtualList
         ref={list}
         items={rows}
@@ -85,9 +67,33 @@ export function Transcript({ sessionId, items, running, onRetry, sources, footer
   );
 }
 
+/** The chapters the agent marked, as a floating table of contents: a click scrolls the transcript there. */
+function Contents({ chapters, onJump }: { chapters: Array<{ key: string; index: number; title: string; summary?: string }>; onJump: (key: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const btn = useRef<HTMLButtonElement>(null);
+  return (
+    <div className="absolute left-3 top-2 z-10" data-toc>
+      <button ref={btn} type="button" onClick={() => setOpen(!open)} aria-expanded={open} aria-label="Chapters" data-toc-toggle
+        className="flex h-8 items-center gap-1.5 rounded-full border border-hx-border bg-hx-elevated px-3 text-[12px] text-hx-secondary shadow-sm hover:text-hx-primary">
+        <Icon name="list" size={14} />Chapters<span className="rounded-full bg-hx-pill px-1.5 text-[10.5px]">{chapters.length}</span>
+      </button>
+      <Popover open={open} onClose={() => setOpen(false)} anchor={btn} placement="bottom-start" className="w-[300px]" role="dialog">
+        <nav aria-label="Chapters" className="max-h-[60vh] overflow-auto p-1.5" data-toc-list>
+          {chapters.map((c) => (
+            <button key={c.key} type="button" data-toc-entry={c.index} onClick={() => { onJump(c.key); setOpen(false); }} className="flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-hx-hover">
+              <span className="mt-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-hx-accent-soft px-1 text-[10.5px] font-semibold text-hx-accent-text">{c.index}</span>
+              <span className="min-w-0"><span className="block text-[13px] text-hx-primary">{c.title}</span>{c.summary && <span className="block truncate text-[11.5px] text-hx-muted">{c.summary}</span>}</span>
+            </button>
+          ))}
+        </nav>
+      </Popover>
+    </div>
+  );
+}
+
 const RowView = React.memo(function RowView({ row, sessionId, fence, sources, running, stepsOpen, isLastAnswer, onRetry }: { row: Row; sessionId: string; fence: FenceRenderer; sources?: Source[]; running: boolean; stepsOpen: boolean; isLastAnswer: boolean; onRetry?: () => void }) {
   if (row.kind === 'steps') return <Steps row={row} sessionId={sessionId} fence={fence} defaultOpen={stepsOpen} />;
-  if (row.kind === 'artifacts') return <ArtifactCards files={row.files} sessionId={sessionId} />;
+  if (row.kind === 'artifacts') return <ArtifactCards files={row.files} refs={row.refs} sessionId={sessionId} />;
   return <ItemView item={row.item} sessionId={sessionId} fence={fence} sources={sources} running={running} isLastAnswer={isLastAnswer} onRetry={onRetry} />;
 });
 
@@ -104,10 +110,15 @@ function ItemView({ item, sessionId, fence, sources, running, isLastAnswer, onRe
     case 'notice': return <div data-notice={item.level} className={cx('my-1 flex items-start gap-2 rounded-lg px-3 py-2 text-[12.5px]', item.level === 'error' ? 'bg-hx-danger/8 text-hx-danger' : item.level === 'warn' ? 'bg-hx-warning/8 text-hx-warning' : 'bg-hx-pill text-hx-secondary')}><Icon name={item.level === 'error' ? 'alert' : item.level === 'warn' ? 'warning' : 'info'} size={14} className="mt-0.5 shrink-0" /><span className="whitespace-pre-wrap">{item.text}</span></div>;
     case 'compaction': return <div className="my-2 flex items-center gap-3 text-[11.5px] text-hx-muted"><span className="h-px flex-1 bg-hx-border-subtle" />Context compacted{item.before ? ` · ${fmtTokens(item.before)} → ${fmtTokens(item.after ?? 0)} tokens` : ''}<span className="h-px flex-1 bg-hx-border-subtle" /></div>;
     case 'workflow': return <WorkflowCard item={item} />;
+    // Without the plugin that draws them (core.agents): a line each.
+    case 'chapter': return <div data-chapter={item.index} className="mt-4 text-[14px] font-semibold">{item.index}. {item.title}</div>;
+    case 'proposal': return <div data-proposal={item.id} className="rounded-lg bg-hx-pill px-3 py-2 text-[12.5px]">Proposed session: <b>{item.title}</b></div>;
+    case 'link': return <div data-link={item.id} className="rounded-lg bg-hx-pill px-3 py-2 text-[12.5px]">Linked session {item.phase}: <b>{item.title}</b></div>;
   }
 }
 
 function UserMessage({ item }: { item: Extract<Item, { kind: 'user' }> }) {
+  if (item.origin === 'auto' && !item.text && !item.images?.length) return <div data-user-message="auto" className="my-1 flex items-center gap-3 text-[11.5px] text-hx-muted"><span className="h-px flex-1 bg-hx-border-subtle" /><Icon name="refresh" size={12} />Continued on its own after a linked session reported<span className="h-px flex-1 bg-hx-border-subtle" /></div>;
   return (
     <div className="group flex flex-col items-end" data-user-message>
       {item.images?.length ? <div className="mb-1"><ImageStrip images={item.images} /></div> : null}
@@ -162,8 +173,8 @@ function Steps({ row, sessionId, fence, defaultOpen }: { row: Extract<Row, { kin
   );
 }
 
-const TOOL_ICON: Record<string, string> = { bash: 'terminal', read: 'file-text', write: 'file-plus', edit: 'edit', glob: 'search', grep: 'search', web_fetch: 'globe', web_search: 'globe', agent: 'bot', todo_write: 'list', ask_user: 'help', exit_plan_mode: 'list', skill: 'sparkles', tool_search: 'search', workflow: 'workflow', render: 'image', browser: 'globe' };
-const VERB: Record<string, string> = { bash: 'Ran', read: 'Read', write: 'Wrote', edit: 'Edited', glob: 'Found files', grep: 'Searched', web_fetch: 'Fetched', web_search: 'Searched the web', agent: 'Delegated', todo_write: 'Updated tasks', ask_user: 'Asked', skill: 'Used skill', tool_search: 'Looked up tools', workflow: 'Ran workflow' };
+const TOOL_ICON: Record<string, string> = { bash: 'terminal', read: 'file-text', write: 'file-plus', edit: 'edit', glob: 'search', grep: 'search', web_fetch: 'globe', web_search: 'globe', agent: 'bot', todo_write: 'list', ask_user: 'help', exit_plan_mode: 'list', skill: 'sparkles', tool_search: 'search', workflow: 'workflow', render: 'image', browser: 'globe', artifact: 'layers', start_session: 'split', hand_off: 'split', list_sessions: 'list', mark_chapter: 'bookmark', desktop_describe: 'monitor', desktop_open: 'external', desktop_notify: 'bell', desktop_command: 'command', task_list: 'activity', send_message: 'mail' };
+const VERB: Record<string, string> = { bash: 'Ran', read: 'Read', write: 'Wrote', edit: 'Edited', glob: 'Found files', grep: 'Searched', web_fetch: 'Fetched', web_search: 'Searched the web', agent: 'Delegated', todo_write: 'Updated tasks', ask_user: 'Asked', skill: 'Used skill', tool_search: 'Looked up tools', workflow: 'Ran workflow', artifact: 'Artifact', start_session: 'Linked session', hand_off: 'Handed off', list_sessions: 'Listed', mark_chapter: 'Chapter', desktop_describe: 'Looked at the app', desktop_open: 'Opened in the app', desktop_notify: 'Notified', desktop_command: 'Ran in the app', send_message: 'Messaged' };
 
 export function ToolCard({ item, sessionId }: { item: ToolItem; sessionId: string }): React.ReactElement {
   const registry = useData((s) => s.registry);
@@ -219,10 +230,13 @@ function DiffCount({ before, after }: { before: string; after: string }) {
 
 const FILE_ICON: Record<string, string> = { html: 'globe', htm: 'globe', svg: 'image', png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image', md: 'file-text', txt: 'file-text', csv: 'table', tsv: 'table', json: 'code', js: 'code', ts: 'code', tsx: 'code', jsx: 'code', py: 'code', css: 'palette', pdf: 'file' };
 
-function ArtifactCards({ files, sessionId }: { files: ArtifactFile[]; sessionId: string }) {
+function ArtifactCards({ files, refs, sessionId }: { files: ArtifactFile[]; refs?: ArtifactRef[]; sessionId: string }) {
+  // Artifacts (the artifact tool's) are drawn by the plugin that renders the "artifact" event kind.
+  const Refs = useEventComponent<{ item: { kind: 'artifact'; refs: ArtifactRef[] }; sessionId: string }>('artifact');
   return (
-    <div data-artifacts className="my-1 grid gap-2 sm:grid-cols-2">
-      {files.slice(0, 12).map((f) => <ArtifactCard key={f.path} f={f} sessionId={sessionId} />)}
+    <div data-artifacts className="my-1 space-y-2">
+      {refs?.length ? (Refs ? <Refs item={{ kind: 'artifact', refs }} sessionId={sessionId} /> : <div className="flex flex-wrap gap-1.5">{refs.map((r) => <Badge key={r.id}><Icon name="layers" size={11} className="mr-1" />{r.title} · v{r.version}</Badge>)}</div>) : null}
+      {files.length > 0 && <div className="grid gap-2 sm:grid-cols-2">{files.slice(0, 12).map((f) => <ArtifactCard key={f.path} f={f} sessionId={sessionId} />)}</div>}
     </div>
   );
 }
@@ -257,6 +271,9 @@ function ArtifactCard({ f, sessionId }: { f: ArtifactFile; sessionId: string }) 
 function WorkflowCard({ item }: { item: Extract<Item, { kind: 'workflow' }> }) {
   const run = item.run;
   const [open, setOpen] = useState<number | null>(null);
+  // The graph needs where each node goes (newer servers say); without it, the steps.
+  const graphable = run.nodes.length > 1 && run.nodes.some((n) => n.next?.length);
+  const [view, setView] = useState<'graph' | 'steps'>(graphable ? 'graph' : 'steps');
   const live = run.status === 'running' || run.status === 'waiting';
   const title = (id: string) => run.nodes.find((n) => n.id === id)?.title ?? id;
   return (
@@ -266,8 +283,9 @@ function WorkflowCard({ item }: { item: Extract<Item, { kind: 'workflow' }> }) {
         <b className="text-[13px]">{run.workflow}</b>
         <Badge tone={run.status === 'succeeded' ? 'success' : run.status === 'failed' ? 'danger' : run.status === 'waiting' ? 'warning' : 'accent'}>{live && <Spinner size={10} className="mr-1" />}{({ running: 'Running', waiting: 'Needs you', succeeded: 'Succeeded', failed: 'Failed', aborted: 'Stopped', interrupted: 'Interrupted' } as Record<string, string>)[run.status] ?? run.status}</Badge>
         <span className="ml-auto text-[11.5px] text-hx-muted">{run.history.length} steps · ${run.cost.toFixed(run.cost < 0.01 ? 4 : 2)}</span>
+        {graphable && <Tabs size="sm" value={view} onChange={(v) => setView(v as 'graph' | 'steps')} tabs={[{ id: 'graph', label: 'Graph' }, { id: 'steps', label: 'Steps' }]} />}
       </div>
-      <ol className="p-1.5">
+      {view === 'graph' && graphable ? <div className="py-2"><WorkflowGraph run={run} /></div> : <ol className="p-1.5">
         {run.history.map((h, i) => {
           const acts = h.status === 'running' ? item.activity[h.node] ?? [] : [];
           return (
@@ -283,7 +301,7 @@ function WorkflowCard({ item }: { item: Extract<Item, { kind: 'workflow' }> }) {
             </li>
           );
         })}
-      </ol>
+      </ol>}
       {run.error && <div className="border-t border-hx-border-subtle px-3 py-2 text-[12px] text-hx-danger">{run.error}</div>}
     </div>
   );

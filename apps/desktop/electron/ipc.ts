@@ -41,6 +41,7 @@ export function registerIpc(ctx: DesktopContext): { grants: JsonFile<Grants> } {
     scratch: ctx.paths.scratch,
     previewRuntime: RUNTIME_URL,
     server: ctx.prefs.get().servers.active,
+    iconDataUrl: ctx.iconDataUrl(),
   }));
   h('app:openDataFolder', () => shell.openPath(ctx.paths.dataDir));
   h('app:setLoginItem', (on: boolean) => { try { app.setLoginItemSettings({ openAtLogin: !!on }); } catch { /* unsupported */ } return app.getLoginItemSettings().openAtLogin; });

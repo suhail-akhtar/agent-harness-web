@@ -12,7 +12,7 @@ import type { SessionMeta, TaskView } from '@harness/client';
 import { Badge, Button, EmptyState, Icon, IconButton, Spinner, toast, cx } from '@harness/ui';
 import type { BuiltinPlugin } from '../state/data';
 import { useData, client } from '../state/data';
-import { useApp, navigate, openSession } from '../state/app';
+import { useApp, navigate, openSession, setCrumb, NARROW_PX } from '../state/app';
 import { desktop } from '../bridge';
 import { PendingCard, respondFor } from '../components/Pending';
 import { fmtCost } from './core.chat/Transcript';
@@ -34,6 +34,15 @@ export const coreShell: BuiltinPlugin = {
         { id: 'theme-light', title: 'Light theme', category: 'Theme', icon: 'sun', action: { type: 'theme', theme: 'light' } },
         { id: 'theme-dark', title: 'Dark theme', category: 'Theme', icon: 'moon', action: { type: 'theme', theme: 'dark' } },
         { id: 'theme-system', title: 'Follow the system theme', category: 'Theme', icon: 'monitor', action: { type: 'theme', theme: 'system' } },
+        {
+          id: 'set-theme', title: 'Switch theme…', category: 'Theme', icon: 'palette', handler: 'setTheme',
+          agent: { description: 'Switch the app\'s theme: light, dark, system, or a plugin theme id from desktop_describe.', inputSchema: { type: 'object', properties: { theme: { type: 'string', description: 'light, dark, system or a theme id', maxLength: 80 } }, required: ['theme'] } },
+        },
+        {
+          id: 'open-view', title: 'Open a page…', category: 'View', icon: 'arrow-right', handler: 'openView',
+          agent: { description: 'Show a page of the app (a view id from desktop_describe, e.g. core.artifacts:library).', inputSchema: { type: 'object', properties: { view: { type: 'string', maxLength: 140 } }, required: ['view'] } },
+        },
+        { id: 'shortcuts', title: 'Keyboard shortcuts', category: 'Help', icon: 'keyboard', keybinding: 'Mod+/', handler: 'shortcuts' },
         { id: 'setup', title: 'Set up (welcome wizard)', category: 'Help', icon: 'sparkles', handler: 'setup' },
         { id: 'reload-plugins', title: 'Reload plugins', category: 'Plugins', icon: 'refresh', handler: 'reloadPlugins' },
       ],
@@ -48,8 +57,23 @@ export const coreShell: BuiltinPlugin = {
     palette: () => useApp.setState({ paletteOpen: !useApp.getState().paletteOpen }),
     back: () => useApp.getState().goBack(),
     forward: () => useApp.getState().goForward(),
-    sidebar: () => { const p = useApp.getState().prefs; useApp.getState().setPrefs({ sidebar: { ...p.sidebar, collapsed: !p.sidebar.collapsed } }); },
+    // A narrow window floats the sidebar over the page (its own state); a wide one collapses it to a rail (a preference).
+    sidebar: () => { if (window.innerWidth < NARROW_PX) { useApp.setState({ narrowSidebarOpen: !useApp.getState().narrowSidebarOpen }); return; } const p = useApp.getState().prefs; useApp.getState().setPrefs({ sidebar: { ...p.sidebar, collapsed: !p.sidebar.collapsed } }); },
     closePanel: () => useApp.setState({ panel: null }),
+    shortcuts: () => useApp.setState({ shortcutsOpen: !useApp.getState().shortcutsOpen }),
+    setTheme: (args) => {
+      const theme = String((args as { theme?: unknown } | undefined)?.theme ?? '').trim();
+      const known = ['light', 'dark', 'system', ...useData.getState().registry.themes.map((t) => t.qid)];
+      if (!known.includes(theme)) throw new Error(`No theme "${theme}". Themes: ${known.join(', ')}`);
+      useApp.getState().setPrefs({ theme });
+      return `Theme set to ${theme}.`;
+    },
+    openView: (args) => {
+      const view = String((args as { view?: unknown } | undefined)?.view ?? '').trim();
+      if (!useData.getState().registry.views.has(view)) throw new Error(`No page ${view}. desktop_describe lists the views.`);
+      navigate({ view });
+      return `Opened ${view}.`;
+    },
     setup: () => useApp.setState({ onboardingOpen: true }),
     reloadPlugins: async () => { await useData.getState().refreshPlugins(); toast('Plugins reloaded'); },
   },
@@ -94,6 +118,7 @@ function Project({ params }: { params: Record<string, string> }) {
   const project = useApp((s) => s.prefs.projects.find((p) => p.path === path));
   const sessions = useData((s) => s.sessions);
   const mine = useMemo(() => sessions.filter((s) => s.runtime?.path === path || (s.runtime?.path ?? '').startsWith(`${path}\\`) || (s.runtime?.path ?? '').startsWith(`${path}/`)), [sessions, path]);
+  useEffect(() => { if (project) setCrumb({ view: 'core.projects:project', title: project.name }); }, [project?.name]);
   if (!project) return <EmptyState icon="folder" title="This project is not in your list" action={<Button onClick={() => navigate({ view: 'core.projects:projects' })}>All projects</Button>} />;
   const newChat = () => { try { localStorage.setItem('harness.workIn', path); } catch { /* none */ } navigate({ view: 'core.chat:home' }); };
   return (

@@ -3,6 +3,7 @@
  * forward), the overlays (palette, settings, side panel, dialogs) and live values (badges).
  */
 
+import type React from 'react';
 import { create } from 'zustand';
 import { DEFAULT_PREFS, type DesktopPrefs } from '@desk/prefs';
 import { desktop, type AppInfo, type EngineState } from '../bridge';
@@ -15,6 +16,9 @@ export type SidePanel =
   | { kind: 'file'; title: string; path: string; sessionId: string; content: string };
 
 export interface Confirm { title: string; body: string; confirmLabel?: string; danger?: boolean; resolve: (yes: boolean) => void }
+
+/** Where the page on screen sits: an optional parent (a page it belongs to) and its own title. */
+export interface Crumb { view: string; title?: string; parent?: { label: string; route?: Route } }
 
 export interface AppState {
   info: AppInfo | null;
@@ -32,6 +36,17 @@ export interface AppState {
   confirm: Confirm | null;
   onboardingOpen: boolean;
   focused: boolean;
+  /** A second view beside the first (a linked conversation next to this one), and its width in px. */
+  split: Route | null;
+  splitWidth: number;
+  /** What the page on screen says about itself (breadcrumbs). */
+  crumb: Crumb | null;
+  /** The floating sidebar of a narrow window is open. */
+  narrowSidebarOpen: boolean;
+  /** Something shown over the whole window (an artifact opened in full window). */
+  fullWindow: { title: string; body: React.ReactNode } | null;
+  /** The keyboard shortcuts sheet. */
+  shortcutsOpen: boolean;
   navigate(r: Route, opts?: { replace?: boolean }): void;
   goBack(): void;
   goForward(): void;
@@ -42,6 +57,8 @@ export interface AppState {
 }
 
 export const HOME: Route = { view: 'core.chat:home' };
+/** Below this width the sidebar is a rail that floats open over the page. */
+export const NARROW_PX = 760;
 const same = (a: Route, b: Route) => a.view === b.view && JSON.stringify(a.params ?? {}) === JSON.stringify(b.params ?? {});
 
 function initialRoute(): Route {
@@ -65,6 +82,12 @@ export const useApp = create<AppState>((set, get) => ({
   confirm: null,
   onboardingOpen: false,
   focused: true,
+  split: null,
+  splitWidth: (() => { try { return Number(localStorage.getItem('harness.splitWidth')) || 0; } catch { return 0; } })(),
+  crumb: null,
+  narrowSidebarOpen: false,
+  fullWindow: null,
+  shortcutsOpen: false,
   navigate(r, opts) {
     const cur = get().route;
     if (same(cur, r)) return;
@@ -102,3 +125,15 @@ export function prefill(text: string, newChat?: boolean) {
 export function openPluginPanel(panel: string, params?: Record<string, string>, data?: unknown): void {
   useApp.setState({ panel: { kind: 'plugin', panel, ...(params ? { params } : {}), ...(data !== undefined ? { data } : {}) } });
 }
+
+/** Opens a view beside the current page (split view); null closes it. */
+export function openSplit(r: Route | null): void { useApp.setState({ split: r }); }
+
+/** A page says where it is (breadcrumbs): its title and the page it belongs to. Cleared when another page shows. */
+export function setCrumb(c: Crumb | null): void {
+  const cur = useApp.getState().crumb;
+  if (JSON.stringify(cur) !== JSON.stringify(c)) useApp.setState({ crumb: c });
+}
+
+/** Shows something over the whole window (Escape closes it). */
+export function showFullWindow(title: string, body: React.ReactNode): void { useApp.setState({ fullWindow: { title, body } }); }

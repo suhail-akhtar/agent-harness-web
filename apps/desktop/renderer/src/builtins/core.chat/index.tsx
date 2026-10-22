@@ -5,7 +5,7 @@
 
 import type { BuiltinPlugin } from '../../state/data';
 import { Home, RecentCard, Search, Session } from './Views';
-import { navigate, useApp } from '../../state/app';
+import { navigate, prefill, useApp } from '../../state/app';
 
 export const coreChat: BuiltinPlugin = {
   name: 'core.chat', version: '0.1.0', description: 'Conversations: the home page, the composer, the transcript and the attention bar.',
@@ -22,7 +22,10 @@ export const coreChat: BuiltinPlugin = {
         { id: 'search', title: 'Search conversations', kind: 'native', component: 'Search' },
       ],
       commands: [
-        { id: 'new', title: 'New chat', category: 'Chat', icon: 'edit', keybinding: 'Mod+N', handler: 'newChat' },
+        {
+          id: 'new', title: 'New chat', category: 'Chat', icon: 'edit', keybinding: 'Mod+N', handler: 'newChat',
+          agent: { description: 'Open a new chat, optionally with a prompt typed in for the person (it is never sent without them).', inputSchema: { type: 'object', properties: { prompt: { type: 'string', maxLength: 4000 } } } },
+        },
         { id: 'search', title: 'Search conversations', category: 'Chat', icon: 'search', keybinding: 'Mod+Shift+F', action: { type: 'open-view', view: 'search' } },
         { id: 'workflow', title: 'Run a workflow…', category: 'Chat', icon: 'workflow', handler: 'workflow' },
       ],
@@ -41,7 +44,11 @@ export const coreChat: BuiltinPlugin = {
   },
   components: { Home, Session, Search, RecentCard },
   handlers: {
-    newChat: () => navigate({ view: 'core.chat:home' }),
+    newChat: (args) => {
+      const prompt = typeof (args as { prompt?: unknown } | undefined)?.prompt === 'string' ? (args as { prompt: string }).prompt : '';
+      if (prompt) prefill(prompt, true); else navigate({ view: 'core.chat:home' });
+      return prompt ? 'A new chat is open with the prompt typed in; the person sends it.' : 'A new chat is open.';
+    },
     workflow: () => {
       const r = useApp.getState().route;
       useApp.setState({ workflowDialog: { sessionId: r.view === 'core.chat:session' ? r.params?.id : undefined } });

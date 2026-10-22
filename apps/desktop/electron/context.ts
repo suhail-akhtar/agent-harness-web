@@ -23,6 +23,8 @@ export interface DesktopContext {
   emit(channel: string, payload?: unknown): void;
   handle<A extends unknown[], R>(channel: string, fn: (...args: A) => R | Promise<R>): void;
   reveal(): void;
+  /** The product's icon (its profile's, else the app's), as a data URL for the window to show; undefined when there is none. */
+  iconDataUrl(): string | undefined;
   /** Switch between the local engine and a remote server. */
   useServer(id: string): Promise<void>;
   quit(): void;

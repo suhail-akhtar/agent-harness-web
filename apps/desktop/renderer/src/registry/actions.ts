@@ -41,14 +41,18 @@ export async function runAction(action: UiAction, plugin: string, args?: unknown
   }
 }
 
-/** Runs a command by its qualified id ("<plugin>:<id>"). */
-export async function runCommand(qid: string, args?: unknown): Promise<void> {
+/**
+ * Runs a command by its qualified id ("<plugin>:<id>"); returns what its handler returned. A
+ * failure is a toast, or (throwErrors: an agent's desktop_command) thrown back to the caller.
+ */
+export async function runCommand(qid: string, args?: unknown, o: { throwErrors?: boolean } = {}): Promise<unknown> {
+  const fail = (m: string, kind: 'warning' | 'error' = 'warning') => { if (o.throwErrors) throw new Error(m); toast(m, { kind }); };
   const { registry } = useData.getState();
   const cmd = registry.commands.find((c) => c.qid === qid);
-  if (!cmd) { toast(`No command ${qid}`, { kind: 'warning' }); return; }
+  if (!cmd) return fail(`No command ${qid}`);
   if (cmd.action) return runAction(cmd.action, cmd.plugin, args);
   const entry = registry.active.find((p) => p.name === cmd.plugin);
   const fn = cmd.handler ? entry?.native?.handlers?.[cmd.handler] : undefined;
-  if (!fn) { toast(`${cmd.title} is not available`, { kind: 'warning' }); return; }
-  try { await fn(args); } catch (e) { toast((e as Error).message, { kind: 'error' }); }
+  if (!fn) return fail(`${cmd.title} is not available`);
+  try { return await fn(args); } catch (e) { return fail((e as Error).message, 'error'); }
 }

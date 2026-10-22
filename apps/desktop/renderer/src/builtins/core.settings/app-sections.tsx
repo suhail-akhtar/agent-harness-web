@@ -7,6 +7,7 @@ import { Badge, Button, Field, Icon, IconButton, Input, Kbd, Select, Switch, Spi
 import { useApp } from '../../state/app';
 import { useData, client } from '../../state/data';
 import { allThemes } from '../../state/theme';
+import { ProductMark } from '../../components/ProductMark';
 import { desktop, platform, type ServersInfo } from '../../bridge';
 import { chordFromEvent, conflicts, formatChord } from '../../registry/keybindings';
 import type { DesktopPrefs } from '@desk/prefs';
@@ -179,13 +180,21 @@ function ServerRow({ name, detail, active, onUse, onRemove, busy }: { name: stri
 
 export function About(): React.ReactElement {
   const info = useApp((s) => s.info);
+  const registry = useData((s) => s.registry);
   const [server, setServer] = useState<string>('…');
   useEffect(() => { client.version().then((v) => setServer(v ? `${v.version} (API ${v.apiVersion ?? '?'}, UI API ${v.uiApiVersion ?? '?'})` : 'unknown')).catch(() => setServer('not reachable')); }, []);
-  const rows: Array<[string, string]> = info ? [['App', `${info.product.name} ${info.version}`], ['Engine', server], ['Electron', info.electron], ['Chromium', info.chrome], ['Node', info.node], ['Platform', info.platform], ['Product profile', `${info.product.id} (${info.product.appId})`], ['Data folder', info.dataDir]] : [];
+  const rows: Array<[string, string]> = info ? [['App', `${info.product.name} ${info.version}`], ['Engine', server], ['Electron', info.electron], ['Chromium', info.chrome], ['Node', info.node], ['Platform', info.platform], ['Product profile', `${info.product.id} (${info.product.appId})`], ['Plugins', `${registry.active.length} active of ${registry.plugins.length}`], ['Data folder', info.dataDir]] : [];
+  const copy = () => void navigator.clipboard.writeText(rows.map(([k, v]) => `${k}: ${v}`).join('\n')).then(() => toast('Copied'), () => toast('Could not copy', { kind: 'error' }));
   return (
     <div data-section="about">
-      <div className="mb-4 flex items-center gap-3"><span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-hx-accent text-[22px] font-bold text-hx-on-accent">H</span><div><div className="text-[17px] font-semibold">{info?.product.name ?? 'Harness'}</div><div className="text-[12.5px] text-hx-muted">{info?.product.description}</div></div></div>
-      <div className="divide-y divide-hx-border-subtle rounded-xl border border-hx-border-subtle">{rows.map(([k, v]) => <div key={k} className="flex gap-4 px-3 py-2 text-[13px]"><span className="w-36 shrink-0 text-hx-muted">{k}</span><span className="min-w-0 break-all">{v}</span></div>)}</div>
+      <div className="mb-4 flex items-center gap-3"><ProductMark size={48} /><div className="min-w-0 flex-1"><div className="text-[17px] font-semibold">{info?.product.name ?? 'Harness'}</div><div className="text-[12.5px] text-hx-muted">{info?.product.description}</div></div><Button size="sm" icon="copy" onClick={copy}>Copy versions</Button></div>
+      <div className="divide-y divide-hx-border-subtle rounded-xl border border-hx-border-subtle" data-about-versions>{rows.map(([k, v]) => <div key={k} className="flex gap-4 px-3 py-2 text-[13px]"><span className="w-36 shrink-0 text-hx-muted">{k}</span><span className="min-w-0 break-all" data-about-row={k}>{v}</span></div>)}</div>
     </div>
   );
 }
+
+/** The About page (Help > About): the same facts as the settings section, as a page. */
+export function AboutPage(): React.ReactElement {
+  return <div className="hx-scroll h-full overflow-y-auto" data-about-page><div className="mx-auto max-w-2xl px-6 py-8"><About /></div></div>;
+}
+
