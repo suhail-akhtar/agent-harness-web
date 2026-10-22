@@ -395,3 +395,15 @@ Where it differs from the text above, and why:
   copied.
 - **Delegation to other models needs the person's consent** (`delegation` in their settings, within the
   operator's cap): sub-agents, linked sessions and workflow agent nodes with a `model`.
+
+## 18. Data, dashboards and reports (`core.dashboards`)
+
+One engine (DuckDB) computes every number; models never type one. Sources (files, Excel, SQLite,
+Postgres, MySQL, HTTP APIs, inline values, plugins' sources) become extracts; datasets add
+query-editor steps and SQL; a semantic model adds relationships, measures (time intelligence
+exact by re-aggregation), hierarchies and row-level security; documents (dashboards and reports)
+hold pages of visuals in one of nine layouts. Every change is an op from one catalogue
+(`packages/plugin-ui/src/bi.ts`), applied by the app's controls and the agents' four tools alike,
+versioned in the artifact store, undoable. Published pages are the same renderers served at
+`/p/<slug>`, refreshed live over server-sent events. Contribution points added: `dataSources`,
+`dashboardWidgets`, `dashboardTemplates`, `blockActions`. Details in the README.

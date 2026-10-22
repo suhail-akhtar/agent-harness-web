@@ -3,7 +3,7 @@
 The agent harness as a desktop app (Electron). It is a generic shell: the shell names no feature,
 and everything a person sees comes from plugins through one registry. The built-ins (chat,
 projects, inbox, activity, plugins, settings) are plugins too, with trust `native`; third-party
-plugins use the same thirteen contribution points from the `ui` section of `harness-plugin.json`.
+plugins use the same seventeen contribution points from the `ui` section of `harness-plugin.json`.
 The design is in [docs/desktop/DESIGN.md](../../docs/desktop/DESIGN.md).
 
 ## Run it
@@ -65,6 +65,16 @@ zoom and pan), `dot` (Graphviz, wasm), `dashboard` (KPIs and panels, the spec in
 `@harness/plugin-ui`), `ipynb` (notebooks), `geojson` (maps without tiles). `diagram` is reserved
 for the interactive diagrams of a later `core.diagrams` plugin; until then it reads as JSON.
 A plugin renderer for a fence language or an artifact kind replaces the default.
+
+## Dashboards (`core.dashboards`)
+
+Dashboards, Reports and Data in the sidebar: sources (secrets as key vault names), datasets with
+the query editor (steps, previews, profiling, SQL), the semantic model (relationships, measures,
+hierarchies, roles), dashboards and reports edited in place (drag, resize, the inspector, nine
+layout types, templates) with Undo, Ask (an agent applying the same ops beside the dashboard),
+publishing as a live page, exports. Every chart, figure and table in a transcript has "Add to
+dashboard". See the README's "Data, dashboards and reports". `node apps/desktop/scripts/build-viewer.mjs`
+builds the published-page viewer (`dist/bi-viewer`); the e2e builds it when it is out of date.
 
 ## Environment
 
