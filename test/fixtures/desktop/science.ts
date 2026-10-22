@@ -158,7 +158,7 @@ ${fence('geojson', json({
     ],
   }))}`,
 
-  diagram: `The architecture (interactive diagrams come with a plugin):
+  diagram: `The architecture:
 
 ${fence('diagram', json({ title: 'Checkout service', nodes: [{ id: 'web', label: 'Web' }, { id: 'api', label: 'API' }, { id: 'db', label: 'Postgres' }], edges: [{ from: 'web', to: 'api' }, { from: 'api', to: 'db' }] }))}`,
 };
