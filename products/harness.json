@@ -1,0 +1,26 @@
+{
+  "id": "harness",
+  "name": "Harness",
+  "appId": "dev.harness.desktop",
+  "description": "The agent harness on your desktop: chat, projects and plugins.",
+  "brand": {
+    "icon": "assets/harness.png",
+    "accent": "#d97757",
+    "wordmark": "Harness",
+    "tagline": "Where should we begin?"
+  },
+  "plugins": {
+    "bundled": ["core.*"],
+    "enabled": ["core.*"],
+    "required": ["core.chat", "core.settings", "core.plugins"]
+  },
+  "nav": {
+    "order": ["core.chat:new", "core.chat:search", "core.inbox:inbox", "core.activity:activity", "core.projects:projects", "core.plugins:plugins"]
+  },
+  "home": {
+    "cards": ["core.inbox:attention", "core.chat:recent"]
+  },
+  "trustedKeys": ["keys/harness.pub"],
+  "policy": { "lock": {}, "defaults": {} },
+  "server": { "mode": "local" }
+}
