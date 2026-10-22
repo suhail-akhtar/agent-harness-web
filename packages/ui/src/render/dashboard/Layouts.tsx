@@ -262,6 +262,22 @@ function Story(p: LayoutProps & { l: LayoutSpec }) {
   );
 }
 
+/**
+ * A TV page taller than one screen becomes several screens, cut where no widget spans the cut,
+ * each shown in turn (the page's rotation time shared between them), so nothing is squashed.
+ */
+export function tvScreens(visuals: VisualSpec[], maxRows: number): VisualSpec[][] {
+  const out: VisualSpec[][] = [];
+  let cur: VisualSpec[] = []; let start = 0; let bottom = 0;
+  for (const v of order(visuals)) {
+    if (cur.length && v.layout.y >= bottom && v.layout.y + v.layout.h - start > maxRows) { out.push(cur); cur = []; start = v.layout.y; }
+    cur.push({ ...v, layout: { ...v.layout, y: v.layout.y - start } });
+    bottom = Math.max(bottom, v.layout.y + v.layout.h);
+  }
+  if (cur.length || !out.length) out.push(cur);
+  return out;
+}
+
 /** A TV wall: a fixed screen (16:9 or 21:9) scaled to fit, larger type; the grid fills it. */
 function Tv(p: LayoutProps & { l: LayoutSpec }) {
   const ratio = p.l.aspect === '21:9' ? 21 / 9 : 16 / 9;
@@ -270,13 +286,23 @@ function Tv(p: LayoutProps & { l: LayoutSpec }) {
   useEffect(() => { const el = host.current?.closest('[data-bi-canvas]') as HTMLElement | null; if (!el) return; const ro = new ResizeObserver(() => setBox({ w: el.clientWidth, h: el.clientHeight })); ro.observe(el); return () => ro.disconnect(); }, []);
   const W = 1200; const H = Math.round(W / ratio);
   const scale = Math.max(0.2, Math.min(box.w / W, (box.h || box.w / ratio) / H));
-  const rows = Math.max(1, ...p.visuals.map((v) => v.layout.y + v.layout.h));
+  // Editing shows the whole page on one screen; viewing splits a long page into screens.
+  const screens = useMemo(() => (p.edit ? [p.visuals] : tvScreens(p.visuals, Math.floor(H / (LROW + LGAP)))), [p.visuals, p.edit, H]);
+  const [n, setN] = useState(0);
+  const i = n % screens.length;
+  useEffect(() => {
+    if (screens.length < 2 || p.print) return;
+    const t = setInterval(() => setN((x) => x + 1), Math.max(5, (p.l.rotate || 30) / screens.length) * 1000);
+    return () => clearInterval(t);
+  }, [screens.length, p.l.rotate, p.print]);
+  const shown = screens[i]!;
+  const rows = Math.max(1, ...shown.map((v) => v.layout.y + v.layout.h));
   const rowHeight = Math.floor(H / rows) - LGAP;
   return (
-    <div ref={host} className="flex h-full w-full items-start justify-center overflow-hidden" data-bi-grid="tv" data-aspect={p.l.aspect ?? '16:9'}>
+    <div ref={host} className="flex h-full w-full items-start justify-center overflow-hidden" data-bi-grid="tv" data-aspect={p.l.aspect ?? '16:9'} data-tv-screens={screens.length} data-tv-screen={i}>
       <div style={{ width: W * scale, height: H * scale }}>
         <div className="origin-top-left" style={{ width: W, height: H, transform: `scale(${scale})`, fontSize: `${(p.l.scale ?? 1.25) * 100}%` }} data-bi-tv-screen>
-          <Grid visuals={p.visuals} render={p.render} edit={p.edit} width={W + 16 - LGAP} columns={p.l.columns} rowHeight={Math.max(16, rowHeight)} />
+          <Grid visuals={shown} render={p.render} edit={p.edit} width={W + 16 - LGAP} columns={p.l.columns} rowHeight={Math.max(16, rowHeight)} />
         </div>
       </div>
     </div>

@@ -71,7 +71,16 @@ export function DocView(p: DocViewProps): React.ReactElement {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const host = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(1200);
-  useEffect(() => { const ro = new ResizeObserver(([e]) => setWidth(e!.contentRect.width)); if (host.current) ro.observe(host.current); return () => ro.disconnect(); }, []);
+  const canvasEl = useRef<HTMLDivElement>(null);
+  // The canvas's inner width (its scrollbar excluded), so a grid never runs under the scrollbar.
+  useEffect(() => {
+    const measure = () => setWidth(canvasEl.current?.clientWidth || host.current?.clientWidth || 1200);
+    const ro = new ResizeObserver(measure);
+    if (host.current) ro.observe(host.current);
+    if (canvasEl.current) ro.observe(canvasEl.current);
+    measure();
+    return () => ro.disconnect();
+  }, []);
   useEffect(() => { setSelection(undefined); setFocus(undefined); p.onPage?.(pageId); }, [pageId]);
   useEffect(() => p.client.subscribe?.((e) => {
     if (e.type === 'gone') setGone(true);
@@ -169,7 +178,7 @@ export function DocView(p: DocViewProps): React.ReactElement {
           </div>
         </div>
       )}
-      <div className={cx('min-h-0 flex-1', tvLayout ? 'overflow-hidden bg-hx-bg' : 'overflow-auto', p.print || tvLayout ? '' : 'p-2')} data-bi-canvas>
+      <div className={cx('min-h-0 flex-1', tvLayout ? 'overflow-hidden bg-hx-bg' : 'overflow-auto', p.print || tvLayout ? '' : 'p-2')} data-bi-canvas ref={canvasEl}>
         {doc.type === 'report' && page.layout?.type !== 'print' && <div className="mx-auto mb-2 max-w-[1100px] px-2"><h1 className="text-[22px] font-semibold">{doc.title}</h1>{doc.description && <p className="text-hx-secondary">{doc.description}</p>}{doc.snapshot && <p className="text-[12px] text-hx-muted">Numbers as of {new Date(doc.snapshot.at).toLocaleString()}</p>}</div>}
         {shownPages.map((pg, i) => {
           const pl = doc.type === 'report' && !pg.layout ? { ...pg, layout: { type: 'story' as const } } : p.print && pg.layout?.type === 'tabs' ? { ...pg, layout: { ...pg.layout, type: 'sections' as const } } : pg;
@@ -251,11 +260,13 @@ function VisualFrame(f: FrameProps) {
   const selected = f.edit?.selected === v.id;
   const statics = result?.lineage.datasets.filter((d) => d.static) ?? [];
   const bare = v.type === 'button' || (v.type === 'text' && !v.title);
+  // A slicer one grid row high is a strip: its title beside its values.
+  const strip = v.type === 'slicer' && v.layout.h <= 1 && !f.focus;
   return (
-    <section aria-label={v.title ?? v.type} data-visual={v.id} data-visual-type={v.type} className={cx('group flex h-full min-h-0 flex-col overflow-hidden rounded-xl', !bare && 'border bg-hx-elevated', selected ? 'border-hx-accent ring-2 ring-hx-accent/40' : 'border-hx-border-subtle', f.focus && 'fixed inset-6 z-40 shadow-[var(--hx-shadow)]')}
+    <section aria-label={v.title ?? v.type} data-visual={v.id} data-visual-type={v.type} data-strip={strip ? '' : undefined} className={cx('group flex h-full min-h-0 overflow-hidden rounded-xl', strip ? 'flex-row items-center' : 'flex-col', !bare && 'border bg-hx-elevated', selected ? 'border-hx-accent ring-2 ring-hx-accent/40' : 'border-hx-border-subtle', f.focus && 'fixed inset-6 z-40 shadow-[var(--hx-shadow)]')}
       style={{ containerType: 'inline-size' }} onClick={f.edit ? (e) => { e.stopPropagation(); f.edit!.onSelect(v.id); } : undefined}>
       {!bare && (
-        <header className={cx('flex min-h-[28px] items-center gap-1 px-2 pt-1', f.edit && 'cursor-move')} data-drag-handle={f.edit ? '' : undefined}>
+        <header className={cx('flex min-h-[28px] items-center gap-1 px-2', strip ? 'max-w-[35%] shrink-0' : 'pt-1', f.edit && 'cursor-move')} data-drag-handle={f.edit ? '' : undefined}>
           <div className="min-w-0 flex-1">
             <div className="truncate text-[12.5px] font-medium text-hx-secondary">{v.title ?? (v.type === 'slicer' ? v.options?.slicer?.field.split('.').pop() : '')}</div>
             {v.subtitle && <div className="truncate text-[11px] text-hx-muted">{v.subtitle}</div>}
@@ -276,7 +287,7 @@ function VisualFrame(f: FrameProps) {
         </header>
       )}
       {lineage && result && <Lineage r={result} />}
-      <div className="min-h-0 flex-1" onClick={(e) => { if (!f.edit) e.stopPropagation(); }}>
+      <div className={cx('min-h-0 flex-1', strip && 'h-full min-w-0')} onClick={(e) => { if (!f.edit) e.stopPropagation(); }}>
         <BiVisual v={v} result={result} error={error} theme={f.theme} dark={f.dark} selection={f.selection} slicerValue={f.slicerValue} decompPath={f.decompPath}
           renderMarkdown={f.renderMarkdown} renderFence={f.renderFence} geo={f.client.geo} static={f.static} chartRef={(c) => { chart.current = c; }} {...f.events} />
       </div>

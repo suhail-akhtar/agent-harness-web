@@ -273,6 +273,13 @@ test('verify runs every visual and catches a broken one; narratives accept only 
   const { visualData } = await import('../src/data/analytics.ts');
   const n = await visualData(svc, home, doc, doc.pages[0]!.visuals[1]!, {});
   assert.equal(n.extra!.text, 'Revenue reached $555.00; EU brought $330.00 (330 of it), in 2024 Q1 too.');
+  // A narrative without a query of its own reads the document's model.
+  const bare = await ops([{ op: 'add_visual', doc: id, visual: { type: 'narrative', title: 'Summary' } }]);
+  const bv = (bare.results[0]!.data as { id: string }).id;
+  await ops([{ op: 'set_narrative', doc: id, visual: bv, text: 'In all, {{Revenue}}.' }]);
+  const doc2 = (await home.doc(id)).spec;
+  const b = await visualData(svc, home, doc2, doc2.pages[0]!.visuals.find((x) => x.id === bv)!, {});
+  assert.equal(b.extra!.text, 'In all, $555.00.');
   // Break the data under a visual: verify says which and why.
   await fs.writeFile(path.join(data, 'files', 'regions.json'), JSON.stringify([{ code: 1, name: 'EU' }]));
   await ops([{ op: 'refresh', dataset: 'regions' }]).catch(() => {});

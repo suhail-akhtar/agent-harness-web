@@ -23,6 +23,8 @@ export function visualQuery(doc: DocSpec, page: PageSpec, v: VisualSpec, state: 
   for (const f of state.filters ?? []) if (f.field !== own) filters.push(f);
   let q: QuerySpec | undefined = v.query ? { ...v.query, model: v.query.model ?? doc.model } : undefined;
   if (v.type === 'slicer' && v.options?.slicer) q = { model: doc.model, dims: [v.options.slicer.field], sort: [{ by: v.options.slicer.field }], limit: 500 };
+  // A narrative needs no query of its own: its placeholders are measures of the document's model.
+  if (!q && v.type === 'narrative' && doc.model) q = { model: doc.model };
   if (!q) return {};
   const o = v.options ?? {};
   // A KPI against a target: the variance is a measure too, computed in SQL like the others.

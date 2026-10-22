@@ -81,3 +81,16 @@ test('HTML visuals: card, KPI against its target, table with the engine\'s total
   const n = html(V('narrative'), r([dim('measure'), ms('value')], [['Revenue', 10]], { extra: { text: 'Revenue was $10.00.', refs: [{ measure: 'Revenue', formatted: '$10.00', filters: [] }] } }));
   assert.match(n, /Revenue was \$10\.00\./); assert.match(n, /\$10\.00 = Revenue/);
 });
+
+test('a TV page taller than a screen is cut into screens where no widget spans the cut; print pages fill paper in reading order', async () => {
+  const { ui } = await loadUi();
+  const at = (id: string, y: number, h: number, w = 6, x = 0): VisualSpec => ({ id, type: 'card', layout: { x, y, w, h } });
+  const screens = ui.tvScreens([at('a', 0, 4), at('b', 0, 4, 6, 6), at('c', 4, 8, 12), at('d', 12, 9, 12), at('e', 21, 3)], 14) as VisualSpec[][];
+  assert.deepEqual(screens.map((s) => s.map((v) => v.id)), [['a', 'b', 'c'], ['d', 'e']]);
+  assert.deepEqual(screens[1]!.map((v) => v.layout.y), [0, 9], 'each screen starts at its top');
+  // A widget spanning the would-be cut keeps its neighbours on its screen.
+  assert.equal((ui.tvScreens([at('a', 0, 10), at('b', 5, 10, 6, 6), at('c', 10, 4)], 14) as VisualSpec[][]).length, 1);
+  assert.equal((ui.tvScreens([], 14) as VisualSpec[][]).length, 1);
+  const pages = ui.printPages([at('a', 0, 4), at('b', 4, 12, 12), at('c', 16, 12, 12), at('d', 28, 12, 12)], { type: 'print', paper: 'A4', orientation: 'portrait' }) as VisualSpec[][][];
+  assert.ok(pages.length >= 2 && pages.flat(2).length === 4, 'every widget on some page, more than one page');
+});
