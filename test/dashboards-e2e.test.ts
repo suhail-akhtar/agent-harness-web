@@ -168,7 +168,7 @@ test('dashboards end to end', { timeout: 15 * 60_000 }, async (t) => {
       await page.click('[role="menuitem"]:has-text("Slicer")');
       await page.waitForSelector('[data-visual-type="slicer"] [data-slicer]', { timeout: 30_000 });
       await page.click('[data-menu="add-visual"]');
-      await page.click('[role="menuitem"]:text-is("Table")');
+      await page.click('[role="menuitem"]:has-text("Table")');
       await page.waitForSelector('[data-visual-type="table"] [data-bi-table] tbody tr', { timeout: 30_000 });
       await page.click('[data-bi-edit]');
       await shot('dashboard-built');
@@ -243,6 +243,48 @@ test('dashboards end to end', { timeout: 15 * 60_000 }, async (t) => {
       await change.locator('[data-undo-change]').click();
       await page.waitForSelector('[data-visual-type="column"]', { timeout: 20_000 });
       assert.equal(await page.locator('[data-visual-type="card"]').count(), 1);
+      await page.click('[aria-label="Close the panel"]');
+    });
+
+    await step('layouts: sections, then a free-form canvas where a widget is dragged; back to the grid', async () => {
+      const layoutTo = async (type: string) => {
+        await page.click('[data-menu="layout"]');
+        await page.click('[role="menuitem"]:has-text("Layout type and options")');
+        await page.click(`[data-layout-type="${type}"]`);
+        await page.click('[data-save-layout]');
+        await page.waitForSelector(`[data-bi-doc][data-layout="${type}"]`, { timeout: 20_000 });
+      };
+      await layoutTo('sections');
+      await page.waitForSelector('[data-bi-section]');
+      await shot('layout-sections-app');
+      await page.click('[data-bi-edit]');
+      await layoutTo('canvas');
+      const card = page.locator('[data-bi-cell] [data-visual-type="card"] header').first();
+      const cell = page.locator('[data-bi-cell]:has([data-visual-type="card"])').first();
+      const before = await cell.boundingBox();
+      const box = (await card.boundingBox())!;
+      await page.mouse.move(box.x + 30, box.y + 10);
+      await page.mouse.down();
+      await page.mouse.move(box.x + 230, box.y + 70, { steps: 8 });
+      await page.mouse.up();
+      await page.waitForFunction((x0) => { const el = document.querySelector('[data-bi-cell]:has([data-visual-type="card"])') as HTMLElement | null; return !!el && el.getBoundingClientRect().x > x0 + 100; }, before!.x, { timeout: 20_000 });
+      await shot('layout-canvas-app');
+      await layoutTo('grid');
+      await page.click('[data-bi-edit]');
+    });
+
+    await step('an agent makes the page a TV wall (set_layout through the ops); undo puts it back', async () => {
+      await page.click('[data-bi-ask]');
+      await page.fill('[data-prompt-input]', 'make this a TV wall for the ops room');
+      await page.click('[data-prompt-ok]');
+      await page.waitForSelector('[data-ask-panel][data-status="idle"] [data-assistant-message]:has-text("TV wall")', { timeout: 60_000 });
+      await page.waitForSelector('[data-bi-doc][data-layout="tv"]', { timeout: 20_000 });
+      assert.equal(await page.locator('[data-bi-toolbar]').count(), 0, 'no chrome on a TV wall');
+      await shot('agent-tv-wall');
+      const steps = page.locator('[data-ask-panel] [data-steps]').last();
+      if (await steps.getAttribute('data-open') !== '1') await steps.locator('button').first().click();
+      await page.locator('[data-ask-panel] [data-data-change] [data-undo-change]').last().click();
+      await page.waitForSelector('[data-bi-doc][data-layout="grid"]', { timeout: 20_000 });
       await page.click('[aria-label="Close the panel"]');
     });
 

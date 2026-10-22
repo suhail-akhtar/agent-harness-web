@@ -182,7 +182,7 @@ export function visualOption(v: VisualSpec, r: QueryResult, ctx: OptionContext):
     series.push({ type: 'line', name: 'Low', stack: 'band', data: [...pad, ...f0.map((f) => f[3])], lineStyle: { opacity: 0 }, symbol: 'none', tooltip: { show: false } });
     series.push({ type: 'line', name: '95% interval', stack: 'band', data: [...pad, ...f0.map((f) => (num(f[4]) ?? 0) - (num(f[3]) ?? 0))], lineStyle: { opacity: 0 }, areaStyle: { opacity: 0.15, color: colors[0] }, symbol: 'none', tooltip: { show: false } });
   }
-  const catAxis = { type: 'category', data: allCats, axisLabel: { hideOverlap: true }, axisTick: { alignWithLabel: true } };
+  const catAxis = { type: 'category', data: allCats, axisLabel: { hideOverlap: true, ...(horizontal && allCats.length <= 30 ? { interval: 0 } : {}) }, axisTick: { alignWithLabel: true } };
   const valAxis = (f: (x: number) => string, i = 0) => ({ type: 'value', ...(percent ? { max: 1 } : {}), axisLabel: { formatter: f }, ...(i ? { splitLine: { show: false } } : {}) });
   const second = twoAxes ? s.series.find((x) => lines.has(x.measure.name))!.measure : undefined;
   return {

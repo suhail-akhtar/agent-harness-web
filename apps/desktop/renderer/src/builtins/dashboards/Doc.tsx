@@ -12,6 +12,7 @@ import { navigate, openPluginPanel, useApp } from '../../state/app';
 import { useFenceRenderer } from '../core.chat/Transcript';
 import { act, appClient, type DocDetail, useDataStore } from './api';
 import { Inspector, PageInspector } from './Inspector';
+import { LAYOUT_LABEL, LayoutDialog, TemplateDialog } from './LayoutUi';
 
 export function useDark(): boolean {
   const [dark, setDark] = useState(() => document.documentElement.dataset.theme === 'dark');
@@ -30,9 +31,10 @@ export function DocPage({ params }: { params: Record<string, string> }): React.R
   const [selected, setSelected] = useState<string | null>(null);
   const [page, setPage] = useState<string>();
   const [viewAs, setViewAs] = useState('');
-  const [dialog, setDialog] = useState<'publish' | 'alerts' | 'subs' | 'refresh' | 'theme' | 'history' | 'verify' | null>(null);
+  const [dialog, setDialog] = useState<'publish' | 'alerts' | 'subs' | 'refresh' | 'theme' | 'history' | 'verify' | 'layout' | 'template' | null>(null);
   const [state, setState] = useState<ViewState>({});
   const [asking, setAsking] = useState<null | 'ask' | 'bookmark'>(null);
+  const [askVisual, setAskVisual] = useState<VisualSpec | null>(null);
   const version = useDataStore((s) => s.docVersion[id]);
   const catalog = useDataStore((s) => s.catalog);
   const dark = useDark();
@@ -73,6 +75,13 @@ export function DocPage({ params }: { params: Record<string, string> }): React.R
         <Tooltip label="Redo"><IconButton icon="arrow-right" size="sm" label="Redo" onClick={() => void act('doc.redo', { doc: id }).catch(() => {})} data-bi-redo /></Tooltip>
         <Tooltip label="Read the sources again"><IconButton icon="refresh" size="sm" label="Refresh the data" onClick={() => void act('data.refresh', { doc: id }, { quiet: true }).then((r) => toast(r.results[0]?.message.split('\n')[0] ?? 'Refreshed', { kind: 'success' })).catch(() => {})} data-bi-refresh /></Tooltip>
         <PopMenu label="Add a visual" icon="plus" items={visualMenu} testid="add-visual" />
+        <PopMenu label={LAYOUT_LABEL[cur.layout?.type ?? 'grid']!.replace(/ \(.*/, '')} icon="grid" testid="layout" items={[
+          { id: 'layout', label: 'Layout type and options…', icon: 'grid', onSelect: () => setDialog('layout') },
+          { id: 'template', label: 'Add a page from a template…', icon: 'apps', onSelect: () => setDialog('template') },
+          { id: 'pack', label: 'Pack the page up (close gaps)', icon: 'arrow-up', onSelect: () => void act('layout.pack', { doc: id, page: cur.id, direction: 'up' }).catch(() => {}) },
+          { id: 'tv', label: 'Make this page a TV wall', icon: 'monitor', onSelect: () => void act('layout.type', { doc: id, page: cur.id, layout: { type: 'tv' } }).catch(() => {}) },
+          { id: 'print', label: 'Make this page printable', icon: 'printer', onSelect: () => void act('layout.type', { doc: id, page: cur.id, layout: { type: 'print' } }).catch(() => {}) },
+        ]} />
         <Button size="sm" variant={edit ? 'primary' : 'secondary'} icon="edit" onClick={() => { setEdit(!edit); setSelected(null); }} data-bi-edit aria-pressed={edit}>{edit ? 'Done' : 'Edit'}</Button>
         <Button size="sm" icon="sparkles" onClick={() => setAsking('ask')} data-bi-ask>Ask</Button>
         <Button size="sm" icon="share" onClick={() => setDialog('publish')} data-bi-publish>Publish</Button>
@@ -83,7 +92,14 @@ export function DocPage({ params }: { params: Record<string, string> }): React.R
       <div className="flex min-h-0 flex-1">
         <div className="min-w-0 flex-1" onClick={() => edit && setSelected(null)}>
           <DocView doc={doc} client={bi} hierarchies={d.model?.hierarchies} dark={dark} page={page} onPage={setPage} onState={setState} renderMarkdown={renderMarkdown} renderFence={renderFence}
-            edit={edit ? { selected, onSelect: setSelected, onLayout: (vid, layout) => void act('doc.drag', { doc: id, visual: vid, layout }, { quiet: true }).catch(() => {}) } : undefined} />
+            visualActions={(v) => <IconButton size="xs" icon="sparkles" label="Ask the agent about this visual" data-ask-visual={v.id} onClick={(e) => { e.stopPropagation(); setAskVisual(v); setAsking('ask'); }} />}
+            edit={edit ? {
+              selected, onSelect: setSelected,
+              onMove: (vid, pos) => void act('layout.drag', { doc: id, visual: vid, x: pos.x, y: pos.y, ...(pos.dx || pos.dy ? { dx: pos.dx, dy: pos.dy } : {}), ...(pos.breakpoint ? { breakpoint: pos.breakpoint } : {}) }, { quiet: true }).catch(() => {}),
+              onResize: (vid, s) => void act('layout.resize', { doc: id, visual: vid, w: s.w, h: s.h, ...(s.breakpoint ? { breakpoint: s.breakpoint } : {}) }, { quiet: true }).catch(() => {}),
+              onLayoutOptions: (patch) => void act('layout.sidebar-width', { doc: id, page: cur.id, layout: patch }, { quiet: true }).catch(() => {}),
+              onSection: (sid, patch) => void act('layout.collapse', { doc: id, page: cur.id, section: sid, patch }, { quiet: true }).catch(() => {}),
+            } : undefined} />
         </div>
         {edit && (
           <aside className="hx-scroll w-[320px] shrink-0 overflow-y-auto border-l border-hx-border-subtle bg-hx-bg" data-bi-inspector>
@@ -98,8 +114,10 @@ export function DocPage({ params }: { params: Record<string, string> }): React.R
       {dialog === 'subs' && <SubsDialog id={id} doc={doc} onClose={() => setDialog(null)} />}
       {dialog === 'history' && <HistoryDialog id={id} onClose={() => setDialog(null)} />}
       {dialog === 'verify' && <VerifyDialog id={id} onClose={() => setDialog(null)} />}
-      {asking && <TextPrompt title={asking === 'ask' ? `Ask about "${doc.title}"` : 'Save a bookmark'} placeholder={asking === 'ask' ? 'A question, or a change: "make Top countries a stacked bar by quarter and add YoY %"' : 'Bookmark name'} multiline={asking === 'ask'} ok={asking === 'ask' ? 'Ask the agent' : 'Save'}
-        onClose={() => setAsking(null)} onOk={(text) => { setAsking(null); if (asking === 'ask') void startAsk(id, doc, cur.id, state, text); else void act('doc.bookmark', { doc: id, bookmark: { name: text, page: cur.id, filters: [...(state.filters ?? []), ...(state.selection?.filters ?? [])] } }).catch(() => {}); }} />}
+      {dialog === 'layout' && <LayoutDialog id={id} page={cur} onClose={() => setDialog(null)} />}
+      {dialog === 'template' && <TemplateDialog doc={d} onClose={() => setDialog(null)} />}
+      {asking && <TextPrompt title={asking === 'ask' ? `Ask about ${askVisual ? `"${askVisual.title ?? askVisual.type}"` : `"${doc.title}"`}` : 'Save a bookmark'} placeholder={asking === 'ask' ? 'A question, or a change: "make Top countries a stacked bar by quarter and add YoY %"' : 'Bookmark name'} multiline={asking === 'ask'} ok={asking === 'ask' ? 'Ask the agent' : 'Save'}
+        onClose={() => { setAsking(null); setAskVisual(null); }} onOk={(text) => { setAsking(null); const v = askVisual; setAskVisual(null); if (asking === 'ask') void startAsk(id, doc, cur.id, state, v ? `About visual ${v.id} ("${v.title ?? v.type}"): ${text}` : text); else void act('doc.bookmark', { doc: id, bookmark: { name: text, page: cur.id, filters: [...(state.filters ?? []), ...(state.selection?.filters ?? [])] } }).catch(() => {}); }} />}
     </div>
   );
 }

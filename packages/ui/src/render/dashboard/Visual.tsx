@@ -154,7 +154,7 @@ function Cards({ v, result }: VisualProps & { result: QueryResult }) {
     return (
       <div className="flex h-full flex-col justify-center px-3" data-card>
         <div className="truncate text-[clamp(20px,4.2cqw,40px)] font-semibold tabular-nums leading-tight text-hx-primary" data-card-value={String(result.rows[0]![i])}>{fmtCell(v, c, result.rows[0]![i]!)}</div>
-        <div className="truncate text-[12px] text-hx-muted">{v.title ?? c.label}</div>
+        {(!v.title || v.title !== c.label) && <div className="truncate text-[12px] text-hx-muted">{c.label}</div>}
         {ms.slice(1).map(([c2, i2]) => <div key={c2.name} className="truncate text-[12px] text-hx-secondary">{c2.label}: <b className="tabular-nums">{fmtCell(v, c2, result.rows[0]![i2]!)}</b></div>)}
       </div>
     );
@@ -194,7 +194,7 @@ function Kpi({ v, result }: VisualProps & { result: QueryResult }) {
   return (
     <div className="flex h-full flex-col justify-between px-3 py-1" data-kpi>
       <div>
-        <div className="truncate text-[12px] text-hx-muted">{v.title ?? c.label}{period >= 0 && <span data-kpi-period> · {formatValue(row[period]!, result.columns[period]!.format, result.columns[period]!.grain)}</span>}</div>
+        {(!v.title || period >= 0) && <div className="truncate text-[12px] text-hx-muted">{v.title ? '' : c.label}{period >= 0 && <span data-kpi-period>{v.title ? '' : ' · '}{formatValue(row[period]!, result.columns[period]!.format, result.columns[period]!.grain)}</span>}</div>}
         <div className="truncate text-[clamp(20px,4cqw,36px)] font-semibold tabular-nums" data-kpi-value={String(row[main])}>{fmtCell(v, c, row[main]!)}</div>
         {target !== null && <div className="flex flex-wrap items-center gap-2 text-[12px]">
           <span className="text-hx-muted">Target {formatValue(target, t >= 0 ? result.columns[t]!.format : c.format)}</span>

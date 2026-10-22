@@ -9,6 +9,7 @@ import { type CondFormat, type FilterSpec, type PageSpec, VISUAL_TYPES, type Vis
 import { Button, IconButton, Input, Select, Switch, Textarea, cx } from '@harness/ui';
 import { act, type DocDetail, modelFields, useDataStore } from './api';
 import { TYPE_LABEL } from './Doc';
+import { ArrangeSection, SectionsEditor } from './LayoutUi';
 
 const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
   <section className="border-b border-hx-border-subtle px-3 py-2.5"><h3 className="mb-1.5 text-[11.5px] font-semibold uppercase tracking-wide text-hx-muted">{title}</h3><div className="space-y-1.5">{children}</div></section>
@@ -137,8 +138,9 @@ export function Inspector({ docId, detail, v, onClose }: { docId: string; detail
         ))}
         {detail.doc.pages.some((p) => p.kind === 'tooltip') && <Row label="Tooltip page"><Select aria-label="Tooltip page" value={v.tooltip ?? ''} onChange={(t) => patch({ tooltip: t || null })} options={[{ value: '', label: 'None' }, ...detail.doc.pages.filter((p) => p.kind === 'tooltip').map((p) => ({ value: p.id, label: p.name }))]} /></Row>}
       </Section>
+      <ArrangeSection docId={docId} detail={detail} v={v} />
       <Section title="Layout">
-        <div className="grid grid-cols-4 gap-1">{(['x', 'y', 'w', 'h'] as const).map((k) => <Input key={`${k}${v.layout[k]}`} aria-label={`Layout ${k}`} type="number" defaultValue={v.layout[k]} onBlur={(e) => { const n = Number(e.target.value); if (n !== v.layout[k]) void act('doc.resize', { doc: docId, visual: v.id, layout: { [k]: n } }).catch(() => {}); }} />)}</div>
+        <div className="grid grid-cols-4 gap-1">{(['x', 'y', 'w', 'h'] as const).map((k) => <Input key={`${k}${v.layout[k]}`} aria-label={`Layout ${k}`} type="number" defaultValue={v.layout[k]} onBlur={(e) => { const n = Number(e.target.value); if (n !== v.layout[k]) void act(k === 'x' || k === 'y' ? 'layout.drag' : 'layout.resize', { doc: docId, visual: v.id, [k]: n }).catch(() => {}); }} />)}</div>
         <div className="text-[11.5px] text-hx-muted">Phone layout</div>
         <div className="grid grid-cols-2 gap-1">
           <Input aria-label="Phone order" type="number" placeholder="order" key={`o${v.mobile?.order}`} defaultValue={v.mobile?.order ?? ''} onBlur={(e) => void act('doc.drag', { doc: docId, visual: v.id, mobile: { order: e.target.value ? Number(e.target.value) : undefined } }).catch(() => {})} />
@@ -232,6 +234,7 @@ export function PageInspector({ docId, detail, page }: { docId: string; detail: 
         <Row label="Kind"><Select aria-label="Page kind" value={page.kind ?? 'page'} onChange={(k) => void act('doc.rename-page', { doc: docId, page: page.id, patch: { kind: k === 'page' ? null : k, ...(k === 'drillthrough' && !page.drillFields?.length && fields[0] ? { drillFields: [fields[0].value] } : {}) } }).catch(() => {})} options={[{ value: 'page', label: 'Page' }, { value: 'drillthrough', label: 'Drill-through target' }, { value: 'tooltip', label: 'Tooltip' }]} /></Row>
         {page.kind === 'drillthrough' && <Picker label="Drill-through fields" testid="drill-fields" values={page.drillFields ?? []} options={fields} onChange={(d) => void act('doc.rename-page', { doc: docId, page: page.id, patch: { drillFields: d } }).catch(() => {})} />}
         <FiltersEditor filters={page.filters ?? []} fields={fields} onChange={(f) => void act('doc.rename-page', { doc: docId, page: page.id, patch: { filters: f } }).catch(() => {})} />
+        <SectionsEditor docId={docId} page={page} />
         {detail.doc.pages.length > 1 && <Button size="sm" variant="danger" onClick={() => void act('doc.remove-page', { doc: docId, page: page.id }).catch(() => {})}>Remove this page</Button>}
       </Section>
       <Section title="Pages">

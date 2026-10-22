@@ -42,6 +42,10 @@ class Scripted implements Provider {
         ] });
       } else if (results.length === 2) call('dashboard', { op: 'verify', doc });
       else content.push({ type: 'text', text: `Done. ${/verified: every visual ran/.test(lastResult) ? 'Every visual ran and its totals reconcile.' : 'Verify found problems.'} Changed: the region chart is now a bar with labels, and an Orders card was added. Undo is one click away.` });
+    } else if (doc && /tv wall/i.test(asked)) {
+      if (results.length === 0) call('dashboard', { op: 'describe', doc });
+      else if (results.length === 1) call('dashboard', { op: 'set_layout', doc, page: /page (p-[a-z0-9-]+)/.exec(lastResult)?.[1] ?? 'p-1', layout: { type: 'tv', aspect: '16:9', rotate: 30 } });
+      else content.push({ type: 'text', text: 'Done: the page is now a 16:9 TV wall (large type, no chrome, pages rotating every 30 s). Every widget was kept.' });
     } else {
       content.push({ type: 'text', text: 'Hello from the dashboards engine.' });
     }

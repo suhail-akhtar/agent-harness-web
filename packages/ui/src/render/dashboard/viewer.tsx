@@ -86,7 +86,7 @@ function Viewer() {
   if (!doc) return <div className="flex h-full items-center justify-center text-hx-muted">Loading…</div>;
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center gap-2 border-b border-hx-border-subtle px-3 py-2"><h1 className="min-w-0 flex-1 truncate text-[16px] font-semibold" data-bi-title>{doc.title}</h1>{stat && <span className="text-[11.5px] text-hx-muted">Static export · interactions need the live page</span>}</header>
+      {!print && !doc.pages.filter((p) => !p.kind).every((p) => p.layout?.type === 'tv') && <header className="flex items-center gap-2 border-b border-hx-border-subtle px-3 py-2"><h1 className="min-w-0 flex-1 truncate text-[16px] font-semibold" data-bi-title>{doc.title}</h1>{stat && <span className="text-[11.5px] text-hx-muted">Static export · interactions need the live page</span>}</header>}
       <div className="min-h-0 flex-1"><DocView doc={doc} client={client} hierarchies={hier} dark={dark} mode={stat ? 'static' : 'published'} print={print} renderMarkdown={renderMarkdown} renderFence={renderFence} /></div>
     </div>
   );

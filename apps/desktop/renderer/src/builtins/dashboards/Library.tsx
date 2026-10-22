@@ -4,12 +4,14 @@ import React, { useEffect, useState } from 'react';
 import { Badge, Button, EmptyState, Field, Icon, Input, Modal, Select, cx } from '@harness/ui';
 import { navigate } from '../../state/app';
 import { act, useDataStore } from './api';
+import { TemplateDialog } from './LayoutUi';
 
 export function Library({ params }: { params: Record<string, string> }): React.ReactElement {
   const type = params.type === 'report' ? 'report' : 'dashboard';
   const docs = useDataStore((s) => s.docs);
   const catalog = useDataStore((s) => s.catalog);
   const [creating, setCreating] = useState(false);
+  const [templating, setTemplating] = useState(false);
   const [q, setQ] = useState('');
   useEffect(() => { void useDataStore.getState().refreshDocs(); void useDataStore.getState().refreshCatalog(); }, []);
   const list = (docs ?? []).filter((d) => d.type === type && (!q || d.title.toLowerCase().includes(q.toLowerCase())));
@@ -21,6 +23,7 @@ export function Library({ params }: { params: Record<string, string> }): React.R
           <h1 className="flex-1 text-[20px] font-semibold">{type === 'report' ? 'Reports' : 'Dashboards'}</h1>
           <Input icon="search" placeholder={`Search ${noun}s`} value={q} onChange={(e) => setQ(e.target.value)} className="w-56" aria-label={`Search ${noun}s`} />
           <Button variant="secondary" icon="database" onClick={() => navigate({ view: 'core.dashboards:data' })}>Data</Button>
+          <Button variant="secondary" icon="apps" onClick={() => setTemplating(true)} data-new-from-template>From a template</Button>
           <Button variant="primary" icon="plus" onClick={() => setCreating(true)} data-new-doc>New {noun}</Button>
         </div>
         {docs === null ? <p className="text-hx-muted">Loading…</p> : !list.length ? (
@@ -39,6 +42,7 @@ export function Library({ params }: { params: Record<string, string> }): React.R
           </div>
         )}
       </div>
+      {templating && <TemplateDialog onClose={() => setTemplating(false)} />}
       <NewDoc open={creating} type={type} models={catalog?.models.map((m) => ({ value: m.id, label: m.name })) ?? []} onClose={() => setCreating(false)} />
     </div>
   );

@@ -11,6 +11,7 @@ import { cx } from '../../components/primitives.tsx';
 import { Icon } from '../../icons.tsx';
 import { BiVisual, type VisualEvents } from './Visual.tsx';
 import { toCsvText } from './csv.ts';
+import { type LayoutEdit, PageLayout, printPages, visibleIn } from './Layouts.tsx';
 
 export interface BiClient {
   /** A visual's numbers in a state (the server applies filters, interactions, drill and row-level security). */
@@ -28,7 +29,7 @@ export interface DocViewProps {
   hierarchies?: HierarchySpec[];
   dark: boolean;
   /** Editing: selecting visuals, moving and resizing them (each change is an op the host applies). */
-  edit?: { selected?: string | null; onSelect(id: string | null): void; onLayout(id: string, layout: VisualSpec['layout']): void; mobile?: boolean };
+  edit?: LayoutEdit;
   renderMarkdown?(text: string): React.ReactNode;
   renderFence?(lang: string, source: string): React.ReactNode;
   mode?: 'app' | 'published' | 'static';
@@ -43,8 +44,6 @@ export interface DocViewProps {
   toolbar?: React.ReactNode;
 }
 
-const ROW = 40;
-const GAP = 8;
 
 export function DocView(p: DocViewProps): React.ReactElement {
   const { doc } = p;
@@ -68,6 +67,8 @@ export function DocView(p: DocViewProps): React.ReactElement {
   const [focus, setFocus] = useState<string>();
   const [tv, setTv] = useState(false);
   const [gone, setGone] = useState(false);
+  const [tabs, setTabs] = useState<Record<string, string>>({});
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const host = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(1200);
   useEffect(() => { const ro = new ResizeObserver(([e]) => setWidth(e!.contentRect.width)); if (host.current) ro.observe(host.current); return () => ro.disconnect(); }, []);
@@ -85,6 +86,15 @@ export function DocView(p: DocViewProps): React.ReactElement {
     document.addEventListener('fullscreenchange', off);
     return () => { clearInterval(t); document.removeEventListener('fullscreenchange', off); };
   }, [tv]);
+
+  // A TV layout rotates through the TV pages on its own timer (not while editing).
+  const tvLayout = page.layout?.type === 'tv' && !p.edit;
+  useEffect(() => {
+    const secs = page.layout?.type === 'tv' ? page.layout.rotate ?? 30 : 0;
+    if (!tvLayout || !secs || pages.length < 2) return;
+    const t = setTimeout(() => setPageId((cur) => { const i = pages.findIndex((x) => x.id === cur); return pages[(i + 1) % pages.length]!.id; }), secs * 1000);
+    return () => clearTimeout(t);
+  }, [tvLayout, pageId, page.layout?.type === 'tv' ? page.layout.rotate : 0]);
 
   const state: ViewState = useMemo(() => ({ page: page.id, filters, ...(selection ? { selection } : {}), drill, decomp, ...(drillthrough && page.kind === 'drillthrough' ? { drillthrough } : {}) }), [page.id, filters, selection, drill, decomp, drillthrough, page.kind]);
   useEffect(() => { p.onState?.(state); }, [state]);
@@ -110,17 +120,39 @@ export function DocView(p: DocViewProps): React.ReactElement {
   const goBack = () => { const last = back.at(-1); if (!last) return; setBack((b) => b.slice(0, -1)); setDrillthrough(last.drillthrough); setPageId(last.page); };
 
   const mobile = width < 640 && !p.edit;
-  const visuals = page.visuals.filter((v) => !hidden.includes(v.id) && !(mobile && v.mobile?.hidden));
-  const ordered = mobile || doc.type === 'report' ? [...visuals].sort((a, b) => (mobile ? (a.mobile?.order ?? 999) - (b.mobile?.order ?? 999) : 0) || a.layout.y - b.layout.y || a.layout.x - b.layout.x) : visuals;
+  const shows = visibleIn(page, tabs[page.id], collapsed);
+  const all = page.visuals.filter((v) => !hidden.includes(v.id) && !(mobile && v.mobile?.hidden));
+  // Printing (a PDF, a printout): every page, one after another, nothing collapsed or behind a tab.
+  const shownPages = p.print ? pages : [page];
+  const visuals = p.print ? shownPages.flatMap((x) => x.visuals) : all.filter(shows);
+  // Paper pages per printed page (print layouts only), so page numbers run through the document.
+  const papers = useMemo(() => shownPages.map((pg) => (pg.layout?.type === 'print' ? printPages(pg.visuals, pg.layout).length : 0)), [shownPages]);
   const [loading, setLoading] = useState<Record<string, boolean>>({});
   const ready = Object.values(loading).every((x) => !x) && Object.keys(loading).length >= visuals.filter((v) => !['text', 'image', 'button'].includes(v.type) && !(v.type === 'fence' && v.options?.fence?.source)).length;
   const active = filters.length + (selection ? 1 : 0) + (drillthrough && page.kind === 'drillthrough' ? drillthrough.length : 0);
 
+  const renderVisual = (v: VisualSpec) => (
+          <VisualFrame key={v.id} v={v} doc={doc} state={state} client={p.client} version={version} dark={p.dark} theme={theme} edit={p.edit} focus={focus === v.id} onFocus={() => setFocus(focus === v.id ? undefined : v.id)}
+            selection={selection?.visual === v.id ? selection.filters : undefined}
+            slicerValue={v.type === 'slicer' ? filters.find((f) => f.field === v.options?.slicer?.field) : undefined}
+            onLoading={(on) => setLoading((l) => (l[v.id] === on ? l : { ...l, [v.id]: on }))}
+            events={{
+              onSelect: (f) => setSelection(f ? { visual: v.id, filters: f } : undefined),
+              onSlicer: setSlicer,
+              onButton: button,
+              onDecomp: (path) => setDecomp((d) => ({ ...d, [v.id]: path })),
+              onDrill: (val) => { const h = hierarchyOf(v); if (!h) return; setDrill((d) => { const cur = d[v.id] ?? { level: 0, path: [] }; if (cur.level >= h.levels.length - 1) return d; return { ...d, [v.id]: { level: cur.level + 1, path: [...cur.path.slice(0, cur.level), val] } }; }); setSelection(undefined); },
+              onContext: (fs, at) => setMenu({ v, filters: fs, ...at }),
+              onHover: (fs, at) => { if (!v.tooltip) return; setTip(fs && at ? { v, filters: fs, ...at } : undefined); },
+            }}
+            drill={drill[v.id]} hierarchy={hierarchyOf(v)} onDrillUp={() => setDrill((d) => { const cur = d[v.id]; if (!cur || cur.level === 0) return d; return { ...d, [v.id]: { level: cur.level - 1, path: cur.path.slice(0, cur.level - 1) } }; })}
+            decompPath={decomp[v.id]} renderMarkdown={p.renderMarkdown} renderFence={p.renderFence} static={!!p.print || p.mode === 'static'} actions={p.visualActions} />
+  );
   if (gone) return <div className="flex h-full items-center justify-center p-8 text-center text-hx-secondary" data-bi-gone>This page is no longer published.</div>;
   const bg = theme.background ? { background: theme.background, color: theme.foreground } : undefined;
   return (
-    <div ref={host} className={cx('flex h-full min-h-0 flex-col', tv && 'bg-hx-bg text-[115%]')} style={bg} data-bi-doc={doc.type} data-bi-ready={ready ? '1' : '0'} data-bi-page={page.id}>
-      {!p.print && (
+    <div ref={host} className={cx('flex h-full min-h-0 flex-col', tv && 'bg-hx-bg text-[115%]')} style={bg} data-bi-doc={doc.type} data-bi-ready={ready ? '1' : '0'} data-bi-page={page.id} data-layout={page.layout?.type ?? 'grid'}>
+      {!p.print && !tvLayout && (
         <div className="flex flex-wrap items-center gap-1 border-b border-hx-border-subtle px-2 py-1" data-bi-toolbar>
           {back.length > 0 && <button type="button" className="mr-1 flex items-center gap-1 rounded px-1.5 py-0.5 text-[12px] hover:bg-hx-hover" onClick={goBack} data-bi-back><Icon name="arrow-left" size={13} />Back</button>}
           <div role="tablist" aria-label="Pages" className="flex min-w-0 flex-wrap gap-0.5">
@@ -137,25 +169,18 @@ export function DocView(p: DocViewProps): React.ReactElement {
           </div>
         </div>
       )}
-      <div className={cx('min-h-0 flex-1 overflow-auto', p.print ? '' : 'p-2')} data-bi-canvas>
-        {doc.type === 'report' && <div className="mx-auto mb-2 max-w-[1100px] px-2"><h1 className="text-[22px] font-semibold">{doc.title}</h1>{doc.description && <p className="text-hx-secondary">{doc.description}</p>}{doc.snapshot && <p className="text-[12px] text-hx-muted">Numbers as of {new Date(doc.snapshot.at).toLocaleString()}</p>}</div>}
-        <Grid edit={p.edit} flow={mobile || doc.type === 'report'} mobile={mobile} width={width} visuals={ordered} render={(v) => (
-          <VisualFrame key={v.id} v={v} doc={doc} state={state} client={p.client} version={version} dark={p.dark} theme={theme} edit={p.edit} focus={focus === v.id} onFocus={() => setFocus(focus === v.id ? undefined : v.id)}
-            selection={selection?.visual === v.id ? selection.filters : undefined}
-            slicerValue={v.type === 'slicer' ? filters.find((f) => f.field === v.options?.slicer?.field) : undefined}
-            onLoading={(on) => setLoading((l) => (l[v.id] === on ? l : { ...l, [v.id]: on }))}
-            events={{
-              onSelect: (f) => setSelection(f ? { visual: v.id, filters: f } : undefined),
-              onSlicer: setSlicer,
-              onButton: button,
-              onDecomp: (path) => setDecomp((d) => ({ ...d, [v.id]: path })),
-              onDrill: (val) => { const h = hierarchyOf(v); if (!h) return; setDrill((d) => { const cur = d[v.id] ?? { level: 0, path: [] }; if (cur.level >= h.levels.length - 1) return d; return { ...d, [v.id]: { level: cur.level + 1, path: [...cur.path.slice(0, cur.level), val] } }; }); setSelection(undefined); },
-              onContext: (fs, at) => setMenu({ v, filters: fs, ...at }),
-              onHover: (fs, at) => { if (!v.tooltip) return; setTip(fs && at ? { v, filters: fs, ...at } : undefined); },
-            }}
-            drill={drill[v.id]} hierarchy={hierarchyOf(v)} onDrillUp={() => setDrill((d) => { const cur = d[v.id]; if (!cur || cur.level === 0) return d; return { ...d, [v.id]: { level: cur.level - 1, path: cur.path.slice(0, cur.level - 1) } }; })}
-            decompPath={decomp[v.id]} renderMarkdown={p.renderMarkdown} renderFence={p.renderFence} static={!!p.print || p.mode === 'static'} actions={p.visualActions} />
-        )} />
+      <div className={cx('min-h-0 flex-1', tvLayout ? 'overflow-hidden bg-hx-bg' : 'overflow-auto', p.print || tvLayout ? '' : 'p-2')} data-bi-canvas>
+        {doc.type === 'report' && page.layout?.type !== 'print' && <div className="mx-auto mb-2 max-w-[1100px] px-2"><h1 className="text-[22px] font-semibold">{doc.title}</h1>{doc.description && <p className="text-hx-secondary">{doc.description}</p>}{doc.snapshot && <p className="text-[12px] text-hx-muted">Numbers as of {new Date(doc.snapshot.at).toLocaleString()}</p>}</div>}
+        {shownPages.map((pg, i) => {
+          const pl = doc.type === 'report' && !pg.layout ? { ...pg, layout: { type: 'story' as const } } : p.print && pg.layout?.type === 'tabs' ? { ...pg, layout: { ...pg.layout, type: 'sections' as const } } : pg;
+          return (
+            <div key={pg.id} data-bi-print-page={p.print ? pg.id : undefined} style={p.print && pg.layout?.type !== 'print' ? { breakAfter: 'page' } : undefined}>
+              {p.print && shownPages.length > 1 && pg.layout?.type !== 'print' && <h2 className="mb-2 px-2 text-[16px] font-semibold">{pg.name}</h2>}
+              <PageLayout page={pl} doc={doc} visuals={pg === page ? all : pg.visuals} width={width} edit={p.edit} print={p.print} paper={p.print ? { before: papers.slice(0, i).reduce((a, b) => a + b, 0), total: papers.reduce((a, b) => a + b, 0) } : undefined}
+                tab={tabs[pg.id]} onTab={(t) => setTabs((x) => ({ ...x, [pg.id]: t }))} collapsed={p.print ? {} : collapsed} onCollapse={(id) => { const sec = pg.layout?.sections?.find((x) => x.id === id); const now = !(collapsed[id] ?? !!sec?.collapsed); setCollapsed((c) => ({ ...c, [id]: now })); p.edit?.onSection?.(id, { collapsed: now }); }} render={renderVisual} />
+            </div>
+          );
+        })}
         {!visuals.length && <div className="p-8 text-center text-[13px] text-hx-muted" data-bi-empty-page>{p.edit ? 'Add a visual, or ask the agent to build this page.' : 'This page is empty.'}</div>}
       </div>
       {menu && (
@@ -196,44 +221,6 @@ function downloadCsv(name: string, r: QueryResult): void {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob); a.download = name; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-}
-
-/** The 12-column grid: absolute placement in rows of 40 px; flowing on a phone and in reports. */
-function Grid({ visuals, render, edit, flow, mobile, width }: { visuals: VisualSpec[]; render(v: VisualSpec): React.ReactNode; edit?: DocViewProps['edit']; flow: boolean; mobile: boolean; width: number }) {
-  const [drag, setDrag] = useState<{ id: string; layout: VisualSpec['layout'] }>();
-  const colW = (width - 16 + GAP) / 12;
-  if (flow) {
-    return <div className="flex flex-wrap content-start gap-2" data-bi-grid="flow">{visuals.map((v) => <div key={v.id} style={{ width: mobile ? '100%' : `calc(${(v.layout.w / 12) * 100}% - ${GAP}px)`, height: (mobile ? v.mobile?.h ?? v.layout.h : v.layout.h) * ROW }} className="break-inside-avoid">{render(v)}</div>)}</div>;
-  }
-  const rows = Math.max(4, ...visuals.map((v) => (drag?.id === v.id ? drag.layout : v.layout)).map((l) => l.y + l.h));
-  const start = (e: React.PointerEvent, v: VisualSpec, mode: 'move' | 'resize') => {
-    if (!edit || e.button !== 0) return;
-    e.preventDefault(); e.stopPropagation();
-    const x0 = e.clientX; const y0 = e.clientY; const l0 = v.layout;
-    let cur = l0;
-    const mv = (ev: PointerEvent) => {
-      const dx = Math.round((ev.clientX - x0) / colW); const dy = Math.round((ev.clientY - y0) / (ROW + GAP));
-      cur = mode === 'move' ? { ...l0, x: Math.max(0, Math.min(12 - l0.w, l0.x + dx)), y: Math.max(0, l0.y + dy) } : { ...l0, w: Math.max(1, Math.min(12 - l0.x, l0.w + dx)), h: Math.max(2, l0.h + dy) };
-      setDrag({ id: v.id, layout: cur });
-    };
-    const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); setDrag(undefined); if (JSON.stringify(cur) !== JSON.stringify(l0)) edit.onLayout(v.id, cur); };
-    window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
-  };
-  return (
-    <div className="relative" style={{ height: rows * (ROW + GAP) }} data-bi-grid="grid">
-      {edit && <div className="pointer-events-none absolute inset-0 opacity-40" style={{ backgroundImage: 'linear-gradient(to right, var(--hx-border-subtle) 1px, transparent 1px)', backgroundSize: `${colW}px 100%` }} />}
-      {visuals.map((v) => {
-        const l = drag?.id === v.id ? drag.layout : v.layout;
-        return (
-          <div key={v.id} className={cx('absolute', drag?.id === v.id && 'z-20 opacity-90')} style={{ left: l.x * colW, top: l.y * (ROW + GAP), width: l.w * colW - GAP, height: l.h * (ROW + GAP) - GAP }} data-bi-cell={v.id}
-            onPointerDown={edit ? (e) => { if ((e.target as HTMLElement).closest('[data-drag-handle]')) start(e, v, 'move'); } : undefined}>
-            {render(v)}
-            {edit && <div data-resize-handle aria-label="Resize" className="absolute bottom-0 right-0 z-10 h-3 w-3 cursor-se-resize rounded-br border-b-2 border-r-2 border-hx-accent/60" onPointerDown={(e) => start(e, v, 'resize')} />}
-          </div>
-        );
-      })}
-    </div>
-  );
 }
 
 interface FrameProps {
