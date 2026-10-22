@@ -313,3 +313,30 @@ The same powers as Claude's desktop app, on the harness:
   sessions, with status, cost and a click-through to each transcript), proposal cards in the chat, report
   cards when a linked session finishes, split view (two sessions side by side), chapters (`mark_chapter`
   draws a table of contents), the todo list, and workflow runs drawn as a graph with each node's agent.
+
+## 13. Agents on several providers, with consent
+
+Agents can work on other providers' models when the person allows it (data goes to that provider's API):
+`delegation: {allowedModels, maxCostUsd?, requireApproval?}` per account under an operator cap. `agent`,
+`start_session` and workflow agent nodes take `model`/`effort`; a model outside the list is refused; the
+first delegation to a new provider can be asked. The allowed models are listed one line each (provider,
+cost tier, context, strengths) in those tools' descriptions, so the catalogue sits in the cached prefix.
+One provider's reasoning is never replayed to another; reports cross providers fenced like any report;
+cost is counted per model.
+
+## 14. Rendering for science and business intelligence
+
+Lazily loaded, sandboxed where they run code, with no network: KaTeX with environments and mhchem
+(`\ce`, `\pu`); 2D chemical structures from SMILES, 3D molecules (mol/sdf/pdb); function plots; Graphviz;
+Vega-Lite (and ECharts) for statistics (histograms, box/violin, regression, heatmaps, annotated series);
+a `dashboard` spec (KPI cards, charts and tables in a grid; defined in packages/plugin-ui so plugins and
+models share it); tables with sort, filter, column statistics and pivots; notebooks (ipynb); GeoJSON as SVG.
+The client's declaration of what it renders stays under 150 tokens: it is in every request's cached prefix.
+
+## 15. Cost
+
+Minimal input, maximum output: the base prefix (system prompt + tools) has a token budget checked by a
+test; tools appear only where they can work (desktop tools only with a desktop attached); everything
+added during a session is appended (reminders), never edited into earlier messages; fresh child sessions
+start from a brief, not the parent's history; reports into a parent are capped and fenced; cheaper models
+take delegated sub-tasks when the person allows it.
