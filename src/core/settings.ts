@@ -160,7 +160,13 @@ export function stackProject(a: Partial<Settings>, b: Partial<Settings>): Partia
  * hooks: a person's command would run on the server's host for a server folder,
  * and http or prompt hooks are the operator's to configure.
  */
-export interface UserSettings { permissions: Rules; maxSteps?: number; maxCostUsd?: number; maxTurnMinutes?: number }
+export interface UserSettings {
+  permissions: Rules; maxSteps?: number; maxCostUsd?: number; maxTurnMinutes?: number;
+  /** Plugins' account-scope settings sections (their ui manifests' JSON Schemas), by plugin: values only, never code. */
+  plugins?: Record<string, Record<string, unknown>>;
+}
+
+const PLUGIN_SETTINGS_MAX = 64 * 1024;
 
 /** Where an account's own files live (settings, instructions); the single-user server is "default". */
 export function accountDir(dataDir: string, owner: string | undefined): string {
@@ -176,6 +182,12 @@ export function cleanUserSettings(j: unknown): UserSettings {
   if (pos(o.maxSteps)) out.maxSteps = Math.floor(pos(o.maxSteps)!);
   if (pos(o.maxCostUsd)) out.maxCostUsd = pos(o.maxCostUsd);
   if (pos(o.maxTurnMinutes)) out.maxTurnMinutes = pos(o.maxTurnMinutes);
+  if (o.plugins && typeof o.plugins === 'object' && !Array.isArray(o.plugins)) {
+    const plugins = Object.fromEntries(Object.entries(o.plugins as Record<string, unknown>)
+      .filter(([k, v]) => /^[a-z0-9][a-z0-9._-]{0,63}$/i.test(k) && v && typeof v === 'object' && !Array.isArray(v))
+      .slice(0, 100)) as Record<string, Record<string, unknown>>;
+    if (Object.keys(plugins).length && JSON.stringify(plugins).length <= PLUGIN_SETTINGS_MAX) out.plugins = plugins;
+  }
   return out;
 }
 
@@ -185,6 +197,11 @@ export async function loadUserSettings(dataDir: string, owner: string | undefine
 
 export async function saveUserSettings(dataDir: string, owner: string | undefined, raw: unknown): Promise<UserSettings> {
   const clean = cleanUserSettings(raw);
+  // Plugins' sections are kept unless the body speaks of them (a page that edits only the core settings).
+  if (!(raw && typeof raw === 'object' && 'plugins' in raw)) {
+    const was = (await loadUserSettings(dataDir, owner)).plugins;
+    if (was) clean.plugins = was;
+  }
   await writeFileAtomic(path.join(accountDir(dataDir, owner), 'settings.json'), JSON.stringify(clean, null, 1));
   return clean;
 }

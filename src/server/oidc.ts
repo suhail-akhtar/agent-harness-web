@@ -308,8 +308,9 @@ export class BrowserSessions {
   readonly maxMs: number;
   private now: () => number;
 
-  constructor(dataDir: string, opts: { idleMs?: number; maxMs?: number; now?: () => number } = {}) {
-    this.file = path.join(dataDir, 'browser-sessions.json');
+  /** `file`: another store of the same kind (the desktop's bearer sessions: desktop-sessions.json). */
+  constructor(dataDir: string, opts: { idleMs?: number; maxMs?: number; now?: () => number; file?: string } = {}) {
+    this.file = path.join(dataDir, opts.file ?? 'browser-sessions.json');
     this.idleMs = opts.idleMs ?? 12 * 3_600_000;
     this.maxMs = opts.maxMs ?? 7 * 86_400_000;
     this.now = opts.now ?? Date.now;
@@ -400,6 +401,11 @@ export class BrowserSessions {
       this.timer.unref?.();
     }
     return r.user;
+  }
+
+  /** When a session was made (for the expiry a client is told). */
+  createdAt(id: string | undefined): number | undefined {
+    return id ? this.recs.get(sha(id))?.created : undefined;
   }
 
   /** The id_token a browser session was signed in with (for the provider's sign-out). */
