@@ -2,8 +2,8 @@
 
 The agent harness as a desktop app (Electron). It is a generic shell: the shell names no feature,
 and everything a person sees comes from plugins through one registry. The built-ins (chat,
-projects, inbox, activity, artifacts, agents, plugins, settings) are plugins too, with trust `native`; third-party
-plugins use the same thirteen contribution points from the `ui` section of `harness-plugin.json`.
+projects, inbox, activity, artifacts, agents, diagrams, dashboards, plugins, settings) are plugins too, with trust `native`; third-party
+plugins use the same seventeen contribution points from the `ui` section of `harness-plugin.json`.
 The design is in [docs/desktop/DESIGN.md](../../docs/desktop/DESIGN.md).
 
 ## Run it
@@ -177,6 +177,18 @@ Layouts stay put between versions: boxes keep their places, new ones go next to 
 "Show code map" (`/codemap`) draws the session's workspace by folder from
 `GET /api/sessions/:id/files/imports` (TS/JS/Python imports, read-only). Models learn the spec from
 the `diagrams` skill, listed only for an app that declares the `diagram` renderer.
+
+## Dashboards (`core.dashboards`)
+
+Dashboards, Reports and Data in the sidebar: sources (secrets as key vault names), datasets with
+the query editor (steps, previews, profiling, SQL), the semantic model (relationships, measures,
+hierarchies, roles), dashboards and reports edited in place (drag, resize, the inspector, nine
+layout types, templates) with Undo, Ask (an agent applying the same ops beside the dashboard),
+publishing as a live page, exports. Every chart, figure and table in a transcript has "Add to
+dashboard". A visual with a hierarchy has a drill bar (up, drill mode, next level, expand all, a
+breadcrumb); a point's menu opens linked dashboards with its context; slicers sync across
+dashboards; the model view shows where each table comes from (and which are live). See the README's "Data, dashboards and reports". `node apps/desktop/scripts/build-viewer.mjs`
+builds the published-page viewer (`dist/bi-viewer`); the e2e builds it when it is out of date.
 
 ## Environment
 

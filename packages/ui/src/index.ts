@@ -15,7 +15,8 @@ export { Artifact, ArtifactFrame, SandboxFrame, DiagramPlaceholder, setArtifactH
 export { artifactDocument, artifactSandbox, artifactCsp, moleculeDocument, MOLECULE_FORMATS, type ArtifactKind, type FramedArtifactKind } from './render/artifact-doc.ts';
 export { DiffView, PatchView } from './render/DiffView.tsx';
 export { ImageView, Lightbox, Citation, Reasoning, ImageStrip, type Source } from './render/Media.tsx';
-export { Widget, RenderBoundary } from './render/Widget.tsx';
+export { Widget, RenderBoundary, BlockActionsContext } from './render/Widget.tsx';
+export * from './render/dashboard/index.ts';
 export { copyText, copyRich, downloadText } from './render/download.ts';
 export * from './render/safe.ts';
 export { sanitizeHtml } from './render/sanitize-html.ts';

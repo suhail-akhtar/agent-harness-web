@@ -538,3 +538,15 @@ Then (follow-ups, for any plugin):
 - Split view is the shell's (`openSplit(route)`, any view), not the agents plugin's.
 - A session's workflow list is read again when `.harness/workflows` changes (cached on the folder's
   listing); the catalogue is not in the prompt, so the cached prefix is untouched.
+
+## 22. Dashboards as built
+
+One engine (DuckDB) computes every number; models never type one. (Since: logs, XML, NDJSON, MongoDB and SQL Server sources, live tables beside imported ones, cleansing steps, five-level drill with a drill bar and breadcrumb, links and synced slicers between dashboards; the pure drill and context rules live in `packages/plugin-ui/src/bi.ts` so the app, published pages and the agents' `drill`/`drillthrough` ops agree.) Sources (files, Excel, SQLite,
+Postgres, MySQL, HTTP APIs, inline values, plugins' sources) become extracts; datasets add
+query-editor steps and SQL; a semantic model adds relationships, measures (time intelligence
+exact by re-aggregation), hierarchies and row-level security; documents (dashboards and reports)
+hold pages of visuals in one of nine layouts. Every change is an op from one catalogue
+(`packages/plugin-ui/src/bi.ts`), applied by the app's controls and the agents' four tools alike,
+versioned in the artifact store, undoable. Published pages are the same renderers served at
+`/p/<slug>`, refreshed live over server-sent events. Contribution points added: `dataSources`,
+`dashboardWidgets`, `dashboardTemplates`, `blockActions`. Details in the README.

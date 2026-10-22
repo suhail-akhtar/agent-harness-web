@@ -597,7 +597,7 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       assert.deepEqual(unnamed, [], 'every control has a name');
       await page.locator('[data-statusbar]').click();
       const seen: string[] = [];
-      for (let i = 0; i < 40; i++) {
+      for (let i = 0; i < 60 && !seen.includes('composer'); i++) {
         await page.keyboard.press('Tab');
         const f = await page.evaluate(() => {
           const el = document.activeElement as HTMLElement | null;

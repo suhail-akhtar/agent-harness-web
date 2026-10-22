@@ -106,7 +106,7 @@ export function FencedBlock({ lang, source, streaming = false, renderFence, onFi
     default: return <CodeBlock code={source} language={lang} streaming={streaming} />;
   }
   if (!FRAMED.has(kind)) return drawn;
-  return <Widget kind={TITLES[kind] ?? kind} source={source} extension={extensionFor(kind, lang)} onFix={onFix}>{drawn}</Widget>;
+  return <Widget kind={TITLES[kind] ?? kind} source={source} extension={extensionFor(kind, lang)} onFix={onFix} block={streaming ? undefined : { kind, lang }}>{drawn}</Widget>;
 }
 
 // The footnotes block's document is the references (in order) and the definitions: only its section is kept.

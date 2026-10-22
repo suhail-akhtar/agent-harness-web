@@ -10,6 +10,7 @@ import {
   qualify, type CommandContribution, type ComposerChipContribution, type HomeCardContribution, type NavItemContribution, type OnboardingContribution,
   type PanelContribution, type PromptContribution, type RendererContribution, type SettingsContribution, type SlashCommandContribution,
   type StatusItemContribution, type ThemeContribution, type UiManifest, type UiTrust, type ViewContribution,
+  type DataSourceContribution, type WidgetContribution, type BlockActionContribution, type DashboardTemplateContribution,
 } from '@harness/plugin-ui';
 import { parseChord } from './keybindings.ts';
 
@@ -44,6 +45,10 @@ export type StatusItem = Q<StatusItemContribution>;
 export type Theme = Q<ThemeContribution>;
 export type Prompt = Q<PromptContribution>;
 export type OnboardingStep = Q<OnboardingContribution> & { view: string };
+export type DataSourceType = Q<DataSourceContribution>;
+export type Widget = Q<WidgetContribution>;
+export type BlockAction = Q<BlockActionContribution> & { command: string };
+export type DashboardTemplate = Q<DashboardTemplateContribution>;
 
 export interface Registry {
   plugins: PluginEntry[];
@@ -62,6 +67,11 @@ export interface Registry {
   themes: Theme[];
   prompts: Prompt[];
   onboarding: OnboardingStep[];
+  /** Data source types and dashboard widgets plugins add (core.dashboards lists them), and actions on rendered blocks. */
+  dataSources: DataSourceType[];
+  widgets: Widget[];
+  blockActions: BlockAction[];
+  dashboardTemplates: DashboardTemplate[];
   errors: Array<{ plugin: string; error: string }>;
   conflicts: Array<{ kind: 'slash' | 'keybinding'; key: string; ids: string[] }>;
 }
@@ -86,7 +96,7 @@ const isBuiltin = (p: PluginEntry) => p.source === 'builtin';
 export function buildRegistry(entries: PluginEntry[], o: RegistryOptions = {}): Registry {
   const r: Registry = {
     plugins: entries, active: [], navItems: [], views: new Map(), panels: new Map(), commands: [], slashCommands: [], composerChips: [], settings: [],
-    renderers: { tool: new Map(), event: new Map(), fence: new Map(), artifact: new Map() }, homeCards: [], statusItems: [], themes: [], prompts: [], onboarding: [], errors: [], conflicts: [],
+    renderers: { tool: new Map(), event: new Map(), fence: new Map(), artifact: new Map() }, homeCards: [], statusItems: [], themes: [], prompts: [], onboarding: [], dataSources: [], widgets: [], blockActions: [], dashboardTemplates: [], errors: [], conflicts: [],
   };
   const required = new Set(o.required ?? []);
   // Built-ins first, so a third-party plugin's renderer (later) replaces a built-in default.
@@ -126,6 +136,10 @@ export function buildRegistry(entries: PluginEntry[], o: RegistryOptions = {}): 
     for (const t of c.themes) r.themes.push(q(t));
     for (const pr of c.prompts) r.prompts.push(q(pr));
     for (const ob of c.onboarding) r.onboarding.push({ ...q(ob), view: qualify(p.name, ob.view) });
+    for (const d of c.dataSources ?? []) r.dataSources.push(q(d));
+    for (const w of c.dashboardWidgets ?? []) r.widgets.push(q(w));
+    for (const b of c.blockActions ?? []) r.blockActions.push({ ...q(b), command: qualify(p.name, b.command) });
+    for (const t of c.dashboardTemplates ?? []) r.dashboardTemplates.push(q(t));
   }
   const navOrder = o.navOrder ?? [];
   const rank = (qid: string, list: string[]) => { const i = list.indexOf(qid); return i < 0 ? 1e6 : i; };

@@ -58,6 +58,8 @@ export interface ToolServices {
   };
   /** The session's artifacts (versioned, under .harness/artifacts). */
   artifacts?: import('../core/artifacts.ts').ArtifactService;
+  /** Data, dashboards and reports: the op layer, as this session's agent (src/data/tools.ts). */
+  data?: import('../data/tools.ts').DataToolService;
   /** The attached client app (desktop tools). */
   client?: import('./desktop.ts').ClientService;
   /** Linked sessions, proposals, messages between sessions, hand-off, chapters (the main agent only). */

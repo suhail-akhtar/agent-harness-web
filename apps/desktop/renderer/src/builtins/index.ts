@@ -11,5 +11,6 @@ import { coreActivity, coreInbox, coreProjects, coreShell } from './small';
 import { coreArtifacts } from './core.artifacts';
 import { coreAgents } from './core.agents';
 import { coreDiagrams } from './diagrams';
+import { coreDashboards } from './dashboards';
 
-export const BUILTINS: BuiltinPlugin[] = [coreShell, coreChat, coreInbox, coreActivity, coreProjects, coreArtifacts, coreAgents, corePlugins, coreSettings, coreDiagrams];
+export const BUILTINS: BuiltinPlugin[] = [coreShell, coreChat, coreInbox, coreActivity, coreProjects, coreArtifacts, coreAgents, corePlugins, coreSettings, coreDiagrams, coreDashboards];
