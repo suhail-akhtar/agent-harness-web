@@ -440,6 +440,14 @@ row-level security enforced server-side (app and published pages), usage metrics
 reports, Excel export, embed codes, versions with restore, certified datasets. (F) Natural-language
 questions answered by queries on the semantic model, with the SQL shown.
 
+Deep drill to five levels per hierarchy (down, up, expand all, next level, drill-through carrying the path)
+with correct aggregation at every level; dashboards linked by shared filter groups and drill-through across
+dashboards; a model of many datasets across many sources (Excel, CSV, JSON, Parquet, XML, SQLite, Postgres,
+MySQL, document databases, APIs, research datasets) related to each other across sources, some live and
+some cached, cleansed by recorded steps and profiled; known log formats (web access logs, syslog, JSON
+lines, Windows events, cloud load-balancer and audit logs, IIS, container logs, logfmt, CEF/LEEF, custom
+patterns) parsed into typed columns for analytics; many tabs per dashboard.
+
 Layouts, mixed per page or section: a responsive grid (drag, resize, auto-pack, its own arrangement per
 breakpoint), a free-form canvas (layers, guides, groups, locks), stacked sections, tabs and pages, a filter
 sidebar, masonry for KPI walls, a scrolling story, TV/kiosk (fixed aspect, large type, rotating pages) and
