@@ -569,6 +569,135 @@ Webhook signing secrets (`HARNESS_OPS_WEBHOOK_SECRETS`, `{"pagerduty": "ops-page
 
 Eval cases in `evals/aiops/` (an eval case can now have `setup` and `teardown` commands): `incident-slow-endpoint` (incident-response; hidden checks: the postmortem's `Root cause:` line names the missing orders index, the index was created after the approval, `/api/orders` is fast again, and no change before an approval), `disk-full` (runbook-clear-disk; half the volume free, the database untouched by checksum, the plan's deletion commands - parsed from its code spans, not its prose - stay inside `/data/cache`, no change before approval), `advisor-report` (ops-advisor; the report flags the expired certificate, the root container and the missing health checks, with evidence, and changes nothing). "Changed a system" is judged from the system, not from what a command looks like: the setup (`up-reset ... --record <run>/stack-before.json`, next to the workspace where no agent sees it) records db-1's files under `/data`, `/config` and `/etc` (type, size, mode, owner, mtime, ctime, SHA-256) and the containers (id, start time, restarts), then records every later change with its time (inotify on db-1, docker events). "Changes nothing" compares that with the state after the run; "no change before an approval" compares every change's time with the run's approval times - a change made during triage fails even when the approved step makes it again. Runs recorded before this have no recording and are judged from the audit log, by whether a command could write, and say so. They share one stack: run with `--concurrency 1`, `HARNESS_OPS_INVENTORY=evals/aiops/stack/operator-inventory.yaml` (the host db-1, Prometheus and the credential names are the operator's; the cases' workspace inventory names the services and alerts), `HARNESS_OPS_LOCAL_DOCKER=1 HARNESS_OPS_LOCAL_DOCKER_ALLOW=hwtest-aiops-*` (the shop container), and, until the Key Vault is there, `HARNESS_OPS_SECRETS=@evals/aiops/stack/.state/secrets.json`. The same test file runs each case end to end with a scripted model (no paid calls): setup, the real workflow with tool calls against the stack, the eval's automatic approval, and the hidden checks - including a run that "fixes" the problem during triage, which the approval check fails.
 
+## Integrations (`plugins/integrations`)
+
+Chat, paging and ticketing for the harness, so incidents and approvals reach people where they work and they can answer from there.
+
+> **Status: built and tested against local stand-ins of each service's documented API, not yet against real accounts.** Every request shape, auth header and signature below follows the vendor's official documentation (read 2026-10-22) and is checked by a mock that answers the way the service does (`test/integrations-mocks.ts`). The first connection to a real Slack workspace, Teams tenant, PagerDuty/Opsgenie account, Jira site or ServiceNow instance still needs a check by hand.
+
+| Service | What it does | API |
+|---|---|---|
+| **Slack** | Incident threads, approval and permission requests with **Approve/Reject** (or **Allow/Deny**) buttons, decided by the operator's approvers; `/harness investigate ...` and `@harness investigate ...` start a session whose progress and summary come back in the thread. | Web API `chat.postMessage` / `chat.update` / `chat.postEphemeral` / `users.info` / `users.lookupByEmail` (bot token), Block Kit, interactivity and the Events API verified with **request signing v0** (HMAC-SHA256 of `v0:<timestamp>:<raw body>`, 5-minute window, constant-time compare), `response_url` for private replies |
+| **Microsoft Teams** | The same, as Adaptive Cards: buttons are `Action.Execute`, answered as `adaptiveCard/action` invoke activities with the updated card (and the card updated for everyone); "investigate" by @mention. One-way notifications through a Teams **Workflows** webhook too. | Bot Framework (Azure Bot) Connector REST: send, reply, update activity, conversation member; client-credentials tokens from Microsoft Entra; every inbound request's **JWT verified**: issuer `https://api.botframework.com`, audience = the bot's App ID, RS256 with a key from the OpenID metadata's `jwks_uri` (cached a day, refetched on an unknown key at most every 5 minutes), 5-minute clock skew, the `serviceUrl` claim equal to the activity's, and the key's channel endorsement |
+| **PagerDuty** | An incident triggers a page (dedup key = the incident's group id, else its id), a status change to identified/mitigating/monitoring acknowledges it, resolving resolves it and adds the investigation summary as a note; who is on call for the route's escalation policy is named on approval messages (and can be the only ones allowed to decide). | Events API v2 (`/v2/enqueue`, the service's integration key), REST API v2 (`Authorization: Token token=...`, `From:` header for notes; `GET /incidents?incident_key=`, `POST /incidents/{id}/notes`, `GET /oncalls?include[]=users`) |
+| **Opsgenie** | Alerts created (alias = the incident), acknowledged, noted and closed with the summary. US or EU. Atlassian has announced the end of Opsgenie (support until April 2027); its successor, Jira Service Management operations, is not implemented yet. | Alert API v2 (`Authorization: GenieKey ...`, `identifierType=alias`) |
+| **Jira Cloud** | One issue per incident (labels `harness`, `harness-<incident>`, `service-<name>`; an ADF description with the evidence and a link to the session; a remote link), comments on updates, moved to done on resolve with the summary. A retry finds the existing issue by its label instead of making a second. | REST v3 (`/rest/api/3/issue`, `/comment`, `/transitions`, `/remotelink`, `/search/jql`), Atlassian Document Format; basic auth with email + API token, or an OAuth 2.0 bearer through `api.atlassian.com/ex/jira/<cloudId>` |
+| **ServiceNow** | One incident per harness incident (`correlation_id`; impact and urgency mapped from severity), work notes on updates, resolved with `close_code` and `close_notes`. | Table API (`/api/now/table/incident`); basic auth, a bearer token, or OAuth client credentials (`/oauth_token.do`) |
+
+**What triggers what.** The plugin listens to every session's events (the framework's `api.events`):
+- the aiops `incident` tool's `open` / `update` / `resolve` calls (or an `incident` event from a server-side incident store) become the incident's thread in its routed channel - the root message edited as status and severity change, notes and evidence as replies - plus pages and tickets as its route says;
+- `approval_request` (a workflow's human approval) and `permission_request` (a tool call that asks) become a message with buttons: in the chat thread the session came from, else in its incident's thread, else (with `approvals.forward: "all"`) in a thread per session in the approvals channel. By default only sessions about an incident or started from a chat are forwarded (`"incidents"`); `"none"` forwards nothing. A decision made in the harness updates the message too ("Rejected in the harness").
+
+**Deciding from a chat.** The click reaches the plugin's route; the request is verified (Slack signature / Bot Framework JWT; anything else is 401, or 403 for an unendorsed channel, and audited); the clicking user is matched to the operator's `approvers` list (Slack member ids, Teams AAD object ids, or emails - looked up with `users.info` / the conversation's member API only when the list names emails) and their harness account; an approver with `"scope": "own"` may decide only for sessions of their own account; with `approvals.onCallOnly`, only whoever PagerDuty has on call for that route. Then `api.sessions.respond(session, request, { decision, by: "slack:U123" | "teams:<aad id>" })`; the message shows who decided and the buttons go. Anyone else gets a private refusal (Slack: an ephemeral reply; Teams: an invoke message only they see), a second click "already decided (approve by slack:U123)". The request id in a button is looked up server-side; the session it belongs to is never taken from the click. Slack is acknowledged at once (its 3-second rule) and the work follows.
+
+**Investigations from a chat.** `/harness investigate checkout latency since 14:00`, `@harness investigate ...` (Slack) or `@Harness investigate ...` (Teams): the person must be in `investigators` (default: the approvers); at most `investigate.perUserPer10Min` (5) each. The text is **fenced as untrusted** (`<trigger_payload>`, invisible characters and HTML comments removed, tags that could close the fence neutralised) and the session is started with `untrusted: true`, as the person's harness account, optionally running a workflow (`investigate.workflow`, e.g. `incident-response`, with the fenced text as its `symptom`). Progress is one message in the thread, edited at most every 15 s (tool calls, the workflow step); each finished turn posts the agent's summary. Slack's Events API retries (`X-Slack-Retry-Num`) are recognised by `event_id` and dropped.
+
+**Safety model.**
+- **Destinations come only from the operator.** Channels, routing, projects, escalation policies and approvers are in `HARNESS_INTEGRATIONS` (a declared secret: JSON, `@<file>` or a file path); the agent can choose among configured channel names, never an address. A Teams `serviceUrl` the bot's token is sent to must be the configured one or a Bot Framework host (`teams.serviceUrlHosts`); a Slack `response_url` must be on `hooks.slack.com`. `api.fetch` reaches only the manifest's hosts (below) and what the operator adds with `HARNESS_PLUGIN_NETWORK`.
+- **Credentials are Key Vault entries named `int-*`** (manifest `"vault": ["int-*"]`); the configuration names them and refuses anything that is not such a name, so no token sits in the file. Tool calls read them through the session's vault after the vault rules decided the call (each tool declares the entries a call reads: `vaultNames`); chat buttons, webhooks and incident events have no session, so they read them through the plugin's server-side vault (`api.vault`, operator entries) when the harness provides one. Until it does, the operator's declared secret `HARNESS_INTEGRATIONS_SECRETS` (a JSON object name -> value, or `@file`) stands in, as `HARNESS_OPS_SECRETS` does for aiops. Values are used only in request headers and bodies; every message, tool result, error and audit line is redacted of every value the plugin revealed (and their base64 / URL-encoded forms) and of token shapes (`xox*-`, `ATATT...`, JWTs, `Bearer`/`Basic`/`GenieKey`/`Token token=` headers).
+- **The tools are external**: `notify`, `page` and `ticket` are asked about in every mode but bypass and refused in plan/dontAsk mode, unless an operator rule allows them (`notify(ops)`, `page(pagerduty trigger)`, `ticket(jira create)` - their rule subjects); `page oncall` is a read (`network`). After untrusted content they are confirmed like any way out. Outside text in a message is escaped (Slack mrkdwn `<`, `>`, `&`, so no `<!channel>` and no disguised links; Teams Markdown links broken).
+- **Automatic write-back is the operator's choice**: pages and tickets follow an incident only for routes that configure them and for the severities they list (`"severities": ["sev1"]`).
+- **Audit**: every decision (with the chat user and the harness account), refusal, rejected request (bad signature, old timestamp, bad token), investigation and write to another system is appended to `<data>/plugin-data/integrations/audit.jsonl` (no values). State (threads, posted requests, incident-to-ticket links, Slack event ids seen) is in `state.json` next to it.
+- Rate limits: inbound 300 requests a minute per address, 30 clicks a minute per user, 5 investigations per user per 10 minutes; outbound, Slack messages are spaced per channel (`slack.minIntervalMs`, 1100) and every service's 429/503 is retried after `Retry-After`.
+
+**Configuration** (`HARNESS_INTEGRATIONS`, JSON or `@/etc/harness/integrations.json`):
+
+```json
+{
+  "publicUrl": "https://harness.example.com",
+  "slack": { "botToken": "int-slack-bot-token", "signingSecret": "int-slack-signing-secret" },
+  "teams": { "appId": "00000000-0000-0000-0000-000000000000", "tenantId": "<your tenant id>", "appPassword": "int-teams-app-password", "serviceUrl": "https://smba.trafficmanager.net/emea/" },
+  "pagerduty": { "apiToken": "int-pd-api-token", "from": "sre-bot@example.com", "routingKey": "int-pd-routing-default" },
+  "opsgenie": { "apiKey": "int-opsgenie-key", "region": "eu" },
+  "jira": { "baseUrl": "https://acme.atlassian.net", "email": "harness-bot@acme.com", "apiToken": "int-jira-api-token", "project": "OPS", "issueType": "Incident", "priority": { "sev1": "Highest", "sev2": "High" } },
+  "servicenow": { "instanceUrl": "https://acme.service-now.com", "user": "harness.integration", "password": "int-snow-password" },
+  "channels": {
+    "ops": { "slack": "C0123ABCD" },
+    "ops-teams": { "teams": "19:abc123@thread.tacv2" },
+    "announce": { "teamsWebhook": "int-teams-announce-webhook" }
+  },
+  "defaults": { "channel": "ops" },
+  "routes": [
+    { "severity": ["sev1", "sev2"], "service": ["checkout*", "payments"], "channel": "ops",
+      "pagerduty": { "routingKey": "int-pd-routing-checkout", "escalationPolicy": "PABC123", "severities": ["sev1"] },
+      "jira": { "project": "SHOP", "labels": ["checkout"] },
+      "servicenow": { "assignmentGroup": "a715cd759f2002002920bde8132e7018" } },
+    { "channel": "ops-teams", "opsgenie": { "responders": [{ "type": "team", "name": "SRE" }], "severities": ["sev1", "sev2"] } }
+  ],
+  "approvers": [
+    { "account": "usr_ab12cd34", "slack": ["U012ABCDEF"], "teams": ["<aad object id>"], "name": "Alice" },
+    { "account": "usr_ef56gh78", "emails": ["bob@acme.com"], "scope": "own" }
+  ],
+  "investigators": [{ "account": "usr_ab12cd34", "slack": ["U012ABCDEF"] }],
+  "approvals": { "forward": "incidents", "channel": "ops", "onCallOnly": false },
+  "investigate": { "workflow": "incident-response", "model": "deepseek-flash", "runtime": { "kind": "local", "path": "/srv/ops-workspace" } }
+}
+```
+
+Routes are tried in order; the first whose `severity` and `service` (globs) match an incident wins (an empty list matches anything); `defaults.channel` (else the first channel) is used otherwise. Mappings that can be changed: `pagerduty.severity` (sev -> critical/error/warning/info), `pagerduty.ackOn`, `opsgenie.priority` (sev -> P1-P5), `jira.priority`, `jira.fields` and a route's `jira.fields` (any field, e.g. `{"components": [{"name": "checkout"}], "customfield_10010": "..."}`), `jira.doneTransition` (a transition name, else the first into the done category), `jira.resolution`, `servicenow.impact` / `urgency` (sev -> 1-3), `servicenow.closeCode` (`Solution provided`), `servicenow.resolvedState` (`6`), `servicenow.fields`. Every service's base URL can be changed (`slack.apiBase`, `slack.hooksBase`, `teams.loginBase`, `teams.openIdMetadata`, `teams.serviceUrl`, `pagerduty.eventsBase` / `apiBase`, `opsgenie.apiBase`, `jira.baseUrl` / `apiGateway`, `servicenow.instanceUrl`): https, or http to this machine only. Errors in the file are logged at startup and the part with the error is left out; `GET /api/plugins/integrations/status` (token auth) shows what is configured, the errors, and which framework services the harness provides.
+
+**Endpoints** (served at `/api/plugins/integrations/<path>`, verified by the plugin itself - no harness token):
+
+| Path | Configure it as |
+|---|---|
+| `POST slack/interactivity` | Slack app > Interactivity & Shortcuts > Request URL |
+| `POST slack/commands` | Slack app > Slash Commands > `/harness` > Request URL |
+| `POST slack/events` | Slack app > Event Subscriptions > Request URL (subscribe to the bot event `app_mention`) |
+| `POST teams/messages` | Azure Bot > Configuration > Messaging endpoint |
+
+**Agent tools** (each only when its services are configured):
+
+| Tool | Kind | What it does |
+|---|---|---|
+| `notify {text, channel?, incident?}` | external | Posts the agent's text to a configured channel (default `defaults.channel`), or in an incident's thread. |
+| `page {action: trigger\|acknowledge\|resolve\|note\|oncall, incident, summary?, severity?, service?, note?, provider?, escalation_policy?}` | external (`oncall`: network) | PagerDuty or Opsgenie, keyed by the incident; the route picks the service, routing key and responders. |
+| `ticket {action: create\|comment\|resolve, incident, title?, description?, severity?, service?, comment?, root_cause?, resolution?, system?}` | external | Jira or ServiceNow, one ticket per incident (an existing one is found and reused). |
+
+### How to connect each service
+
+Store every credential in the Key Vault as an **operator** entry (an administrator: `POST /api/vault/entries {"name": "int-slack-bot-token", "value": "...", "scope": "operator", "kind": "token"}`), and allow it to the accounts whose sessions use the tools (`allow`); background work reads it through the server-side vault. Then name it in `HARNESS_INTEGRATIONS`. The harness must be reachable over HTTPS from the service for the two-way parts (Slack and Teams call the endpoints above).
+
+**Slack**
+1. <https://api.slack.com/apps> > Create New App > From scratch, in your workspace.
+2. OAuth & Permissions > Bot Token Scopes: `chat:write` (post and update), `commands` (the slash command), `app_mentions:read` (mentions), `users:read` and `users:read.email` (only if approvers are listed by email). Add `chat:write.public` to post in public channels without inviting the bot. Install to Workspace and copy the **Bot User OAuth Token** (`xoxb-...`) into the vault as `int-slack-bot-token`.
+3. Basic Information > App Credentials > **Signing Secret** into the vault as `int-slack-signing-secret` (not the deprecated verification token).
+4. Interactivity & Shortcuts: on; Request URL `https://<harness>/api/plugins/integrations/slack/interactivity`.
+5. Slash Commands > Create: `/harness`, Request URL `https://<harness>/api/plugins/integrations/slack/commands`, usage hint `investigate <what is wrong>`.
+6. Event Subscriptions: on; Request URL `https://<harness>/api/plugins/integrations/slack/events` (Slack checks it with a signed `url_verification`, which the plugin answers); Subscribe to bot events: `app_mention`. Reinstall the app when Slack asks.
+7. In the channel: `/invite @<your app>`; its id (channel details, bottom: `C...`) goes in `channels.<name>.slack`. Approvers' member ids: profile > ... > Copy member ID (`U...`).
+
+**Microsoft Teams (two-way, a bot)**
+1. Azure portal > Create a resource > **Azure Bot**. Type of app: **Single Tenant** (Microsoft deprecated new multi-tenant bot registrations in 2025; for an existing multi-tenant bot leave `teams.tenantId` out); creation type: create a new Microsoft App ID. Note the **Microsoft App ID** and your **tenant id** (`teams.appId`, `teams.tenantId`).
+2. The bot > Configuration > Manage Password (the Entra app registration) > Certificates & secrets > New client secret: its **value** into the vault as `int-teams-app-password` (and a reminder before it expires).
+3. Configuration > **Messaging endpoint**: `https://<harness>/api/plugins/integrations/teams/messages`.
+4. Channels > **Microsoft Teams** > Apply.
+5. A Teams app for the bot: in the Teams Developer Portal (<https://dev.teams.microsoft.com>) > Apps > New app > App features > Bot > "Enter a bot ID" (the App ID), scopes **Team** and **Personal**; Publish to your org (or download the package and upload it as a custom app), then add it to the team.
+6. Mention the bot once in the channel (`@Harness hello`): the plugin records the channel's conversation id and `serviceUrl` in its audit log (`teams.conversation`). Put the conversation id (`19:...@thread.tacv2`) in `channels.<name>.teams` and the `serviceUrl` (e.g. `https://smba.trafficmanager.net/emea/`) in `teams.serviceUrl`. A serviceUrl on another host (a government cloud) needs that host in `teams.serviceUrlHosts` and `HARNESS_PLUGIN_NETWORK`.
+7. Approvers: their Entra (AAD) object id (Entra admin center > Users > the user > Object ID) in `teams`, or their email in `emails` (looked up through the Connector's conversation member API).
+
+**Microsoft Teams (one-way, a Workflows webhook)**: in the channel > ... > Workflows > "Send webhook alerts to a channel" (or "Post to a channel when a webhook request is received"); finish it and copy the URL. The URL carries its own signature (`sig=`), so it is a secret: store the whole URL in the vault (`int-teams-<name>-webhook`) and name it in `channels.<name>.teamsWebhook`. The manifest allows `*.logic.azure.com` and `*.api.powerplatform.com`; add another host with `HARNESS_PLUGIN_NETWORK` if yours differs. Webhook messages cannot be threaded, edited or clicked.
+
+**PagerDuty**
+1. For each service to page: Services > the service > Integrations > Add an integration > **Events API V2** > its **Integration Key** (the routing key) into the vault (`int-pd-routing-<service>`), named in a route's `pagerduty.routingKey` (or `pagerduty.routingKey` for all).
+2. For notes and on-call: Integrations > Developer Tools > API Access Keys > Create New API Key (not read-only) into the vault as `int-pd-api-token` (`pagerduty.apiToken`); `pagerduty.from` is the email of a PagerDuty user the notes are made as. A route's `escalationPolicy` is the policy id (`P...` in its URL).
+
+**Opsgenie**: Settings > Integrations > Add integration > **API** > copy the API key into the vault (`int-opsgenie-key`, `opsgenie.apiKey`); turn on create and update access. `opsgenie.region: "eu"` for accounts on `app.eu.opsgenie.com`. Responders in routes are `{type: team|user|escalation|schedule, name|id|username}`.
+
+**Jira Cloud**
+1. Make (or pick) an account for the harness with permission to create, comment on and transition issues in the project.
+2. <https://id.atlassian.com/manage-profile/security/api-tokens> > Create API token (a scoped token needs `read:jira-work` and `write:jira-work`) into the vault as `int-jira-api-token`; `jira.email` is that account's email; `jira.baseUrl` is `https://<site>.atlassian.net`.
+3. `jira.project` (the key, e.g. `OPS`) and `issueType` (as named in the project). If the project's workflow has no transition into a done status, name one with `jira.doneTransition`; if its done screen needs a resolution, set `jira.resolution`.
+4. OAuth 2.0 (3LO) instead: `jira.oauthToken` (a vault entry holding the access token) and `jira.cloudId`; refreshing that token is not automated yet.
+
+**ServiceNow**
+1. User Administration > Users > New: an integration user (e.g. `harness.integration`) with **Web service access only**, the `itil` role (incident read/write), and a password into the vault (`int-snow-password`).
+2. `servicenow.instanceUrl` is `https://<instance>.service-now.com`. Optional: `assignmentGroup` (a group's sys_id or name) per route, `servicenow.fields` (e.g. `{"category": "software", "caller_id": "<sys_id>"}` - some instances require a caller to resolve).
+3. OAuth instead: System OAuth > Application Registry > New > "Create an OAuth API endpoint for external clients"; with the client-credentials grant enabled for it (Washington DC release and later), set `clientId` and the secret in the vault (`clientSecret: "int-snow-client-secret"`); or `oauthToken` for a token you manage.
+
+**Tested** (`test/integrations.test.ts`, against `test/integrations-mocks.ts`; no real accounts, no network): Slack - a stand-in Web API that checks the bearer token, JSON bodies for write methods and query parameters for reads, Block Kit limits (50 blocks, 3000-character sections, 150-character plain-text headers, button `action_id` and value sizes), thread and update targets that exist, and answers one 429 with `Retry-After` (retried); signed interactivity, slash-command and Events API requests made exactly as Slack signs them. End to end with a fake of the plugin API contract: an incident opened by the `incident` tool -> its thread -> an `approval_request` -> a reply with buttons -> a forged signature and a timestamp over 5 minutes old refused (401, audited, `respond` never called) -> an unknown user refused privately through `response_url` -> the approver's click -> `respond(session, request, {decision: "approve", by: "slack:U123"})` -> the message updated with who decided and no buttons -> a second click "already decided"; an approver by email (users.info) denying a permission request; a decision made in the harness shown on the message; nothing forwarded by default for sessions without an incident. `@harness investigate` acknowledged before the session starts, started once despite a retried event, fenced and untrusted, with the workflow; progress edited in place and the summary in the thread; refusals for people not allowed. Teams - a stand-in Entra token endpoint (client id/secret/scope/tenant checked), OpenID metadata and JWKS from a locally generated RSA key, and the Connector API (bearer checked, Adaptive Card attachments and `Action.Execute` verbs checked, replies and updates to activities that exist): invokes with a valid token decide and return the updated card; tokens signed by another key, for another audience, expired, with another issuer or serviceUrl, or missing are 401, an unendorsed channel 403; unknown users get an invoke message; an approver by email through the member API; an @mention investigation; the keys fetched once. PagerDuty (routing key, payload fields and severity enum, dedup key, `Token token=`, Accept and `From` headers), Opsgenie (`GenieKey`, message length, priority, responders, alias actions), Jira (basic `email:token`, project and issue type, one-line summary, ADF description and comments, labels without spaces, transitions, remote links, search by label), ServiceNow (basic and OAuth client credentials, impact/urgency 1-3, work notes, resolve refused without `close_code`/`close_notes` as a data policy would): a sev1 incident through open (trigger, alert, issue, record), update (acknowledge, notes, comment, work note) and resolve (resolve + note with the summary, close, done, resolved), and a replay that finds the existing ticket instead of making another. The tools: declared vault entries per call, read through the session's vault (a call reading an entry it did not declare is refused), external kinds, and no credential in any output or audit line - including an error from a service. The plugin also loads through the real plugin loader (only its declared hosts are reachable).
+
+**Not done yet**: the framework's route/event/session contract lands separately (until it does, the plugin logs that chat decisions, investigations and automatic forwarding are off; the tools work); Jira OAuth token refresh; Opsgenie's successor (JSM operations); Slack modals for a reason with a rejection; Teams user-specific card views (`refresh.userIds`); several harness servers share `state.json` only through the data folder (no cross-server lock on a thread's first message).
+
 ## Permissions
 
 Enforced in code on every call. Order: deny rules, then ask rules, then allow rules, then the mode's default.
@@ -971,7 +1100,9 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 | `HARNESS_TRUST_PROJECT` | off | Let repository hooks and stdio MCP servers run outside the sandbox. |
 | `HARNESS_AUTO_RESUME` | off | Continue interrupted sessions after a restart. |
 | `HARNESS_GATES_ON_STOP` | off | Refuse to end a turn while a blocking quality gate fails. |
-| `HARNESS_BUNDLED_PLUGINS` | on | `off` skips the bundled `plugins/` (quality gates, SDLC, visual, documents, games3d, computer, devops). |
+| `HARNESS_BUNDLED_PLUGINS` | on | `off` skips the bundled `plugins/` (quality gates, SDLC, visual, documents, games3d, computer, devops, aiops, integrations). |
+| `HARNESS_INTEGRATIONS` | | The integrations plugin's configuration: channels, routing rules, approvers (JSON, `@<file>` or a file path; credentials only as Key Vault names `int-*`). See [Integrations](#integrations-pluginsintegrations). |
+| `HARNESS_INTEGRATIONS_SECRETS` | | Stand-in for the Key Vault for the integrations plugin until the harness gives plugins a server-side vault: a JSON object of `int-*` name -> value, or `@<file>`. |
 | `HARNESS_PLUGIN_KEYS` | | Trusted public keys; when set, every non-bundled plugin must be signed. |
 | `HARNESS_PLUGIN_NETWORK` | | Hosts the operator grants a plugin beyond its manifest's `permissions.network`, as JSON: `{"devops": ["github.acme.internal"], "aiops": ["prometheus.internal:9090"]}` (a GitHub Enterprise or internal monitoring address). Only the operator can widen a plugin's reach. |
 | `HARNESS_PLUGIN_CATALOGUE` | | Signed plugins to install from the UI/API: a folder, or the https URL of an `index.json`. |

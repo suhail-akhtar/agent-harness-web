@@ -1,0 +1,28 @@
+{
+  "name": "integrations",
+  "version": "1.0.0",
+  "description": "Two-way chat (Slack, Microsoft Teams), paging (PagerDuty, Opsgenie) and ticketing (Jira Cloud, ServiceNow). Incidents and approval/permission requests reach a configured channel, threaded per incident or session; the operator's approvers approve or deny from the chat (Slack request signing, Bot Framework JWTs verified); 'investigate <text>' in a chat starts a session and its summary comes back in the thread; pages and tickets follow incidents as the operator's routing rules say. Agent tools notify, page and ticket are external (asked unless an operator rule allows them). Destinations come only from the operator's HARNESS_INTEGRATIONS; credentials are Key Vault entries named int-*, used on the server only.",
+  "main": "index.mjs",
+  "permissions": {
+    "network": [
+      "slack.com",
+      "*.slack.com",
+      "smba.trafficmanager.net",
+      "*.botframework.com",
+      "login.microsoftonline.com",
+      "*.logic.azure.com",
+      "*.api.powerplatform.com",
+      "events.pagerduty.com",
+      "api.pagerduty.com",
+      "api.opsgenie.com",
+      "api.eu.opsgenie.com",
+      "*.atlassian.net",
+      "api.atlassian.com",
+      "*.service-now.com"
+    ],
+    "secrets": ["HARNESS_INTEGRATIONS", "HARNESS_INTEGRATIONS_SECRETS"],
+    "vault": ["int-*"],
+    "sessions": true,
+    "routes": true
+  }
+}
