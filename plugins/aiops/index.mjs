@@ -50,6 +50,7 @@ import { budgetLeft, burnAlerts, burnRate, dedupeLines, fmt, forecast, humanSeco
 import { register as registerAlerts } from './lib/alerts.mjs';
 import { register as registerChanges } from './lib/changes.mjs';
 import { register as registerWatch, stopWatchLoops } from './lib/watch.mjs';
+import { register as registerConsole } from './lib/console.mjs';
 
 const OUT_MAX = 24_000;
 const clip = (s, n = OUT_MAX) => (s.length <= n ? s : `${s.slice(0, Math.floor(n * 0.7))}\n[... ${s.length - n} characters omitted ...]\n${s.slice(-Math.floor(n * 0.3))}`);
@@ -892,6 +893,8 @@ export default {
       for (const f of [json, await incidentPath(ctx, inc.id, 'incident.md')]) await ctx.beforeWrite?.(f);
       await fs.writeFile(json, JSON.stringify(inc, null, 2));
       await fs.writeFile(await incidentPath(ctx, inc.id, 'incident.md'), renderIncident(inc));
+      // Where the record lives, for the Operations pages (the session that works on it comes from its events).
+      await opsShared.recordIncident?.(ctx.host.root, inc).catch(() => {});
     };
 
     register({
@@ -1127,6 +1130,8 @@ export default {
     registerChanges(api, opsShared);
     registerAlerts(api, opsShared);
     registerWatch(api, opsShared);
+    // The desktop's Operations pages: read-only routes over all of the above (lib/console.mjs).
+    registerConsole(api, opsShared);
 
     api.log(`aiops: tools for sessions with an inventory; known hosts in ${knownHosts}`);
   },

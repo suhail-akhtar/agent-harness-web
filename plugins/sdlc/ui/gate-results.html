@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Gate results</title>
+<link rel="stylesheet" href="kit.css">
+<style>
+  body { background: transparent; }
+  .box { border: 1px solid var(--hx-border-subtle); border-radius: 10px; background: var(--hx-elevated); padding: 8px 10px; }
+  .line { display: grid; grid-template-columns: auto auto minmax(0, 1fr); gap: 8px; align-items: baseline; padding: 3px 0; font-size: 12.5px; }
+  .line .sum { color: var(--hx-text-secondary); overflow-wrap: anywhere; }
+  details pre { margin: 4px 0 6px; max-height: 220px; overflow: auto; background: var(--hx-code-bg); border-radius: 6px; padding: 6px 8px; font: 11.5px/1.45 var(--hx-font-mono); white-space: pre-wrap; }
+</style>
+<script src="harness://app/sdk/plugin-ui.js"></script>
+<script src="kit.js"></script>
+</head>
+<body class="inline-frame">
+<div class="box" id="out"></div>
+<script>
+// A renderer for the quality_gates tool: its PASS / FAIL / WARN lines as a table, failure details folded.
+Kit.start(async (harness) => {
+  const { h, mount, chip } = Kit;
+  const ctx = harness.context || {};
+  const text = String(ctx.result ?? '');
+  const rows = [];
+  for (const line of text.split('\n')) {
+    const m = /^(PASS|FAIL|WARN) ([A-Za-z0-9_.-]+)(?: \(([\d.]+)s\))?: (.*)$/.exec(line);
+    if (m) rows.push({ status: m[1].toLowerCase(), name: m[2], secs: m[3], summary: m[4], details: [] });
+    else if (rows.length && line.trim() && rows.at(-1).status !== 'pass') rows.at(-1).details.push(line);
+  }
+  const head = text.split('\n')[0] || '';
+  const out = document.getElementById('out');
+  if (!rows.length) { mount(out, h('div', { class: 'small muted' }, text ? head : (ctx.result === undefined ? 'Running the gates…' : 'No gate applies here.'))); Kit.autoHeight(harness); return; }
+  const tone = { pass: 'pass', fail: 'fail', warn: 'warn' };
+  mount(out,
+    h('div', { class: 'small', style: { marginBottom: '4px', fontWeight: '500' } }, head),
+    rows.map((r) => [
+      h('div', { class: 'line', 'data-gate': r.name }, chip(r.status.toUpperCase(), tone[r.status]), h('b', {}, r.name), h('span', { class: 'sum' }, `${r.summary}${r.secs ? ` · ${r.secs} s` : ''}`)),
+      r.details.length ? h('details', {}, h('summary', { class: 'small muted' }, 'Output'), h('pre', {}, r.details.join('\n'))) : null,
+    ]));
+  Kit.autoHeight(harness);
+});
+</script>
+</body>
+</html>

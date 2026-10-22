@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Alerts</title>
+<link rel="stylesheet" href="kit.css">
+<style>
+  body { background: transparent; }
+  .box { border: 1px solid var(--hx-border-subtle); border-radius: 10px; background: var(--hx-elevated); padding: 8px 10px; }
+  .line { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: baseline; padding: 4px 0; font-size: 12.5px; border-top: 1px solid var(--hx-border-subtle); }
+  .line:first-of-type { border-top: 0; }
+</style>
+<script src="harness://app/sdk/plugin-ui.js"></script>
+<script src="kit.js"></script>
+</head>
+<body class="inline-frame">
+<div class="box" id="out"></div>
+<script>
+// A renderer for the alerts tool: its incident list as rows (severity, state, title, firing count).
+Kit.start(async (harness) => {
+  const { h, mount, chip } = Kit;
+  const ctx = harness.context || {};
+  const text = String(ctx.result ?? '');
+  const out = document.getElementById('out');
+  const rows = [];
+  for (const line of text.split('\n')) {
+    const m = /^(alr-[a-z0-9-]+) \[(critical|warning|info)\/(sev\d), (\w+)\] (.*?) - (\d+)\/(\d+) alert\(s\) firing, opened ([^,]+)(.*)$/.exec(line.trim());
+    if (m) rows.push({ id: m[1], severity: m[2], sev: m[3], state: m[4], title: m[5], firing: Number(m[6]), total: Number(m[7]), opened: m[8], rest: m[9] });
+  }
+  if (!rows.length) {
+    mount(out, ctx.result === undefined ? h('div', { class: 'small muted' }, 'Reading the alerts…') : Kit.markdown(text.slice(0, 6000)));
+  } else {
+    mount(out, h('div', { class: 'small', style: { fontWeight: '500', marginBottom: '4px' } }, `${rows.length} alert incident(s), ${rows.reduce((a, r) => a + r.firing, 0)} alert(s) firing`),
+      rows.map((r) => h('div', { class: 'line', 'data-alert-incident': r.id },
+        chip(r.severity, r.severity),
+        h('div', {}, h('b', {}, r.title), h('div', { class: 'muted small' }, `${r.id} · ${r.state} · opened ${Kit.ago(r.opened)}${/investigation/.test(r.rest) ? ' · investigating' : ''}`)),
+        h('button', { type: 'button', class: 'btn sm ghost', onclick: () => harness.view.open('incidents', { id: r.id }) }, `${r.firing}/${r.total} firing`))));
+  }
+  Kit.autoHeight(harness);
+});
+</script>
+</body>
+</html>

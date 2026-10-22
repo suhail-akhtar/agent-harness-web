@@ -1,20 +1,20 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { newRun, render, WorkflowRunner } from '../src/graph/runner.ts';
+import { newRun, nodeModel, render, WorkflowRunner } from '../src/graph/runner.ts';
 import type { RunRecord, WorkflowDef, WorkflowHost } from '../src/graph/types.ts';
 import { validateWorkflow } from '../src/graph/validate.ts';
 import { LocalHost } from '../src/runtime/host.ts';
 import { tempDir } from './helpers.ts';
 
 function stubHost(opts: { reports?: Record<string, string[]>; gates?: boolean[]; approvals?: { approved: boolean; feedback?: string }[]; reasons?: Record<string, string[]> }) {
-  const prompts: { label: string; prompt: string }[] = [];
+  const prompts: { label: string; prompt: string; model?: string }[] = [];
   const saved: string[] = [];
   const reports = Object.fromEntries(Object.entries(opts.reports ?? {}).map(([k, v]) => [k, [...v]]));
   const gates = [...(opts.gates ?? [])];
   const approvals = [...(opts.approvals ?? [])];
   const host: WorkflowHost = {
     host: async () => new LocalHost(await tempDir()),
-    runAgent: async (a) => { prompts.push({ label: a.label, prompt: a.prompt }); return { report: reports[a.label]?.shift() ?? `${a.label} done`, reason: opts.reasons?.[a.label]?.shift() ?? 'done', cost: 0.01 }; },
+    runAgent: async (a) => { prompts.push({ label: a.label, prompt: a.prompt, ...(a.model ? { model: a.model } : {}) }); return { report: reports[a.label]?.shift() ?? `${a.label} done`, reason: opts.reasons?.[a.label]?.shift() ?? 'done', cost: 0.01 }; },
     runGates: async () => { const pass = gates.shift() ?? true; return [{ name: 'tests', pass, summary: pass ? 'ok' : '2 failing', details: pass ? undefined : 'expected 3, got 2' }]; },
     approve: async () => approvals.shift() ?? { approved: true },
     emit: () => {},
@@ -57,6 +57,21 @@ test('templates fill inputs, state and feedback', () => {
   run.feedback = 'tests fail';
   assert.equal(render('{{input.request}} | {{state.cr}} | {{feedback}} | {{state.none}}', run), 'a todo app | looks fine | tests fail | ');
   assert.throws(() => newRun(wf(), 's', {}), /needs input "request"/);
+});
+
+test("a node's model may come from the run's input (a role's model chosen at start); empty is the session's model", async () => {
+  const run = newRun(wf(), 's', { request: 'x', reviewerModel: 'kimi-k2.6' });
+  assert.equal(nodeModel('{{input.reviewerModel}}', run), 'kimi-k2.6');
+  assert.equal(nodeModel('{{input.none}}', run), undefined, 'empty: no override');
+  assert.equal(nodeModel('deepseek-flash', run), 'deepseek-flash', 'a fixed model is kept');
+  assert.equal(nodeModel(undefined, run), undefined);
+  const w = wf();
+  (w.nodes.cr as { model?: string }).model = '{{input.reviewerModel}}';
+  (w.nodes.build as { model?: string }).model = '{{input.engineerModel}}';
+  const { host, prompts } = stubHost({});
+  await new WorkflowRunner(w, host, newRun(w, 's', { request: 'x', reviewerModel: 'kimi-k2.6' })).execute(new AbortController().signal);
+  assert.equal(prompts.find((p) => p.label === 'cr')?.model, 'kimi-k2.6');
+  assert.equal(prompts.find((p) => p.label === 'build')?.model, undefined);
 });
 
 test('gate failures route to the fix loop with the evidence, then on', async () => {

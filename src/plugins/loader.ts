@@ -172,7 +172,7 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void, da
       registerRoute: (r) => {
         if (!mayServe) undeclared('api.registerRoute', 'routes')();
         if (r?.method !== 'GET' && r?.method !== 'POST') throw new Error(`${m.name}: a route's method is GET or POST`);
-        if (r.auth !== 'token' && r.auth !== 'none') throw new Error(`${m.name}: a route's auth is "token" or "none"`);
+        if (r.auth !== 'token' && r.auth !== 'none' && r.auth !== 'user') throw new Error(`${m.name}: a route's auth is "token", "user" or "none"`);
         if (typeof r.path !== 'string' || !ROUTE_PATH.test(r.path) || r.path.split('/').some((x) => x === '.' || x === '..')) throw new Error(`${m.name}: route path "${r.path}" must be letters, digits, . _ - and / (no leading slash)`);
         // The server's own paths under /api/plugins/<name>/: the UI files, enable and disable.
         if (/^(ui(\/|$)|enable$|disable$)/.test(r.path)) throw new Error(`${m.name}: route path "${r.path}" is reserved (ui/..., enable, disable)`);

@@ -1491,6 +1491,16 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       const given = url.searchParams.get('token') ?? String(req.headers['x-harness-route-token'] ?? '');
       if (!given || !await harness.bridge.routeTokens.verify(`${plugin}/${rel}`, given)) throw new HttpError(401, 'a valid route token is required (?token= or the x-harness-route-token header)');
     }
+    // auth 'user': signed in as for the rest of the API, with the same guards on writes; the handler learns who asked.
+    let user: { id?: string; name: string; role: Role } | undefined;
+    if (r.auth === 'user') {
+      const caller = who(req);
+      if (!caller) throw new HttpError(401, 'sign in required');
+      if (method !== 'GET' && req.headers['x-harness'] !== '1') throw new HttpError(403, 'missing x-harness header');
+      if (caller.viaSession && method !== 'GET' && req.headers.origin && req.headers.origin !== sso!.client.origin) throw new HttpError(403, 'cross-site request refused');
+      limited(limiter, caller.p);
+      user = { ...(caller.p.id ? { id: caller.p.id } : {}), name: caller.p.name, role: caller.p.role };
+    }
     const chunks: Buffer[] = [];
     let size = 0;
     for await (const c of req) {
@@ -1501,12 +1511,13 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     const query = Object.fromEntries([...url.searchParams.entries()].filter(([k]) => k !== 'token'));
     const headers: Record<string, string> = {};
     for (const [k, v] of Object.entries(req.headers)) {
-      if (k === 'cookie' || k === 'x-harness-route-token' || v === undefined) continue;
+      // A signed-in caller's credentials stay with the harness: the plugin gets `user` instead.
+      if (k === 'cookie' || k === 'x-harness-route-token' || v === undefined || (user && k === 'authorization')) continue;
       headers[k.toLowerCase()] = Array.isArray(v) ? v.join(', ') : String(v);
     }
     let out: Awaited<ReturnType<typeof r.handler>>;
     try {
-      out = await r.handler({ method, path: rel, query, headers, body: Buffer.concat(chunks), ip: req.socket.remoteAddress ?? '' });
+      out = await r.handler({ method, path: rel, query, headers, body: Buffer.concat(chunks), ip: req.socket.remoteAddress ?? '', ...(user ? { user } : {}) });
     } catch (e) {
       console.error(`plugin route ${plugin}/${rel} failed:`, e);
       return send(res, 500, { error: 'the plugin could not handle this request' });

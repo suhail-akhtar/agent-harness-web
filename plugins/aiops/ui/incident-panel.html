@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Incident</title>
+<link rel="stylesheet" href="kit.css">
+<style>
+  body { background: var(--hx-bg); }
+  .wrap { padding: 14px 14px 30px; }
+  .ledger { padding: 0; margin: 0; } .ledger li { list-style: none; margin-bottom: 8px; font-size: 12px; }
+  .ex { font: 11px/1.45 var(--hx-font-mono); color: var(--hx-text-secondary); white-space: pre-wrap; max-height: 70px; overflow: hidden; }
+  details > summary { cursor: pointer; font-weight: 600; font-size: 13px; margin: 10px 0 4px; }
+</style>
+<script src="harness://app/sdk/plugin-ui.js"></script>
+<script src="kit.js"></script>
+</head>
+<body>
+<div class="wrap" id="out"><span class="muted small">Loading…</span></div>
+<script>
+// Next to a conversation that works on an incident: its root cause, the evidence it rests on, the runbook.
+Kit.start(async (harness) => {
+  const { h, mount, chip, time } = Kit;
+  const out = document.getElementById('out');
+  const session = harness.params.id || '';
+  if (!/^[a-f0-9]{16}$/.test(session)) { mount(out, h('div', { class: 'empty' }, h('b', {}, 'Open a conversation'), 'The incident a conversation works on shows here.')); return; }
+  const load = async () => {
+    const r = await Kit.route(harness, 'console/session', { session });
+    const d = r.incident;
+    if (!d) { mount(out, h('div', { class: 'empty', 'data-empty': '' }, h('b', {}, 'No incident here'), 'When this conversation opens or works on an incident (the incident tool, an investigation), its evidence and runbook show here.')); return; }
+    mount(out,
+      h('div', { 'data-panel-incident': d.id },
+        h('div', { class: 'row' }, chip(String(d.severity).toUpperCase(), d.severity), chip(d.status || d.state)),
+        h('h2', { style: { margin: '8px 0 2px' } }, d.title),
+        h('div', { class: 'muted small' }, `${d.ids.join(' · ')} · opened ${time(d.openedAt)}`),
+        h('h3', {}, 'Root cause'),
+        d.rootCause ? h('div', { class: 'small' }, Kit.withEvidence(d.rootCause)) : h('div', { class: 'muted small' }, 'Not established yet.'),
+        d.confidence ? h('div', { class: 'small muted', style: { marginTop: '4px' } }, d.confidence) : null,
+        d.refuter ? h('div', { class: 'row', style: { marginTop: '8px' } }, h('span', { class: 'small' }, 'Refuter:'), chip(d.refuter.verdict || 'verdict', d.refuter.verdict === 'SURVIVES' ? 'ok' : d.refuter.verdict === 'REJECTED' ? 'bad' : '')) : null,
+        h('h3', {}, `Evidence (${d.evidenceIds.length})`),
+        d.evidence.length ? h('ul', { class: 'ledger', 'data-panel-evidence': '' }, d.evidence.map((e) => h('li', {}, h('span', { class: 'ev' }, e.id), ' ', e.missing ? h('span', { class: 'muted' }, 'not in the ledger') : h('b', {}, e.tool), e.input ? h('div', { class: 'ex' }, e.input) : null))) : h('div', { class: 'muted small' }, d.evidenceIds.length ? d.evidenceIds.join(', ') : 'None cited yet.'),
+        d.runbook || d.runbookReport ? h('details', { open: true, 'data-panel-runbook': '' }, h('summary', {}, 'Runbook'), Kit.markdown(d.runbook || d.runbookReport)) : null,
+        h('div', { style: { marginTop: '12px' } }, h('button', { type: 'button', class: 'btn sm', onclick: () => harness.view.open('incidents', { id: d.id }) }, 'Open in Operations')),
+      ));
+  };
+  await Kit.live(harness, load, { topics: ['session'], ms: 20_000, busyMs: 20_000 });
+});
+</script>
+</body>
+</html>

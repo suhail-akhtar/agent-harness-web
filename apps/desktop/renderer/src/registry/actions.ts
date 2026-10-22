@@ -13,7 +13,13 @@ export async function runAction(action: UiAction, plugin: string, args?: unknown
   const text = typeof args === 'string' ? args : '';
   switch (action.type) {
     case 'prompt': prefill(action.prompt.replace(/\{args\}/g, text).trim(), action.newChat); return;
-    case 'open-view': navigate({ view: qualify(plugin, action.view), ...(action.params ? { params: action.params } : {}) }); return;
+    case 'open-view': {
+      // Arguments that are plain values (an agent's, a command's) join the view's params: "open incident <id>".
+      const extra = args && typeof args === 'object' && !Array.isArray(args) ? Object.fromEntries(Object.entries(args as Record<string, unknown>).filter(([k, v]) => /^[a-zA-Z0-9_.-]{1,40}$/.test(k) && (typeof v === 'string' || typeof v === 'number')).map(([k, v]) => [k, String(v).slice(0, 200)])) : {};
+      const params = { ...(action.params ?? {}), ...extra };
+      navigate({ view: qualify(plugin, action.view), ...(Object.keys(params).length ? { params } : {}) });
+      return;
+    }
     case 'open-panel': useApp.setState({ panel: { kind: 'plugin', panel: qualify(plugin, action.panel) } }); return;
     case 'open-url':
     case 'browse': await desktop.openExternal(action.url).catch((e: Error) => toast(e.message, { kind: 'error' })); return;

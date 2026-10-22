@@ -446,3 +446,25 @@ data), `workspaces/` (`default/` and one folder per project the harness creates)
 cleaned on a schedule), `dashboards/` and `reports/` exports, `plugins/` (installed), `logs/`, and
 `settings.json`. Opening an existing folder keeps working in place; "Scratch" uses `tmp/`. Moving the home
 is a setting that migrates (or points at) the folder after confirmation.
+
+## 20. Domain plugins as frames (sdlc, aiops)
+
+The first two domain products are plugins, not core: `plugins/sdlc` ("Engineering") and
+`plugins/aiops` ("Operations") bring their pages as **frames**, the path a third party takes; native
+stays for the desktop's own built-ins. What the core gained so that a frame can do real work (each
+small, each for any plugin):
+
+- **Plugin routes with `auth: "user"`**: signed in like the rest of the API (a write needs the
+  `x-harness` header), the handler gets `req.user` and never the caller's credentials. A frame's
+  `routes.call` reads its server half's data per person; webhooks keep `token` and `none`.
+- **A workflow agent node's `model` may name the run's input** (`{{input.reviewerModel}}`; empty: the
+  session's model). A role's model chosen at start is a delegation, within the person's setting.
+- **The workflow dialog without a conversation** (opened from a page by `workflows.start` or a form)
+  runs the workflow in a new conversation, in the folder the person picks.
+- **A frame view or panel opened again with other params starts again** with them (its init carries
+  them): links between a plugin's pages (`view.open('incidents', {id})`) work, back and forward too.
+- **`open-view` actions take an agent's plain arguments as params** ("open incident <id>").
+
+Not yet: a frame cannot ask the registry what else is installed, so the Operations topology draws its
+own SVG rather than handing a `diagram` spec to `core.diagrams` when that is present; agent-callable
+commands are listed, but the desktop still declines `desktop_command` calls.

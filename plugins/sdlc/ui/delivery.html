@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Delivery</title>
+<link rel="stylesheet" href="kit.css">
+<style>
+  .filters { margin: 0 0 14px; }
+  #board { min-width: 0; }
+  .board { display: grid; grid-template-columns: repeat(7, minmax(150px, 1fr)); gap: 10px; overflow-x: auto; padding-bottom: 6px; }
+  .col { min-width: 0; overflow-wrap: anywhere; background: var(--hx-sidebar); border: 1px solid var(--hx-border-subtle); border-radius: 12px; padding: 8px; min-height: 160px; }
+  .col > header { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding: 2px 4px 8px; font-size: 11.5px; font-weight: 600; color: var(--hx-text-secondary); text-transform: uppercase; letter-spacing: .03em; }
+  .col .cardlink + .cardlink { margin-top: 8px; }
+  /* With a feature open beside the board, an empty stage is a narrow strip with its name upright. */
+  .col.slim { padding: 8px 4px; } .col.slim > header { writing-mode: vertical-rl; flex-wrap: nowrap; padding: 4px 0; margin: 0 auto; }
+  .feature-title { font-weight: 500; font-size: 13px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .meta { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; margin-top: 6px; font-size: 11.5px; color: var(--hx-text-muted); }
+  .failing { margin-top: 4px; font-size: 11.5px; color: var(--hx-danger); }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .layout.with-detail { grid-template-columns: minmax(0, 1fr) 400px; }
+  .detail { border: 1px solid var(--hx-border-subtle); border-radius: 12px; background: var(--hx-elevated); padding: 14px 16px; align-self: start; position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow: auto; }
+  .stages { display: flex; gap: 3px; margin: 10px 0 4px; }
+  .stages span { flex: 1; height: 5px; border-radius: 3px; background: var(--hx-pill); }
+  .stages span.done { background: var(--hx-success); } .stages span.now { background: var(--hx-accent); } .stages span.failed { background: var(--hx-danger); }
+  .steps td:first-child { width: 22px; }
+  .docs button { margin: 0 6px 6px 0; }
+  .doc { margin-top: 10px; border-top: 1px solid var(--hx-border-subtle); padding-top: 8px; }
+  @media (max-width: 900px) { .layout.with-detail { grid-template-columns: 1fr; } .detail { position: static; max-height: none; } }
+  @media (max-width: 860px) { .board { grid-template-columns: 1fr !important; } .col { min-height: 0; } }
+</style>
+<script src="harness://app/sdk/plugin-ui.js"></script>
+<script src="kit.js"></script>
+</head>
+<body>
+<div class="page">
+  <div class="head">
+    <div class="grow"><h1>Delivery</h1><div class="sub" id="summary">Loading…</div></div>
+    <button class="btn" type="button" id="refresh" aria-label="Refresh">Refresh</button>
+    <button class="btn primary" type="button" id="start">Start a feature</button>
+  </div>
+  <div class="row filters" id="filters" role="toolbar" aria-label="Show"></div>
+  <div class="layout" id="layout">
+    <div id="board"></div>
+    <aside class="detail" id="detail" hidden></aside>
+  </div>
+</div>
+<script>
+Kit.start(async (harness) => {
+  const { h, mount, chip, money, ago, dur } = Kit;
+  let data = { stages: [], deliveries: [] };
+  let filter = 'all';
+  let selected = harness.params.id || '';
+  let detail = null;
+  let openDoc = null;
+  let settings = {};
+  try { settings = (await harness.settings.get()) || {}; } catch { settings = {}; }
+
+  const statusTone = (s) => ({ succeeded: 'ok', failed: 'bad', aborted: 'bad', waiting: 'waiting', running: 'running', interrupted: 'warn' }[s] || '');
+  const statusText = (s) => ({ succeeded: 'Delivered', failed: 'Failed', aborted: 'Stopped', waiting: 'Waiting for you', running: 'Running', interrupted: 'Interrupted' }[s] || s || '');
+  const inFlight = (d) => d.status === 'running' || d.status === 'waiting';
+  const shown = () => data.deliveries.filter((d) => filter === 'all' || (filter === 'flight' ? inFlight(d) : filter === 'delivered' ? d.status === 'succeeded' : ['failed', 'aborted', 'interrupted'].includes(d.status)));
+
+  function gateLine(g) {
+    const parts = [];
+    if (g.pass) parts.push(h('span', { title: `${g.pass} gate(s) passed` }, h('span', { class: 'dot ok' }), ` ${g.pass}`));
+    if (g.fail) parts.push(h('span', { title: `${g.fail} gate(s) failed` }, h('span', { class: 'dot bad' }), ` ${g.fail}`));
+    if (g.warn && settings.advisory !== 'hide') parts.push(h('span', { title: `${g.warn} advisory warning(s)` }, h('span', { class: 'dot warn' }), ` ${g.warn}`));
+    return parts;
+  }
+  const testsText = (t) => (t ? `${t.passed}/${t.total} tests${t.failed ? `, ${t.failed} failing` : ''}` : '');
+
+  function cardOf(d) {
+    return h('button', { type: 'button', class: 'cardlink', 'data-delivery': d.id, 'aria-current': d.id === selected ? 'true' : undefined, onclick: () => select(d.id) },
+      h('div', { class: 'feature-title' }, d.title),
+      h('div', { class: 'meta' }, chip(statusText(d.status), statusTone(d.status)), ...gateLine(d.gates), d.tests ? h('span', { 'data-tests': '' }, testsText(d.tests)) : null, h('span', {}, money(d.cost)), h('span', {}, ago(d.updatedAt))),
+      d.gates.failing.length ? h('div', { class: 'failing' }, `Failing: ${d.gates.failing.join(', ')}`) : null);
+  }
+
+  function renderBoard() {
+    const list = shown();
+    const flying = data.deliveries.filter(inFlight).length;
+    const spent = data.deliveries.reduce((a, d) => a + (d.cost || 0), 0);
+    mount(document.getElementById('summary'), data.deliveries.length ? `${data.deliveries.length} feature(s) · ${flying} in flight · ${money(spent)} spent` : 'Features you build with the build-feature workflow show here, from requirement to delivered.');
+    mount(document.getElementById('filters'), [['all', 'All'], ['flight', 'In flight'], ['delivered', 'Delivered'], ['failed', 'Stopped']].map(([id, label]) => h('button', { type: 'button', class: `btn sm ${filter === id ? '' : 'ghost'}`, 'aria-pressed': String(filter === id), onclick: () => { filter = id; renderBoard(); } }, label)));
+    const board = document.getElementById('board');
+    if (!data.deliveries.length) {
+      mount(board, h('div', { class: 'card empty', 'data-empty': '' }, h('b', {}, 'No features yet'), 'Start one: describe what to build, and the agents take it from requirements to a reviewed delivery, with the quality gates checked on the way.', h('div', { style: { marginTop: '12px' } }, h('button', { type: 'button', class: 'btn primary', onclick: startFeature }, 'Start a feature'))));
+      return;
+    }
+    // An empty stage takes less room than one with features in it.
+    const cols = data.stages.map((st) => (list.some((d) => d.stage === st.id) ? 'minmax(180px, 1fr)' : (selected ? '46px' : 'minmax(120px, 0.6fr)'))).join(' ');
+    mount(board, h('div', { class: 'board', 'data-board': '', style: { gridTemplateColumns: cols } }, data.stages.map((st) => {
+      const items = list.filter((d) => d.stage === st.id);
+      return h('section', { class: `col${!items.length && selected ? ' slim' : ''}`, 'data-stage': st.id, title: st.title, 'aria-label': st.title }, h('header', {}, st.title, h('span', { class: 'count' }, String(items.length))), items.map(cardOf));
+    })));
+  }
+
+  async function select(id) {
+    selected = id; openDoc = null;
+    renderBoard();
+    await loadDetail();
+    document.getElementById('detail').scrollTop = 0;
+    document.querySelector('[data-delivery][aria-current="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
+  async function loadDetail() {
+    const box = document.getElementById('detail');
+    const layout = document.getElementById('layout');
+    if (!selected) { box.hidden = true; layout.classList.remove('with-detail'); return; }
+    try { detail = await Kit.route(harness, 'delivery', { id: selected }); } catch (e) { detail = null; mount(box, h('div', { class: 'error' }, e.message)); box.hidden = false; layout.classList.add('with-detail'); return; }
+    box.hidden = false; layout.classList.add('with-detail');
+    renderDetail();
+  }
+
+  function renderDetail() {
+    const d = detail; const box = document.getElementById('detail');
+    if (!d) return;
+    const idx = data.stages.findIndex((s) => s.id === d.stage);
+    const failed = ['failed', 'aborted'].includes(d.status);
+    const steps = h('table', { class: 'steps' }, h('tbody', {}, d.nodes.map((n) => h('tr', {},
+      h('td', {}, h('span', { class: `dot ${n.status === 'done' ? 'ok' : n.status === 'failed' ? 'bad' : n.status === 'waiting' ? 'warn' : 'info live'}` })),
+      h('td', {}, n.title, n.outcome ? h('span', { class: 'muted' }, ` · ${n.outcome}`) : null),
+      h('td', { class: 'muted small' }, n.endedAt ? dur(n.startedAt, n.endedAt) : 'now'),
+    ))));
+    const gates = d.gateResults.length ? h('table', { 'data-gate-table': '' }, h('thead', {}, h('tr', {}, h('th', {}, 'Gate'), h('th', {}, 'Result'))), h('tbody', {}, d.gateResults.filter((g) => settings.advisory !== 'hide' || g.status !== 'warn').map((g) => h('tr', {}, h('td', {}, chip(g.status.toUpperCase(), g.status), ' ', h('b', {}, g.name)), h('td', { class: 'small' }, g.summary))))) : h('p', { class: 'muted' }, 'No gate has run yet.');
+    const reviews = Object.entries(d.reviews || {});
+    mount(box,
+      h('div', { class: 'row' }, h('h2', { style: { margin: 0, flex: 1 } }, d.title), h('button', { type: 'button', class: 'btn ghost sm', 'aria-label': 'Close the details', onclick: () => select('') }, 'Close')),
+      h('div', { class: 'row', style: { marginTop: '6px' } }, chip(statusText(d.status), statusTone(d.status)), h('span', { class: 'muted small' }, `${d.workflow} · ${money(d.cost)} · started ${ago(d.createdAt)}`)),
+      h('div', { class: 'stages', 'aria-label': `Stage: ${data.stages[idx]?.title ?? d.stage}` }, data.stages.map((s, i) => h('span', { title: s.title, class: i < idx || d.status === 'succeeded' ? 'done' : i === idx ? (failed ? 'failed' : 'now') : '' }))),
+      h('div', { class: 'muted small' }, `Stage: ${data.stages[idx]?.title ?? d.stage}${d.current && d.status !== 'succeeded' ? ` (${d.current})` : ''}`),
+      d.error ? h('div', { class: 'error', style: { marginTop: '8px' } }, d.error) : null,
+      h('h3', {}, 'Tests'), h('p', { class: 'small', 'data-detail-tests': '' }, d.tests ? `${testsText(d.tests)}${d.tests.skipped ? `, ${d.tests.skipped} skipped` : ''} (${d.tests.gate === 'agent' ? 'from the agent\'s own run' : `from ${d.tests.gate}`}, ${ago(d.tests.at)})` : 'No test run reported yet.'),
+      h('h3', {}, 'Quality gates'), gates,
+      reviews.length ? [h('h3', {}, 'Reviews'), h('div', { class: 'row' }, reviews.map(([k, v]) => chip(`${k === 'code' ? 'Code' : 'Security'}: ${v}`, v === 'APPROVE' ? 'ok' : 'bad')))] : null,
+      h('h3', {}, 'Steps'), steps,
+      h('h3', {}, 'Documents'), h('div', { class: 'docs', id: 'docs' }, h('span', { class: 'muted small' }, 'Looking…')),
+      h('div', { id: 'doc' }),
+      h('div', { class: 'row', style: { marginTop: '14px' } },
+        h('button', { type: 'button', class: 'btn', onclick: () => harness.view.open('core.chat:session', { id: d.sessionId }) }, 'Open the conversation'),
+        inFlight(d) ? null : h('button', { type: 'button', class: 'btn', onclick: () => review(d) }, 'Ask for a review')),
+    );
+    void loadDocs(d);
+  }
+
+  async function loadDocs(d) {
+    const box = document.getElementById('docs');
+    let files = [];
+    try {
+      // docs/ and its folders (adr/, reviews/): one level at a time, as the host lists them.
+      const queue = ['docs'];
+      for (let n = 0; queue.length && n < 8; n++) {
+        const tree = await harness.files.list({ session: d.sessionId, path: queue.shift() });
+        for (const e of tree.entries ?? []) {
+          if (e.type === 'dir') queue.push(e.path);
+          else if (/\.md$/i.test(e.path)) files.push(e.path);
+        }
+      }
+    } catch { /* no docs folder yet */ }
+    const order = ['requirements', 'architecture', 'adr', 'plan', 'review', 'delivery-report'];
+    files.sort((a, b) => (order.findIndex((o) => a.includes(o)) + 99) % 99 - (order.findIndex((o) => b.includes(o)) + 99) % 99 || a.localeCompare(b));
+    if (!box) return;
+    if (!files.length) { mount(box, h('span', { class: 'muted small' }, 'None yet (the agents write docs/requirements.md, docs/architecture.md, ADRs, docs/plan.md, reviews and the delivery report).')); return; }
+    mount(box, files.slice(0, 20).map((p) => h('button', { type: 'button', class: `btn sm ${openDoc === p ? '' : 'ghost'}`, 'data-doc': p, onclick: () => showDoc(d, p) }, p.replace(/^docs\//, ''))));
+  }
+
+  async function showDoc(d, p) {
+    openDoc = p;
+    const box = document.getElementById('doc');
+    try {
+      const f = await harness.files.read({ session: d.sessionId, path: p });
+      mount(box, h('div', { class: 'doc' }, h('div', { class: 'muted small' }, p), Kit.markdown(f.content ?? '')));
+    } catch (e) { mount(box, h('div', { class: 'error' }, e.message)); }
+    void loadDocs(d);
+  }
+
+  async function review(d) {
+    const strict = { lenient: 'Report BLOCKING findings only.', standard: 'Report BLOCKING and MAJOR findings.', strict: 'Report every finding, MINOR included.' }[settings.strictness || 'standard'];
+    try { await harness.sessions.send(d.sessionId, `Review the delivered changes against docs/requirements.md: correctness, edge cases, tests and security. Run the tests. ${strict} Give file:line and the fix for each, then say APPROVE or REQUEST_CHANGES.`); await harness.notify.toast('Review asked for', { kind: 'success' }); }
+    catch (e) { await harness.notify.toast(e.message, { kind: 'error' }); }
+  }
+
+  function startFeature() { harness.view.open('start-feature').catch(() => {}); }
+  document.getElementById('start').addEventListener('click', startFeature);
+
+  const load = async () => {
+    data = await Kit.route(harness, 'deliveries');
+    renderBoard();
+    if (selected) await loadDetail();
+  };
+  document.getElementById('refresh').addEventListener('click', () => { void load(); });
+  await Kit.live(harness, load, { busy: () => data.deliveries.some(inFlight) });
+});
+</script>
+</body>
+</html>
