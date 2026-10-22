@@ -2,9 +2,9 @@
 // npm script reaches cmd.exe with its quotes and matches nothing) and runs them.
 //   node scripts/test.mjs [--test-name-pattern=...] [files...]
 //
-// The Electron end-to-end files (test/desktop-*e2e*.test.ts) run after the rest, one after
-// another: never in parallel with each other or with the other tests (their timing checks need
-// a quiet machine, and their windows are hidden: HARNESS_E2E_SHOW=1 shows them).
+// The end-to-end files (test/*e2e*.test.ts: Electron or a real browser) run after the rest, one
+// after another: never in parallel with each other or with the other tests (their timing checks
+// need a quiet machine; their windows are off-screen and unfocused: HARNESS_E2E_SHOW=1 shows them).
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -18,7 +18,7 @@ if (!files.length) {
   const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? (e.name === 'fixtures' ? [] : walk(path.join(d, e.name))) : e.name.endsWith('.test.ts') ? [path.join(d, e.name)] : []));
   files = walk(path.join(root, 'test')).map((f) => path.relative(root, f)).sort();
 }
-const isElectron = (f) => /(^|[\\/])desktop-[^\\/]*e2e[^\\/]*\.test\.ts$/.test(f);
+const isElectron = (f) => /(^|[\\/])[^\\/]*e2e[^\\/]*\.test\.ts$/.test(f);
 const batches = [files.filter((f) => !isElectron(f)), ...files.filter(isElectron).map((f) => [f])].filter((b) => b.length);
 
 // Plugins' background loops (the aiops watch loop) stay off in tests unless a test turns them on.

@@ -150,6 +150,8 @@ test('drill, linked dashboards and log analytics in the browser', { timeout: 15 
       await page.click('[data-visual="v-tab"] tbody tr:has-text("France")');
       await page.waitForFunction(() => document.querySelector('[data-visual="v-tab"] [data-drill-level]')?.getAttribute('data-drill-level') === '2');
       await page.waitForSelector('[data-bi-ready="1"]');
+      // The drilled rows replace the countries' a moment later: read them once they are states.
+      await page.waitForFunction(() => { const c = document.querySelector('[data-visual="v-tab"] tbody tr td'); return !!c && !/^(France|Germany|Brazil|Canada|EMEA|AMER|APAC)\b/.test(c.textContent ?? ''); });
       const state = (await tableRows())[0]!.split(/\s|\$/)[0]!;
       await page.click(`[data-visual="v-tab"] tbody tr:has-text("${state}")`, { button: 'right' });
       await page.click(`[data-bi-menu] [data-link="${docB}"]`);
