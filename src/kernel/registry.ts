@@ -21,6 +21,20 @@ export interface LoadedPlugin {
   signature?: string;
   /** What it declared it needs (harness-plugin.json permissions). */
   permissions?: { network?: string[]; secrets?: string[]; vault?: string[]; sessions?: boolean; routes?: boolean };
+  /** Where it came from: shipped with the harness, installed from the catalogue, or listed by the operator (HARNESS_PLUGINS). */
+  source?: 'bundled' | 'installed' | 'env';
+}
+
+/**
+ * What loading one plugin added to the registry, so it can be taken out again and put
+ * back (a plugin switched off and on while the server runs). Map entries keep what they
+ * replaced, if anything.
+ */
+export interface PluginParts {
+  maps: { map: Map<string, unknown>; key: string; value: unknown; replaced?: { value: unknown } }[];
+  lists: { list: unknown[]; item: unknown }[];
+  shell: { event: string; spec: unknown }[];
+  closers: (() => void | Promise<void>)[];
 }
 
 export interface InProcessHook { event: HookEvent; matcher?: string; handler: HookHandler; plugin: string }
@@ -52,6 +66,15 @@ export class Registry {
   /** What plugin code reaches of the running harness (sessions, the change journal, leases); set by createHarness. */
   bridge?: PluginBridge;
   private instances = new Map<string, Provider>();
+  /** Provider instances made here, with the key and base URL they were made with (a changed key makes a new one). */
+  private made = new Map<string, { key: string; baseUrl?: string; p: Provider }>();
+  private live = new Map<string, Provider>();
+  /**
+   * Keys and base URLs set through the API (the vault's provider-<id>-key entries, the
+   * providers file): the environment's key wins, then this. Set by createHarness.
+   */
+  keySource?: (provider: string) => string | undefined;
+  baseUrlFor?: (provider: string) => string | undefined;
 
   /** Saves the registry's contents; the function returned puts them back (a failed plugin load). */
   snapshot(): () => void {
@@ -78,23 +101,94 @@ export class Registry {
     return [...this.models.values()].map((m) => ({ ...m, available: this.instances.has(m.provider) || !!this.keyFor(m.provider) || !!this.providers.get(m.provider)?.keyless }));
   }
 
-  private keyFor(provider: string): string | undefined {
+  /** Where a provider's key comes from: its environment variables first, then a key set through the API. */
+  keyInfo(provider: string): { key?: string; source: 'env' | 'vault' | 'none' } {
     const def = this.providers.get(provider);
-    for (const k of def?.keyEnv ?? []) if (process.env[k]) return process.env[k];
-    return undefined;
+    for (const k of def?.keyEnv ?? []) if (process.env[k]) return { key: process.env[k], source: 'env' };
+    const stored = this.keySource?.(provider);
+    return stored ? { key: stored, source: 'vault' } : { source: 'none' };
   }
 
-  /** The provider instance serving a model (created on first use; keys never leave the server). */
+  private keyFor(provider: string): string | undefined { return this.keyInfo(provider).key; }
+
+  /** Whether a test (setProviderInstance) serves this provider. */
+  hasInstance(provider: string): boolean { return this.instances.has(provider); }
+
+  /**
+   * The provider serving a model (keys never leave the server). Without a test instance it is
+   * a thin stand-in that looks the key up on every request, so a key set or changed through the
+   * API takes effect at the next request of every session, without a restart.
+   */
   provider(model: ModelSpec): Provider {
     const hit = this.instances.get(model.provider);
     if (hit) return hit;
-    const def = this.providers.get(model.provider);
-    if (!def) throw new Error(`No provider "${model.provider}" is registered for ${model.id}.`);
-    const key = this.keyFor(model.provider);
-    if (!key && !def.keyless) throw new Error(`No API key for ${model.provider}. Set ${def.keyEnv.join(' or ')} on the server.`);
-    const p = def.create(key ?? '');
-    this.instances.set(model.provider, p);
+    const id = model.provider;
+    this.current(id); // fails now (no provider, no key) rather than at the first request
+    let p = this.live.get(id);
+    if (!p) {
+      p = {
+        send: async (req) => this.current(id).send(req),
+        compactsServerSide: (m, at) => this.current(id).compactsServerSide?.(m, at) ?? false,
+      };
+      this.live.set(id, p);
+    }
     return p;
+  }
+
+  /** The instance for the key and base URL in force now (made again when either changed). */
+  private current(id: string): Provider {
+    const hit = this.instances.get(id);
+    if (hit) return hit;
+    const def = this.providers.get(id);
+    if (!def) throw new Error(`No provider "${id}" is registered.`);
+    const key = this.keyFor(id);
+    if (!key && !def.keyless) throw new Error(`No API key for ${id}. Set ${def.keyEnv.join(' or ')} on the server, or an administrator sets one in the providers settings.`);
+    const baseUrl = this.baseUrlFor?.(id);
+    const was = this.made.get(id);
+    if (was && was.key === (key ?? '') && was.baseUrl === baseUrl) return was.p;
+    const p = def.create(key ?? '', baseUrl ? { baseUrl } : undefined);
+    this.made.set(id, { key: key ?? '', baseUrl, p });
+    return p;
+  }
+
+  /** Starts recording what a plugin's load adds; the function returned says what it added. */
+  record(): () => PluginParts {
+    const maps: Map<string, unknown>[] = [this.models, this.providers, this.tools, this.agents, this.mcpServers, this.gates, this.workflows, this.searchBackends];
+    const lists: unknown[][] = [this.skillDirs, this.outputStyleDirs, this.hooks, this.routes, this.eventHandlers, this.vaultRotators];
+    const before = maps.map((m) => new Map(m));
+    const had = lists.map((l) => new Set(l));
+    const shellBefore = new Map(Object.entries(this.shellHooks).map(([k, v]) => [k, new Set<unknown>(v ?? [])]));
+    const closers = new Set(this.closers);
+    return () => ({
+      maps: maps.flatMap((m, i) => [...m].filter(([k, v]) => before[i]!.get(k) !== v).map(([key, value]) => ({ map: m, key, value, ...(before[i]!.has(key) ? { replaced: { value: before[i]!.get(key) } } : {}) }))),
+      lists: lists.flatMap((l, i) => l.filter((x) => !had[i]!.has(x)).map((item) => ({ list: l, item }))),
+      shell: Object.entries(this.shellHooks).flatMap(([event, specs]) => (specs ?? []).filter((x) => !shellBefore.get(event)?.has(x)).map((spec) => ({ event, spec }))),
+      closers: this.closers.filter((c) => !closers.has(c)),
+    });
+  }
+
+  /** Takes a plugin's contributions out (its code stays loaded; nothing reaches it any more). */
+  detach(parts: PluginParts): void {
+    for (const e of parts.maps) {
+      if (e.map.get(e.key) !== e.value) continue; // another plugin's now
+      if (e.replaced) e.map.set(e.key, e.replaced.value); else e.map.delete(e.key);
+    }
+    for (const e of parts.lists) { const i = e.list.indexOf(e.item); if (i >= 0) e.list.splice(i, 1); }
+    for (const e of parts.shell) {
+      const l = (this.shellHooks as Record<string, unknown[] | undefined>)[e.event];
+      const i = l?.indexOf(e.spec) ?? -1;
+      if (i >= 0) l!.splice(i, 1);
+    }
+  }
+
+  /** Puts a detached plugin's contributions back. */
+  attach(parts: PluginParts): void {
+    for (const e of parts.maps) e.map.set(e.key, e.value);
+    for (const e of parts.lists) if (!e.list.includes(e.item)) e.list.push(e.item);
+    for (const e of parts.shell) {
+      const l = ((this.shellHooks as Record<string, unknown[]>)[e.event] ??= []);
+      if (!l.includes(e.spec)) l.push(e.spec);
+    }
   }
 
   /** Test seam: serve a provider id with a given instance. */

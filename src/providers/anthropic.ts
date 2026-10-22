@@ -37,9 +37,9 @@ export class AnthropicProvider implements Provider {
     return this.contextEditing && this.serverCompaction && compactAt >= COMPACT_MIN;
   }
 
-  constructor(apiKey: string) {
+  constructor(apiKey: string, baseUrl?: string) {
     // The SDK reads ANTHROPIC_BASE_URL; ignore it unless explicitly meant for us.
-    this.client = new Anthropic({ apiKey, baseURL: process.env.HARNESS_ANTHROPIC_BASE_URL || 'https://api.anthropic.com', maxRetries: 0 });
+    this.client = new Anthropic({ apiKey, baseURL: baseUrl || process.env.HARNESS_ANTHROPIC_BASE_URL || 'https://api.anthropic.com', maxRetries: 0 });
   }
 
   async send(req: ProviderRequest): Promise<ProviderResponse> {
