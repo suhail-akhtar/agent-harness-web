@@ -42,6 +42,11 @@ export function checkStep(s: StepSpec): void {
     case 'dateparts': if (!s.column || !Array.isArray(s.parts) || !s.parts.length) throw new DataError('dateparts: column and parts'); break;
     case 'sort': if (!Array.isArray(s.by) || !s.by.length) throw new DataError('sort: by [{column, desc}]'); break;
     case 'limit': if (!(Number(s.n) > 0)) throw new DataError('limit: n > 0'); break;
+    case 'trim': cols(s.columns, 'columns'); break;
+    case 'case': cols(s.columns, 'columns'); if (!['upper', 'lower', 'title'].includes(s.to)) throw new DataError('case: to is upper, lower or title'); break;
+    case 'nulls': cols(s.columns, 'columns'); if (!['drop', 'fill'].includes(s.action)) throw new DataError('nulls: action is drop (the rows) or fill (with value)'); if (s.action === 'fill' && s.value === undefined) throw new DataError('nulls: fill needs a value'); break;
+    case 'parse_date': if (!s.column) throw new DataError('parse_date: column, and formats (strptime, e.g. %d/%m/%Y) to try in order'); if (s.formats !== undefined && (!Array.isArray(s.formats) || !s.formats.every((f) => typeof f === 'string' && f.includes('%')))) throw new DataError('parse_date: formats are strptime patterns such as %d/%m/%Y or %Y-%m-%d %H:%M'); if (s.to && !['date', 'timestamp'].includes(s.to)) throw new DataError('parse_date: to is date or timestamp'); break;
+    case 'outliers': if (!s.column) throw new DataError('outliers: column (a number), method iqr (default, k 1.5) or zscore (k 3), as (the flag column)'); if (s.method && !['iqr', 'zscore'].includes(s.method)) throw new DataError('outliers: method is iqr or zscore'); if (s.k !== undefined && !(Number(s.k) > 0)) throw new DataError('outliers: k > 0'); break;
   }
 }
 
@@ -113,6 +118,33 @@ export function compileDataset(d: DatasetSpec, from: string | undefined, o: { up
         sql = ordered ? `SELECT * REPLACE (row_number() OVER (ORDER BY ${by}, __rn) AS __rn) FROM ${p}` : `SELECT * FROM ${p} ORDER BY ${by}`; break;
       }
       case 'limit': sql = `SELECT * FROM ${p}${ordered ? ' ORDER BY __rn' : ''} LIMIT ${Math.floor(Number(s.n))}`; break;
+      // Cleansing: text trimmed (blank becomes null) and cased, nulls dropped or filled, dates parsed
+      // from text with formats tried in order, outliers flagged (never removed: a step after can filter them).
+      case 'trim': sql = `SELECT * REPLACE (${s.columns.map((c) => `NULLIF(trim(CAST(${qid(c)} AS VARCHAR)), '') AS ${qid(c)}`).join(', ')}) FROM ${p}`; break;
+      case 'case': {
+        const f = (x: string) => (s.to === 'upper' ? `upper(${x})` : s.to === 'lower' ? `lower(${x})` : `array_to_string(list_transform(string_split(lower(${x}), ' '), w -> upper(w[1]) || w[2:]), ' ')`);
+        sql = `SELECT * REPLACE (${s.columns.map((c) => `${f(`CAST(${qid(c)} AS VARCHAR)`)} AS ${qid(c)}`).join(', ')}) FROM ${p}`; break;
+      }
+      case 'nulls':
+        sql = s.action === 'drop'
+          ? `SELECT * FROM ${p} WHERE ${s.columns.map((c) => `${qid(c)} IS NOT NULL`).join(' AND ')}`
+          : `SELECT * REPLACE (${s.columns.map((c) => `coalesce(${qid(c)}, ${scalarLit(s.value ?? null)}) AS ${qid(c)}`).join(', ')}) FROM ${p}`;
+        break;
+      case 'parse_date': {
+        const x = `CAST(${qid(s.column)} AS VARCHAR)`;
+        const t = s.to === 'timestamp' ? 'TIMESTAMP' : 'DATE';
+        const tries = [...(s.formats ?? []).map((f) => `try_strptime(${x}, ${lit(f)})`), `TRY_CAST(${x} AS TIMESTAMP)`];
+        sql = `SELECT * REPLACE (CAST(coalesce(${tries.join(', ')}) AS ${t}) AS ${qid(s.column)}) FROM ${p}`; break;
+      }
+      case 'outliers': {
+        const x = `CAST(${qid(s.column)} AS DOUBLE)`;
+        const k = Number(s.k ?? (s.method === 'zscore' ? 3 : 1.5));
+        const flag = qid(s.as ?? `${s.column}_outlier`);
+        sql = s.method === 'zscore'
+          ? `SELECT *, coalesce(abs(${x} - avg(${x}) OVER ()) > ${k} * stddev_samp(${x}) OVER (), false) AS ${flag} FROM ${p}`
+          : `SELECT *, coalesce(${x} < quantile_cont(${x}, 0.25) OVER () - ${k} * (quantile_cont(${x}, 0.75) OVER () - quantile_cont(${x}, 0.25) OVER ()) OR ${x} > quantile_cont(${x}, 0.75) OVER () + ${k} * (quantile_cont(${x}, 0.75) OVER () - quantile_cont(${x}, 0.25) OVER ()), false) AS ${flag} FROM ${p}`;
+        break;
+      }
     }
     ctes.push(`${n} AS (${sql})`);
     prev = n;

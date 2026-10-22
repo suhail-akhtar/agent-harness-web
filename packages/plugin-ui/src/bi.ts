@@ -41,10 +41,21 @@ export const fieldRef = (f: FieldRef) => `${f.table}.${f.column}${f.grain ? `:${
 
 // ---------------- sources and datasets ----------------
 
-export const SOURCE_TYPES = ['file', 'sqlite', 'postgres', 'mysql', 'http', 'static', 'plugin'] as const;
+export const SOURCE_TYPES = ['file', 'sqlite', 'postgres', 'mysql', 'mssql', 'mongodb', 'http', 'static', 'plugin'] as const;
 export type SourceType = typeof SOURCE_TYPES[number];
-export const FILE_FORMATS = ['csv', 'tsv', 'json', 'parquet', 'xlsx', 'geojson'] as const;
+export const FILE_FORMATS = ['csv', 'tsv', 'json', 'ndjson', 'parquet', 'xlsx', 'geojson', 'xml', 'log'] as const;
 export type FileFormat = typeof FILE_FORMATS[number];
+/**
+ * Log formats parsed into typed columns (time, level, host, status, latency_ms, path ...): web
+ * access logs (common, combined), syslog (RFC 3164 and 5424), JSON lines, logfmt, CEF, LEEF, W3C
+ * extended (IIS), CloudTrail, ALB and classic ELB access logs, Docker json-file and Kubernetes (CRI)
+ * container logs, Windows events exported as XML or CSV, and a person's or an agent's own pattern
+ * (a regular expression with named groups, or grok-like %{PATTERN:name}). "auto" detects.
+ */
+export const LOG_FORMATS = ['auto', 'common', 'combined', 'syslog', 'jsonl', 'logfmt', 'cef', 'leef', 'w3c', 'cloudtrail', 'alb', 'elb', 'docker', 'cri', 'winevent-xml', 'winevent-csv', 'regex', 'grok'] as const;
+export type LogFormat = typeof LOG_FORMATS[number];
+/** An API's pages: page numbers, offsets, a cursor from the body, or the Link header's next. */
+export interface PaginateSpec { kind: 'page' | 'offset' | 'cursor' | 'link'; param?: string; sizeParam?: string; size?: number; start?: number; cursorPath?: string; maxPages?: number }
 
 export interface SourceSpec {
   id: string;
@@ -54,7 +65,7 @@ export interface SourceSpec {
   /** file, sqlite: a path the server can read (inside the person's folders or uploads). */
   path?: string;
   format?: FileFormat;
-  /** postgres, mysql. */
+  /** postgres, mysql (and MariaDB), mssql (SQL Server), mongodb. */
   host?: string; port?: number; database?: string; user?: string; ssl?: boolean;
   /** http: the URL (its host is the only one the source may reach), the array inside the JSON. */
   url?: string; rowsPath?: string; method?: 'GET' | 'POST'; body?: string; headers?: Record<string, string>;
@@ -72,6 +83,16 @@ export interface SourceSpec {
   plugin?: string; kind?: string; params?: Record<string, unknown>;
   /** Where the data came from (research: the pages it was taken from). */
   provenance?: { sources: string[]; note?: string };
+  /** Text files: the encoding (detected when absent: UTF-8, UTF-16 by its mark, else Windows-1252) and the CSV delimiter (detected). */
+  encoding?: string; delimiter?: string;
+  /** JSON, documents: nested objects become columns (a.b -> a_b; default on); `unnest` turns an array field into rows. */
+  flatten?: boolean; unnest?: string;
+  /** log files (and APIs answering log text): the format, and the pattern for regex / grok; the year for syslog lines without one. */
+  log?: { format: LogFormat; pattern?: string; year?: number };
+  /** http: follow the API's pages. */
+  paginate?: PaginateSpec;
+  /** mongodb: a query filter (JSON) and the fields to read. */
+  filter?: Record<string, unknown>; projection?: Record<string, unknown>;
 }
 
 export type StepSpec =
@@ -93,8 +114,14 @@ export type StepSpec =
   | { op: 'conditional'; name: string; cases: Array<{ when: string; then: string | number | null }>; else?: string | number | null }
   | { op: 'dateparts'; column: string; parts: Array<'year' | 'quarter' | 'month' | 'monthname' | 'week' | 'day' | 'weekday' | 'dayname'> }
   | { op: 'sort'; by: Array<{ column: string; desc?: boolean }> }
-  | { op: 'limit'; n: number };
-export const STEP_OPS = ['filter', 'keep', 'remove', 'rename', 'type', 'split', 'filldown', 'replace', 'group', 'pivot', 'unpivot', 'merge', 'append', 'dedupe', 'add', 'conditional', 'dateparts', 'sort', 'limit'] as const;
+  | { op: 'limit'; n: number }
+  // Cleansing.
+  | { op: 'trim'; columns: string[] }
+  | { op: 'case'; columns: string[]; to: 'upper' | 'lower' | 'title' }
+  | { op: 'nulls'; columns: string[]; action: 'drop' | 'fill'; value?: string | number | boolean | null }
+  | { op: 'parse_date'; column: string; formats?: string[]; to?: 'date' | 'timestamp' }
+  | { op: 'outliers'; column: string; method?: 'iqr' | 'zscore'; k?: number; as?: string };
+export const STEP_OPS = ['filter', 'keep', 'remove', 'rename', 'type', 'split', 'filldown', 'replace', 'group', 'pivot', 'unpivot', 'merge', 'append', 'dedupe', 'add', 'conditional', 'dateparts', 'sort', 'limit', 'trim', 'case', 'nulls', 'parse_date', 'outliers'] as const;
 export const AGG_FNS = ['sum', 'avg', 'min', 'max', 'count', 'count_distinct', 'median', 'stddev', 'first', 'last'] as const;
 export type AggFn = typeof AGG_FNS[number];
 export const COLUMN_TYPES = ['integer', 'double', 'decimal', 'text', 'date', 'timestamp', 'boolean'] as const;
@@ -131,6 +158,13 @@ export interface DatasetSpec {
   certified?: boolean;
   /** Promoted: recommended to others (a weaker flag than certified). */
   promoted?: boolean;
+  /**
+   * import (default): read into a local extract, refreshed on its schedule. live: read from the
+   * source when it is queried (at most every `ttl` seconds, default 5), so a model can mix live and
+   * cached tables (a composite model).
+   */
+  storage?: 'import' | 'live';
+  ttl?: number;
 }
 
 // ---------------- the semantic model ----------------
@@ -168,7 +202,9 @@ export interface RelationshipSpec {
   crossFilter?: 'single' | 'both';
   active?: boolean;
 }
+/** Drill levels, top first: two to five fields (Year > Quarter > Month > Week > Day; Region > Country > State > City > Store). */
 export interface HierarchySpec { name: string; levels: string[] }
+export const MAX_HIERARCHY_LEVELS = 5;
 export interface RoleSpec {
   name: string;
   /** Harness account ids (usr_...), "*" for every signed-in account, or "token:<label>" for a publish link bound to this role. */
@@ -245,7 +281,7 @@ export interface QueryResult {
   extra?: Record<string, unknown>;
 }
 export interface Lineage {
-  datasets: Array<{ name: string; source?: string; sourceType?: SourceType; refreshedAt?: number; rows?: number; hash?: string; static?: boolean; certified?: boolean; origin?: 'person' | 'model'; provenance?: string[] }>;
+  datasets: Array<{ name: string; source?: string; sourceType?: SourceType; live?: boolean; refreshedAt?: number; rows?: number; hash?: string; static?: boolean; certified?: boolean; origin?: 'person' | 'model'; provenance?: string[] }>;
   sql?: string;
   params?: Record<string, unknown>;
   role?: string;
@@ -304,8 +340,14 @@ export interface VisualOptions {
   /** text: markdown; image: an https or data: URL. */
   markdown?: string;
   url?: string; alt?: string;
-  slicer?: { field: string; style?: 'list' | 'dropdown' | 'range' | 'relative' | 'buttons'; multi?: boolean };
-  button?: { label: string; action: 'bookmark' | 'page' | 'back' | 'clear' | 'url'; target?: string };
+  /** sync: slicers of one group share their selection across the pages and dashboards that have one. */
+  slicer?: { field: string; style?: 'list' | 'dropdown' | 'range' | 'relative' | 'buttons'; multi?: boolean; sync?: string };
+  /** doc: open another dashboard (target: its id; page optional) with the filters in force. */
+  button?: { label: string; action: 'bookmark' | 'page' | 'back' | 'clear' | 'url' | 'doc'; target?: string; page?: string };
+  /** Clicking a data point drills down the hierarchy instead of selecting it. */
+  drillMode?: boolean;
+  /** Related dashboards a data point opens, carrying the filters, the point and the drilled path. */
+  links?: LinkSpec[];
   /** fence: a renderer of the existing stack (smiles, pdb, plot, dot, mermaid, geojson, diagram, a plugin's) with static source or the query's rows. */
   fence?: { lang: string; source?: string };
   /** The hierarchy drilled through (model hierarchy name). */
@@ -342,6 +384,9 @@ export interface VisualSpec {
   tooltip?: string;
   hidden?: boolean;
 }
+
+/** A link from a visual to another dashboard (or a page of one): the context travels with it. */
+export interface LinkSpec { id: string; label: string; doc: string; page?: string; /** Only these fields travel (default: all). */ fields?: string[] }
 
 export interface PageSpec {
   id: string;
@@ -489,6 +534,7 @@ export const OPS: Record<string, OpInfo> = {
   move_step: { family: 'dataset', write: true, summary: 'move a step', example: '{"dataset":"sales","from":2,"to":0}' },
   certify: { family: 'dataset', write: true, summary: 'mark certified or promoted', example: '{"dataset":"sales","certified":true}' },
   set_dataset_refresh: { family: 'dataset', write: true, summary: 'refresh schedule of a dataset', example: '{"dataset":"sales","refresh":{"mode":"interval","every":3600}}' },
+  set_storage: { family: 'dataset', write: true, summary: 'import (an extract, refreshed on schedule) or live (read from the source when queried, ttl seconds)', example: '{"dataset":"orders","storage":"live","ttl":5}' },
   set_incremental: { family: 'dataset', write: true, summary: 'incremental refresh window (null: off)', example: '{"dataset":"orders","incremental":{"column":"day","window":30,"unit":"day"}}' },
   query: { family: 'dataset', write: false, summary: 'read-only SQL over datasets: a capped summary', example: '{"sql":"SELECT region, sum(amount) FROM sales GROUP BY 1"}' },
   preview: { family: 'dataset', write: false, summary: 'first rows of a dataset (or up to step n)', example: '{"dataset":"sales","step":2}' },
@@ -506,7 +552,7 @@ export const OPS: Record<string, OpInfo> = {
   remove_relationship: { family: 'model', write: true, summary: 'remove a relationship', example: '{"model":"m","id":"sales.region_id->regions.id"}' },
   set_measure: { family: 'model', write: true, summary: 'measure: expr (aggregate) or base+calc (time intelligence)', example: '{"model":"m","measure":{"name":"Revenue","expr":"sum(sales.amount)","format":"currency:USD"}}' },
   remove_measure: { family: 'model', write: true, summary: 'remove a measure', example: '{"model":"m","name":"Revenue"}' },
-  set_hierarchy: { family: 'model', write: true, summary: 'drill levels', example: '{"model":"m","hierarchy":{"name":"Calendar","levels":["sales.day:year","sales.day:quarter","sales.day:month"]}}' },
+  set_hierarchy: { family: 'model', write: true, summary: 'drill levels, two to five, top first', example: '{"model":"m","hierarchy":{"name":"Calendar","levels":["sales.day:year","sales.day:quarter","sales.day:month"]}}' },
   remove_hierarchy: { family: 'model', write: true, summary: 'remove a hierarchy', example: '{"model":"m","name":"Calendar"}' },
   set_format: { family: 'model', write: true, summary: 'format of a field or measure', example: '{"model":"m","field":"Revenue","format":"currency:EUR:0"}' },
   set_role: { family: 'model', write: true, summary: 'row-level security role', example: '{"model":"m","role":{"name":"EU","members":["usr_..."],"filters":{"regions":"region = \'EU\'"}}}' },
@@ -563,6 +609,11 @@ export const OPS: Record<string, OpInfo> = {
   add_section: { family: 'dashboard', write: true, summary: 'a section (sections layout) or a tab (tabs layout)', example: '{"doc":"d-1","page":"p-1","section":{"title":"Revenue"}}' },
   update_section: { family: 'dashboard', write: true, summary: 'rename, collapse or move a section or tab', example: '{"doc":"d-1","page":"p-1","section":"s-1","patch":{"collapsed":true}}' },
   remove_section: { family: 'dashboard', write: true, summary: 'remove a section (its widgets move to the first)', example: '{"doc":"d-1","page":"p-1","section":"s-2"}' },
+  drill: { family: 'dashboard', write: false, summary: 'move through a visual\'s hierarchy: down (value), up, next, expand, to (level), reset; returns the new state, breadcrumb and numbers', example: '{"doc":"d-1","visual":"v-3","action":"down","value":"2024","state":{"drill":{}}}' },
+  drillthrough: { family: 'dashboard', write: false, summary: 'from a point of a visual to a drill-through page or another dashboard, with the filters, the drilled path and the point', example: '{"doc":"d-1","visual":"v-3","point":{"geo.country":"France"},"to":{"doc":"d-2"}}' },
+  add_link: { family: 'dashboard', write: true, summary: 'link a visual to another dashboard (its points open it with their context)', example: '{"doc":"d-1","visual":"v-3","link":{"label":"Country detail","doc":"d-2"}}' },
+  remove_link: { family: 'dashboard', write: true, summary: 'remove a link', example: '{"doc":"d-1","visual":"v-3","link":"l-1"}' },
+  sync_slicer: { family: 'dashboard', write: true, summary: 'put a slicer in a sync group (shared across pages and dashboards; null: none)', example: '{"doc":"d-1","visual":"v-2","group":"region"}' },
 };
 
 /** Every control in the desktop that changes something, and the op it applies (tested: each is in OPS). */
@@ -583,6 +634,7 @@ export const UI_ACTIONS: Record<string, string> = {
   'doc.undo': 'undo', 'doc.redo': 'redo', 'doc.restore': 'restore', 'doc.export': 'export', 'doc.history': 'history', 'doc.describe': 'describe', 'data.list-docs': 'list_docs',
   'layout.type': 'set_layout', 'layout.options': 'set_layout', 'layout.template': 'apply_template', 'layout.templates': 'list_templates', 'layout.drag': 'move_widget', 'layout.resize': 'resize_widget',
   'layout.front': 'arrange', 'layout.back': 'arrange', 'layout.lock': 'arrange', 'layout.group': 'arrange', 'layout.align': 'align', 'layout.pack': 'pack',
+  'data.storage': 'set_storage', 'doc.link': 'add_link', 'doc.unlink': 'remove_link', 'doc.sync': 'sync_slicer',
   'layout.add-section': 'add_section', 'layout.edit-section': 'update_section', 'layout.remove-section': 'remove_section', 'layout.collapse': 'update_section', 'layout.sidebar-width': 'set_layout',
 };
 
@@ -617,11 +669,97 @@ export interface ViewState {
   filters?: FilterSpec[];
   /** A selection in a visual (a clicked bar): filters or highlights the others per their interactions. */
   selection?: { visual: string; filters: FilterSpec[] };
-  /** Hierarchy drill per visual: the level and the values clicked on the way down. */
-  drill?: Record<string, { level: number; path: Scalar[] }>;
+  /** Hierarchy drill per visual (see drillStep). */
+  drill?: Record<string, DrillState>;
   /** Filters a drill-through brought into its page. */
   drillthrough?: FilterSpec[];
   /** Decomposition tree: the path of splits taken. */
   decomp?: Record<string, Array<{ dim: string; value: Scalar }>>;
   params?: Record<string, Scalar>;
+}
+
+// ---------------- drill ----------------
+
+/**
+ * Where a visual is in its hierarchy. `level` is the level shown; `path` holds a value for each
+ * level above it (the points drilled into); levels in `skip` were passed with "go to the next
+ * level" and filter nothing. `mode: "expand"` shows every level from the first unfiltered one down
+ * to `level` together ("expand all down one level": the next level within its parents).
+ */
+export interface DrillState { level: number; path: Scalar[]; mode?: 'drill' | 'expand'; skip?: number[] }
+export type DrillAction =
+  | { action: 'down'; value?: Scalar; values?: Scalar[] }
+  | { action: 'up' }
+  | { action: 'next' }
+  | { action: 'expand' }
+  | { action: 'to'; level: number }
+  | { action: 'reset' };
+
+/** The next drill state (the same function in the app, published pages and the agents' drill op). */
+export function drillStep(h: HierarchySpec, cur: DrillState | undefined, a: DrillAction): DrillState {
+  const s: DrillState = { level: cur?.level ?? 0, path: [...(cur?.path ?? [])], mode: cur?.mode ?? 'drill', skip: [...(cur?.skip ?? [])] };
+  const last = h.levels.length - 1;
+  const tidy = (x: DrillState): DrillState => ({ level: x.level, path: x.path, ...(x.mode === 'expand' ? { mode: 'expand' as const } : {}), ...(x.skip?.length ? { skip: x.skip } : {}) });
+  switch (a.action) {
+    case 'reset': return { level: 0, path: [] };
+    case 'down': {
+      if (s.level >= last) return tidy(s);
+      // In an expanded view a point carries a value for each level shown.
+      const vals = s.mode === 'expand' ? (a.values ?? [a.value ?? null]) : [a.values?.at(-1) ?? a.value ?? null];
+      const path = s.mode === 'expand' ? [...s.path, ...vals].slice(0, s.level + 1) : [...s.path.slice(0, s.level), vals[0]!];
+      while (path.length < s.level + 1) path.push(null);
+      return tidy({ level: s.level + 1, path, skip: s.skip!.filter((i) => i < s.level || (s.mode === 'expand' && i < s.path.length)) });
+    }
+    case 'up': {
+      if (s.level === 0) return tidy(s);
+      const level = s.level - 1;
+      if (s.mode === 'expand' && level > s.path.length) return tidy({ ...s, level });
+      return tidy({ level, path: s.path.slice(0, level), skip: s.skip!.filter((i) => i < level) });
+    }
+    case 'next': {
+      if (s.level >= last) return tidy(s);
+      // Every level not drilled into so far (in an expanded view, several) is passed through unfiltered.
+      const path = s.path.slice(0, s.level); const skip = s.skip!.filter((i) => i < s.level);
+      for (let i = path.length; i <= s.level; i++) { path.push(null); skip.push(i); }
+      return tidy({ level: s.level + 1, path, skip });
+    }
+    case 'expand': {
+      if (s.level >= last) return tidy(s);
+      return tidy({ level: s.level + 1, path: s.path.slice(0, s.mode === 'expand' ? s.path.length : s.level), mode: 'expand', skip: s.skip });
+    }
+    case 'to': {
+      const level = Math.max(0, Math.min(last, Math.floor(a.level)));
+      if (level >= s.level) return tidy(s);
+      return tidy({ level, path: s.path.slice(0, level), skip: s.skip!.filter((i) => i < level) });
+    }
+  }
+}
+
+/** The dims and filters of a drill state: what a visual's first dim becomes, and the path as filters. */
+export function drillQuery(h: HierarchySpec, s: DrillState | undefined): { dims: string[]; filters: FilterSpec[] } {
+  const level = Math.max(0, Math.min(h.levels.length - 1, s?.level ?? 0));
+  const path = s?.path ?? [];
+  const skip = new Set(s?.skip ?? []);
+  const fixed = Math.min(path.length, level);
+  const filters: FilterSpec[] = [];
+  for (let i = 0; i < fixed; i++) if (!skip.has(i)) filters.push(path[i] === null ? { field: h.levels[i]!, op: 'is_null' } : { field: h.levels[i]!, op: 'eq', value: path[i] });
+  const dims = s?.mode === 'expand' ? h.levels.slice(fixed, level + 1) : [h.levels[level]!];
+  return { dims, filters };
+}
+
+/** The breadcrumb of a drill state: one entry per level down to the current one (its value, or all). */
+export function drillCrumbs(h: HierarchySpec, s: DrillState | undefined): Array<{ level: number; field: string; value?: Scalar; all?: boolean }> {
+  const level = s?.level ?? 0; const skip = new Set(s?.skip ?? []);
+  return h.levels.slice(0, level + 1).map((field, i) => (i < level && i < (s?.path.length ?? 0) && !skip.has(i) ? { level: i, field, value: s!.path[i]! } : { level: i, field, all: true }));
+}
+
+/**
+ * The filter context a drill-through or a link carries: the filters in force, the selection, the
+ * drilled path, then the clicked point (later ones win per field); `fields` keeps only those.
+ */
+export function carryFilters(parts: Array<FilterSpec[] | undefined>, fields?: string[]): FilterSpec[] {
+  const by = new Map<string, FilterSpec>();
+  for (const list of parts) for (const f of list ?? []) by.set(f.field, f);
+  const base = (x: string) => x.replace(/:.*$/, '');
+  return [...by.values()].filter((f) => !fields?.length || fields.some((k) => k === f.field || base(k) === base(f.field)));
 }

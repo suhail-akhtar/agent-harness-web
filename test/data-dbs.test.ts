@@ -78,3 +78,53 @@ test('MySQL source: a table read read-only with exact decimals; writes refused',
     await assert.rejects(ops([{ op: 'define', dataset: { name: 'evil', source: 'src-my', from: "SELECT * FROM orders WHERE region = 'x' FOR UPDATE" } }]), /read|READ ONLY|denied|lock/i);
   } finally { c.stop(); }
 });
+
+test('MongoDB source: collections listed; nested documents flattened into columns; an array unnested into rows; a query filter', { timeout: 240_000 }, async (t) => {
+  if (!have('mongo:7.0')) { t.skip('docker or mongo:7.0 not available'); return; }
+  const c = await container('mongo:7.0', ['MONGO_INITDB_ROOT_USERNAME=root', `MONGO_INITDB_ROOT_PASSWORD=${PW}`], 27017);
+  try {
+    const sh = (js: string) => spawnSync('docker', ['exec', c.id, 'mongosh', '--quiet', '-u', 'root', '-p', PW, '--authenticationDatabase', 'admin', 'shop', '--eval', js], { encoding: 'utf8', timeout: 60_000 });
+    for (let i = 0; i < 60; i++) { if (sh('db.runCommand({ping:1}).ok').stdout.trim() === '1') break; await delay(1000); }
+    const r0 = sh(`db.orders.insertMany([
+      { _id: 1, day: ISODate('2024-01-03'), status: 'paid', customer: { name: 'Ada', address: { city: 'Paris', zip: '75001' } }, items: [{ sku: 'A', qty: 2, price: 1.5 }, { sku: 'B', qty: 1, price: 4 }], total: NumberDecimal('7.00') },
+      { _id: 2, day: ISODate('2024-01-04'), status: 'paid', customer: { name: 'Bo', address: { city: 'Lyon', zip: '69001' } }, items: [{ sku: 'A', qty: 5, price: 1.5 }], total: NumberDecimal('7.50') },
+      { _id: 3, day: ISODate('2024-01-05'), status: 'void', customer: { name: 'Cy', address: { city: 'Paris', zip: '75002' } }, items: [], total: NumberDecimal('0') }
+    ]).acknowledged`);
+    assert.match(r0.stdout, /true/, r0.stderr);
+    const svc = await service();
+    const home = svc.home(undefined);
+    const ops = (o: unknown[]) => applyOps(svc, home, o as never, { kind: 'person', label: 'person:t' });
+    await assert.rejects(ops([{ op: 'add_source', source: { name: 'bad', type: 'mongodb', url: `mongodb://root:${PW}@127.0.0.1:${c.port}`, database: 'shop' } }]), /no credentials in the URL/);
+    await ops([{ op: 'add_source', source: { id: 'src-mg', name: 'Shop', type: 'mongodb', host: '127.0.0.1', port: c.port, database: 'shop', user: 'root', secret: 'db-pw' } }]);
+    assert.match((await ops([{ op: 'test_source', id: 'src-mg' }])).results[0]!.message, /orders/);
+    await ops([
+      { op: 'define', dataset: { name: 'orders', source: 'src-mg', from: 'orders' } },
+      { op: 'add_source', source: { id: 'src-mg-items', name: 'Shop items', type: 'mongodb', host: '127.0.0.1', port: c.port, database: 'shop', user: 'root', secret: 'db-pw', unnest: 'items', filter: { status: 'paid' } } },
+      { op: 'define', dataset: { name: 'items', source: 'src-mg-items', from: 'orders' } },
+    ]);
+    const cols = (await svc.sql(home, 'SELECT * FROM orders LIMIT 1')).columns.map((x) => x.name);
+    for (const k of ['_id', 'customer_name', 'customer_address_city', 'customer_address_zip', 'total']) assert.ok(cols.includes(k), `column ${k} in ${cols.join(', ')}`);
+    assert.deepEqual((await svc.sql(home, 'SELECT customer_address_city, count(*), sum(total) FROM orders GROUP BY 1 ORDER BY 1')).rows, [['Lyon', 1, 7.5], ['Paris', 2, 7]]);
+    // One row per item of the paid orders, with the order's fields beside the item's.
+    assert.deepEqual((await svc.sql(home, 'SELECT items_sku, sum(items_qty), sum(items_qty * items_price), count(DISTINCT _id) FROM items GROUP BY 1 ORDER BY 1')).rows, [['A', 7, 10.5, 2], ['B', 1, 4, 1]]);
+    assert.equal((await svc.sql(home, 'SELECT min(day) FROM items')).rows[0]![0], '2024-01-03 00:00:00');
+  } finally { c.stop(); }
+});
+
+test('SQL Server source (tedious, no ODBC): read-only, types mapped', { timeout: 300_000 }, async (t) => {
+  const img = 'mcr.microsoft.com/mssql/server:2022-latest';
+  if (!have(img)) { t.skip(`docker or ${img} not available (SQL Server sources are read with tedious; this test runs where the image is)`); return; }
+  const pw = `Aa1!${PW}`;
+  const c = await container(img, ['ACCEPT_EULA=Y', `MSSQL_SA_PASSWORD=${pw}`], 1433);
+  try {
+    const sql = (q: string) => spawnSync('docker', ['exec', c.id, '/opt/mssql-tools18/bin/sqlcmd', '-C', '-S', 'localhost', '-U', 'sa', '-P', pw, '-Q', q], { encoding: 'utf8', timeout: 60_000 });
+    for (let i = 0; i < 90; i++) { if (sql('SELECT 1').status === 0) break; await delay(1000); }
+    sql('CREATE DATABASE shop;');
+    sql("USE shop; CREATE TABLE orders (id int primary key, region nvarchar(10), amount decimal(12,2), day date); INSERT INTO orders VALUES (1,'EU',10.10,'2024-01-02'),(2,'US',20.20,'2024-01-03');");
+    const svc = new DataService({ dataDir: await tempDir(), vault: { reveal: async () => pw } as never });
+    const home = svc.home(undefined);
+    const ops = (o: unknown[]) => applyOps(svc, home, o as never, { kind: 'person', label: 'person:t' });
+    await ops([{ op: 'add_source', source: { id: 'src-ms', name: 'Shop', type: 'mssql', host: '127.0.0.1', port: c.port, database: 'shop', user: 'sa', secret: 'db-pw' } }, { op: 'define', dataset: { name: 'orders', source: 'src-ms', from: 'dbo.orders' } }]);
+    assert.deepEqual((await svc.sql(home, 'SELECT count(*), sum(amount), min(day) FROM orders')).rows[0], [2, 30.3, '2024-01-02']);
+  } finally { c.stop(); }
+});

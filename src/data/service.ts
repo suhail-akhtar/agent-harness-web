@@ -149,6 +149,10 @@ export class DataService {
         if (o.autoRefresh === false) throw new DataError(`dataset ${d.name} has not been read yet: refresh it`, 409);
         await this.refresh(home, d.id, 'first use', cat);
         state = await home.state();
+      } else if (d.source && d.storage === 'live' && o.autoRefresh !== false) {
+        // A live table is read from its source when it is queried (at most every ttl seconds).
+        const at = state.datasets[d.id]?.at ?? 0;
+        if (Date.now() - at >= (d.ttl ?? 5) * 1000) { await this.refresh(home, d.id, 'live', cat, { quiet: true }); state = await home.state(); }
       }
     }
     const views: ViewDef[] = []; const files: string[] = []; const vars: Record<string, Scalar> = {};
@@ -174,7 +178,7 @@ export class DataService {
       }
       const upTo = o.upTo?.dataset === d.name || o.upTo?.dataset === d.id ? o.upTo.step : undefined;
       views.push({ name: d.name, sql: compileDataset(d, base, { upTo, columnsOf: (n) => state.datasets[cat.datasets.find((x) => x.name === n)?.id ?? '']?.columns?.map((c) => c.name) }), user: true });
-      lineage.push({ name: d.name, ...(src ? { source: src.name, sourceType: src.type } : {}), ...(st?.at ? { refreshedAt: st.at, rows: st.rows, hash: st.hash } : {}), ...(src?.type === 'static' ? { static: true, origin: src.origin ?? 'person' } : {}), ...(d.certified ? { certified: true } : {}), ...(src?.provenance ? { provenance: src.provenance.sources } : {}) });
+      lineage.push({ name: d.name, ...(src ? { source: src.name, sourceType: src.type } : {}), ...(d.storage === 'live' ? { live: true } : {}), ...(st?.at ? { refreshedAt: st.at, rows: st.rows, hash: st.hash } : {}), ...(src?.type === 'static' ? { static: true, origin: src.origin ?? 'person' } : {}), ...(d.certified ? { certified: true } : {}), ...(src?.provenance ? { provenance: src.provenance.sources } : {}) });
     }
     return { views, files, vars, lineage, state };
   }
@@ -182,18 +186,18 @@ export class DataService {
   // ---------- refresh ----------
 
   /** Reads a dataset's source again into a new extract (one refresh of a dataset at a time). */
-  async refresh(home: DataHome, ref: string, reason: string, catalog?: CatalogSpec): Promise<DatasetState> {
+  async refresh(home: DataHome, ref: string, reason: string, catalog?: CatalogSpec, o: { quiet?: boolean } = {}): Promise<DatasetState> {
     const cat = catalog ?? (await home.catalog()).spec;
     const d = this.dataset(cat, ref);
     const key = `${home.dir}\0${d.id}`;
     const running = this.refreshing.get(key);
     if (running) return running as Promise<DatasetState>;
-    const p = this.doRefresh(home, d, cat, reason).finally(() => this.refreshing.delete(key));
+    const p = this.doRefresh(home, d, cat, reason, !!o.quiet).finally(() => this.refreshing.delete(key));
     this.refreshing.set(key, p);
     return p;
   }
 
-  private async doRefresh(home: DataHome, d: DatasetSpec, cat: CatalogSpec, reason: string): Promise<DatasetState> {
+  private async doRefresh(home: DataHome, d: DatasetSpec, cat: CatalogSpec, reason: string, quiet = false): Promise<DatasetState> {
     const t0 = Date.now();
     try {
       let extract: Partial<DatasetState> = {};
@@ -223,8 +227,11 @@ export class DataService {
       }
       const done = (await home.updateState((s) => { s.datasets[d.id] = { ...s.datasets[d.id], columns }; if (!d.source) s.datasets[d.id]!.rows = undefined; })).datasets[d.id]!;
       await this.pruneExtracts(home, d.id, st.datasets[d.id]?.file);
-      await home.recordRun({ kind: 'refresh', dataset: d.name, ok: true, rows: done.rows, ms: Date.now() - t0, reason });
-      this.emit(home.owner, { type: 'dataset_refreshed', dataset: d.name, rows: done.rows ?? null, at: done.at });
+      // A live table's reads at query time are not refreshes anyone needs to hear about.
+      if (!quiet) {
+        await home.recordRun({ kind: 'refresh', dataset: d.name, ok: true, rows: done.rows, ms: Date.now() - t0, reason });
+        this.emit(home.owner, { type: 'dataset_refreshed', dataset: d.name, rows: done.rows ?? null, at: done.at });
+      }
       return done;
     } catch (e) {
       const msg = (e as Error).message;

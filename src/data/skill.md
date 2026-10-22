@@ -28,10 +28,21 @@ A result lists what changed (`+`, `~`, `-`); every change is versioned and `undo
 {"op":"define","dataset":{"name":"sales","source":"src-1a2b3c4d","from":"Sheet1"}}
 {"op":"define","dataset":{"name":"big_orders","sql":"SELECT * FROM sales WHERE amount > $min","params":[{"name":"min","type":"number","default":1000}]}}
 ```
-Types: file (csv, tsv, json, parquet, xlsx, geojson), sqlite, postgres, mysql (from = a table or one
-SELECT), http (JSON or CSV; its own host only), static (columns + rows), plugin. **Credentials are never
-in a source**: the person stores them in the key vault; you name the entry in `secret`. Adding a source
-asks the person. `test_source` lists tables/sheets. Paths are relative to your workspace.
+Types: file (csv, tsv, json, ndjson, xml, parquet, xlsx, geojson, log), sqlite, postgres, mysql (and MariaDB),
+mssql (SQL Server), mongodb (from = a table, one SELECT, or a collection), http (JSON, CSV, XML or log text;
+its own host only), static (columns + rows), plugin. **Credentials are never in a source**: the person
+stores them in the key vault; you name the entry in `secret`. Adding a source asks the person.
+`test_source` lists tables, sheets and named ranges (or a log's detected format and columns). Paths are relative to your workspace.
+- Text files: `encoding` and `delimiter` are detected (UTF-8, UTF-16, Windows-1252; `, ; tab |`); name them to override.
+- JSON, NDJSON, XML, MongoDB: nested objects become columns (`customer.address.city` -> `customer_address_city`);
+  `unnest:"items"` turns that array into one row per item (`items_sku`, ...); `flatten:false` keeps them whole.
+  XML: `from` names the record element ("Order" or "Orders/Order"). MongoDB: `filter` (a query) and `projection`.
+- Excel: `from` is a sheet, a named range, or `Sheet1!B3:F40`; the header row is found under a title.
+- Logs: `log:{format}` with format `auto common combined syslog jsonl logfmt cef leef w3c cloudtrail alb elb docker cri
+  winevent-xml winevent-csv regex grok`; typed columns such as `time level host status bytes latency_ms path method
+  user_agent message` (and each format's own). `regex`/`grok` take `pattern` with named groups (`(?<status>\d{3})`,
+  `%{IP:client} %{INT:status:int}`). Binary .evtx: export the events as XML or CSV first.
+- http: `paginate:{kind: page|offset|cursor|link, param?, size?, sizeParam?, cursorPath?, maxPages?}` reads every page.
 
 Query-editor steps (`add_step {dataset, step, at?}`; `preview {dataset, step}` shows the rows after a step;
 `profile` gives nulls, distinct, min/max, top values):
@@ -39,7 +50,12 @@ Query-editor steps (`add_step {dataset, step, at?}`; `preview {dataset, step}` s
 `split {column, by, into:[a,b]}` · `filldown {columns}` · `replace {column, find, with}` · `group {by:[..], aggs:[{column, fn, as}]}` (fn: sum avg min max count count_distinct median stddev first last) ·
 `pivot {on, values, fn}` · `unpivot {columns, name, value}` · `merge {with: dataset, on:[["left","right"]], how: left|inner|right|full|anti|semi, columns?}` ·
 `append {with:[datasets]}` · `dedupe {columns?}` · `add {name, expr}` · `conditional {name, cases:[{when, then}], else}` · `dateparts {column, parts:[year,quarter,month,monthname,week,day,weekday,dayname]}` · `sort {by:[{column, desc}]}` · `limit {n}`.
+Cleansing: `trim {columns}` · `case {columns, to: upper|lower|title}` · `nulls {columns, action: drop|fill, value}` ·
+`parse_date {column, formats:["%d/%m/%Y",...], to: date|timestamp}` · `outliers {column, method: iqr|zscore, k, as}` (a flag column; filter after).
 `set_incremental {dataset, incremental:{column, window, unit}}` re-reads only recent rows. `certify {dataset, certified:true}`.
+`set_storage {dataset, storage: import|live, ttl}`: import keeps an extract (refreshed on its schedule); live reads the
+source when queried (at most every ttl seconds), so one model can mix live and imported tables. Datasets from different
+sources relate in one model like any others (an Excel sheet, a database table and an API joined by relationships).
 `query {sql}` (one read-only SELECT over datasets by name) returns a capped summary.
 
 ## Semantic model
@@ -69,6 +85,7 @@ Query-editor steps (`add_step {dataset, step, at?}`; `preview {dataset, step}` s
 - Formats: `currency:USD[:decimals]`, `percent[:d]`, `number[:d]`, `integer`, `compact`, `date[:grain]`.
 - Row-level security: `set_role {model, role:{name, members:["usr_..","*"], filters:{regions:"region = 'EU'"}}}`
   (`{user}` is the viewer's account); enforced in SQL for the app ("view as") and published pages.
+- Hierarchies have two to five levels, top first (Year > Quarter > Month > Week > Day; Region > Country > State > City > Store).
 - `suggest {datasets}` profiles data and returns ops for relationships, measures and a calendar.
 - `model_query {query:{model, dims, measures, filters, sort, limit}}` answers a question with its SQL.
 
@@ -102,6 +119,20 @@ Also: `add_filter {scope: doc|page id|visual id, filter}`, `set_theme {theme}` (
 `publish {doc, access: token|signed-in, accounts?, role?}` (a live page at /p/<slug>; viewers get no SQL or credentials), `unpublish`,
 `export {doc, format: xlsx|csv|html|pdf|png}`, `snapshot {doc}` (reports: refresh and freeze the numbers), `history`, `undo`, `redo`, `restore {version}`.
 Reports are documents with `type:"report"`: visuals flow in order, `text` visuals carry the prose (markdown), header/footer repeat on each printed page.
+
+## Drill and linked dashboards
+
+A visual with `options.hierarchy` drills (`drillMode:true`: a click drills down instead of selecting).
+`drill {doc, visual, action: down|up|next|expand|to|reset, value?, level?, state?}` returns the new drill state, the
+breadcrumb and the numbers (pass the returned `state` back as `state.drill[visual]` to go on): `down` a value,
+`up`, `next` (the next level for every parent), `expand` (the next level within its parents: several levels at once),
+`to` a breadcrumb level. Each level is aggregated in SQL; filters, measures and time intelligence apply at every level.
+`drillthrough {doc, visual, point:{field: value}, state?, to:{page} | to:{doc, page?} | link}` goes to a drill-through
+page or another dashboard with the filters in force, the drilled path and the point, and returns the target's numbers.
+`add_link {doc, visual, link:{label, doc, page?, fields?}}`: the visual's points open that dashboard with their context
+(`fields` limits what travels). Buttons: `button:{label, action:"doc", target: docId, page?}`.
+`sync_slicer {doc, visual, group}`: slicers of one group share their selection across pages and dashboards.
+Published pages keep links (a linked dashboard is read through the published page's own link).
 
 ## Layouts and templates
 

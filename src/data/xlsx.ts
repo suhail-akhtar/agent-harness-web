@@ -138,15 +138,48 @@ export function readXlsx(buf: Buffer): Sheet[] {
   return sheets;
 }
 
+/** The workbook's defined names that are cell ranges (named ranges): their sheet and A1 range. */
+export function definedNames(buf: Buffer): Array<{ name: string; sheet: string; range: string }> {
+  const wb = unzip(buf).get('xl/workbook.xml')?.toString('utf8') ?? '';
+  const out: Array<{ name: string; sheet: string; range: string }> = [];
+  for (const m of wb.matchAll(/<definedName\b([^>]*)>([\s\S]*?)<\/definedName>/g)) {
+    const name = attr(m[1]!, 'name');
+    const ref = /^'?(.+?)'?!\$?([A-Z]+)\$?(\d+)(?::\$?([A-Z]+)\$?(\d+))?$/.exec(unescapeXml(m[2]!.trim()));
+    if (!name || name.startsWith('_xlnm.') || !ref) continue;
+    out.push({ name, sheet: ref[1]!.replace(/''/g, "'"), range: `${ref[2]}${ref[3]}:${ref[4] ?? ref[2]}${ref[5] ?? ref[3]}` });
+  }
+  return out;
+}
+
+/** The cells of a sheet inside an A1 range ("B3:F40"), as a sheet of their own. */
+export function rangeSheet(s: Sheet, range: string): Sheet {
+  const m = /^\$?([A-Z]+)\$?(\d+):\$?([A-Z]+)\$?(\d+)$/.exec(range.toUpperCase());
+  if (!m) throw new Error(`not a cell range: ${range}`);
+  const c0 = colIndex(m[1]!); const r0 = Number(m[2]) - 1; const c1 = colIndex(m[3]!); const r1 = Number(m[4]) - 1;
+  const rows = s.rows.slice(r0, r1 + 1).map((r) => Array.from({ length: c1 - c0 + 1 }, (_, i) => r[c0 + i] ?? null));
+  const dates = new Set<string>();
+  for (const k of s.dates) { const [r, c] = k.split(':').map(Number); if (r! >= r0 && r! <= r1 && c! >= c0 && c! <= c1) dates.add(`${r! - r0}:${c! - c0}`); }
+  return { name: `${s.name}!${range}`, rows, dates };
+}
+
 export interface Table { columns: Array<{ name: string; type: 'BIGINT' | 'DOUBLE' | 'BOOLEAN' | 'DATE' | 'TIMESTAMP' | 'VARCHAR' }>; rows: Cell[][] }
 
 /**
- * A sheet as a table: the first non-empty row is the header (blank or repeated names made unique),
- * trailing empty rows dropped, and each column typed from its cells (mixed columns are text).
+ * A sheet as a table: the header row is found (a title and notes above it are skipped: the first
+ * row whose filled cells are all text and span most of the table's width, with data under it;
+ * else the first filled row), blank or repeated names made unique, trailing empty rows dropped,
+ * and each column typed from its cells (mixed columns are text). `headerAtTop`: a range's first row.
  */
-export function sheetTable(s: Sheet): Table {
-  const start = s.rows.findIndex((r) => r.some((v) => v !== null && v !== ''));
-  if (start < 0) return { columns: [], rows: [] };
+export function sheetTable(s: Sheet, o: { headerAtTop?: boolean } = {}): Table {
+  const filled = (r: Cell[] | undefined) => (r ?? []).filter((v) => v !== null && v !== '').length;
+  const first = s.rows.findIndex((r) => filled(r) > 0);
+  if (first < 0) return { columns: [], rows: [] };
+  let start = first;
+  if (!o.headerAtTop) {
+    const width = Math.max(...s.rows.slice(first, first + 50).map(filled));
+    const cand = s.rows.slice(first, first + 20).findIndex((r, i) => filled(r) >= Math.max(2, Math.ceil(width * 0.6)) && r.every((v) => v === null || v === '' || typeof v === 'string') && filled(s.rows[first + i + 1]) > 0);
+    if (cand > 0) start = first + cand;
+  }
   const head = s.rows[start]!;
   let body = s.rows.slice(start + 1);
   while (body.length && !body[body.length - 1]!.some((v) => v !== null && v !== '')) body.pop();
@@ -182,7 +215,7 @@ const isoDate = /^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}(:\d{2})?)?$/;
 function isoToSerial(s: string): number { const t = Date.parse(s.length === 10 ? `${s}T00:00:00Z` : `${s.replace(' ', 'T')}Z`); return t / 86_400_000 + 25569; }
 
 /** A workbook from tables (one sheet each): header row bold, numbers as numbers, ISO dates as dates. */
-export function writeXlsx(sheets: Array<{ name: string; columns: string[]; rows: Cell[][] }>): Buffer {
+export function writeXlsx(sheets: Array<{ name: string; columns: string[]; rows: Cell[][] }>, definedRanges: Array<{ name: string; sheet: string; range: string }> = []): Buffer {
   const used = new Set<string>();
   const names = sheets.map((s, i) => {
     let n = (s.name || `Sheet${i + 1}`).replace(/[\\/?*[\]:]/g, ' ').slice(0, 31).trim() || `Sheet${i + 1}`;
@@ -206,7 +239,7 @@ export function writeXlsx(sheets: Array<{ name: string; columns: string[]; rows:
   return zip([
     { name: '[Content_Types].xml', data: x(`<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${names.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}</Types>`) },
     { name: '_rels/.rels', data: x('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>') },
-    { name: 'xl/workbook.xml', data: x(`<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${names.map((n, i) => `<sheet name="${esc(n)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets></workbook>`) },
+    { name: 'xl/workbook.xml', data: x(`<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${names.map((n, i) => `<sheet name="${esc(n)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets>${definedRanges.length ? `<definedNames>${definedRanges.map((d) => `<definedName name="${esc(d.name)}">'${esc(d.sheet)}'!${d.range.split(':').map((c) => c.replace(/([A-Z]+)(\d+)/, '$$$1$$$2')).join(':')}</definedName>`).join('')}</definedNames>` : ''}</workbook>`) },
     { name: 'xl/_rels/workbook.xml.rels', data: x(`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${names.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}<Relationship Id="rId${names.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`) },
     { name: 'xl/styles.xml', data: x('<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="yyyy-mm-dd hh:mm:ss"/></numFmts><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="4"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="14" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs></styleSheet>') },
     ...sheets.map((s, i) => ({ name: `xl/worksheets/sheet${i + 1}.xml`, data: x(sheetXml(s).replace(/^<\?xml[^>]*>\n/, '')) })),

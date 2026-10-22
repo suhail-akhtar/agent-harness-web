@@ -204,7 +204,7 @@ function cleanState(s: unknown, allowed: Set<string>): ViewState {
     ...(o.page ? { page: String(o.page) } : {}),
     filters: fl(o.filters),
     ...(o.selection ? { selection: { visual: String(o.selection.visual), filters: fl(o.selection.filters) } } : {}),
-    ...(o.drill ? { drill: Object.fromEntries(Object.entries(o.drill).slice(0, 50).map(([k, v]) => [k, { level: Number(v?.level ?? 0), path: (Array.isArray(v?.path) ? v.path : []).slice(0, 6) as Scalar[] }])) } : {}),
+    ...(o.drill ? { drill: Object.fromEntries(Object.entries(o.drill).slice(0, 50).map(([k, v]) => [k, { level: Math.max(0, Math.min(4, Number(v?.level ?? 0) || 0)), path: (Array.isArray(v?.path) ? v.path : []).slice(0, 6).map((x: unknown) => (x === null || ['string', 'number', 'boolean'].includes(typeof x) ? x : null)) as Scalar[], ...(v?.mode === 'expand' ? { mode: 'expand' as const } : {}), ...(Array.isArray(v?.skip) ? { skip: v.skip.slice(0, 6).map(Number).filter((n: number) => Number.isInteger(n) && n >= 0 && n < 5) } : {}) }])) } : {}),
     ...(o.drillthrough ? { drillthrough: fl(o.drillthrough) } : {}),
     ...(o.decomp ? { decomp: Object.fromEntries(Object.entries(o.decomp).slice(0, 20).map(([k, v]) => [k, (Array.isArray(v) ? v : []).slice(0, 8).map((x) => { if (!allowed.has(String(x?.dim))) throw new DataError('decomposition dims are the visual\'s own', 403); return { dim: String(x.dim), value: x.value as Scalar }; })])) } : {}),
   };
@@ -222,8 +222,15 @@ function stripResult(r: QueryResult, showSql: boolean): QueryResult {
   return r;
 }
 
-/** Who may see a published page, and with which row-level security. */
-async function access(ctx: DataHttpContext, req: http.IncomingMessage, slug: string): Promise<{ entry: PublishedEntry; viewer: Viewer; doc: DocSpec; model?: ModelSpec }> {
+/** The dashboards a published one opens (its visuals' links and "open a dashboard" buttons): readable through its own link. */
+function linkTargets(doc: DocSpec): Set<string> {
+  const out = new Set<string>();
+  for (const p of doc.pages) for (const v of p.visuals) { for (const l of v.options?.links ?? []) out.add(l.doc); if (v.options?.button?.action === 'doc' && v.options.button.target) out.add(v.options.button.target); }
+  return out;
+}
+
+/** Who may see a published page (or a dashboard it links to, read through it), and with which row-level security. */
+async function access(ctx: DataHttpContext, req: http.IncomingMessage, slug: string, linked?: string | null): Promise<{ entry: PublishedEntry; viewer: Viewer; doc: DocSpec; model?: ModelSpec; docId: string }> {
   const entry = (await ctx.svc.published()).find((x) => x.slug === slug && !x.remote);
   if (!entry) throw new DataError('this page is not published (or was unpublished)', 404);
   const home = ctx.svc.home(entry.owner);
@@ -238,14 +245,21 @@ async function access(ctx: DataHttpContext, req: http.IncomingMessage, slug: str
     if (entry.accounts?.length && !entry.accounts.includes('*') && !(who.id && entry.accounts.includes(who.id)) && who.id !== entry.owner) throw new DataError('this page is not shared with you', 403);
     user = who.id;
   }
-  const { spec } = await home.doc(entry.doc);
+  let { spec } = await home.doc(entry.doc);
+  let docId = entry.doc;
+  if (linked && linked !== entry.doc) {
+    // The owner linked it from the published page: it is shown with the same link and the same rules.
+    if (!/^[\w-]{1,80}$/.test(linked) || !linkTargets(spec).has(linked)) throw new DataError('not found', 404);
+    spec = (await home.doc(linked)).spec;
+    docId = linked;
+  }
   const cat = (await home.catalog()).spec;
   const model = spec.model ? cat.models.find((m) => m.id === spec.model) : undefined;
   // A link (token) shows its role's rows, or, published without a role, what the owner published.
   // Signed-in viewers see the rows of the roles they are members of (none: no data, when the model has roles).
   const roles = model?.roles.filter((r) => (entry.access === 'token' ? r.name === entry.role : (entry.role ? r.name === entry.role : false) || r.members.includes('*') || (!!user && r.members.includes(user)))) ?? [];
   const all = (entry.access === 'token' && !entry.role) || (entry.access === 'signed-in' && user === entry.owner && !entry.role) || !model?.roles.length;
-  return { entry, doc: spec, model, viewer: all ? { owner: true, showSql: !!entry.showSql } : { owner: false, user, roles, showSql: !!entry.showSql } };
+  return { entry, doc: spec, model, docId, viewer: all ? { owner: true, showSql: !!entry.showSql } : { owner: false, user, roles, showSql: !!entry.showSql } };
 }
 
 const streams = new Map<string, Set<http.ServerResponse>>();
@@ -273,17 +287,18 @@ export async function publishedRoutes(ctx: DataHttpContext, req: http.IncomingMe
       res.writeHead(live ? 200 : 404, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': PAGE_CSP, 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff' });
       { res.end(viewerHtml('Dashboard', { base: '/p/_/' })); return true; }
     }
-    const a = await access(ctx, req, slug);
+    const b = m[2] === 'visual' && method === 'POST' ? await body(req, 200_000) : undefined;
+    const a = await access(ctx, req, slug, (b?.linked as string | undefined) ?? url.searchParams.get('linked'));
     const home = ctx.svc.home(a.entry.owner);
     if (m[2] === 'doc' && method === 'GET') {
-      void home.countView(a.entry.doc, 'published').catch(() => {});
-      { send(res, 200, { doc: publicDoc(a.doc, !!a.entry.showSql), hierarchies: a.model?.hierarchies ?? [], formats: a.model?.formats ?? {}, role: a.viewer.roles?.map((r) => r.name) ?? [], published: { at: a.entry.at } }); return true; }
+      void home.countView(a.docId, 'published').catch(() => {});
+      // fields: what this page may be filtered on (a dashboard opened from another keeps only those of the carried filters).
+      { send(res, 200, { doc: publicDoc(a.doc, !!a.entry.showSql), id: a.docId, hierarchies: a.model?.hierarchies ?? [], formats: a.model?.formats ?? {}, role: a.viewer.roles?.map((r) => r.name) ?? [], published: { at: a.entry.at }, fields: [...allowedFields(a.doc, a.model)] }); return true; }
     }
     if (m[2] === 'visual' && method === 'POST') {
-      const b = await body(req, 200_000);
-      const v = a.doc.pages.flatMap((x) => x.visuals).find((x) => x.id === b.visual);
+      const v = a.doc.pages.flatMap((x) => x.visuals).find((x) => x.id === b!.visual);
       if (!v) throw new DataError('no such visual', 404);
-      const state = cleanState(b.state, allowedFields(a.doc, a.model));
+      const state = cleanState(b!.state, allowedFields(a.doc, a.model));
       const r = await visualData(ctx.svc, home, a.doc, v, state, a.viewer);
       { send(res, 200, stripResult(JSON.parse(JSON.stringify(r)) as QueryResult, !!a.entry.showSql)); return true; }
     }

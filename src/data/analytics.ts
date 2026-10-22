@@ -1,5 +1,5 @@
 import { validateDashboard } from '../../packages/plugin-ui/src/dashboard.ts';
-import { type CatalogSpec, DATA_VISUALS, type DocSpec, type FilterSpec, formatValue, type InlineMeasure, type ModelSpec, OPS, type PageSpec, parseField, type QueryResult, type QuerySpec, type Scalar, type ViewState, type VisualSpec, visualSummary } from '../../packages/plugin-ui/src/bi.ts';
+import { carryFilters, type CatalogSpec, DATA_VISUALS, type DocSpec, type DrillAction, drillCrumbs, drillQuery, drillStep, type FilterSpec, formatValue, type InlineMeasure, type ModelSpec, OPS, type PageSpec, parseField, type QueryResult, type QuerySpec, type Scalar, type ViewState, type VisualSpec, visualSummary } from '../../packages/plugin-ui/src/bi.ts';
 import { DataError, qid, rowsHash } from './engine.ts';
 import { CATALOG_ID, type DataHome, newId } from './home.ts';
 import { type Actor, type Op, type OpOutcome, type Tx } from './ops.ts';
@@ -17,7 +17,7 @@ export type { ViewState };
 const DEFAULT_HIGHLIGHT = new Set(['bar', 'column', 'pie', 'donut', 'treemap', 'funnel']);
 
 /** The query a visual runs in this state, and the selection it highlights (if any). */
-export function visualQuery(doc: DocSpec, page: PageSpec, v: VisualSpec, state: ViewState, model?: ModelSpec): { query?: QuerySpec; highlight?: FilterSpec[] } {
+export function visualQuery(doc: DocSpec, page: PageSpec, v: VisualSpec, state: ViewState, model?: ModelSpec): { query?: QuerySpec; highlight?: FilterSpec[]; expand?: number } {
   const filters: FilterSpec[] = [...(doc.filters ?? []), ...(page.filters ?? []), ...(state.drillthrough && page.kind === 'drillthrough' ? state.drillthrough : [])];
   const own = v.type === 'slicer' ? v.options?.slicer?.field : undefined;
   for (const f of state.filters ?? []) if (f.field !== own) filters.push(f);
@@ -39,10 +39,13 @@ export function visualQuery(doc: DocSpec, page: PageSpec, v: VisualSpec, state: 
   // Hierarchy drill: the level's field instead of the first dim, filtered by the path taken.
   const h = v.options?.hierarchy ? model?.hierarchies.find((x) => x.name === v.options!.hierarchy) : undefined;
   const dr = state.drill?.[v.id];
+  let expand: number | undefined;
   if (h && dr && q.dims?.length) {
-    const level = Math.max(0, Math.min(h.levels.length - 1, dr.level));
-    q = { ...q, dims: [h.levels[level]!, ...q.dims.slice(1)] };
-    dr.path.slice(0, level).forEach((val, i) => filters.push({ field: h.levels[i]!, op: 'eq', value: val }));
+    // Down, up, next level or expanded (several levels at once): the same rule in the app and the drill op.
+    const d = drillQuery(h, dr);
+    q = { ...q, dims: [...d.dims, ...q.dims.slice(1)] };
+    filters.push(...d.filters);
+    if (d.dims.length > 1) expand = d.dims.length;
   }
   let highlight: FilterSpec[] | undefined;
   const sel = state.selection;
@@ -52,7 +55,7 @@ export function visualQuery(doc: DocSpec, page: PageSpec, v: VisualSpec, state: 
     if (mode === 'filter') filters.push(...sel.filters);
     else if (mode === 'highlight') highlight = sel.filters;
   }
-  return { query: { ...q, filters: [...filters, ...(q.filters ?? [])] }, ...(highlight ? { highlight } : {}) };
+  return { query: { ...q, filters: [...filters, ...(q.filters ?? [])] }, ...(highlight ? { highlight } : {}), ...(expand ? { expand } : {}) };
 }
 
 /** A visual's data in a state: its query (with highlight), or what its analysis computes. */
@@ -61,7 +64,7 @@ export async function visualData(svc: DataService, home: DataHome, doc: DocSpec,
   const cat = o.catalog ?? (await home.catalog()).spec;
   const model = doc.model ? svc.model(cat, doc.model) : undefined;
   if (doc.snapshot?.results[v.id] && !state.filters?.length && !state.selection) return doc.snapshot.results[v.id]!;
-  const { query, highlight } = visualQuery(doc, page, v, state, model);
+  const { query, highlight, expand } = visualQuery(doc, page, v, state, model);
   if (!query) return { columns: [], rows: [], rowCount: 0, hash: rowsHash([]), ms: 0, at: Date.now(), lineage: { datasets: [] } };
   if (v.type === 'decomp') return decomposition(svc, home, v, query, state.decomp?.[v.id] ?? [], viewer, cat);
   if (v.type === 'drivers') return drivers(svc, home, v, query, viewer, cat);
@@ -76,7 +79,9 @@ export async function visualData(svc: DataService, home: DataHome, doc: DocSpec,
     const t = await svc.query(home, { ...query, measures: query.measures!.slice(0, 1), dims: [trend], sort: [{ by: trend }] }, viewer, { catalog: cat, params: state.params });
     return { ...r, extra: { ...r.extra, trend: t.rows.map((x) => [x[0]!, x[1]!]) } };
   }
-  const r = await svc.query(home, query, viewer, { signal: o.signal, highlight, catalog: cat, params: state.params });
+  let r = await svc.query(home, query, viewer, { signal: o.signal, highlight, catalog: cat, params: state.params });
+  // An expanded drill: the first `expand` dims are one path (a chart draws them as one axis).
+  if (expand) r = { ...r, extra: { ...r.extra, expand } };
   if ((v.type === 'line' || v.type === 'area' || v.type === 'combo') && (v.options?.forecast || v.options?.anomalies)) return { ...r, ...(await forecast(svc, home, v, query, viewer, cat)) };
   return r;
 }
@@ -454,6 +459,11 @@ export async function suggestModel(svc: DataService, home: DataHome, names: stri
 
 // ---------------- reads and actions ----------------
 
+function visualIn(doc: DocSpec, id: string): { v: VisualSpec; page: PageSpec } {
+  for (const page of doc.pages) { const v = page.visuals.find((x) => x.id === id); if (v) return { v, page }; }
+  throw new DataError(`no visual ${id} (visuals: ${doc.pages.flatMap((p) => p.visuals.map((x) => x.id)).join(', ')})`, 404);
+}
+
 const isOutside = (r: QueryResult) => r.lineage.datasets.some((d) => d.sourceType === 'http' || d.sourceType === 'plugin' || !!d.provenance?.length);
 
 /** The ops that read or act (refresh, publish, export, undo ...): run after a batch's changes are written. */
@@ -508,6 +518,48 @@ export async function reads(svc: DataService, home: DataHome, a: Op, actor: Acto
       return { op: a.op, message: `${describeDoc(d.id, d.spec, d.version)}${m ? `\n${describeModel(m, colsOf)}` : `\ndatasets: ${cat.datasets.map((x) => `${x.name}(${(colsOf(x.name) ?? []).map((c) => c.name).join(', ')})`).join('; ')}`}`, data: { id: d.id, version: d.version, doc: d.spec } };
     }
     case 'verify': { const v = await verifyDoc(svc, home, String(a.doc ?? '')); return { op: a.op, message: v.text, data: v }; }
+    case 'drill': {
+      const d = await docRef();
+      const { v, page } = visualIn(d.spec, String(a.visual ?? ''));
+      const model = d.spec.model ? svc.model(cat, d.spec.model) : undefined;
+      const h = v.options?.hierarchy ? model?.hierarchies.find((x) => x.name === v.options!.hierarchy) : undefined;
+      if (!h) throw new DataError(`${v.id} has no hierarchy to drill (set options.hierarchy to one of: ${model?.hierarchies.map((x) => x.name).join(', ') || 'none: add one with set_hierarchy'})`);
+      const st = (a.state ?? {}) as ViewState;
+      const action = String(a.action ?? 'reset') as DrillAction['action'];
+      if (!['down', 'up', 'next', 'expand', 'to', 'reset'].includes(action)) throw new DataError('action is down (value), up, next, expand, to (level) or reset');
+      const next = drillStep(h, st.drill?.[v.id], { action, value: (a.value ?? null) as Scalar, values: a.values as Scalar[] | undefined, level: Number(a.level ?? 0) } as DrillAction);
+      const state: ViewState = { ...st, page: page.id, drill: { ...(st.drill ?? {}), [v.id]: next } };
+      const r = await visualData(svc, home, d.spec, v, state, OWNER, { catalog: cat });
+      const crumbs = drillCrumbs(h, next).map((c) => `${c.field}${c.all ? '' : ` = ${String(c.value)}`}`).join(' > ');
+      return { op: a.op, message: `${h.name}: ${crumbs} (level ${next.level + 1} of ${h.levels.length}${next.mode === 'expand' ? ', expanded' : ''})\n${summarize(r)}`, data: { state: next, crumbs: drillCrumbs(h, next), result: r }, ...(isOutside(r) ? { untrusted: true } : {}) };
+    }
+    case 'drillthrough': {
+      const d = await docRef();
+      const { v } = visualIn(d.spec, String(a.visual ?? ''));
+      const st = (a.state ?? {}) as ViewState;
+      const model = d.spec.model ? svc.model(cat, d.spec.model) : undefined;
+      const h = v.options?.hierarchy ? model?.hierarchies.find((x) => x.name === v.options!.hierarchy) : undefined;
+      const point: FilterSpec[] = Array.isArray(a.point) ? a.point as FilterSpec[] : Object.entries((a.point ?? {}) as Record<string, Scalar>).map(([field, value]) => (value === null ? { field, op: 'is_null' as const } : { field, op: 'eq' as const, value }));
+      const to = (a.to ?? {}) as { doc?: string; page?: string };
+      const link = v.options?.links?.find((l) => l.id === a.link || l.doc === to.doc);
+      const targetId = to.doc ?? (a.link ? link?.doc : undefined) ?? d.id;
+      const target = targetId === d.id ? d.spec : (await home.doc(targetId)).spec;
+      const page = to.page ?? link?.page ? target.pages.find((p) => p.id === (to.page ?? link?.page) || p.name === (to.page ?? link?.page)) : targetId === d.id ? target.pages.find((p) => p.kind === 'drillthrough' && (!p.drillFields?.length || p.drillFields.some((f) => point.some((x) => x.field.replace(/:.*$/, '') === f.replace(/:.*$/, ''))))) : target.pages.find((p) => !p.kind || p.kind === 'page');
+      if (!page) throw new DataError(`no page to go to in ${targetId} (name one with to.page)`);
+      // The filters in force, the selection, the drilled path and the point; only fields the target's model knows.
+      let carried = carryFilters([d.spec.filters, st.filters, st.selection?.filters, h ? drillQuery(h, st.drill?.[v.id]).filters : undefined, point], link?.fields);
+      const tm = svc.model(cat, target.model);
+      const tables = new Set(tm.tables.map((t) => t.name));
+      const dropped = carried.filter((f) => { const p = parseField(f.field); return !p || !tables.has(p.table); });
+      carried = carried.filter((f) => !dropped.includes(f));
+      const state: ViewState = page.kind === 'drillthrough' ? { page: page.id, drillthrough: carried } : { page: page.id, filters: carried };
+      const out: string[] = [`to ${targetId === d.id ? '' : `${targetId} `}page ${page.id} "${page.name}" with ${carried.map((f) => `${f.field} ${f.op} ${JSON.stringify(f.value ?? f.values ?? '')}`).join(', ') || 'no filters'}${dropped.length ? ` (not carried, the target's model has no ${dropped.map((f) => f.field).join(', ')})` : ''}`];
+      const results: Record<string, QueryResult> = {};
+      for (const x of page.visuals.filter((y) => DATA_VISUALS.has(y.type) && y.type !== 'slicer')) {
+        try { const r = await visualData(svc, home, target, x, state, OWNER, { catalog: cat }); results[x.id] = r; out.push(`${x.id} ${visualSummary(x)}: ${summarize(r, 8)}`); } catch (e) { out.push(`${x.id}: ERROR ${(e as Error).message}`); }
+      }
+      return { op: a.op, message: out.join('\n'), data: { doc: targetId, page: page.id, state, results } };
+    }
     case 'history': {
       const target = String(a.doc ?? a.target ?? CATALOG_ID);
       const meta = await home.store.meta(target);

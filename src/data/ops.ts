@@ -1,7 +1,7 @@
 import path from 'node:path';
 import {
-  type AlertSpec, type BookmarkSpec, type CatalogSpec, COLUMN_TYPES, DATA_VISUALS, type DatasetSpec, type DocSpec, FILTER_OPS, type FilterSpec, ID, IDENT, type MeasureSpec,
-  type ModelSpec, OPS, type PageSpec, parseField, type QuerySpec, type RefreshPolicy, type SourceSpec, SOURCE_TYPES, type StepSpec, type SubscriptionSpec, THEMES, TIME_CALCS,
+  type AlertSpec, type BookmarkSpec, type CatalogSpec, COLUMN_TYPES, FILE_FORMATS, LOG_FORMATS, DATA_VISUALS, type DatasetSpec, type DocSpec, FILTER_OPS, type FilterSpec, ID, IDENT, type MeasureSpec,
+  type LinkSpec, MAX_HIERARCHY_LEVELS, type ModelSpec, OPS, type PageSpec, parseField, type QuerySpec, type RefreshPolicy, type SourceSpec, SOURCE_TYPES, type StepSpec, type SubscriptionSpec, THEMES, TIME_CALCS,
   VISUAL_TYPES, type VisualSpec, visualSummary,
 } from '../../packages/plugin-ui/src/bi.ts';
 import { parseCron } from '../core/scheduler.ts';
@@ -114,13 +114,24 @@ function cleanSource(s: SourceSpec, workspace?: string): SourceSpec {
     if (!s.path) throw new DataError(`a ${s.type} source needs a path`);
     if (!path.isAbsolute(s.path)) { if (!workspace) throw new DataError('the path must be absolute here'); s.path = path.resolve(workspace, s.path); }
   }
-  if ((s.type === 'postgres' || s.type === 'mysql') && (!s.host || !s.database)) throw new DataError(`a ${s.type} source needs host and database (and user; the password as a vault entry name in "secret")`);
+  if ((s.type === 'postgres' || s.type === 'mysql' || s.type === 'mssql') && (!s.host || !s.database)) throw new DataError(`a ${s.type} source needs host and database (and user; the password as a vault entry name in "secret")`);
   if (s.type === 'http') { let u: URL; try { u = new URL(String(s.url)); } catch { throw new DataError('an http source needs a url'); } if (!/^https?:$/.test(u.protocol)) throw new DataError('only http(s) URLs'); if (u.username || u.password) throw new DataError('no credentials in the URL: use "secret"'); }
   if (s.type === 'static') {
     if (!Array.isArray(s.columns) || !Array.isArray(s.rows)) throw new DataError('a static source needs columns and rows');
     if (s.rows.length > 10_000) throw new DataError('a static source holds at most 10,000 rows; use a file');
   }
   if (s.type === 'plugin' && (!s.plugin || !s.kind)) throw new DataError('a plugin source needs plugin and kind');
+  if (s.type === 'mongodb') {
+    if (!s.database || !(s.host || s.url)) throw new DataError('a mongodb source needs host (or url: mongodb://host:port, mongodb+srv://cluster) and database (and user; the password as a vault entry name in "secret")');
+    if (s.url) { let u: URL; try { u = new URL(s.url); } catch { throw new DataError('url is mongodb://host:port or mongodb+srv://cluster'); } if (!/^mongodb(\+srv)?:$/.test(u.protocol)) throw new DataError('url is mongodb://host:port or mongodb+srv://cluster'); if (u.username || u.password) throw new DataError('no credentials in the URL: user, and the password in "secret"'); }
+  }
+  if (s.format && !(FILE_FORMATS as readonly string[]).includes(s.format)) throw new DataError(`format is one of ${FILE_FORMATS.join(', ')}`);
+  if (s.log) {
+    if (!(LOG_FORMATS as readonly string[]).includes(s.log.format)) throw new DataError(`log.format is one of ${LOG_FORMATS.join(', ')}`);
+    if ((s.log.format === 'regex' || s.log.format === 'grok') && !s.log.pattern) throw new DataError(`a ${s.log.format} log needs log.pattern (named groups: (?<status>\\d{3}) or %{INT:status})`);
+    if (s.log.format === 'regex') { try { new RegExp(s.log.pattern!); } catch (e) { throw new DataError(`log.pattern: ${(e as Error).message}`); } }
+  }
+  if (s.paginate && !['page', 'offset', 'cursor', 'link'].includes(s.paginate.kind)) throw new DataError('paginate.kind is page, offset, cursor or link');
   return s;
 }
 
@@ -174,6 +185,15 @@ async function checkVisual(tx: Tx, doc: DocSpec, v: VisualSpec, page: PageSpec):
   if (v.section && v.section !== 'sidebar' && page.layout?.type === 'sections' && !page.layout?.sections?.some((s) => s.id === v.section)) throw new DataError(`no section "${v.section}" on page ${page.name} (${page.layout?.sections?.map((s) => s.id).join(', ') || 'it has none'})`);
   if (o.button?.action === 'bookmark' && !doc.bookmarks?.some((b) => b.id === o.button!.target)) throw new DataError(`button: no bookmark ${o.button.target}`);
   if (o.button?.action === 'page' && !doc.pages.some((p) => p.id === o.button!.target)) throw new DataError(`button: no page ${o.button.target}`);
+  // Links and "open a dashboard" buttons point at documents that exist (in this batch or saved).
+  const docExists = async (id: string) => tx.docs.has(id) ? !tx.docs.get(id)!.deleted : !!(await tx.home.store.meta(id).catch(() => undefined));
+  if (o.button?.action === 'doc' && !(o.button.target && await docExists(o.button.target))) throw new DataError(`button: no dashboard ${o.button.target ?? '(target)'} to open`);
+  for (const l of o.links ?? []) {
+    if (!l.id || !l.label || !l.doc) throw new DataError('a link is {label, doc, page?, fields?}');
+    if (!(await docExists(l.doc))) throw new DataError(`link ${l.label}: no dashboard ${l.doc} (list_docs)`);
+  }
+  if (o.slicer?.sync !== undefined && !/^[A-Za-z0-9][\w .-]{0,40}$/.test(o.slicer.sync)) throw new DataError('a sync group is a short name (letters, digits, - _ . and spaces)');
+  if (o.drillMode && !o.hierarchy) throw new DataError('drillMode needs a hierarchy (options.hierarchy)');
 }
 
 function findVisual(doc: DocSpec, id: unknown): { page: PageSpec; v: VisualSpec; i: number } {
@@ -334,6 +354,16 @@ const H: Record<string, Handler> = {
     return `${d.name}: certified ${!!d.certified}, promoted ${!!d.promoted}`;
   },
   set_dataset_refresh: (tx, a) => { const d = tx.dataset(a.dataset); d.refresh = checkPolicy(a.refresh); tx.touch(); return `${d.name} refreshes ${d.refresh.mode}`; },
+  set_storage: (tx, a) => {
+    const d = tx.dataset(a.dataset);
+    const mode = S(a, 'storage', 'import or live');
+    if (mode !== 'import' && mode !== 'live') throw new DataError('storage is import (an extract) or live (read when queried)');
+    if (mode === 'live' && !d.source) throw new DataError(`${d.name} has no source of its own (it is SQL over other datasets): it is as live as they are`);
+    if (a.ttl !== undefined && !(Number(a.ttl) >= 0 && Number(a.ttl) <= 86_400)) throw new DataError('ttl is seconds, 0 to 86400');
+    if (mode === 'import') { delete d.storage; delete d.ttl; } else { d.storage = 'live'; if (a.ttl !== undefined) d.ttl = Math.floor(Number(a.ttl)); }
+    tx.touch();
+    return mode === 'live' ? `${d.name} is live: read from its source when queried (at most every ${d.ttl ?? 5} s)` : `${d.name} is imported: an extract refreshed on its schedule`;
+  },
   set_incremental: (tx, a) => {
     const d = tx.dataset(a.dataset);
     if (a.incremental === null) { delete d.incremental; tx.touch(); return `${d.name}: full refresh`; }
@@ -469,7 +499,7 @@ const H: Record<string, Handler> = {
   set_hierarchy: (tx, a) => {
     const m = tx.model(a.model);
     const h = O<{ name: string; levels: string[] }>(a, 'hierarchy');
-    if (!h.name || !Array.isArray(h.levels) || h.levels.length < 2) throw new DataError('a hierarchy is {name, levels: [two or more fields, top first]}');
+    if (!h.name || !Array.isArray(h.levels) || h.levels.length < 2 || h.levels.length > MAX_HIERARCHY_LEVELS) throw new DataError(`a hierarchy is {name, levels: [two to ${MAX_HIERARCHY_LEVELS} fields, top first]}`);
     m.hierarchies = [...m.hierarchies.filter((x) => x.name !== h.name), { name: h.name, levels: h.levels }]; tx.touch();
     tx.checks.push(async () => { const c = await tx.compiler(m.id); for (const l of h.levels) c.field(l); });
     return `hierarchy ${h.name}: ${h.levels.join(' > ')}`;
@@ -575,6 +605,41 @@ const H: Record<string, Handler> = {
     await checkVisual(tx, d, next, page);
     page.visuals[i] = next;
     return `updated ${v.id}: ${visualSummary(next)}`;
+  },
+  add_link: async (tx, a) => {
+    const d = await tx.doc(a.doc); const { page, v } = findVisual(d, a.visual);
+    const l = O<Partial<LinkSpec>>(a, 'link');
+    const link: LinkSpec = { id: newId('l'), label: String(l.label ?? '').trim(), doc: String(l.doc ?? ''), ...(l.page ? { page: String(l.page) } : {}), ...(Array.isArray(l.fields) && l.fields.length ? { fields: l.fields.map(String) } : {}) };
+    if (link.doc === tx.docId(d)) throw new DataError('a link goes to another dashboard (a page of this one: a drill-through page or a page button)');
+    v.options = { ...v.options, links: [...(v.options?.links ?? []), link] };
+    await checkVisual(tx, d, v, page);
+    tx.checks.push(async () => {
+      const t = await tx.doc(link.doc);
+      if (!link.page) return;
+      const pg = t.pages.find((p) => p.id === link.page || p.name === link.page);
+      if (!pg) throw new DataError(`link: ${link.doc} has no page ${link.page} (pages: ${t.pages.map((p) => `${p.id} "${p.name}"`).join(', ')})`);
+      link.page = pg.id;
+    });
+    return { op: a.op, message: `${v.id} links to ${link.doc}${link.page ? ` page ${link.page}` : ''} ("${link.label}"): its points open it with their filters and drilled path`, data: { id: link.id } };
+  },
+  remove_link: async (tx, a) => {
+    const d = await tx.doc(a.doc); const { v } = findVisual(d, a.visual);
+    const before = v.options?.links ?? [];
+    const after = before.filter((l) => l.id !== a.link && l.doc !== a.link);
+    if (after.length === before.length) throw new DataError(`no link ${String(a.link)} on ${v.id} (${before.map((l) => `${l.id} -> ${l.doc}`).join(', ') || 'none'})`);
+    v.options = { ...v.options, links: after };
+    if (!after.length) delete v.options.links;
+    return `removed the link from ${v.id}`;
+  },
+  sync_slicer: async (tx, a) => {
+    const d = await tx.doc(a.doc); const { page, v } = findVisual(d, a.visual);
+    if (v.type !== 'slicer' || !v.options?.slicer) throw new DataError(`${v.id} is a ${v.type}, not a slicer`);
+    const group = a.group === null || a.group === undefined || a.group === '' ? undefined : String(a.group);
+    const sl = { ...v.options.slicer, ...(group ? { sync: group } : {}) };
+    if (!group) delete sl.sync;
+    v.options = { ...v.options, slicer: sl };
+    await checkVisual(tx, d, v, page);
+    return group ? `${v.id} shares its selection with the slicers of group "${group}" (on any page or dashboard)` : `${v.id} no longer synced`;
   },
   remove_visual: async (tx, a) => {
     const d = await tx.doc(a.doc); const { page, v } = findVisual(d, a.visual);

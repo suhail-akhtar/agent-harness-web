@@ -46,11 +46,13 @@
   "optionalDependencies": {
     "docx": "9.13.0",
     "marked": "18.0.14",
+    "mongodb": "7.7.0",
     "mysql2": "3.24.5",
     "pdfjs-dist": "6.3.289",
     "pg": "8.23.1",
     "playwright-core": "1.56.1",
     "pptxgenjs": "4.0.1",
+    "tedious": "20.3.5",
     "three": "0.186.1"
   },
   "overrides": {

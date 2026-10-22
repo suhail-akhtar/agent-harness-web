@@ -4,7 +4,8 @@ import path from 'node:path';
 import type { FileFormat, Scalar, SourceSpec } from '../../packages/plugin-ui/src/bi.ts';
 import { assertPublicUrl, publicFetch } from '../tools/web.ts';
 import { DataError, lit, pathLit, qid } from './engine.ts';
-import { readXlsx, sheetTable, type Cell } from './xlsx.ts';
+import { readXlsx, sheetTable, type Cell, definedNames, rangeSheet } from './xlsx.ts';
+import { decodeText, flattenRecords, parseLog, parseNdjson, sniffDelimiter, xmlRows } from './formats.ts';
 
 // Reading sources. Each type turns into an extract reader: DuckDB SQL over a file (CSV, TSV, JSON,
 // Parquet) or over rows the server took from a workbook, a database, an API or a plugin (written
@@ -33,7 +34,10 @@ export function formatOf(p: string, f?: FileFormat): FileFormat {
   const ext = path.extname(p).toLowerCase().slice(1);
   if (ext === 'xlsx' || ext === 'xlsm') return 'xlsx';
   if (ext === 'tsv' || ext === 'tab') return 'tsv';
-  if (ext === 'json' || ext === 'ndjson' || ext === 'jsonl') return 'json';
+  if (ext === 'ndjson' || ext === 'jsonl') return 'ndjson';
+  if (ext === 'json') return 'json';
+  if (ext === 'xml') return 'xml';
+  if (ext === 'log' || ext === 'evtx') return 'log';
   if (ext === 'geojson') return 'geojson';
   if (ext === 'parquet') return 'parquet';
   return 'csv';
@@ -114,8 +118,8 @@ export function atPath(v: unknown, p?: string): unknown {
   return cur;
 }
 
-/** JSON rows (objects, arrays with a header, {columns, rows}) as columns and rows. */
-export function jsonTable(v: unknown): { columns: string[]; rows: unknown[][] } {
+/** JSON rows (objects, arrays with a header, {columns, rows}) as columns and rows; nested objects flattened unless `flatten` is false. */
+export function jsonTable(v: unknown, o: { flatten?: boolean; unnest?: string } = {}): { columns: string[]; rows: unknown[][] } {
   if (v && typeof v === 'object' && !Array.isArray(v) && Array.isArray((v as { rows?: unknown }).rows)) {
     const o = v as { columns?: unknown[]; rows: unknown[] };
     if (Array.isArray(o.columns) && o.rows.every(Array.isArray)) return { columns: o.columns.map((c) => (typeof c === 'string' ? c : String((c as { name?: unknown })?.name ?? c))), rows: o.rows as unknown[][] };
@@ -123,6 +127,10 @@ export function jsonTable(v: unknown): { columns: string[]; rows: unknown[][] } 
   }
   if (!Array.isArray(v)) throw new DataError('the data is not a list of rows (set rowsPath to the array inside the JSON, e.g. "data.items")');
   if (v.length && v.every(Array.isArray)) { const [head, ...rest] = v as unknown[][]; return { columns: head!.map(String), rows: rest }; }
+  if (o.flatten !== false && v.some((r) => r && typeof r === 'object')) {
+    const t = flattenRecords(v, { unnest: o.unnest });
+    if (t.columns.length) return t;
+  }
   const columns: string[] = [];
   const seen = new Set<string>();
   for (const r of v) if (r && typeof r === 'object') for (const k of Object.keys(r)) if (!seen.has(k)) { seen.add(k); columns.push(k); }
@@ -204,6 +212,35 @@ async function mysqlRows(s: SourceSpec, from: string | undefined, ctx: SourceCon
   }
 }
 
+// SQL Server type names (tedious) -> DuckDB types.
+const MS_TYPES: Record<string, ColType> = { Int: 'BIGINT', BigInt: 'BIGINT', SmallInt: 'BIGINT', TinyInt: 'BIGINT', IntN: 'BIGINT', Float: 'DOUBLE', Real: 'DOUBLE', FloatN: 'DOUBLE', Decimal: 'DECIMAL(38,10)', Numeric: 'DECIMAL(38,10)', DecimalN: 'DECIMAL(38,10)', NumericN: 'DECIMAL(38,10)', Money: 'DECIMAL(38,10)', SmallMoney: 'DECIMAL(38,10)', MoneyN: 'DECIMAL(38,10)', Date: 'DATE', DateTime: 'TIMESTAMP', DateTime2: 'TIMESTAMP', SmallDateTime: 'TIMESTAMP', DateTimeN: 'TIMESTAMP', DateTimeOffset: 'TIMESTAMP', Bit: 'BOOLEAN', BitN: 'BOOLEAN' };
+
+/** SQL Server through tedious (a TDS driver, no ODBC): one SELECT inside a transaction that is rolled back. */
+async function mssqlRows(s: SourceSpec, from: string | undefined, ctx: SourceContext, since?: { column: string; cutoff: string }, list = false): Promise<{ columns: string[]; rows: unknown[][]; types: Record<string, ColType> } | string[]> {
+  let td: typeof import('tedious');
+  try { td = await import('tedious'); } catch { throw new DataError('SQL Server sources need the tedious package (npm install)', 503); }
+  const password = s.secret ? await ctx.secret(s.secret, `read SQL Server source ${s.name}`) : undefined;
+  const conn = new td.Connection({ server: s.host!, authentication: { type: 'default', options: { userName: s.user, password } }, options: { port: s.port ?? 1433, database: s.database, encrypt: s.ssl !== false, trustServerCertificate: !s.ssl, readOnlyIntent: true, connectTimeout: 10_000, requestTimeout: ctx.timeoutMs ?? 120_000, rowCollectionOnRequestCompletion: false } });
+  await new Promise<void>((res, rej) => { conn.on('connect', (e) => (e ? rej(new DataError(`SQL Server: ${e.message}`)) : res())); conn.connect(); });
+  const run = (sql: string) => new Promise<{ columns: string[]; rows: unknown[][]; types: Record<string, ColType> }>((res, rej) => {
+    const out = { columns: [] as string[], rows: [] as unknown[][], types: {} as Record<string, ColType> };
+    const req = new td.Request(sql, (e) => (e ? rej(new DataError(`SQL Server: ${e.message}`)) : res(out)));
+    req.on('columnMetadata', (cols) => { const list = (Array.isArray(cols) ? cols : Object.values(cols)) as Array<{ colName: string; type: { name: string } }>; out.columns = list.map((c) => c.colName); for (const c of list) out.types[c.colName] = MS_TYPES[c.type.name] ?? 'VARCHAR'; });
+    req.on('row', (cols) => { const list = (Array.isArray(cols) ? cols : Object.values(cols)) as Array<{ value: unknown }>; out.rows.push(list.map((c) => c.value)); });
+    conn.execSql(req);
+  });
+  try {
+    await new Promise<void>((res, rej) => conn.beginTransaction((e) => (e ? rej(new DataError(`SQL Server: ${e.message}`)) : res())));
+    if (list) return (await run("SELECT TABLE_SCHEMA + '.' + TABLE_NAME AS t FROM INFORMATION_SCHEMA.TABLES ORDER BY 1")).rows.map((r) => String(r[0]));
+    let q = dbQuery(from, (x) => `[${x.replace(/]/g, ']]')}]`);
+    if (since) q = `SELECT * FROM (${q}) AS t WHERE [${since.column.replace(/]/g, ']]')}] >= '${since.cutoff.replace(/'/g, "''")}'`;
+    return await run(q);
+  } finally {
+    await new Promise<void>((res) => conn.rollbackTransaction(() => res())).catch(() => {});
+    conn.close();
+  }
+}
+
 async function sqliteRows(file: string, from: string | undefined, list = false): Promise<{ columns: string[]; rows: unknown[][] } | string[]> {
   const { DatabaseSync } = await import('node:sqlite');
   const db = new DatabaseSync(file, { readOnly: true });
@@ -217,9 +254,10 @@ async function sqliteRows(file: string, from: string | undefined, list = false):
 }
 
 /** An API source's request (secret attached on the server only). */
-async function httpGet(s: SourceSpec, ctx: SourceContext): Promise<{ type: string; body: Buffer }> {
+async function httpGet(s: SourceSpec, ctx: SourceContext, pageUrl?: string): Promise<{ type: string; body: Buffer; link?: string }> {
   if (!s.url) throw new DataError('an http source needs a url');
-  const u = new URL(s.url);
+  const u = new URL(pageUrl ?? s.url);
+  if (u.host !== new URL(s.url).host) throw new DataError('a page of an API source is on its own host only');
   if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new DataError('only http(s) URLs');
   const hostKey = u.port ? `${u.hostname}:${u.port}` : u.hostname;
   const isPrivate = ctx.privateHosts.includes(hostKey) || ctx.privateHosts.includes(u.hostname);
@@ -242,7 +280,122 @@ async function httpGet(s: SourceSpec, ctx: SourceContext): Promise<{ type: strin
   if (len > MAX_FETCH) throw new DataError('the response is larger than 50 MB');
   const body = Buffer.from(await res.arrayBuffer());
   if (body.length > MAX_FETCH) throw new DataError('the response is larger than 50 MB');
-  return { type: res.headers.get('content-type') ?? '', body };
+  return { type: res.headers.get('content-type') ?? '', body, link: res.headers.get('link') ?? undefined };
+}
+
+/**
+ * A delimited text file: its encoding (a file that is not UTF-8 is converted to a UTF-8 copy first)
+ * and its delimiter (named, else detected) given to the engine, which types the columns.
+ */
+async function csvReader(file: string, fmt: 'csv' | 'tsv', s: SourceSpec, ctx: SourceContext): Promise<Reader> {
+  const fh = await fs.open(file, 'r');
+  const head = Buffer.alloc(65_536);
+  const { bytesRead } = await fh.read(head, 0, head.length, 0).finally(() => fh.close());
+  const sample = head.subarray(0, bytesRead);
+  // Cut at the last newline so a character split by the sample's end does not look like bad UTF-8.
+  const cut = sample.lastIndexOf(10);
+  const probe = decodeText(cut > 0 && bytesRead === head.length ? sample.subarray(0, cut) : sample, s.encoding);
+  const delim = fmt === 'tsv' ? '\t' : s.delimiter ?? sniffDelimiter(probe.text);
+  const opts = `header = true, delim = ${lit(delim)}, auto_detect = true, sample_size = -1`;
+  if (probe.encoding === 'utf-8' && !(sample[0] === 0xef && sample[1] === 0xbb && sample[2] === 0xbf)) return { reader: `SELECT * FROM read_csv(${pathLit(file)}, ${opts})`, cleanup: noCleanup };
+  const dir = path.join(ctx.home, 'tmp');
+  await fs.mkdir(dir, { recursive: true });
+  const copy = path.join(dir, `${crypto.randomBytes(8).toString('hex')}.csv`);
+  await fs.writeFile(copy, decodeText(await fs.readFile(file), s.encoding ?? probe.encoding).text, 'utf8');
+  return { reader: `SELECT * FROM read_csv(${pathLit(copy)}, ${opts})`, cleanup: () => fs.rm(copy, { force: true }) };
+}
+
+/** A sheet (by name) or a named range of a workbook, as a table with its header row found. */
+function workbookTable(buf: Buffer, from: string | undefined, file: string): ReturnType<typeof sheetTable> {
+  const sheets = readXlsx(buf);
+  const find = (n: string) => sheets.find((x) => x.name === n) ?? sheets.find((x) => x.name.toLowerCase() === n.toLowerCase());
+  if (!from) return sheetTable(sheets[0]!);
+  const sh = find(from);
+  if (sh) return sheetTable(sh);
+  // A named range ("SalesTable"), or a sheet and range ("Sheet1!B3:F40").
+  const named = definedNames(buf).find((x) => x.name.toLowerCase() === from.toLowerCase());
+  const direct = /^'?(.+?)'?!(\$?[A-Z]+\$?\d+:\$?[A-Z]+\$?\d+)$/.exec(from);
+  const ref = named ? { sheet: named.sheet, range: named.range } : direct ? { sheet: direct[1]!, range: direct[2]! } : undefined;
+  const base = ref ? find(ref.sheet) : undefined;
+  if (!ref || !base) throw new DataError(`no sheet or named range "${from}" in ${file} (sheets: ${sheets.map((x) => x.name).join(', ')}${definedNames(buf).length ? `; names: ${definedNames(buf).map((x) => x.name).join(', ')}` : ''})`);
+  return sheetTable(rangeSheet(base, ref.range), { headerAtTop: true });
+}
+
+/** An API's rows across its pages (page numbers, offsets, a cursor in the body, or the Link header's next). */
+async function httpRows(s: SourceSpec, from: string | undefined, ctx: SourceContext): Promise<{ columns: string[]; rows: unknown[][]; types?: Record<string, ColType> }> {
+  const pg = s.paginate;
+  const first = await httpGet(s, ctx, pg ? pageUrl(s.url!, pg, pg.start ?? (pg.kind === 'offset' ? 0 : 1)) : undefined);
+  const text = first.body.toString('utf8');
+  if (s.format === 'log') return parseLog(text, s.log ?? { format: 'auto' });
+  if (s.format === 'xml' || (!s.format && /xml/i.test(first.type) && !/json/i.test(first.type))) return xmlRows(text, from ?? s.rowsPath);
+  const parse = (t: string): { items: unknown; json: unknown } => {
+    if (s.format === 'ndjson') { const items = parseNdjson(t); return { items, json: items }; }
+    let json: unknown; try { json = JSON.parse(t); } catch { throw new DataError(`${new URL(s.url!).host} did not answer with JSON or CSV`); }
+    return { items: atPath(json, from ?? s.rowsPath), json };
+  };
+  let cur = parse(text);
+  if (!pg) return jsonTable(cur.items, { flatten: s.flatten, unnest: s.unnest });
+  const all: unknown[] = [];
+  let res = first; let n = pg.start ?? (pg.kind === 'offset' ? 0 : 1); let url = s.url!;
+  for (let i = 0; i < Math.min(pg.maxPages ?? 50, 500); i++) {
+    if (!Array.isArray(cur.items)) throw new DataError('a page is not a list of rows: set rowsPath to the list');
+    all.push(...cur.items);
+    let next: string | undefined;
+    if (pg.kind === 'link') {
+      const link = /<([^>]+)>\s*;\s*rel="?next"?/.exec(res.link ?? '')?.[1];
+      if (link) { const u = new URL(link, url); if (u.host !== new URL(s.url!).host) throw new DataError('the next page is on another host: refused'); next = u.toString(); }
+    } else if (pg.kind === 'cursor') {
+      const c = atPath(cur.json, pg.cursorPath ?? 'next');
+      if (c !== null && c !== undefined && c !== '' && cur.items.length) { const u = new URL(s.url!); u.searchParams.set(pg.param ?? 'cursor', String(c)); if (pg.size) u.searchParams.set(pg.sizeParam ?? 'limit', String(pg.size)); next = u.toString(); }
+    } else if (cur.items.length && !(pg.size && cur.items.length < pg.size)) {
+      n += pg.kind === 'offset' ? cur.items.length : 1;
+      next = pageUrl(s.url!, pg, n);
+    }
+    if (!next) break;
+    url = next;
+    res = await httpGet(s, ctx, url);
+    cur = parse(res.body.toString('utf8'));
+  }
+  return jsonTable(all, { flatten: s.flatten, unnest: s.unnest });
+}
+function pageUrl(base: string, pg: NonNullable<SourceSpec['paginate']>, n: number): string {
+  const u = new URL(base);
+  if (pg.kind === 'page' || pg.kind === 'offset') u.searchParams.set(pg.param ?? (pg.kind === 'offset' ? 'offset' : 'page'), String(n));
+  if (pg.size && pg.kind !== 'link') u.searchParams.set(pg.sizeParam ?? (pg.kind === 'offset' ? 'limit' : 'per_page'), String(pg.size));
+  return u.toString();
+}
+
+/** A MongoDB collection (the official driver, read with a secondary-preferred read): documents flattened, an array unnested into rows when asked. */
+async function mongoRows(s: SourceSpec, from: string | undefined, ctx: SourceContext, list = false): Promise<{ columns: string[]; rows: unknown[][] } | string[]> {
+  let mongo: typeof import('mongodb');
+  try { mongo = await import('mongodb'); } catch { throw new DataError('MongoDB sources need the mongodb package (npm install)', 503); }
+  const password = s.secret ? await ctx.secret(s.secret, `read MongoDB source ${s.name}`) : undefined;
+  const base = s.url ? new URL(s.url) : new URL(`mongodb://${s.host ?? 'localhost'}:${s.port ?? 27017}`);
+  if (s.user) { base.username = encodeURIComponent(s.user); if (password) base.password = encodeURIComponent(password); }
+  const client = new mongo.MongoClient(base.toString(), { serverSelectionTimeoutMS: 10_000, readPreference: 'secondaryPreferred', ...(s.user && !base.searchParams.get('authSource') ? { authSource: 'admin' } : {}) });
+  await client.connect();
+  try {
+    const db = client.db(s.database);
+    if (list) return (await db.listCollections({}, { nameOnly: true }).toArray()).map((c) => c.name).sort();
+    if (!from) throw new DataError('name the collection to read: "from"');
+    const docs = await db.collection(from).find(s.filter ?? {}, { projection: s.projection, maxTimeMS: ctx.timeoutMs ?? 120_000 }).limit(2_000_000).toArray();
+    const plain = (v: unknown): unknown => {
+      if (v === null || v === undefined) return null;
+      if (v instanceof Date) return v;
+      if (Array.isArray(v)) return v.map(plain);
+      if (typeof v === 'object') {
+        const bt = (v as { _bsontype?: string })._bsontype;
+        if (bt === 'ObjectId' || bt === 'ObjectID') return (v as { toHexString(): string }).toHexString();
+        if (bt === 'Decimal128') return Number((v as { toString(): string }).toString());
+        if (bt === 'Long' || bt === 'Int32' || bt === 'Double') return Number((v as { toString(): string }).toString());
+        if (bt === 'Binary') return Buffer.from((v as { buffer: Uint8Array }).buffer).toString('base64');
+        if (bt) return String(v);
+        return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, plain(x)]));
+      }
+      return v;
+    };
+    return flattenRecords(docs.map(plain), { unnest: s.unnest });
+  } finally { await client.close().catch(() => {}); }
 }
 
 /**
@@ -254,20 +407,21 @@ export async function readerFor(s: SourceSpec, from: string | undefined, ctx: So
     case 'file': {
       const file = await allowedFile(s.path ?? '', ctx.roots);
       const fmt = formatOf(file, s.format);
-      if (fmt === 'csv') return { reader: `SELECT * FROM read_csv(${pathLit(file)}, header = true, auto_detect = true, sample_size = -1)`, cleanup: noCleanup };
-      if (fmt === 'tsv') return { reader: `SELECT * FROM read_csv(${pathLit(file)}, header = true, delim = '\\t', auto_detect = true, sample_size = -1)`, cleanup: noCleanup };
+      if (fmt === 'csv' || fmt === 'tsv') return csvReader(file, fmt, s, ctx);
       if (fmt === 'parquet') return { reader: `SELECT * FROM read_parquet(${pathLit(file)})`, cleanup: noCleanup };
-      if (fmt === 'json' && !from) return { reader: `SELECT * FROM read_json_auto(${pathLit(file)}, sample_size = -1, maximum_object_size = 104857600)`, cleanup: noCleanup };
+      if (fmt === 'json' && !from && s.flatten === false && !s.unnest) return { reader: `SELECT * FROM read_json_auto(${pathLit(file)}, sample_size = -1, maximum_object_size = 104857600)`, cleanup: noCleanup };
+      if (path.extname(file).toLowerCase() === '.evtx') throw new DataError('binary .evtx files are not read here: export the events from Event Viewer as XML (or CSV) and read that (log format winevent-xml or winevent-csv)');
       const buf = await fs.readFile(file);
       if (fmt === 'xlsx') {
-        const sheets = readXlsx(buf);
-        const sh = from ? sheets.find((x) => x.name === from) ?? sheets.find((x) => x.name.toLowerCase() === from.toLowerCase()) : sheets[0];
-        if (!sh) throw new DataError(`no sheet "${from}" in ${path.basename(file)} (sheets: ${sheets.map((x) => x.name).join(', ')})`);
-        const t = sheetTable(sh);
+        const t = workbookTable(buf, from, path.basename(file));
         return rowsReader(ctx.home, t.columns.map((c) => c.name), t.rows, Object.fromEntries(t.columns.map((c) => [c.name, c.type])));
       }
-      const json = JSON.parse(buf.toString('utf8')) as unknown;
-      const t = fmt === 'geojson' ? geoRows(json) : jsonTable(atPath(json, from ?? s.rowsPath));
+      const text = decodeText(buf, s.encoding).text;
+      if (fmt === 'log') { const t = parseLog(text, s.log ?? { format: 'auto' }); return rowsReader(ctx.home, t.columns, t.rows, t.types); }
+      if (fmt === 'xml') { const t = xmlRows(text, from ?? s.rowsPath); return rowsReader(ctx.home, t.columns, t.rows); }
+      if (fmt === 'ndjson') { const t = jsonTable(parseNdjson(text), { flatten: s.flatten, unnest: s.unnest }); return rowsReader(ctx.home, t.columns, t.rows); }
+      const json = JSON.parse(text) as unknown;
+      const t = fmt === 'geojson' ? geoRows(json) : jsonTable(atPath(json, from ?? s.rowsPath), { flatten: s.flatten, unnest: s.unnest });
       return rowsReader(ctx.home, t.columns, t.rows);
     }
     case 'sqlite': {
@@ -275,14 +429,16 @@ export async function readerFor(s: SourceSpec, from: string | undefined, ctx: So
       const t = await sqliteRows(file, from) as { columns: string[]; rows: unknown[][] };
       return rowsReader(ctx.home, t.columns, t.rows);
     }
-    case 'postgres': case 'mysql': {
-      const t = await (s.type === 'postgres' ? postgresRows : mysqlRows)(s, from, ctx, since) as { columns: string[]; rows: unknown[][]; types: Record<string, ColType> };
+    case 'postgres': case 'mysql': case 'mssql': {
+      const t = await (s.type === 'postgres' ? postgresRows : s.type === 'mssql' ? mssqlRows : mysqlRows)(s, from, ctx, since) as { columns: string[]; rows: unknown[][]; types: Record<string, ColType> };
       return rowsReader(ctx.home, t.columns, t.rows, t.types);
     }
     case 'http': {
+      if (s.paginate || (s.format && s.format !== 'csv' && s.format !== 'tsv')) { const t = await httpRows(s, from, ctx); return rowsReader(ctx.home, t.columns, t.rows, t.types); }
       const r = await httpGet(s, ctx);
       const text = r.body.toString('utf8');
-      if (/csv|tab-separated/i.test(r.type) || (!/json/i.test(r.type) && !/^\s*[[{]/.test(text))) {
+      if (/xml/i.test(r.type) && !/json/i.test(r.type)) { const t = xmlRows(text, from ?? s.rowsPath); return rowsReader(ctx.home, t.columns, t.rows); }
+      if (s.format === 'csv' || s.format === 'tsv' || /csv|tab-separated/i.test(r.type) || (!/json/i.test(r.type) && !/^\s*[[{]/.test(text))) {
         const dir = path.join(ctx.home, 'tmp');
         await fs.mkdir(dir, { recursive: true });
         const file = path.join(dir, `${crypto.randomBytes(8).toString('hex')}.csv`);
@@ -291,7 +447,11 @@ export async function readerFor(s: SourceSpec, from: string | undefined, ctx: So
       }
       let json: unknown;
       try { json = JSON.parse(text); } catch { throw new DataError(`${new URL(s.url!).host} did not answer with JSON or CSV`); }
-      const t = jsonTable(atPath(json, from ?? s.rowsPath));
+      const t = jsonTable(atPath(json, from ?? s.rowsPath), { flatten: s.flatten, unnest: s.unnest });
+      return rowsReader(ctx.home, t.columns, t.rows);
+    }
+    case 'mongodb': {
+      const t = await mongoRows(s, from, ctx) as { columns: string[]; rows: unknown[][] };
       return rowsReader(ctx.home, t.columns, t.rows);
     }
     case 'static': {
@@ -313,18 +473,20 @@ export async function testSource(s: SourceSpec, ctx: SourceContext): Promise<{ o
     case 'file': {
       const file = await allowedFile(s.path ?? '', ctx.roots);
       const fmt = formatOf(file, s.format);
-      if (fmt === 'xlsx') { const sh = readXlsx(await fs.readFile(file)); return { ok: true, tables: sh.map((x) => x.name), note: `${sh.length} sheet(s)` }; }
+      if (fmt === 'xlsx') { const buf = await fs.readFile(file); const sh = readXlsx(buf); const names = definedNames(buf); return { ok: true, tables: [...sh.map((x) => x.name), ...names.map((x) => x.name)], note: `${sh.length} sheet(s)${names.length ? `, ${names.length} named range(s)` : ''}` }; }
+      if (fmt === 'log') { const t = parseLog(decodeText(await fs.readFile(file), s.encoding).text, s.log ?? { format: 'auto' }); return { ok: true, tables: [path.basename(file)], note: `${t.note}; columns: ${t.columns.join(', ')}` }; }
       const st = await fs.stat(file);
       return { ok: true, tables: [path.basename(file)], note: `${fmt}, ${Math.round(st.size / 1024)} KB` };
     }
     case 'sqlite': { const t = await sqliteRows(await allowedFile(s.path ?? '', ctx.roots), undefined, true) as string[]; return { ok: true, tables: t, note: `${t.length} table(s)` }; }
-    case 'postgres': case 'mysql': { const t = await (s.type === 'postgres' ? postgresRows : mysqlRows)(s, undefined, ctx, undefined, true) as string[]; return { ok: true, tables: t, note: `connected; ${t.length} table(s)` }; }
+    case 'postgres': case 'mysql': case 'mssql': { const t = await (s.type === 'postgres' ? postgresRows : s.type === 'mssql' ? mssqlRows : mysqlRows)(s, undefined, ctx, undefined, true) as string[]; return { ok: true, tables: t, note: `connected; ${t.length} table(s)` }; }
     case 'http': {
       const r = await httpGet(s, ctx);
       let note = `${r.body.length} bytes of ${r.type || 'data'}`;
       if (/json/i.test(r.type) || /^\s*[[{]/.test(r.body.toString('utf8', 0, 64))) { try { const t = jsonTable(atPath(JSON.parse(r.body.toString('utf8')), s.rowsPath)); note += `; ${t.rows.length} rows, columns: ${t.columns.slice(0, 20).join(', ')}`; } catch (e) { note += `; ${(e as Error).message}`; } }
       return { ok: true, tables: [new URL(s.url!).host], note };
     }
+    case 'mongodb': { const t = await mongoRows(s, undefined, ctx, true) as string[]; return { ok: true, tables: t, note: `connected; ${t.length} collection(s)` }; }
     case 'static': return { ok: true, tables: ['values'], note: `${s.rows?.length ?? 0} rows typed in${s.origin === 'model' ? ' by a model (bind a real source)' : ''}` };
     case 'plugin': { const t = jsonTable(atPath(await ctx.pluginData!(s.plugin!, s.kind!, s.params ?? {}), s.rowsPath)); return { ok: true, tables: [s.kind!], note: `${t.rows.length} rows` }; }
   }

@@ -428,9 +428,15 @@ export class SemanticCompiler {
     for (const f of filters) {
       const t = parseField(f.field)!.table;
       if (reach.has(t)) { where.push(this.fieldFilter(f)); continue; }
-      // Cross-filtering both ways: a filter on a table on the many side of a reached table.
-      const e = this.edges.find((x) => x.many.table === t && x.both && reach.has(x.one.table));
-      if (e) { where.push(`${qid(e.one.table)}.${qid(e.one.column)} IN (SELECT ${qid(t)}.${qid(e.many.column)} FROM ${this.tableSource(t)} AS ${qid(t)} WHERE ${this.fieldFilter(f)})`); continue; }
+      // Cross-filtering both ways: a filter on a table on the many side of a reached table, or on a
+      // table that many side reaches (products -> orders -> customers: the customers who bought tea).
+      const e = this.edges.find((x) => x.many.table === t && x.both && reach.has(x.one.table))
+        ?? this.edges.find((x) => x.both && reach.has(x.one.table) && x.many.table !== fact && this.reach(x.many.table).has(t));
+      if (e) {
+        const from = e.many.table === t ? `${this.tableSource(t)} AS ${qid(t)}` : this.fromClause(e.many.table, new Set([t])).sql;
+        where.push(`${qid(e.one.table)}.${qid(e.one.column)} IN (SELECT ${qid(e.many.table)}.${qid(e.many.column)} FROM ${from} WHERE ${this.fieldFilter(f)})`);
+        continue;
+      }
       this.warnings.push(`the filter on ${f.field} does not reach ${fact} (no relationship; set cross-filtering to both or add a relationship): it was not applied to ${ms.map((m) => m.name).join(', ') || fact}`);
     }
     return { from: sql, where };
