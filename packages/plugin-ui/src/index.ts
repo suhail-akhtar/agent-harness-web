@@ -1,3 +1,4 @@
 export * from './manifest.ts';
 export * from './rpc.ts';
 export * from './dashboard.ts';
+export * from './diagram.ts';

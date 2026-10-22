@@ -29,8 +29,8 @@ export function useArtifactRenderer(): ArtifactRenderer {
     const r = rendererFor(registry, 'artifact', kind);
     if (!r) return undefined;
     if (r.kind === 'frame' && r.entry) return <PluginFrame plugin={r.plugin} contribution={r.qid} entry={r.entry} height={r.height ?? 360} fill={o.fill} context={{ artifact: kind, source, title: o.title }} />;
-    const C = r.component ? registry.active.find((p) => p.name === r.plugin)?.native?.components[r.component] as React.ComponentType<{ kind: string; source: string; title: string; fill?: boolean }> | undefined : undefined;
-    return C ? <C kind={kind} source={source} title={o.title} fill={o.fill} /> : undefined;
+    const C = r.component ? registry.active.find((p) => p.name === r.plugin)?.native?.components[r.component] as React.ComponentType<{ kind: string; source: string; title: string; fill?: boolean; origin?: typeof o.origin }> | undefined : undefined;
+    return C ? <C kind={kind} source={source} title={o.title} fill={o.fill} origin={o.origin} /> : undefined;
   }, [registry]);
 }
 

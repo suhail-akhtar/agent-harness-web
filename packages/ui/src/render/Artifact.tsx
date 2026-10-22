@@ -15,6 +15,7 @@ import { CodeBlock } from './CodeBlock.tsx';
 import { artifactDocument, type ArtifactKind, type FramedArtifactKind } from './artifact-doc.ts';
 import { JsonView } from './Data.tsx';
 import { RenderBoundary } from './Widget.tsx';
+import { DiagramBlock } from './diagram/Static.tsx';
 import { copyText, downloadText } from './download.ts';
 
 export interface ArtifactHost {
@@ -30,20 +31,22 @@ export interface ArtifactHost {
    */
   useRenderer?(): ArtifactRenderer;
 }
+/** Where an artifact is kept (a session's versioned artifact), when the host knows: a renderer can update it. */
+export interface ArtifactOrigin { sessionId: string; id: string; version?: number }
 /** Draws an artifact kind, or returns undefined to keep the default. */
-export type ArtifactRenderer = (kind: ArtifactKind, source: string, o: { title: string; fill?: boolean }) => React.ReactNode | undefined;
+export type ArtifactRenderer = (kind: ArtifactKind, source: string, o: { title: string; fill?: boolean; origin?: ArtifactOrigin }) => React.ReactNode | undefined;
 const noRenderer: ArtifactRenderer = () => undefined;
 const useNoRenderer = () => noRenderer;
 let host: ArtifactHost = {};
 export function setArtifactHost(h: ArtifactHost): void { host = h; }
 export function artifactHost(): ArtifactHost { return host; }
 
-export interface ArtifactProps { kind: ArtifactKind; source: string; language?: string; title?: string; streaming?: boolean; /** Fill the container (the side panel) instead of the transcript's height. */ fill?: boolean; defaultTab?: 'preview' | 'code' }
+export interface ArtifactProps { kind: ArtifactKind; source: string; language?: string; title?: string; streaming?: boolean; /** Fill the container (the side panel) instead of the transcript's height. */ fill?: boolean; defaultTab?: 'preview' | 'code'; /** The stored artifact this is a version of (passed to a host renderer). */ origin?: ArtifactOrigin }
 
 const label: Record<ArtifactKind, string> = { html: 'HTML', svg: 'SVG', react: 'React component', diagram: 'Diagram' };
 const ICON = { react: 'atom', svg: 'image', html: 'code', diagram: 'layers' } as const;
 
-export const Artifact = React.memo(function Artifact({ kind, source, language, title, streaming, fill, defaultTab }: ArtifactProps): React.ReactElement {
+export const Artifact = React.memo(function Artifact({ kind, source, language, title, streaming, fill, defaultTab, origin }: ArtifactProps): React.ReactElement {
   const [tab, setTab] = useState<'preview' | 'code'>(defaultTab ?? (streaming ? 'code' : 'preview'));
   const [copied, setCopied] = useState(false);
   const name = title ?? guessTitle(kind, source);
@@ -65,27 +68,27 @@ export const Artifact = React.memo(function Artifact({ kind, source, language, t
       <div className={fill ? 'min-h-0 flex-1' : ''}>
         {tab === 'code' || streaming
           ? <div className="max-h-[480px] overflow-auto [&_figure]:my-0 [&_figure]:rounded-none [&_figure]:border-0"><CodeBlock code={source} language={language ?? (kind === 'react' ? 'jsx' : kind === 'svg' ? 'xml' : kind === 'diagram' ? 'json' : 'html')} collapseAt={1e9} streaming={streaming} /></div>
-          : <ArtifactPreview kind={kind} source={source} fill={fill} title={name} custom={custom} />}
+          : <ArtifactPreview kind={kind} source={source} fill={fill} title={name} custom={custom} origin={origin} />}
       </div>
     </figure>
   );
 });
 
-function ArtifactPreview({ kind, source, fill, title, custom }: { kind: ArtifactKind; source: string; fill?: boolean; title: string; custom: ArtifactRenderer }): React.ReactElement {
-  const drawn = custom(kind, source, { title, fill });
+function ArtifactPreview({ kind, source, fill, title, custom, origin }: { kind: ArtifactKind; source: string; fill?: boolean; title: string; custom: ArtifactRenderer; origin?: ArtifactOrigin }): React.ReactElement {
+  const drawn = custom(kind, source, { title, fill, ...(origin ? { origin } : {}) });
   if (drawn !== undefined && drawn !== null) {
     return <RenderBoundary fallback={(e, retry) => <div className="p-3 text-[12px] text-hx-danger" data-render-error>The renderer for {label[kind]} failed: {e} <button type="button" className="underline" onClick={retry}>Try again</button></div>}><div data-artifact-renderer className={fill ? 'h-full' : ''}>{drawn}</div></RenderBoundary>;
   }
-  return kind === 'diagram' ? <DiagramPlaceholder source={source} /> : <ArtifactFrame kind={kind} source={source} fill={fill} />;
+  return kind === 'diagram' ? <DiagramBlock source={source} title={title} bare stableKey={origin ? `${origin.sessionId}/${origin.id}` : undefined} /> : <ArtifactFrame kind={kind} source={source} fill={fill} />;
 }
 
-/** The reserved `diagram` kind before its plugin is installed: the JSON, readable, with a note. */
+/** A diagram's JSON with a note, for a host that wants the raw spec shown (the drawing is DiagramBlock). */
 export function DiagramPlaceholder({ source }: { source: string }): React.ReactElement {
   let json = true;
   try { JSON.parse(source); } catch { json = false; }
   return (
     <div data-diagram-placeholder className="p-2">
-      <div className="mb-1.5 flex items-center gap-1.5 text-[11.5px] text-hx-muted"><Icon name="info" size={12} />diagram (interactive view coming)</div>
+      <div className="mb-1.5 flex items-center gap-1.5 text-[11.5px] text-hx-muted"><Icon name="info" size={12} />diagram (the spec as JSON)</div>
       <div className="max-h-[420px] overflow-auto [&_figure]:my-0">{json ? <JsonView source={source} /> : <CodeBlock code={source} language="text" />}</div>
     </div>
   );

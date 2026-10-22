@@ -215,13 +215,14 @@ test('tables: filter, median and std, pivot, CSV export without formula injectio
   assert.match(html, />Export CSV</);
 });
 
-test('diagram is reserved: a readable JSON block with a note until the core.diagrams plugin draws it', async () => {
+test('diagram: drawn (a static picture with "Open interactive"); a plugin renderer for the kind replaces it', async () => {
   const { ui, React } = await loadUi();
   const { html, errors } = await renderAll(React.createElement(ui.Markdown, { text: SCIENCE.diagram }));
   assert.deepEqual(errors, []);
   assert.match(html, /data-artifact="diagram"/);
-  assert.match(html, /data-diagram-placeholder/);
-  assert.match(html, /diagram \(interactive view coming\)/);
+  assert.match(html, /data-diagram-block="container"/);
+  assert.match(html, /data-diagram-svg/);
+  assert.match(html, /Open interactive/);
   assert.match(html, /Checkout service/);
   const bad = await renderAll(React.createElement(ui.Markdown, { text: `\`\`\`diagram\n${SCIENCE_HOSTILE.diagram}\n\`\`\`` }));
   assert.doesNotMatch(bad.html, /<img/);
@@ -230,7 +231,7 @@ test('diagram is reserved: a readable JSON block with a note until the core.diag
   try {
     const custom = await renderAll(React.createElement(ui.Markdown, { text: SCIENCE.diagram }));
     assert.match(custom.html, /data-custom-diagram="3"/);
-    assert.doesNotMatch(custom.html, /data-diagram-placeholder/);
+    assert.doesNotMatch(custom.html, /data-diagram-svg/);
   } finally { ui.setArtifactHost({}); }
 });
 

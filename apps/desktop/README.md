@@ -158,9 +158,25 @@ exons and CDS, signal tracks, zoom and pan), `pdb`/`cif` (cartoon by secondary s
 ligands, residue picker), `uniprot` (feature tracks), `pathway` (SBGN-like glyphs, Graphviz layout),
 `volcano`, `ma`, `kaplan-meier` (log-rank p), `manhattan` (Vega-Lite) and `heatmap` (clustered, with
 dendrograms). Their formats are in the core `rich-output` skill, offered to sessions whose client
-declares those fences. `diagram` is reserved
-for the interactive diagrams of a later `core.diagrams` plugin; until then it reads as JSON.
+declares those fences. `diagram` is drawn by `core.diagrams` (below).
 A plugin renderer for a fence language or an artifact kind replaces the default.
+
+## Diagrams (`core.diagrams`)
+
+Architecture, deployment, data (ER), code and flow diagrams from one JSON spec
+(`packages/plugin-ui/src/diagram.ts`: `validateDiagram`, the version diff, flows), drawn by
+`packages/ui/src/render/diagram/`: cards with an icon per kind, status badges, dashed integrated
+systems, nested zones, ER tables with key marks, orthogonal edges laid out by ELK (elkjs, in a
+worker; AICO's layered layout as the fallback). A ```diagram block or an artifact of kind `diagram`
+shows a static picture in the transcript; "Open interactive" opens the canvas: pan, zoom, fit,
+minimap, Overview and Neighbourhood, search, collapsible groups, details in the side panel, flows
+played step by step, export to SVG and PNG, arrow keys and Enter. Dragging a box saves the positions
+as a new artifact version (`PUT /api/sessions/:id/artifacts/:aid`, refused when stale); the ask box
+sends a request to the conversation and the new version arrives in place with its changes marked.
+Layouts stay put between versions: boxes keep their places, new ones go next to their neighbours.
+"Show code map" (`/codemap`) draws the session's workspace by folder from
+`GET /api/sessions/:id/files/imports` (TS/JS/Python imports, read-only). Models learn the spec from
+the `diagrams` skill, listed only for an app that declares the `diagram` renderer.
 
 ## Environment
 
@@ -199,9 +215,15 @@ A plugin renderer for a fence language or an artifact kind replaces the default.
   Engineering and Operations switched on and off live and used in between
   (`test/fixtures/desktop/plugins-engine.ts`: the real server and plugins, fixture monitoring, a scripted
   model); screenshots in `docs/screenshots/desktop/plugins-journey/` with `HARNESS_DESKTOP_SCREENSHOTS=1`.
+- Diagrams: `test/desktop-diagrams.test.ts` (spec, layouts, flows, diff, drawing, code map, speed),
+  `desktop-diagrams-server.test.ts` (artifact kind, PUT, import scan, skill), and the Electron run
+  `desktop-diagrams-e2e.test.ts`.
 - Live smoke (costs money, not in `npm test`):
   `node --env-file=<path to .env> apps/desktop/scripts/live-smoke.mjs` runs deepseek-flash and
   claude-sonnet-5-5 at effort medium under a $0.50 cap; it never prints key values.
+  `apps/desktop/scripts/live-diagrams.mjs` (same invocation) has claude-sonnet-5-5 draw a CRM
+  deployment with zones and a login flow, asks for a cache from the canvas (the changes marked in
+  place), then the same first request on deepseek-flash; $1.50 cap (a run costs about $0.15).
   `apps/desktop/scripts/live-bio.mjs` (same invocation) asks both models for a sequence, a plasmid
   map, a tree and a volcano plot and checks each drew, under a $0.60 cap.
   `node --env-file=<path to .env> test/fixtures/desktop/plugins-live.ts` runs the plugins journey on real

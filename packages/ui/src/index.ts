@@ -11,7 +11,7 @@ export { CodeBlock } from './render/CodeBlock.tsx';
 export { Diagram } from './render/Diagram.tsx';
 export { Chart, Viz } from './render/Charts.tsx';
 export { DataTable, TableBody, JsonView, MathBlock, tableFromJson } from './render/Data.tsx';
-export { Artifact, ArtifactFrame, SandboxFrame, DiagramPlaceholder, setArtifactHost, artifactHost, type ArtifactHost, type ArtifactRenderer } from './render/Artifact.tsx';
+export { Artifact, ArtifactFrame, SandboxFrame, DiagramPlaceholder, setArtifactHost, artifactHost, type ArtifactHost, type ArtifactRenderer, type ArtifactOrigin } from './render/Artifact.tsx';
 export { artifactDocument, artifactSandbox, artifactCsp, moleculeDocument, MOLECULE_FORMATS, type ArtifactKind, type FramedArtifactKind } from './render/artifact-doc.ts';
 export { DiffView, PatchView } from './render/DiffView.tsx';
 export { ImageView, Lightbox, Citation, Reasoning, ImageStrip, type Source } from './render/Media.tsx';
@@ -33,3 +33,4 @@ export * from './render/science/graphviz.ts';
 export { BIO_BY_LANG, BIO_DECLARED, bioBlock, type BioKind } from './render/biology/kinds.ts';
 /** The biology renderers and their parsers (a separate chunk: loaded on first use). */
 export const loadBiology = () => import('./render/biology/Biology.tsx');
+export * from './render/diagram/index.ts';

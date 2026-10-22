@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { Session } from '../core/session.ts';
 import { PathError, resolveIn, within } from '../tools/paths.ts';
+import { scanImports, type ImportScan } from './code-imports.ts';
 
 // A session's workspace as a person sees it from the desktop: a lazy file tree, writes,
 // renames, deletes, uploads, name and content search, and git status, diff and log.
@@ -194,6 +195,14 @@ export async function searchFiles(s: Session, q: string, o: { content?: boolean;
   };
   await walk(root, '');
   return { query: q, results, ...(truncated ? { truncated } : {}) };
+}
+
+/** The imports between the TS/JS/Python files under a folder (the desktop's code map); read-only. */
+export async function codeImports(s: Session, rel: string): Promise<ImportScan> {
+  const t = await inside(s, rel);
+  const st = await fs.stat(t.real).catch(() => null);
+  if (!st?.isDirectory()) throw new WorkspaceError(400, 'not a folder');
+  return scanImports(t.root, t.real);
 }
 
 // ---- git, where the session's commands run ----

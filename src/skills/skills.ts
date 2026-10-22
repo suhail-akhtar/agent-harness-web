@@ -5,6 +5,7 @@ import type { Tool } from '../tools/types.ts';
 import { str } from '../tools/types.ts';
 import { within } from '../tools/paths.ts';
 import { parseFrontmatter } from '../util/frontmatter.ts';
+import { fileURLToPath } from 'node:url';
 
 // Skills are folders of instructions (SKILL.md + any files it references) that
 // the agent loads only when a task needs them: the context carries one line per
@@ -94,6 +95,16 @@ async function companionSkills(host: ToolHost, rootRel: string, source: string):
     });
   }
   return out;
+}
+
+/** Skills that come with the harness for what a client app renders: a skill here is listed only when the app declares its renderer. */
+const CLIENT_SKILLS: Record<string, string> = { diagrams: 'diagram' };
+const CLIENT_SKILLS_DIR = fileURLToPath(new URL('./client', import.meta.url));
+
+export async function clientSkills(renderers: readonly string[]): Promise<Skill[]> {
+  const wanted = Object.entries(CLIENT_SKILLS).filter(([, r]) => renderers.includes(r)).map(([n]) => n);
+  if (!wanted.length) return [];
+  return (await skillsIn(CLIENT_SKILLS_DIR, 'harness')).filter((s) => wanted.includes(s.name));
 }
 
 /** Workspace skills: .harness/skills and .claude/skills (Claude Code's location). */

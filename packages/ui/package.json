@@ -15,6 +15,7 @@
     "@hpcc-js/wasm-graphviz": "1.29.2",
     "@tanstack/react-virtual": "3.14.13",
     "echarts": "6.1.0",
+    "elkjs": "0.11.1",
     "katex": "0.16.47",
     "mermaid": "11.17.2",
     "react-markdown": "9.1.0",

@@ -5,13 +5,14 @@ import path from 'node:path';
 import type { Tool } from '../tools/types.ts';
 import { bool, clip, num, str } from '../tools/types.ts';
 import { withFileLock, writeFileAtomic } from '../util/shared-file.ts';
+import { validateDiagram } from '../../packages/plugin-ui/src/diagram.ts';
 
 // Artifacts: documents, apps, diagrams and data an agent makes for the person to keep -
 // versioned files in the session's workspace under .harness/artifacts/<id>/v<n>.<ext>,
 // with a meta.json per artifact. Clients render them sandboxed (html, svg and react in a
 // frame without same origin); the server never serves one as an active page of its own.
 
-export const ARTIFACT_KINDS = ['markdown', 'html', 'svg', 'react', 'mermaid', 'code', 'csv', 'json', 'chart', 'image', 'pdf'] as const;
+export const ARTIFACT_KINDS = ['markdown', 'html', 'svg', 'react', 'mermaid', 'code', 'csv', 'json', 'chart', 'diagram', 'image', 'pdf'] as const;
 export type ArtifactKind = typeof ARTIFACT_KINDS[number];
 const BINARY = new Set<ArtifactKind>(['image', 'pdf']);
 
@@ -49,7 +50,7 @@ export function kindFile(kind: ArtifactKind, language?: string): { ext: string; 
     case 'react': return { ext: 'jsx', type: 'text/jsx; charset=utf-8' };
     case 'mermaid': return { ext: 'mmd', type: 'text/vnd.mermaid; charset=utf-8' };
     case 'csv': return { ext: 'csv', type: 'text/csv; charset=utf-8' };
-    case 'json': case 'chart': return { ext: 'json', type: 'application/json' };
+    case 'json': case 'chart': case 'diagram': return { ext: 'json', type: 'application/json' };
     case 'pdf': return { ext: 'pdf', type: 'application/pdf' };
     case 'image': { const t = IMAGE_TYPES[(language ?? 'png').toLowerCase().replace('jpg', 'jpeg')] ?? IMAGE_TYPES.png!; return { ext: t.ext, type: t.type }; }
     default: return { ext: CODE_EXT[(language ?? '').toLowerCase()] ?? 'txt', type: 'text/plain; charset=utf-8' };
@@ -62,6 +63,8 @@ function encode(kind: ArtifactKind, content: string, language?: string): Buffer 
     const b = Buffer.from(content, 'utf8');
     if (b.length > TEXT_MAX()) throw new ArtifactError(`content is ${Math.round(b.length / 1024)} KB; an artifact version is at most ${TEXT_MAX() / 1024} KB`);
     if ((kind === 'json' || kind === 'chart') && content.trim()) { try { JSON.parse(content); } catch (e) { throw new ArtifactError(`a ${kind} artifact must be valid JSON: ${(e as Error).message}`); } }
+    // A diagram is checked against its spec (packages/plugin-ui/src/diagram.ts), so the model hears what to fix at once.
+    if (kind === 'diagram') { const r = validateDiagram(content); if (r.error) throw new ArtifactError(`not a valid diagram: ${r.error}`); }
     return b;
   }
   const m = /^data:([\w/+.-]+);base64,(.*)$/s.exec(content.trim());
