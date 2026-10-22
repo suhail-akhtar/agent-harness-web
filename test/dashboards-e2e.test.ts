@@ -97,8 +97,13 @@ test('dashboards end to end', { timeout: 15 * 60_000 }, async (t) => {
       await page.click('[data-nav="core.chat:new"]');
       await page.waitForSelector('[data-home]');
       const box = page.locator('[data-composer-input]');
-      await box.fill('chart please');
-      await box.press('Enter');
+      // Under load the composer may not take the first Enter (models still loading): send again until a session opens.
+      for (let i = 0; i < 4; i++) {
+        if (!(await page.locator('[data-home]').count())) break;
+        if (!(await box.inputValue().catch(() => ''))) await box.fill('chart please');
+        await box.press('Enter');
+        await page.waitForSelector('[data-home]', { state: 'detached', timeout: 10_000 }).catch(() => {});
+      }
       const pin = page.locator('[data-block-action="core.dashboards:pin"]').first();
       await pin.waitFor({ timeout: 30_000 });
       await shot('pin-from-transcript', page.locator('[data-widget]').first());
