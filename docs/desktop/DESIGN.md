@@ -259,3 +259,57 @@ Taken (adapted to this API): engine host, the scheme and its proxy, preload and 
 registry shape, composer behaviour (steer vs queue, chips, `@` and `/` menus, drafts), the attention bar,
 the inbox, the engine gate, update policy, notification rules. Not taken: AICO's coupling to its web
 client's store, its browser's size (ours starts small), unsigned builds.
+
+## 11. Agents that know and drive the desktop
+
+The model must know what this app can show and do, and use it - without a word of it in the core's code
+being specific to one plugin.
+
+- **The client declares itself.** A session created by the desktop carries
+  `client: {kind: 'desktop', version, renderers, tools}`: the fence languages it renders (mermaid, math,
+  chart specs, csv, json, html/svg/react artifacts, every plugin renderer) and the desktop tools it serves.
+  The server puts that in the session's frozen system prompt (the cache prefix stays stable), so the model
+  writes a Mermaid diagram or a chart spec knowing it will be drawn, and uses artifacts for documents and
+  apps.
+- **Artifacts are first-class.** Tool `artifact {action: create|update|rewrite|get|list, id?, title, kind:
+  markdown|html|svg|react|mermaid|code|csv|json|chart|image|pdf, content, language?}`: versioned files under
+  `.harness/artifacts/<id>/v<n>` with an `artifact` event. API: `GET /api/sessions/:id/artifacts`,
+  `GET /api/sessions/:id/artifacts/:aid?version=`, and across sessions `GET /api/artifacts?query=` (the
+  Library). The desktop shows them in an Artifacts panel (preview/code, versions, diff between versions,
+  download, open full window); html/svg/react run in a sandboxed frame without same origin.
+- **Desktop tools** (served only while a desktop is attached to the session; the server forwards each call
+  to the client on the event stream as `client_call {callId, tool, input}` and the client answers
+  `POST /api/sessions/:id/client-result {callId, result}`, with a timeout):
+  `desktop_describe` (read: the live registry - plugins, views, panels, commands, settings sections,
+  renderers, themes - so the agent learns what is available), `desktop_open {view|panel|file|artifact|url}`
+  (read), `desktop_notify {title, body}` (read), `desktop_command {command, args}` (external: asked unless a
+  rule allows it; only commands a manifest marks `agent: {description, inputSchema}`), and `ask_user` with a
+  JSON-Schema form rendered as a native form.
+- **Plugins extend what agents can do in the UI** by marking commands `agent`-callable and by contributing
+  renderers; `desktop_describe` lists them, so a new plugin's features are usable by the agent the moment it
+  is enabled, and gone when it is disabled.
+
+## 12. A multi-agent platform
+
+The same powers as Claude's desktop app, on the harness:
+
+- **Sub-agents** (exists): named agents with their own tools and models, nested up to 3 levels, in the
+  background with a notification when done, continued with `send_message`. Adds: `isolation: 'worktree'`
+  (the sub-agent works in its own git worktree, removed when it changed nothing) and a catalogue of agent
+  types the model can browse.
+- **Sessions that start sessions.** Tool `start_session {title, prompt, context: fork|fresh, initiation:
+  user_asked|offer|own_initiative, use_worktree, model?, effort?}`: a full, separate session linked to its
+  parent (`meta.parent`). `offer` and `own_initiative` become a proposal card the person starts or dismisses
+  (`session_proposal` event; nothing runs until they do); `user_asked` starts at once within the account's
+  limits. When a linked session ends a turn, the parent gets a fenced `side-session` report (first 400
+  characters of its latest summary) at its next step, and an idle parent can be continued automatically
+  (setting). `list_sessions {linked}`, `send_message` to a session id (delivered as a fenced note from that
+  session), `hand_off {title, remaining_plan}` (move the current task to a new session and answer the
+  person here), `dismiss_proposal`.
+- **Limits and safety:** linked sessions inherit the account's spend and concurrency caps, a depth limit,
+  the parent's permission mode at most, and the untrusted-content guard (a report from a session that read
+  outside content is fenced as outside content).
+- **In the desktop:** an Agents panel (a live tree: session -> sub-agents -> background tasks -> linked
+  sessions, with status, cost and a click-through to each transcript), proposal cards in the chat, report
+  cards when a linked session finishes, split view (two sessions side by side), chapters (`mark_chapter`
+  draws a table of contents), the todo list, and workflow runs drawn as a graph with each node's agent.
