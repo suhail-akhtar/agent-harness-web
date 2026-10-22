@@ -1,3 +1,5 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { validateValue, type JsonSchema } from '../../packages/plugin-ui/src/manifest.ts';
 
 // What app a session's person uses (the desktop, the browser UI, a CLI) and what it can do:
@@ -67,9 +69,19 @@ export function clientPrompt(c: ClientDecl, opts: { artifacts: boolean }): strin
   const app = c.kind === 'desktop' ? 'the desktop app' : c.kind === 'web' ? 'the browser app' : 'a terminal client';
   const lines = [`# Client\nThe person uses ${app}${c.version ? ` ${c.version}` : ''}.`];
   if (c.renderers.length) lines.push(`It draws these Markdown code fences instead of showing their source: ${c.renderers.join(', ')}.`);
+  if (clientSkillDirs(c).length) lines.push('Before writing a biology fence, load the rich-output skill for its exact format.');
   if (opts.artifacts) lines.push('Put documents, apps, diagrams and data the person will keep or reuse in the artifact tool (versioned; shown in its Artifacts panel and Library; html/svg/react run sandboxed), not in long chat replies.');
   if (c.tools.length) lines.push(`Desktop tools (${c.tools.join(', ')}) act in that app and work only while it is open on this session.`);
   return lines.join('\n');
+}
+
+/** Fences whose formats live in the core `rich-output` skill (src/skills/core), loaded on demand. */
+export const SKILL_FENCES = ['fasta', 'msa', 'newick', 'plasmid', 'gff', 'bed', 'tracks', 'uniprot', 'pathway', 'volcano', 'ma', 'heatmap', 'kaplan-meier', 'manhattan'] as const;
+const CORE_SKILLS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'skills', 'core');
+
+/** The core skill folders a session gets for its client: only when the client draws fences they describe (other sessions' prompts stay as they were). */
+export function clientSkillDirs(c: ClientDecl | undefined): Array<{ dir: string; source: string }> {
+  return c && c.renderers.some((r) => (SKILL_FENCES as readonly string[]).includes(r)) ? [{ dir: CORE_SKILLS, source: 'core' }] : [];
 }
 
 /** Args for a client-declared agent command, checked against its schema. */

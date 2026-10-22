@@ -404,3 +404,55 @@ test('biology kitchen sink: every block renders through Markdown, lazily, withou
   assert.equal((html.match(/data-widget="Sequence"/g) ?? []).length, 2);
   assert.doesNotMatch(html, /data-render-error/);
 });
+
+test('the rich-output skill: offered only to sessions whose client draws biology fences; every example in it parses and renders', async () => {
+  const { ui, React } = await loadUi();
+  const { b } = await bio();
+  const { cleanClient, clientPrompt, clientSkillDirs } = await import('../src/core/client.ts');
+  const { skillsIn } = await import('../src/skills/skills.ts');
+  const desk = cleanClient({ kind: 'desktop', version: '1', renderers: [...ui.DECLARED_FENCES], tools: [] });
+  assert.match(clientPrompt(desk, { artifacts: true }), /load the rich-output skill/);
+  const plain = cleanClient({ kind: 'desktop', version: '1', renderers: ['mermaid', 'chart'], tools: [] });
+  assert.doesNotMatch(clientPrompt(plain, { artifacts: true }), /rich-output/, 'no note without biology fences');
+  assert.deepEqual(clientSkillDirs(plain), []);
+  assert.deepEqual(clientSkillDirs(undefined), []);
+  const [skill] = await skillsIn(clientSkillDirs(desk)[0]!.dir, 'core');
+  assert.equal(skill!.name, 'rich-output');
+  const text = await skill!.load();
+  assert.ok(text.length < 8000, `lean (${text.length} chars)`);
+  const blocks = [...text.matchAll(/```([\w-]+)\n([\s\S]*?)\n```/g)].map((m) => ({ lang: m[1]!, source: m[2]! }));
+  const covered = new Set<string>();
+  for (const { lang, source } of blocks) {
+    const block = ui.bioBlock(ui.fenceKind(lang, source), lang);
+    assert.ok(block, `${lang} is a biology fence`);
+    covered.add(block.kind);
+    const { errors } = await renderAll(React.createElement(ui.FencedBlock, { lang, source: source.replace('ATGGCC...', 'ATGGCCCTGTGGATG') }));
+    assert.deepEqual(errors, [], `the ${lang} example renders`);
+  }
+  for (const k of ['sequence', 'msa', 'phylo', 'plasmid', 'tracks', 'protein-features', 'pathway', 'volcano', 'heatmap', 'kaplan-meier', 'manhattan']) assert.ok(covered.has(k), `the skill shows ${k}`);
+  assert.equal(b.parseBioPlot('ma', JSON.stringify({ points: [{ gene: 'VEGFA', baseMean: 900, log2fc: 3.2 }] })).spec.layer.length, 4, 'ma as the skill describes it');
+});
+
+test('a desktop session that draws biology fences gets the skill tool with rich-output; a plain session does not', async () => {
+  const { setupServer, record, turnsEnded, waitFor } = await import('./multi-helpers.ts');
+  const { tempDir } = await import('./helpers.ts');
+  const { ui } = await loadUi();
+  const t = await setupServer();
+  try {
+    const run = async (key: string, renderers: string[]) => {
+      const s = await t.harness.sessions.create({ model: 'deepseek-flash', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: await tempDir() }, client: { kind: 'desktop', version: '1', renderers, tools: [] } });
+      const ev = record(s);
+      t.ds.scripts[key] = [{ text: 'ok' }];
+      await s.send(`[[${key}]] hi`); await waitFor(() => turnsEnded(ev) === 1, key);
+      return t.ds.byKey[key]![0]!;
+    };
+    const withBio = await run('bio1', [...ui.DECLARED_FENCES]);
+    const skillTool = withBio.tools.find((x) => x.name === 'skill');
+    assert.ok(skillTool, 'the skill tool is there');
+    assert.match(JSON.stringify(skillTool!.input_schema), /rich-output/);
+    assert.match(withBio.system, /load the rich-output skill/);
+    const without = await run('bio2', ['mermaid']);
+    assert.doesNotMatch(JSON.stringify(without.tools), /rich-output/);
+    assert.doesNotMatch(without.system, /rich-output/);
+  } finally { await t.close(); }
+});

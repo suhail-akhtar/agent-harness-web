@@ -48,7 +48,7 @@ import { seal, serverKey, unseal } from '../util/sealed.ts';
 import type { ChangeService } from '../ops/changes.ts';
 import { ruleMatches } from './permissions.ts';
 import { ArtifactError, type ArtifactMeta, type ArtifactService, ArtifactStore, artifactTool } from './artifacts.ts';
-import { type ClientDecl, clientPrompt, type ClientPresence, type DesktopTool } from './client.ts';
+import { type ClientDecl, clientPrompt, clientSkillDirs, type ClientPresence, type DesktopTool } from './client.ts';
 import { delegableModels, delegationRefusal, modelCatalogue } from './delegation.ts';
 import type { LinkedSessions } from './linked.ts';
 import { DESKTOP_TOOL_IMPLS, type ClientService } from '../tools/desktop.ts';
@@ -1237,7 +1237,7 @@ export class Session {
     // Skills: operator plugins first, then the workspace's (a name is taken once).
     const skills: Skill[] = [];
     const seen = new Set<string>();
-    for (const sd of reg.skillDirs) for (const s of await skillsIn(sd.dir, sd.source)) if (!seen.has(s.name)) { seen.add(s.name); skills.push(s); }
+    for (const sd of [...reg.skillDirs, ...clientSkillDirs(this.meta.client)]) for (const s of await skillsIn(sd.dir, sd.source)) if (!seen.has(s.name)) { seen.add(s.name); skills.push(s); }
     for (const s of await workspaceSkills(host).catch(() => [])) if (!seen.has(s.name)) { seen.add(s.name); skills.push(s); }
     if (skills.length) tools.push(makeSkillTool(skills));
 
