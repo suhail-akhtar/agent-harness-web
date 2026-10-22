@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { CALLS, CAPABILITIES, ManifestError, PROTOCOL, isPluginFile, needsConfirm, needsGesture, qualify, refuseCall, uiEntries, validateUiManifest } from '../packages/plugin-ui/src/index.ts';
+import { CALLS, CAPABILITIES, ManifestError, PROTOCOL, isPluginFile, needsConfirm, needsGesture, qualify, refuseCall, uiEntries, validateFormSchema, validateUiManifest, validateValue } from '../packages/plugin-ui/src/index.ts';
 import { connect } from '../packages/plugin-ui/src/sdk.ts';
 
 const full = {
@@ -78,6 +78,33 @@ test('plugin-ui trust: what the contributions need, at most what was declared, a
   assert.equal(validateUiManifest(native, { trustCeiling: 'native' }).trust, 'native');
   assert.throws(() => validateUiManifest({ contributes: { settings: [{ id: 's', title: 'S', scope: 'app', component: 'Panel' }] } }), /Native UI/);
   assert.throws(() => validateUiManifest({ trust: 'frame', contributes: {} }, { trustCeiling: 'declarative' }), /more than this host allows/);
+});
+
+test('plugin-ui commands: "agent" marks one agent-callable (a description, an args schema); a bad marker is refused; unmarked ones stay as they were', () => {
+  const ui = validateUiManifest({ contributes: { commands: [
+    { id: 'plain', title: 'Plain', action: { type: 'open-view', view: 'v' } },
+    { id: 'greet', title: 'Greet', action: { type: 'prompt', prompt: 'hi' }, agent: { description: '  Greets  ', inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } } },
+  ] } });
+  assert.equal(ui.contributes.commands[0]!.agent, undefined);
+  assert.deepEqual(ui.contributes.commands[1]!.agent, { description: 'Greets', inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } });
+  const bad = (agent: unknown) => () => validateUiManifest({ contributes: { commands: [{ id: 'c', title: 'C', action: { type: 'theme', theme: 't' }, agent }] } });
+  assert.throws(bad({}), /"agent" needs a "description"/);
+  assert.throws(bad({ description: 'x'.repeat(501) }), /at most 500/);
+  assert.throws(bad({ description: 'x', inputSchema: { type: 'function' } }), /unsupported type "function"/);
+});
+
+test('plugin-ui forms: a form schema is an object of at most 40 fields; values are checked against the subset (types, required, enum, ranges, lengths, patterns, unknown fields)', () => {
+  assert.throws(() => validateFormSchema({ type: 'string' }), /must be \{"type": "object"/);
+  assert.throws(() => validateFormSchema({ type: 'object', properties: Object.fromEntries(Array.from({ length: 41 }, (_, i) => [`f${i}`, { type: 'string' }])) }), /at most 40 fields/);
+  assert.throws(() => validateFormSchema({ type: 'object', properties: { a: { type: 'string' } }, required: ['b'] }), /"required" names "b"/);
+  const form = validateFormSchema({ type: 'object', properties: { n: { type: 'integer', minimum: 1, maximum: 9 }, size: { type: 'string', enum: ['s', 'm'] }, code: { type: 'string', pattern: '^[A-Z]{3}$', maxLength: 3 }, ok: { type: 'boolean' }, tags: { type: 'array', items: { type: 'string', minLength: 1 } } }, required: ['n'] });
+  assert.deepEqual(validateValue(form, { n: 3, size: 's', code: 'ABC', ok: true, tags: ['a'] }), []);
+  assert.deepEqual(validateValue(form, {}), ['answer.n: is required']);
+  assert.deepEqual(validateValue(form, { n: 2.5 }), ['answer.n: must be a whole number']);
+  assert.deepEqual(validateValue(form, { n: 10, size: 'xl', code: 'abc', ok: 'yes', tags: [''], extra: 1 }), [
+    'answer.n: at most 9', 'answer.size: must be one of "s", "m"', 'answer.code: does not match the expected format', 'answer.ok: must be true or false', 'answer.tags[0]: at least 1 characters', 'answer.extra: is not a field of this form',
+  ]);
+  assert.deepEqual(validateValue(form, 'text'), ['answer: must be an object']);
 });
 
 test('plugin-ui files: only relative paths inside the plugin', () => {
