@@ -62,7 +62,16 @@ stats, pivot, CSV export), diffs (unified and split), citations, "Thought for", 
 "Worked for", file cards, workflows. Science and BI blocks load on first use: `smiles` (2D
 structures), `pdb`/`sdf`/`mol`/`xyz` (3D, 3Dmol.js in a sandboxed frame), `plot` (function plots,
 zoom and pan), `dot` (Graphviz, wasm), `dashboard` (KPIs and panels, the spec in
-`@harness/plugin-ui`), `ipynb` (notebooks), `geojson` (maps without tiles). `diagram` is reserved
+`@harness/plugin-ui`), `ipynb` (notebooks), `geojson` (maps without tiles). Biology blocks load
+the same way (one chunk, `packages/ui/src/render/biology`, no new libraries): `fasta`/`sequence`
+(colours, ruler, selection, features, GC, weight, reverse complement, 3-frame translation),
+`msa`/`clustal` (conservation, consensus), `newick`/`phyloxml` (rectangular or circular,
+collapsible), `plasmid` (circular and linear maps, sites), `gff`/`gtf`/`bed`/`tracks` (genes with
+exons and CDS, signal tracks, zoom and pan), `pdb`/`cif` (cartoon by secondary structure, chains,
+ligands, residue picker), `uniprot` (feature tracks), `pathway` (SBGN-like glyphs, Graphviz layout),
+`volcano`, `ma`, `kaplan-meier` (log-rank p), `manhattan` (Vega-Lite) and `heatmap` (clustered, with
+dendrograms). Their formats are in the core `rich-output` skill, offered to sessions whose client
+declares those fences. `diagram` is reserved
 for the interactive diagrams of a later `core.diagrams` plugin; until then it reads as JSON.
 A plugin renderer for a fence language or an artifact kind replaces the default.
 
@@ -82,9 +91,11 @@ A plugin renderer for a fence language or an artifact kind replaces the default.
 - Unit (in `npm test`): `test/desktop-registry.test.ts` (registry, keybindings, reconcile),
   `desktop-ui-core` (theme contrast, schema forms, grants, prefs, products), `desktop-client`
   (client and event reader), `desktop-security` (frame host refusals, scheme policies),
-  `desktop-render` and `desktop-science` (every renderer, hostile input included).
+  `desktop-render`, `desktop-science` and `desktop-biology` (every renderer, hostile input included).
 - End to end: `test/desktop-e2e.test.ts` drives the app with playwright-core against a scripted
   engine (no paid calls); it skips itself when Electron cannot start.
 - Live smoke (costs money, not in `npm test`):
   `node --env-file=<path to .env> apps/desktop/scripts/live-smoke.mjs` runs deepseek-flash and
   claude-sonnet-5-5 at effort medium under a $0.50 cap; it never prints key values.
+  `apps/desktop/scripts/live-bio.mjs` (same invocation) asks both models for a sequence, a plasmid
+  map, a tree and a volcano plot and checks each drew, under a $0.60 cap.
