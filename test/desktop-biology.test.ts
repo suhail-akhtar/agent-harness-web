@@ -190,12 +190,12 @@ test('genome tracks: GFF3 transcripts with exons and CDS, BED12 blocks, GTF, a t
   const { b } = await bio();
   const gff = b.parseTracks(body(BIO.gff!, 'gff'), 'gff');
   const items = gff.tracks[0].items;
-  const ins = items.find((t: { name: string }) => t.name === 'NM_000207.3');
+  const ins = items.find((t: { name: string }) => t.name === 'INS (NM_000207.3)');
   assert.ok(ins, `the INS transcript (${items.map((t: { name: string }) => t.name).join(', ')})`);
   assert.equal(ins.exons.length, 3);
   assert.deepEqual(ins.cds, [2160061, 2160571]);
   assert.equal(ins.strand, -1);
-  assert.equal(items.find((t: { name: string }) => t.name === 'NM_199292.3').exons.length, 10);
+  assert.equal(items.find((t: { name: string }) => t.name === 'TH (NM_199292.3)').exons.length, 10);
   assert.ok(items.some((t: { type: string }) => t.type === 'enhancer'), 'stand-alone features are drawn too');
   assert.ok(!items.some((t: { type: string }) => t.type === 'gene'), 'a gene with a transcript is not drawn twice');
   const bed = b.parseTracks(body(BIO.bed!, 'bed'), 'bed');

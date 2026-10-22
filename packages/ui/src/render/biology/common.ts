@@ -122,10 +122,18 @@ export function niceTicks(a: number, b: number, n = 6): number[] {
   return out;
 }
 
-/** 12,345 -> "12.3 kb" for genomic coordinates on an axis. */
+/** A length: 7,000 -> "7,000 bp", 12,345 -> "12.3 kb", 2,500,000 -> "2.5 Mb". */
 export function bp(n: number): string {
   const a = Math.abs(n);
   if (a >= 1e6) return `${(n / 1e6).toFixed(a >= 1e7 ? 1 : 2).replace(/\.?0+$/, '')} Mb`;
   if (a >= 1e4) return `${(n / 1e3).toFixed(1).replace(/\.0$/, '')} kb`;
-  return fmt(Math.round(n));
+  return `${fmt(Math.round(n))} bp`;
+}
+
+/** A coordinate on an axis whose ticks are `step` apart, with just enough precision to tell ticks apart. */
+export function axisLabel(t: number, step: number): string {
+  const dec = (unit: number) => { const s = step / unit; return s >= 1 ? 0 : Math.min(3, Math.ceil(-Math.log10(s) - 1e-9)); };
+  if (step >= 1e5) return `${(t / 1e6).toFixed(dec(1e6))} Mb`;
+  if (step >= 100) return `${fmt(Number((t / 1e3).toFixed(dec(1e3))))} kb`;
+  return fmt(Math.round(t));
 }

@@ -22,7 +22,6 @@ export function useDark(): boolean {
 
 /** Parses once per source; a parse error is thrown while drawing (the block frame shows it) unless the block is still arriving. */
 export function useParsed<T>(parse: () => T, deps: unknown[]): { value?: T; error?: string } {
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   return useMemo(() => { try { return { value: parse() }; } catch (e) { return { error: e instanceof Error ? e.message : String(e) }; } }, deps);
 }
 
@@ -65,13 +64,13 @@ export function Seg<T extends string>({ value, options, onChange, label }: { val
  */
 export function useRange(full: [number, number], minSpan = 10) {
   const [view, setView] = useState<[number, number]>(full);
-  useEffect(() => { setView(full); }, [full[0], full[1]]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setView(full); }, [full[0], full[1]]);
   const clamp = useCallback((s: number, e: number): [number, number] => {
     const total = full[1] - full[0];
     const span = Math.max(Math.min(minSpan, total), Math.min(total, e - s));
     const start = Math.max(full[0], Math.min(full[1] - span, s));
     return [start, start + span];
-  }, [full[0], full[1], minSpan]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [full[0], full[1], minSpan]);
   const zoom = useCallback((k: number, centre?: number) => setView(([s, e]) => { const c = centre ?? (s + e) / 2; return clamp(c - (c - s) * k, c + (e - c) * k); }), [clamp]);
   const pan = useCallback((d: number) => setView(([s, e]) => clamp(s + d, e + d)), [clamp]);
   const set = useCallback((s: number, e: number) => setView(clamp(s, e)), [clamp]);

@@ -166,7 +166,7 @@ function MsaGrid({ a, scheme, setScheme, hover, setHover }: { a: ReturnType<type
   const runs = useMemo(() => a.rows.map((r) => colourRuns(r, cols, sch)), [a, cols, sch]);
   const ruler = useMemo(() => { const chars = Array<string>(a.columns).fill(' '); for (let c = 10; c <= a.columns; c += 10) { const s = String(c); for (let k = 0; k < s.length; k++) chars[c - s.length + k] = s[k]!; } return chars.join(''); }, [a.columns]);
   const conserved = cols.filter((c) => c.conserved).length;
-  const nameW = Math.min(18, Math.max(6, ...a.names.map((n) => n.length))) + 1;
+  const nameW = Math.min(18, Math.max(12, ...a.names.map((n) => n.length))) + 1;
   const colAt = (e: React.MouseEvent) => {
     const el = e.currentTarget as HTMLElement; const r = el.getBoundingClientRect();
     const ch = (el.scrollWidth || r.width) / Math.max(1, a.columns); const c = Math.floor((e.clientX - r.left + el.scrollLeft - 8) / ch);
@@ -184,7 +184,7 @@ function MsaGrid({ a, scheme, setScheme, hover, setHover }: { a: ReturnType<type
         <Seg label="Colour scheme" value={scheme} onChange={setScheme} options={[['auto', 'Auto'], ['clustal', 'Clustal'], ['nucleotide', 'Nucleotide'], ['identity', 'Identity'], ['none', 'None']]} />
       </div>
       <div className="flex rounded-lg bg-hx-code font-mono text-[12.5px] leading-[18px]">
-        <div className="shrink-0 border-r border-hx-border-subtle py-1.5 pl-2 pr-1 text-hx-secondary" style={{ width: `${nameW + 1}ch` }}>
+        <div className="shrink-0 whitespace-nowrap border-r border-hx-border-subtle py-1.5 pl-2 pr-1 text-hx-secondary" style={{ width: `${nameW + 1}ch` }}>
           <div className="text-[10px] text-hx-muted">&nbsp;</div>
           {a.names.map((n, i) => <div key={i} className="truncate" title={n}>{n}</div>)}
           <div className="font-semibold text-hx-muted">consensus</div>

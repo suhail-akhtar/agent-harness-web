@@ -67,7 +67,9 @@ const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').repl
 /**
  * A 3D protein viewer page: cartoon coloured by secondary structure (3Dmol computes it when the file
  * has no HELIX/SHEET records), by chain or as a spectrum; ligands (HETATM, not water) as sticks; a
- * residue picker (select or click) that centres and labels a residue. The structure travels
+ * residue picker (select or click) that centres and labels a residue. 3Dmol computes the secondary
+ * structure from hydrogen bonds and then applies the file's HELIX/SHEET records, except that a bare
+ * `END` line makes it drop those records, so it is padded the way RCSB writes it. The structure travels
  * base64-encoded and is parsed by 3Dmol, never as markup. Small files (fewer than 8 residues) are
  * drawn as balls and sticks. Reports `data-atoms` like the science 3D view.
  */
@@ -79,7 +81,7 @@ export function proteinDocument(source: string, format: string, runtimeUrl?: str
   const css = `html,body{margin:0;height:100%;background:${bg};color:${ink};font:12px system-ui,'Segoe UI',sans-serif}#v{position:absolute;inset:34px 0 0 0}#bar{position:absolute;top:0;left:0;right:0;height:33px;display:flex;gap:6px;align-items:center;padding:0 8px;border-bottom:1px solid ${line};box-sizing:border-box;white-space:nowrap;overflow-x:auto}select,button{font:inherit;color:inherit;background:transparent;border:1px solid ${line};border-radius:6px;padding:2px 6px}button[aria-pressed=true]{background:${dark ? '#2b2e35' : '#efece6'}}#info{margin-left:auto;opacity:.75}#e{color:#d1453b;padding:10px;position:absolute;top:34px}`;
   const script = `(function(){var el=document.getElementById('mol');var info=document.createElement('span');info.id='info';try{if(!window.$3Dmol)throw new Error('the 3D viewer is not available here');
 var data=decodeURIComponent(escape(atob(el.getAttribute('data-b64'))));var v=window.$3Dmol.createViewer(document.getElementById('v'),{backgroundColor:'${bg}'});
-var m=v.addModel(data,el.getAttribute('data-format'));var atoms=m?m.selectedAtoms({}):[];var n=atoms.length;if(!n)throw new Error('no atoms in this structure');
+var m=v.addModel(data.replace(/^END[ 	]*$/gm,'END   '),el.getAttribute('data-format'));var atoms=m?m.selectedAtoms({}):[];var n=atoms.length;if(!n)throw new Error('no atoms in this structure');
 var ca=atoms.filter(function(a){return a.atom==='CA'&&!a.hetflag;});var chains={};ca.forEach(function(a){chains[a.chain]=1;});var nch=Object.keys(chains).length;
 var lig=atoms.filter(function(a){return a.hetflag&&a.resn!=='HOH'&&a.resn!=='WAT';});var ligNames={};lig.forEach(function(a){ligNames[a.resn]=1;});
 var big=ca.length>=8;var mode=big?'ss':'atoms';var showLig=true;var picked=null;

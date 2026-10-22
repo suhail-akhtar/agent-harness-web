@@ -7,12 +7,27 @@
 import React, { useMemo, useState } from 'react';
 import { Select } from '../../components/primitives.tsx';
 import { SandboxFrame, artifactHost } from '../Artifact.tsx';
-import { bp, fmt, niceTicks } from './common.ts';
+import { axisLabel, bp, fmt, niceTicks } from './common.ts';
+
+/** A tick's text: plain base pairs for plasmid-sized ranges, kb/Mb with enough precision beyond. */
+const tickText = (ticks: number[], t: number, small = false) => (small ? fmt(t) : axisLabel(t, ticks.length > 1 ? ticks[1]! - ticks[0]! : 1));
 import { angleOf, arcPath, linearLanes, parsePlasmid, placeLabels, spanOf, type Plasmid } from './plasmid.ts';
 import { initialView, laneItems, parseTracks, type Transcript, type TrackSet } from './tracks.ts';
 import { CATEGORY_COLOR, CATEGORY_ORDER, parseProteinFeatures, proteinDocument, type ProteinFeature, type ProteinTracks } from './protein.ts';
 import { RESIDUE_TINT, packLanes, residueClass } from './seq.ts';
 import { Arriving, Notes, Seg, Stat, ZoomButtons, useDark, useParsed, useRange, useRangeGestures } from './ui.tsx';
+
+/** Positions near the wanted ones (sorted input order kept), at least `gap` apart, within [lo, hi]. */
+function spreadX(xs: number[], gap: number, lo: number, hi: number): number[] {
+  const order = xs.map((x, i) => [x, i] as const).sort((a, b) => a[0] - b[0]);
+  const out = order.map(([x]) => Math.max(lo, x));
+  for (let k = 1; k < out.length; k++) out[k] = Math.max(out[k]!, out[k - 1]! + gap);
+  const over = out.length ? out[out.length - 1]! - hi : 0;
+  if (over > 0) for (let k = out.length - 1; k >= 0; k--) out[k] = Math.max(lo + k * gap, Math.min(out[k]!, (k === out.length - 1 ? hi : out[k + 1]! - gap)));
+  const res = new Array<number>(xs.length);
+  order.forEach(([, i], k) => { res[i] = out[k]!; });
+  return res;
+}
 
 const strandText = (s: number) => (s === 1 ? 'forward' : s === -1 ? 'reverse' : 'no strand');
 
@@ -54,7 +69,7 @@ function CircularMap({ p, picked, onPick }: { p: Plasmid; picked: number | null;
     <svg data-plasmid-map="circular" viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label={`Map of ${p.name}`}>
       <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--hx-text-muted)" strokeWidth={1.4} />
       <circle cx={cx} cy={cy} r={r - 3} fill="none" stroke="var(--hx-text-muted)" strokeWidth={0.6} />
-      {niceTicks(0, p.length, 12).filter((t) => t < p.length).map((t) => { const a = angleOf(t + 1, p.length); return <g key={t}><line x1={cx + (r - 6) * Math.cos(a)} y1={cy + (r - 6) * Math.sin(a)} x2={cx + (r - 12) * Math.cos(a)} y2={cy + (r - 12) * Math.sin(a)} stroke="var(--hx-text-muted)" /><text x={cx + (r - 24) * Math.cos(a)} y={cy + (r - 24) * Math.sin(a) + 3} fontSize={9} textAnchor="middle" fill="var(--hx-text-muted)">{t === 0 ? '1' : bp(t)}</text></g>; })}
+      {niceTicks(0, p.length, 12).filter((t) => t < p.length).map((t, _i, all) => { const a = angleOf(t + 1, p.length); return <g key={t}><line x1={cx + (r - 6) * Math.cos(a)} y1={cy + (r - 6) * Math.sin(a)} x2={cx + (r - 12) * Math.cos(a)} y2={cy + (r - 12) * Math.sin(a)} stroke="var(--hx-text-muted)" /><text x={cx + (r - 24) * Math.cos(a)} y={cy + (r - 24) * Math.sin(a) + 3} fontSize={9} textAnchor="middle" fill="var(--hx-text-muted)">{t === 0 ? '1' : tickText(all, t, p.length < 20_000)}</text></g>; })}
       {p.features.map((f, i) => (
         <path key={i} data-feature={f.type} d={arcPath(f, p.length, cx, cy, r, w)} fill={f.color} opacity={picked === null || picked === i ? 0.9 : 0.35} stroke={picked === i ? 'var(--hx-text-primary)' : 'none'} strokeWidth={1.2} className="cursor-pointer" onClick={() => onPick(picked === i ? null : i)}>
           <title>{`${f.label} · ${f.type} · ${fmt(f.start)}–${fmt(f.end)} · ${strandText(f.strand)}`}</title>
@@ -76,14 +91,15 @@ function CircularMap({ p, picked, onPick }: { p: Plasmid; picked: number | null;
 function LinearMap({ p, picked, onPick }: { p: Plasmid; picked: number | null; onPick: (i: number | null) => void }) {
   const W = 720; const L = 12; const R = 12; const pieces = useMemo(() => linearLanes(p), [p]);
   const nl = Math.max(1, ...pieces.map((x) => x.lane + 1));
-  const siteRows = Math.min(4, p.sites.length);
-  const top = 14 + siteRows * 12; const axisY = top + 14; const H = axisY + 24 + nl * 26;
   const x = (pos: number) => L + ((pos - 1) / p.length) * (W - L - R);
+  // Site labels slanted above the axis, spread apart along it, each joined to its tick.
+  const spread = useMemo(() => spreadX(p.sites.map((s) => x(s.position)), 11, L, W - R - 40), [p]);
+  const top = p.sites.length ? 62 : 6; const axisY = top + 14; const H = axisY + 24 + nl * 26;
   return (
     <svg data-plasmid-map="linear" viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label={`Linear map of ${p.name}`}>
-      {p.sites.map((s, i) => <g key={i} data-site={s.label}><line x1={x(s.position)} x2={x(s.position)} y1={top + 2} y2={axisY} stroke="var(--hx-text-muted)" /><text x={x(s.position)} y={10 + (i % Math.max(1, siteRows)) * 12} fontSize={9.5} textAnchor="middle" fill="var(--hx-text-muted)">{s.label}</text></g>)}
+      {p.sites.map((s, i) => <g key={i} data-site={s.label}><polyline points={`${x(s.position)},${axisY} ${x(s.position)},${top} ${spread[i]},${top - 8}`} fill="none" stroke="var(--hx-text-muted)" strokeWidth={0.8} /><text x={spread[i]} y={top - 10} fontSize={9.5} fill="var(--hx-text-muted)" transform={`rotate(-40 ${spread[i]} ${top - 10})`}>{s.label}</text></g>)}
       <line x1={L} x2={W - R} y1={axisY} y2={axisY} stroke="var(--hx-text-secondary)" strokeWidth={1.5} />
-      {niceTicks(1, p.length, 10).map((t) => <g key={t}><line x1={x(t)} x2={x(t)} y1={axisY} y2={axisY + 5} stroke="var(--hx-text-muted)" /><text x={x(t)} y={axisY + 15} fontSize={9.5} textAnchor="middle" fill="var(--hx-text-muted)">{bp(t)}</text></g>)}
+      {niceTicks(1, p.length, 10).map((t, _i, all) => <g key={t}><line x1={x(t)} x2={x(t)} y1={axisY} y2={axisY + 5} stroke="var(--hx-text-muted)" /><text x={x(t)} y={axisY + 15} fontSize={9.5} textAnchor="middle" fill="var(--hx-text-muted)">{tickText(all, t, p.length < 20_000)}</text></g>)}
       {pieces.map(({ f, index, lane, start, end }, k) => {
         const y = axisY + 24 + lane * 26; const x0 = x(start); const x1 = Math.max(x0 + 3, x(end + 1)); const h = 13; const tip = Math.min(7, (x1 - x0) / 2);
         const d = f.strand === 1 && end === f.end ? `M${x0},${y}H${x1 - tip}L${x1},${y + h / 2}L${x1 - tip},${y + h}H${x0}Z` : f.strand === -1 && start === f.start ? `M${x1},${y}H${x0 + tip}L${x0},${y + h / 2}L${x0 + tip},${y + h}H${x1}Z` : `M${x0},${y}H${x1}V${y + h}H${x0}Z`;
@@ -175,7 +191,7 @@ function Browser({ set }: { set: TrackSet }) {
       </div>
       <svg ref={g.ref} {...g.handlers} data-genome-tracks viewBox={`0 0 ${W} ${H}`} className="w-full touch-none select-none" style={{ cursor: 'grab' }} role="img" aria-label="Genome tracks">
         <line x1={L} x2={W - R} y1={16} y2={16} stroke="var(--hx-text-muted)" />
-        {niceTicks(s, e, 7).map((t) => <g key={t}><line x1={x(t)} x2={x(t)} y1={12} y2={20} stroke="var(--hx-text-muted)" /><text x={x(t)} y={9} fontSize={9.5} textAnchor="middle" fill="var(--hx-text-muted)">{bp(t)}</text></g>)}
+        {niceTicks(s, e, 7).map((t, _i, all) => <g key={t}><line x1={x(t)} x2={x(t)} y1={12} y2={20} stroke="var(--hx-text-muted)" /><text x={x(t)} y={9} fontSize={9.5} textAnchor={x(t) < L + 30 ? 'start' : x(t) > W - R - 30 ? 'end' : 'middle'} fill="var(--hx-text-muted)">{tickText(all, t)}</text></g>)}
         {blocks}
       </svg>
       <div className="min-h-[18px] text-[11.5px] text-hx-secondary" data-track-detail>

@@ -23,7 +23,8 @@ const GCN4 = 'RMKQLEDKVEELLSKNYHLENEVARLKKLVGER';
 
 /** A PDB ATOM/HETATM record with its fixed columns. */
 function atom(kind: 'ATOM' | 'HETATM', serial: number, name: string, res: string, chain: string, seq: number, x: number, y: number, z: number, el: string): string {
-  return `${kind.padEnd(6)}${String(serial).padStart(5)} ${name.padEnd(4)} ${res} ${chain}${String(seq).padStart(4)}    ${x.toFixed(3).padStart(8)}${y.toFixed(3).padStart(8)}${z.toFixed(3).padStart(8)}  1.00 20.00          ${el.padStart(2)}`;
+  // Rotated (x, y, z) -> (z, x, y) so the helix axes lie across the default view rather than along it.
+  return `${kind.padEnd(6)}${String(serial).padStart(5)} ${name.padEnd(4)} ${res} ${chain}${String(seq).padStart(4)}    ${z.toFixed(3).padStart(8)}${x.toFixed(3).padStart(8)}${y.toFixed(3).padStart(8)}  1.00 20.00          ${el.padStart(2)}`;
 }
 const THREE: Record<string, string> = { A: 'ALA', R: 'ARG', N: 'ASN', D: 'ASP', C: 'CYS', E: 'GLU', Q: 'GLN', G: 'GLY', H: 'HIS', I: 'ILE', L: 'LEU', K: 'LYS', M: 'MET', F: 'PHE', P: 'PRO', S: 'SER', T: 'THR', W: 'TRP', Y: 'TYR', V: 'VAL' };
 

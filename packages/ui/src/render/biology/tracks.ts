@@ -97,7 +97,10 @@ export function parseGff(src: string, gtf: boolean, notes: string[]): Transcript
     const id = r.attrs.ID ?? r.attrs.transcript_id ?? `${r.type}:${r.start}`;
     const t = tx(id, r);
     const gene = genes.get(r.attrs.Parent ?? '');
-    t.name = r.attrs.Name ?? r.attrs.gene_name ?? gene?.attrs.Name ?? r.attrs.gene ?? id;
+    // A transcript reads as its gene (with its own name after it); a stand-alone feature by its name.
+    const geneName = gene?.attrs.Name ?? r.attrs.gene ?? r.attrs.gene_name;
+    const own = r.attrs.Name ?? r.attrs.transcript_name;
+    t.name = geneName && own && own !== geneName ? `${geneName} (${own})` : geneName ?? own ?? id;
     t.type = r.type; t.strand = r.strand;
     t.info = Object.entries(r.attrs).filter(([k]) => !['ID', 'Parent'].includes(k)).slice(0, 6);
   }

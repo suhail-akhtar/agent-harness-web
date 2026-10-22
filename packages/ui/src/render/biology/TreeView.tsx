@@ -55,7 +55,7 @@ export function TreeView({ source, streaming, format }: { source: string; stream
         {t.hasSupport && <Toggle on={support} onChange={setSupport}>Support values</Toggle>}
         <Seg label="Layout" value={mode} onChange={setMode} options={[['rectangular', 'Rectangular'], ['circular', 'Circular']]} />
       </div>
-      {tall ? <div className="max-h-[520px] overflow-y-auto">{svg}</div> : <ZoomPan>{svg}</ZoomPan>}
+      {tall ? <div className="max-h-[520px] overflow-y-auto pt-8">{svg}</div> : <ZoomPan className="pt-8">{svg}</ZoomPan>}
       <p className="text-[11px] text-hx-muted">Click a node to collapse or expand its clade.</p>
     </div>
   );
