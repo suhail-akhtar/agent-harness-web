@@ -33,8 +33,20 @@ export interface SessionMeta {
   byModel: Record<string, { usage: Usage; cost: number; requests: number }>;
   contextStart: number; compactions: number; lastPromptTokens: number; status?: SessionStatus;
   /** New server fields (absent on older servers). */
-  archived?: boolean; pinned?: boolean; group?: string; forkedFrom?: string;
+  archived?: boolean; pinned?: boolean; group?: string; forkedFrom?: string | { id: string; turn: number };
+  /** The app declared when the session was made. */
+  client?: { kind: string; version?: string; renderers?: string[]; tools?: string[] };
+  /** A linked session: the session that started it, and how deep it is. */
+  parent?: string; linkDepth?: number;
+  /** Linked sessions this one started (newest last), and tasks it handed off. */
+  linked?: string[]; handoffs?: { id: string; title: string; at: number }[];
+  /** Chapters the agent marked (mark_chapter): a table of contents. */
+  chapters?: Chapter[];
+  /** Spent by agents on other models than the session's (delegation). */
+  delegationCost?: number;
+  turns?: number;
 }
+export interface Chapter { index: number; title: string; summary?: string; at?: number; turn?: number }
 export type SessionStatus = 'idle' | 'running' | 'waiting';
 
 export interface ImageData { media_type: string; data: string }
@@ -54,24 +66,31 @@ export type ToolDisplay =
 
 export interface WorkflowRunView {
   id: string; workflow: string; status: string; current?: string; cost: number; error?: string;
-  nodes: { id: string; type: string; title?: string }[];
+  nodes: WorkflowNodeView[];
+  /** The first node (newer servers). */
+  start?: string;
   history: { node: string; type: string; status: string; outcome?: string; summary?: string; startedAt: number; endedAt?: number; cost?: number }[];
 }
-export interface WorkflowInfo { name: string; description: string; source?: string; inputs: Record<string, { description?: string; required?: boolean; default?: string }>; nodes: { id: string; type: string; title?: string }[] }
+export interface WorkflowInfo { name: string; description: string; source?: string; inputs: Record<string, { description?: string; required?: boolean; default?: string }>; nodes: WorkflowNodeView[]; start?: string }
+
+/** A workflow node as a run shows it: its type and title, and (newer servers) its agent, model and where it goes next. */
+export interface WorkflowNodeView { id: string; type: string; title?: string; agent?: string; model?: string; next?: string[] }
 
 /** Background work: a shell, a sub-agent, a workflow run or a monitor. */
 export interface TaskView { id: string; kind: 'shell' | 'agent' | 'workflow' | 'monitor'; description: string; status: 'running' | 'completed' | 'failed' | 'stopped'; startedAt: number; endedAt?: number; owner: string; cost?: number }
 
 export type HarnessEvent =
   | { kind: 'turn_start'; turn: number; agent?: string }
-  | { kind: 'user_message'; text: string; images?: ImageData[] }
+  /** origin: not typed by the person (a linked session's report or message woke it: auto; a linked session's brief: link). */
+  | { kind: 'user_message'; text: string; images?: ImageData[]; origin?: 'auto' | 'link' | 'person' }
   | { kind: 'text_delta'; text: string; agent?: string }
   | { kind: 'reasoning_delta'; text: string; agent?: string }
   | { kind: 'assistant_message'; message: Message; agent?: string }
   | { kind: 'tool_call'; id: string; name: string; input: Record<string, unknown>; agent?: string }
   | { kind: 'tool_result'; id: string; name: string; content: string; is_error: boolean; display?: ToolDisplay; ms: number; agent?: string; images?: ImageData[] }
   | { kind: 'permission_request'; requestId: string; tool: string; summary: string; input: Record<string, unknown>; suggestion?: string; agent?: string }
-  | { kind: 'question'; requestId: string; question: string; options: string[] }
+  /** `form`: a JSON Schema the answer fills in (an object); `agent`: a sub-agent asked. */
+  | { kind: 'question'; requestId: string; question: string; options: string[]; form?: Record<string, unknown>; agent?: string }
   | { kind: 'plan_proposed'; requestId: string; plan: string }
   | { kind: 'approval_request'; requestId: string; runId: string; node: string; title: string; message: string; files: { path: string; content: string }[] }
   | { kind: 'workflow'; phase: 'started' | 'node_started' | 'node_finished' | 'finished'; node?: string; run: WorkflowRunView }
@@ -84,7 +103,18 @@ export type HarnessEvent =
   | { kind: 'retry'; attempt: number; delayMs: number; reason: string }
   | { kind: 'turn_end'; reason: string; agent?: string }
   | { kind: 'status'; status: SessionStatus }
-  | { kind: 'task'; phase: 'started' | 'finished'; task: TaskView };
+  | { kind: 'task'; phase: 'started' | 'finished'; task: TaskView }
+  /** An artifact was made or got a new version (its own kind is markdown, html, ...). */
+  | { kind: 'artifact'; artifact: { id: string; title: string; kind: string; version: number; action: 'create' | 'update' | 'rewrite' } }
+  /** A desktop tool call for the attached app to answer (POST /api/sessions/:id/client-result). */
+  | { kind: 'client_call'; callId: string; tool: string; input: Record<string, unknown> }
+  | { kind: 'client_call_end'; callId: string; ok: boolean; reason: string }
+  /** A session the agent offered to start: nothing runs until the person starts it. */
+  | { kind: 'session_proposal'; id: string; title: string; brief: string; initiation: 'offer' | 'own_initiative'; context: 'fork' | 'fresh'; useWorktree?: boolean; model?: string; effort?: string; expiresAt: number }
+  | { kind: 'proposal_resolved'; id: string; status: 'started' | 'dismissed' | 'expired'; sessionId?: string }
+  /** A linked session started from this one, its report at the end of a turn, or a message from another session. */
+  | { kind: 'side_session'; phase: 'started' | 'report' | 'message'; id: string; title: string; reason?: string; preview?: string }
+  | { kind: 'chapter'; title: string; summary?: string; index: number };
 
 /** A request waiting for a person: a tool permission, a question, a plan, a workflow approval. */
 export type PendingRequest = Extract<HarnessEvent, { kind: 'permission_request' | 'question' | 'plan_proposed' | 'approval_request' }>;
@@ -106,7 +136,7 @@ export interface HistoryPage { total?: number; after?: number; messages: Message
 export interface Approval { sessionId: string; requestId: string; kind: PendingRequest['kind']; /** The session's title. */ title?: string; summary?: string; tool?: string; at: number; request?: PendingRequest }
 
 /** The global stream (GET /api/events): `data:{seq,topic,payload}`. */
-export type EventTopic = 'sessions' | 'session' | 'approvals' | 'schedules' | 'plugins' | 'notices';
+export type EventTopic = 'sessions' | 'session' | 'approvals' | 'schedules' | 'plugins' | 'notices' | 'proposals' | 'linked' | 'artifacts' | 'chapters' | 'client';
 export interface GlobalEvent { seq: number; topic: EventTopic | string; payload: unknown }
 
 export interface Capabilities {
@@ -150,3 +180,26 @@ export interface EffectiveSetting { key: string; value: unknown; source: 'defaul
 
 /** A file attached to a message (POST messages, new). */
 export interface Attachment { name: string; mediaType: string; base64: string }
+
+/** An artifact (GET /api/sessions/:id/artifacts): versioned files the agent made for the person. */
+export interface ArtifactVersionInfo { n: number; at: number; size: number; action: 'create' | 'update' | 'rewrite'; file: string }
+export interface ArtifactMeta {
+  id: string; title: string; kind: string; language?: string; contentType: string;
+  version: number; versions: ArtifactVersionInfo[]; createdAt: number; updatedAt: number;
+  /** In the Library (GET /api/artifacts): whose session it is. */
+  sessionId?: string; sessionTitle?: string;
+}
+/** One version's content: text, or base64 for images and PDFs. */
+export interface ArtifactContent { meta: ArtifactMeta; version: number; contentType: string; content?: string; base64?: string }
+
+/** A session an agent offered to start (GET /api/sessions/:id/proposals). */
+export interface Proposal { id: string; sessionId: string; title: string; brief: string; initiation: 'offer' | 'own_initiative'; context: 'fork' | 'fresh'; useWorktree?: boolean; model?: string; effort?: string; status?: string; createdAt?: number; expiresAt?: number }
+
+/** A model call or a tool call in a session's trace (GET /api/sessions/:id/trace). */
+export type TraceSpan =
+  | { type: 'model'; at: number; agent: string; model: string; ms: number; usage: Usage; cost: number; stop: string; retries: number; compaction?: boolean }
+  | { type: 'tool'; at: number; agent: string; tool: string; ms: number; error: boolean; chars?: number; images?: number }
+  | { type: 'clear'; at: number; agent: string; results: number; tokens: number };
+
+/** The person's delegation setting (other models agents may use). */
+export interface Delegation { allowedModels?: string[] | '*'; maxCostUsd?: number; requireApproval?: boolean }

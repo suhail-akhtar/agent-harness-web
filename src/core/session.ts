@@ -278,10 +278,25 @@ When "untrustedContentSeen" is true, be stricter: the agent has read web pages o
 When unsure, refuse (ok: false) with a short reason: the user is then asked.`;
 const TRUST_PROJECT = process.env.HARNESS_TRUST_PROJECT === '1';
 
+/** A workflow's nodes as clients draw them: type, title, the agent and model of agent nodes, where each goes next. */
+export function nodeViews(w: WorkflowDef): WorkflowRunView['nodes'] {
+  return Object.entries(w.nodes).map(([id, n]) => {
+    const next = !n.next ? [] : typeof n.next === 'string' ? [n.next] : [...new Set([...Object.values(n.next.on), ...(n.next.default ? [n.next.default] : [])])];
+    const fan = n.type === 'parallel' ? n.branches : [];
+    const agentOf = n.type === 'agent' ? n : n.type === 'map' && n.node.type === 'agent' ? n.node : undefined;
+    return {
+      id, type: n.type, title: n.title,
+      ...(agentOf ? { agent: agentOf.agent ?? 'general', ...(agentOf.model ? { model: agentOf.model } : {}) } : {}),
+      ...(next.length || fan.length ? { next: [...fan, ...next] } : {}),
+    };
+  });
+}
+
 export function runView(run: RunRecord, w?: WorkflowDef): WorkflowRunView {
   return {
     id: run.id, workflow: run.workflow, status: run.status, current: run.current, cost: run.cost, error: run.error,
-    nodes: w ? Object.entries(w.nodes).map(([id, n]) => ({ id, type: n.type, title: n.title })) : [],
+    nodes: w ? nodeViews(w) : [],
+    ...(w ? { start: w.start } : {}),
     history: run.history.map((h) => ({ node: h.node, type: h.type, status: h.status, outcome: h.outcome, summary: h.summary, startedAt: h.startedAt, endedAt: h.endedAt, cost: h.cost })),
   };
 }
@@ -1876,8 +1891,38 @@ export class Session {
 
   private runsDir() { return path.join(this.dir, 'runs'); }
 
+  /**
+   * The session's workflows, read again when they change: plugins' (as the registry has them now)
+   * and the project's .harness/workflows (a file added after the session started is seen). Not
+   * part of the prompt: the workflow tool lists them on request, so the cached prefix is untouched.
+   */
   async workflows(): Promise<WorkflowDef[]> {
-    return (await this.getToolbox(await this.getHost())).workflows;
+    const host = await this.getHost();
+    await this.getToolbox(host);
+    const workflows = new Map<string, WorkflowDef>(this.deps.registry.workflows);
+    for (const w of await this.projectWorkflows(host)) workflows.set(w.name, w);
+    return [...workflows.values()];
+  }
+
+  /** The project's workflows, cached on the folder's listing (names, sizes and times): a changed file is read again. */
+  private projectWorkflowCache?: { sig: string; list: WorkflowDef[] };
+  private async projectWorkflows(host: ToolHost): Promise<WorkflowDef[]> {
+    if (host.kind === 'companion') return [];
+    const dir = path.join(host.root, '.harness', 'workflows');
+    let sig = '';
+    try {
+      const names = (await fs.readdir(dir)).filter((n) => n.endsWith('.json')).sort();
+      const stats = await Promise.all(names.map((n) => fs.stat(path.join(dir, n)).then((st) => `${n}:${st.size}:${st.mtimeMs}`).catch(() => n)));
+      sig = `${this.projectTrusted(host) ? 't' : 'u'}|${stats.join('|')}`;
+    } catch { return []; }
+    if (this.projectWorkflowCache?.sig === sig) return this.projectWorkflowCache.list;
+    const list: WorkflowDef[] = [];
+    for (const w of await loadWorkflowDir(dir, 'project')) {
+      if (!this.projectTrusted(host) && usesNodeType(w, 'shell')) continue;
+      list.push(w);
+    }
+    this.projectWorkflowCache = { sig, list };
+    return list;
   }
 
   async listRuns(): Promise<WorkflowRunView[]> {

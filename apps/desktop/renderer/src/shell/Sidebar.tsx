@@ -12,6 +12,7 @@ import { interpolate, type NavItem } from '../registry/registry';
 import { formatChord } from '../registry/keybindings';
 import { runCommand } from '../registry/actions';
 import { platform } from '../bridge';
+import { ProductMark } from '../components/ProductMark';
 
 /** The sidebar; a narrow window passes its own (unsaved) collapsed state and toggle. */
 export function Sidebar({ collapsed: forced, onToggle }: { collapsed?: boolean; onToggle?: () => void } = {}): React.ReactElement {
@@ -66,9 +67,7 @@ export function Sidebar({ collapsed: forced, onToggle }: { collapsed?: boolean; 
   );
 }
 
-function Logo() {
-  return <span className="flex h-6 w-6 items-center justify-center rounded-md bg-hx-accent text-[12px] font-bold text-hx-on-accent">H</span>;
-}
+function Logo() { return <ProductMark size={24} />; }
 
 function NavRow({ item, collapsed, indent }: { item: NavItem; collapsed: boolean; indent?: boolean }) {
   const route = useApp((s) => s.route);

@@ -468,3 +468,20 @@ small, each for any plugin):
 Not yet: a frame cannot ask the registry what else is installed, so the Operations topology draws its
 own SVG rather than handing a `diagram` spec to `core.diagrams` when that is present; agent-callable
 commands are listed, but the desktop still declines `desktop_command` calls.
+
+## 21. The desktop side of sections 11 to 13 (built)
+
+- `core.artifacts` and `core.agents` are built-in plugins on the public contribution points: panels
+  (`where: session`), views and nav items, and renderers for the item kinds the timeline adds
+  (`artifact`, `proposal`, `link`, `chapter`); without them the transcript falls back to a line each.
+- The timeline (`packages/client`) draws proposals, linked-session reports and chapters live and from
+  stored history (the start_session / mark_chapter results and the report reminders), and a turn a
+  report woke as a boundary; artifact cards come from the artifact tool's results.
+- One live store per conversation (`core.chat/live.ts`): the transcript, both panels and a split view
+  of the same conversation share one event stream.
+- Desktop calls are answered by `state/client-calls.ts` (pure checks in `registry/agent-surface.ts`),
+  once per call (the global and the session stream both bring it), within 20 s. `desktop_notify` shows a
+  toast and a system notification even with the window in front: the agent asked for it.
+- Split view is the shell's (`openSplit(route)`, any view), not the agents plugin's.
+- A session's workflow list is read again when `.harness/workflows` changes (cached on the folder's
+  listing); the catalogue is not in the prompt, so the cached prefix is untouched.

@@ -7,7 +7,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { Attachment, Effort, Mode } from '@harness/client';
 import { Button, EmptyState, Icon, IconButton, Input, Popover, MenuList, Spinner, Tooltip, cx, toast, type MenuItem } from '@harness/ui';
-import { useApp, openSession, navigate } from '../../state/app';
+import { useApp, openSession, navigate, setCrumb } from '../../state/app';
 import { useData, client, clientInfo } from '../../state/data';
 import { desktop } from '../../bridge';
 import { TopBar } from '../../shell/Bars';
@@ -16,6 +16,10 @@ import { Composer, chipContext, type ComposerValue } from './Composer';
 import { Transcript, fmtCost, fmtTokens } from './Transcript';
 import { useSessionLive } from './live';
 import { PendingCard, respondFor } from '../../components/Pending';
+import { usePane } from '../../registry/PluginView';
+import { ProductMark } from '../../components/ProductMark';
+import { recommendedModel } from '../../state/recommend';
+import { CostByModel } from '../../components/CostByModel';
 
 const EFFORT_RANK: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 /** Think on: at least "high", when the model offers it. */
@@ -29,15 +33,15 @@ function effortFor(v: ComposerValue, efforts: Effort[] | undefined): Effort | un
 
 function defaultsNow(): ComposerValue { return defaultsFrom(useApp.getState().prefs, useData.getState().models); }
 function defaultsFrom(prefs: ReturnType<typeof useApp.getState>['prefs'], models: ReturnType<typeof useData.getState>['models']): ComposerValue {
-  const model = models.find((m) => m.id === prefs.defaultModel && m.available) ?? models.find((m) => m.available) ?? models[0];
+  const rec = recommendedModel(models)?.id;
+  const model = models.find((m) => m.id === prefs.defaultModel && m.available) ?? models.find((m) => m.id === rec) ?? models.find((m) => m.available) ?? models[0];
   return { model: model?.id ?? '', effort: (prefs.defaultEffort as Effort) || model?.effort, mode: (prefs.defaultMode as Mode) || 'default', think: false };
 }
 
 function useDefaults(): ComposerValue {
   const prefs = useApp((s) => s.prefs);
   const models = useData((s) => s.models);
-  const model = models.find((m) => m.id === prefs.defaultModel && m.available) ?? models.find((m) => m.available) ?? models[0];
-  return { model: model?.id ?? '', effort: (prefs.defaultEffort as Effort) || model?.effort, mode: (prefs.defaultMode as Mode) || 'default', think: false };
+  return defaultsFrom(prefs, models);
 }
 
 export function Home(): React.ReactElement {
@@ -49,6 +53,8 @@ export function Home(): React.ReactElement {
   const [value, setValue] = useState<ComposerValue>(defaults);
   const [where, setWhere] = useState<string>(() => { try { return localStorage.getItem('harness.workIn') ?? ''; } catch { return ''; } });
   useEffect(() => { if (!value.model && defaults.model) setValue(defaults); }, [defaults.model]);
+  // A default changed in Settings (or by an agent) while the page is open: the composer follows it.
+  useEffect(() => { setValue((v) => ({ ...v, mode: defaults.mode, ...(defaults.effort ? { effort: defaults.effort } : {}) })); }, [defaults.mode, defaults.effort]);
   useEffect(() => { try { localStorage.setItem('harness.workIn', where); } catch { /* none */ } }, [where]);
   const homePrompts = registry.prompts.filter((p) => p.home);
   const noModel = models.length > 0 && !models.some((m) => m.available);
@@ -75,7 +81,7 @@ export function Home(): React.ReactElement {
       <div className="hx-scroll min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex w-full max-w-column flex-col items-center px-4 pt-[14vh] sm:px-6">
           <div className="mb-6 flex items-center gap-3">
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-hx-accent text-[16px] font-bold text-hx-on-accent">H</span>
+            <ProductMark size={36} />
             <h1 className="text-[26px] font-semibold tracking-tight text-hx-primary" data-greeting>{info?.product.brand.tagline ?? 'Where should we begin?'}</h1>
           </div>
           {noModel && (
@@ -161,6 +167,8 @@ export function Session({ params }: { params: Record<string, string> }): React.R
   const stop = () => void client.sessions.abort(id).catch((e: Error) => toast(e.message, { kind: 'error' }));
   const respond = respondFor(id);
   const ctxPct = s.live.contextWindow ? Math.min(100, Math.round((s.live.contextTokens / s.live.contextWindow) * 100)) : 0;
+  const pane = usePane();
+  useEffect(() => { if (!pane.split && s.meta) setCrumb({ view: 'core.chat:session', title: s.meta.title }); }, [s.meta?.title, pane.split]);
 
   if (!s.loaded) return <div className="flex h-full flex-col"><TopBar title="Loading…" /><div className="flex flex-1 items-center justify-center"><Spinner size={20} /></div></div>;
   if (s.error) return <div className="flex h-full flex-col"><TopBar title="Conversation" /><EmptyState icon="alert" title="This conversation could not be opened" action={<Button onClick={() => navigate({ view: 'core.chat:home' })}>Go home</Button>}>{s.error}</EmptyState></div>;
@@ -172,7 +180,7 @@ export function Session({ params }: { params: Record<string, string> }): React.R
             <Tooltip label={`${s.live.contextTokens.toLocaleString()} of ${s.live.contextWindow.toLocaleString()} tokens before the context is compacted`}>
               <span className="flex items-center gap-1.5"><span className="h-1.5 w-16 overflow-hidden rounded-full bg-hx-pill"><span className={cx('block h-full rounded-full', ctxPct > 85 ? 'bg-hx-danger' : ctxPct > 60 ? 'bg-hx-warning' : 'bg-hx-accent')} style={{ width: `${ctxPct}%` }} /></span>{fmtTokens(s.live.contextTokens)}</span>
             </Tooltip>
-            <Tooltip label="What this conversation has cost"><span data-cost>{fmtCost(s.meta.cost)}</span></Tooltip>
+            <UsageButton meta={s.meta} />
           </div>
         )}
         <Tooltip label="Run a workflow"><IconButton icon="workflow" size="sm" label="Run a workflow" onClick={() => useApp.setState({ workflowDialog: { sessionId: id } })} /></Tooltip>
@@ -190,6 +198,25 @@ export function Session({ params }: { params: Record<string, string> }): React.R
       )}
       <Composer draftKey={`s:${id}`} value={value} onChange={(v) => void patch(v)} onSend={send} running={running} onStop={stop} sessionId={id} queued={queue} onUnqueue={(i) => setQueue((q) => q.filter((_, j) => j !== i))} autoFocus />
     </div>
+  );
+}
+
+/** The conversation's cost; a click shows it per model (its own and the ones its agents delegated to). */
+function UsageButton({ meta }: { meta: import('@harness/client').SessionMeta }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLButtonElement>(null);
+  const models = Object.keys(meta.byModel ?? {}).length;
+  return (
+    <>
+      <Tooltip label="What this conversation has cost, per model"><button ref={ref} type="button" data-cost onClick={() => setOpen(!open)} className="rounded px-1 hover:bg-hx-hover hover:text-hx-primary">{fmtCost(meta.cost)}{models > 1 ? ` · ${models} models` : ''}</button></Tooltip>
+      <Popover open={open} onClose={() => setOpen(false)} anchor={ref} placement="bottom-end" className="w-[360px]" role="dialog" label="Usage">
+        <div className="p-3" data-usage-panel>
+          <div className="mb-2 text-[12px] font-medium uppercase tracking-wide text-hx-muted">Usage</div>
+          <CostByModel meta={meta} />
+          {meta.delegationCost ? <p className="mt-2 text-[11.5px] text-hx-muted">Agents on other models: {fmtCost(meta.delegationCost)} (Settings › Models & providers › Delegation).</p> : null}
+        </div>
+      </Popover>
+    </>
   );
 }
 

@@ -33,7 +33,7 @@ export type EngineState =
   | { status: 'crashed'; message: string; attempt: number; retryInMs: number }
   | { status: 'stopped'; message?: string };
 
-export interface AppInfo { product: ProductProfile; version: string; electron: string; chrome: string; node: string; platform: string; packaged: boolean; dataDir: string; scratch: string; previewRuntime: string; server: string }
+export interface AppInfo { product: ProductProfile; version: string; electron: string; chrome: string; node: string; platform: string; packaged: boolean; dataDir: string; scratch: string; previewRuntime: string; server: string; /** The product's icon (96 px). */ iconDataUrl?: string }
 export interface DevPluginInfo { name: string; version: string; description?: string; dir: string; ui?: import('@harness/plugin-ui').UiManifest; uiError?: string; uiHash?: string; enabled: boolean; source: 'dev' }
 export interface ServersInfo { active: string; remote: Array<{ id: string; name: string; url: string; hasToken?: boolean }>; encryption: boolean }
 
@@ -57,7 +57,8 @@ export const desktop = {
   openExternal: (url: string) => invoke<boolean>('shell:openExternal', url),
   showItem: (p: string) => invoke<void>('shell:showItem', p),
   clipboard: (text: string) => invoke<boolean>('clipboard:write', text),
-  notify: (n: { title: string; body?: string; route?: string }) => invoke<boolean>('notify:show', n).catch(() => false),
+  /** force: shown even while the window is in front (an agent's desktop_notify). */
+  notify: (n: { title: string; body?: string; route?: string; force?: boolean }) => invoke<boolean>('notify:show', n).catch(() => false),
   devPlugins: () => invoke<DevPluginInfo[]>('plugins:dev').catch(() => [] as DevPluginInfo[]),
   addDevPlugin: () => invoke<DevPluginInfo[] | null>('plugins:devAdd'),
   removeDevPlugin: (dir: string) => invoke<DevPluginInfo[]>('plugins:devRemove', dir),

@@ -4,11 +4,12 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import type { EffectiveSetting, McpBundle, ProviderInfo, Schedule, SessionMeta, VaultEntry } from '@harness/client';
+import type { Delegation, EffectiveSetting, McpBundle, ProviderInfo, Schedule, SessionMeta, VaultEntry } from '@harness/client';
 import { isMissing } from '@harness/client';
 import { Badge, Button, EmptyState, Field, Icon, IconButton, Input, InfoNote, Select, Spinner, Switch, Textarea, cx, toast, SecretInput } from '@harness/ui';
 import { useData, client } from '../../state/data';
 import { useApp } from '../../state/app';
+import { recommendedModel } from '../../state/recommend';
 
 const fail = (e: unknown) => toast((e as Error).message, { kind: 'error' });
 function useLoad<T>(f: () => Promise<T>, deps: unknown[] = []): [T | null, string, () => void] {
@@ -33,7 +34,75 @@ export function ModelsProviders({ onboarding }: { onboarding?: boolean }): React
       <div className="space-y-3">
         {[...providers].sort((a, b) => Number(b.configured) - Number(a.configured)).map((p) => <ProviderCard key={p.id} p={p} admin={admin} models={models.filter((m) => m.provider === p.id)} onChanged={refresh} />)}
       </div>
+      {!onboarding && <DelegationSettings />}
     </div>
+  );
+}
+
+/**
+ * Delegation (your account's `delegation` setting): which other models agents may hand work to
+ * (sub-agents, linked sessions, workflow agent nodes), whether the first hand-off to each provider
+ * in a conversation asks you, and a cost cap for that work. Within the operator's cap.
+ */
+export function DelegationSettings(): React.ReactElement {
+  const models = useData((s) => s.models);
+  const [saved, setSaved] = useState<Delegation | null>(null);
+  const [v, setV] = useState<Delegation>({});
+  const [cap, setCap] = useState<string[] | '*' | null>(null);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    client.settings.mine().then((m) => { const d = (m.delegation ?? {}) as Delegation; setSaved(d); setV(d); }).catch((e: Error) => { setErr(e.message); setSaved({}); });
+    client.settings.effective().then((rows) => {
+      const op = rows?.find((r) => r.key === 'delegation')?.layers?.find((l) => l.source === 'operator')?.value as { allowedModels?: string[] | '*' } | undefined;
+      setCap(op?.allowedModels ?? '*');
+    }).catch(() => setCap('*'));
+  }, []);
+  if (!saved) return <div className="mt-6"><Spinner /></div>;
+  const any = v.allowedModels === '*';
+  const list = Array.isArray(v.allowedModels) ? v.allowedModels : [];
+  const allowedByOperator = (id: string) => cap === null || cap === '*' || cap.includes(id);
+  const toggle = (id: string, on: boolean) => setV({ ...v, allowedModels: on ? [...new Set([...list, id])] : list.filter((x) => x !== id) });
+  const dirty = JSON.stringify(v) !== JSON.stringify(saved);
+  const save = async () => {
+    setBusy(true); setErr('');
+    try {
+      const m = await client.settings.mine();
+      const clean: Delegation = { ...(v.allowedModels !== undefined && (v.allowedModels === '*' || v.allowedModels.length) ? { allowedModels: v.allowedModels } : {}), ...(v.requireApproval ? { requireApproval: true } : {}), ...(v.maxCostUsd ? { maxCostUsd: v.maxCostUsd } : {}) };
+      const { delegation: _old, ...rest } = m as Record<string, unknown> & { delegation?: unknown };
+      await client.settings.saveMine(Object.keys(clean).length ? { ...rest, delegation: clean } : rest);
+      setSaved(clean); setV(clean); toast('Delegation saved: new hand-offs follow it', { kind: 'success' });
+    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <section data-delegation className="mt-6 rounded-xl border border-hx-border-subtle bg-hx-elevated p-4">
+      <div className="flex items-center gap-2"><Icon name="split" size={16} className="text-hx-muted" /><h3 className="text-[14px] font-medium">Delegation</h3></div>
+      <p className="mt-1 text-[12.5px] text-hx-secondary">Models your agents may hand work to (sub-agents, linked sessions, workflow steps), besides the conversation's own. What they pass on goes to that model's company. Without any, agents use the conversation's model only.</p>
+      <div className="mt-3"><Switch checked={any} onChange={(on) => setV({ ...v, allowedModels: on ? '*' : [] })} label="Any model the server allows" /></div>
+      {!any && (
+        <div className="mt-2 grid gap-1 sm:grid-cols-2" data-delegation-models>
+          {models.map((m) => {
+            const ok = allowedByOperator(m.id);
+            return (
+              <label key={m.id} data-delegation-model={m.id} className={cx('flex items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px]', ok ? 'hover:bg-hx-hover' : 'opacity-50')} title={ok ? m.notes : 'Not allowed by the operator'}>
+                <input type="checkbox" className="accent-[var(--hx-accent)]" checked={list.includes(m.id)} disabled={!ok} onChange={(e) => toggle(m.id, e.target.checked)} />
+                <span className="min-w-0 flex-1 truncate">{m.label}</span>
+                <span className="text-[11px] text-hx-muted">{m.provider}{m.available ? '' : ' · no key'}</span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+      <div className="mt-3 space-y-2">
+        <Switch checked={!!v.requireApproval} onChange={(on) => setV({ ...v, requireApproval: on })} label="Ask me before the first hand-off to each provider in a conversation" />
+        <Field label="Cost cap for delegated work, per conversation (USD)" help="Empty: no cap of your own (the operator's still applies)">
+          <Input type="number" min={0} step={0.05} className="w-40" aria-label="Cost cap in USD" data-delegation-cap value={v.maxCostUsd ?? ''} onChange={(e) => { const n = Number(e.target.value); setV({ ...v, maxCostUsd: e.target.value === '' || !(n > 0) ? undefined : n }); }} />
+        </Field>
+      </div>
+      {cap !== null && cap !== '*' && <p className="mt-2 text-[11.5px] text-hx-muted">The operator allows: {cap.join(', ') || 'no other model'}.</p>}
+      {err && <p className="mt-2 text-[12.5px] text-hx-danger">{err}</p>}
+      <div className="mt-3 flex justify-end gap-2"><Button disabled={!dirty || busy} onClick={() => setV(saved)}>Reset</Button><Button variant="primary" loading={busy} disabled={!dirty} data-save-delegation onClick={() => void save()}>Save</Button></div>
+    </section>
   );
 }
 
@@ -81,17 +150,20 @@ export const SUGGESTED_MODELS = ['claude-sonnet-5-5', 'deepseek-flash'];
 export function OnboardModel(): React.ReactElement {
   const models = useData((s) => s.models);
   const prefs = useApp((s) => s.prefs);
-  // Suggested first: Claude Sonnet for quality, DeepSeek Flash for cost.
-  const rank = (id: string) => { const i = SUGGESTED_MODELS.indexOf(id); return i < 0 ? 99 : i; };
+  // Recommended first: Claude Sonnet 5.5 with an Anthropic key, else DeepSeek Flash (state/recommend.ts).
+  const rec = recommendedModel(models);
+  const rank = (id: string) => (id === rec?.id ? -1 : SUGGESTED_MODELS.includes(id) ? SUGGESTED_MODELS.indexOf(id) : 99);
   const available = models.filter((m) => m.available).sort((a, b) => rank(a.id) - rank(b.id));
-  useEffect(() => { if (available.length && !available.some((m) => m.id === prefs.defaultModel)) useApp.getState().setPrefs({ defaultModel: available[0]!.id }); }, [available.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The recommendation becomes the default unless the person already picked one that works.
+  useEffect(() => { if (rec && !available.some((m) => m.id === prefs.defaultModel)) useApp.getState().setPrefs({ defaultModel: rec.id }); }, [rec?.id, available.length]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <div className="px-6 py-4" data-onboard-model>
+    <div className="px-6 py-4" data-onboard-model data-recommended={rec?.id}>
       {!available.length ? <InfoNote tone="warning">No model has a key yet: go back a step and add one.</InfoNote> : (
         <div className="space-y-1.5">
+          {rec && <p className="mb-2 text-[12.5px] text-hx-secondary">{rec.why}</p>}
           {available.map((m) => (
-            <button key={m.id} type="button" onClick={() => useApp.getState().setPrefs({ defaultModel: m.id })} className={cx('flex w-full items-center gap-3 rounded-xl border p-3 text-left', prefs.defaultModel === m.id ? 'border-hx-accent bg-hx-accent-soft' : 'border-hx-border-subtle hover:border-hx-border')}>
-              <Icon name="cpu" size={16} /><span className="flex-1"><span className="block text-[13.5px] font-medium">{m.label}{rank(m.id) < 99 && <span className="ml-2 rounded bg-hx-accent-soft px-1.5 py-0.5 text-[10.5px] font-medium text-hx-accent-text">Suggested</span>}</span><span className="block text-[11.5px] text-hx-muted">{m.provider} · {Math.round(m.contextWindow / 1000)}K context{m.notes ? ` · ${m.notes}` : ''}</span></span>{prefs.defaultModel === m.id && <Icon name="check" size={16} className="text-hx-accent-text" />}
+            <button key={m.id} type="button" data-model-choice={m.id} onClick={() => useApp.getState().setPrefs({ defaultModel: m.id })} className={cx('flex w-full items-center gap-3 rounded-xl border p-3 text-left', prefs.defaultModel === m.id ? 'border-hx-accent bg-hx-accent-soft' : 'border-hx-border-subtle hover:border-hx-border')}>
+              <Icon name="cpu" size={16} /><span className="flex-1"><span className="block text-[13.5px] font-medium">{m.label}{m.id === rec?.id && <span className="ml-2 rounded bg-hx-accent-soft px-1.5 py-0.5 text-[10.5px] font-medium text-hx-accent-text" data-recommended-badge>Recommended</span>}</span><span className="block text-[11.5px] text-hx-muted">{m.provider} · {Math.round(m.contextWindow / 1000)}K context{m.notes ? ` · ${m.notes}` : ''}</span></span>{prefs.defaultModel === m.id && <Icon name="check" size={16} className="text-hx-accent-text" />}
             </button>
           ))}
         </div>

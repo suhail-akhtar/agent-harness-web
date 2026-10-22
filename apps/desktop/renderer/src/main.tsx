@@ -11,7 +11,8 @@ import { App } from './shell/App';
 import { useApp, navigate, openSession, prefill, HOME } from './state/app';
 import { reconcile } from './registry/reconcile';
 import { describeRegistry } from './registry/registry';
-import { useData, setBuiltins, client, applyGlobal } from './state/data';
+import { useData, setBuiltins, client, applyGlobal, setClientCallHandler } from './state/data';
+import { handleClientCall } from './state/client-calls';
 import * as theme from './state/theme';
 import { desktop, on, type EngineState } from './bridge';
 import { runCommand } from './registry/actions';
@@ -21,6 +22,8 @@ import type { DesktopPrefs } from '@desk/prefs';
 import type { GlobalEvents } from '@harness/client';
 
 setBuiltins(BUILTINS);
+// The desktop tools agents call in this window (desktop_describe, desktop_open, desktop_notify, desktop_command).
+setClientCallHandler(handleClientCall);
 // An internal surface for the agent's desktop tools (desktop_describe) and diagnostics: the live registry as data.
 (globalThis as unknown as { harnessDesktopInternal?: unknown }).harnessDesktopInternal = { describe: () => describeRegistry(useData.getState().registry) };
 

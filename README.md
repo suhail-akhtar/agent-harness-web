@@ -24,8 +24,11 @@ Screenshots of real sessions (a sandbox task with tests and gates, approvals, co
 starts the server itself as its engine (local, on 127.0.0.1 with a random port and token), or
 connects to a remote server. The shell is generic: the sidebar, pages, panels, commands,
 settings, renderers and themes all come from plugins, the built-in chat, projects, inbox,
-activity, plugins and settings included. Third-party plugins add to it through the `ui` section
-of `harness-plugin.json`, with sandboxed frames for anything that runs code.
+activity, artifacts, agents, plugins and settings included. Third-party plugins add to it through the `ui` section
+of `harness-plugin.json`, with sandboxed frames for anything that runs code. Agents in it know the
+app and drive it: artifacts with versions and a Library, a live Agents panel (sub-agents, linked
+sessions, proposals, cost per model), split view, chapters, workflow graphs, and the desktop tools
+(describe, open, notify, agent-callable commands) answered by the window.
 
 ```bash
 npm run desktop:dev     # build, start, rebuild on change

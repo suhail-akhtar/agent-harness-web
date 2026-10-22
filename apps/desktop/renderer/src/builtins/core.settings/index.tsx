@@ -5,7 +5,8 @@
 
 import type { BuiltinPlugin } from '../../state/data';
 import { useApp } from '../../state/app';
-import { About, Appearance, Application, General, Servers, Shortcuts } from './app-sections';
+import { useData } from '../../state/data';
+import { About, AboutPage, Appearance, Application, General, Servers, Shortcuts } from './app-sections';
 import { Instructions, McpBundles, Memory, ModelsProviders, OnboardModel, OnboardProvider, Permissions, Schedules, Vault } from './server-sections';
 import { SEARCH_TEXT } from '../../shell/Overlays';
 
@@ -13,7 +14,7 @@ Object.assign(SEARCH_TEXT, {
   'core.settings:appearance': 'theme light dark system accent colour contrast font size density width motion',
   'core.settings:general': 'send enter key steps model default mode notifications',
   'core.settings:application': 'login tray sleep engine restart log data folder',
-  'core.settings:models': 'provider key api deepseek anthropic claude openai moonshot kimi zai glm base url test',
+  'core.settings:models': 'provider key api deepseek anthropic claude openai moonshot kimi zai glm base url test delegation delegate other models sub-agents cost cap',
   'core.settings:permissions': 'allow deny ask rules limits steps cost minutes effective',
   'core.settings:instructions': 'claude.md instructions personal',
   'core.settings:memory': 'memory remember forget',
@@ -48,11 +49,16 @@ export const coreSettings: BuiltinPlugin = {
         { id: 'about', title: 'About', icon: 'info', group: 'admin', order: 99, scope: 'app', component: 'About' },
       ],
       views: [
+        { id: 'about-page', title: 'About', kind: 'native', component: 'AboutPage' },
         { id: 'onboard-provider', title: 'Add a provider key', kind: 'native', component: 'OnboardProvider' },
         { id: 'onboard-model', title: 'Pick a default model', kind: 'native', component: 'OnboardModel' },
       ],
       commands: [
-        { id: 'open', title: 'Open settings', category: 'Settings', icon: 'settings', keybinding: 'Mod+,', handler: 'open' },
+        {
+          id: 'open', title: 'Open settings', category: 'Settings', icon: 'settings', keybinding: 'Mod+,', handler: 'open',
+          agent: { description: 'Open Settings, at a section (a settings id from desktop_describe, e.g. core.settings:models).', inputSchema: { type: 'object', properties: { section: { type: 'string', maxLength: 140 } } } },
+        },
+        { id: 'about', title: 'About', category: 'Help', icon: 'info', action: { type: 'open-view', view: 'about-page' } },
         { id: 'models', title: 'Models & providers', category: 'Settings', icon: 'cpu', handler: 'models' },
         { id: 'appearance', title: 'Appearance', category: 'Settings', icon: 'palette', handler: 'appearance' },
         { id: 'shortcuts', title: 'Keyboard shortcuts', category: 'Settings', icon: 'keyboard', handler: 'shortcuts' },
@@ -64,6 +70,17 @@ export const coreSettings: BuiltinPlugin = {
       ],
     },
   },
-  components: { Appearance, General, Application, Shortcuts, Servers, ModelsProviders, Permissions, Instructions, Memory, Vault, Schedules, McpBundles, About, OnboardProvider, OnboardModel },
-  handlers: { open: open('appearance'), models: open('models'), appearance: open('appearance'), shortcuts: open('shortcuts'), engine: open('application') },
+  components: { Appearance, General, Application, Shortcuts, Servers, ModelsProviders, Permissions, Instructions, Memory, Vault, Schedules, McpBundles, About, AboutPage, OnboardProvider, OnboardModel },
+  handlers: {
+    open: (args) => {
+      const section = typeof (args as { section?: unknown } | undefined)?.section === 'string' ? (args as { section: string }).section : '';
+      if (!section) { useApp.getState().openSettings('core.settings:appearance'); return 'Settings are open.'; }
+      const all = useData.getState().registry.settings.map((s) => s.qid);
+      const qid = all.includes(section) ? section : all.find((s) => s.endsWith(`:${section}`));
+      if (!qid) throw new Error(`No settings section ${section}. Sections: ${all.join(', ')}`);
+      useApp.getState().openSettings(qid);
+      return `Settings are open at ${qid}.`;
+    },
+    models: open('models'), appearance: open('appearance'), shortcuts: open('shortcuts'), engine: open('application'),
+  },
 };

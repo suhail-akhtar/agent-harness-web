@@ -79,6 +79,7 @@ const ctx: DesktopContext = {
   emit(channel, payload) { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload); },
   handle: makeHandle(),
   reveal() { if (!mainWindow) { createWindow(); return; } if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); },
+  iconDataUrl() { const i = appIcon(); return i && !i.isEmpty() ? i.resize({ width: 96, height: 96, quality: 'best' }).toDataURL() : undefined; },
   async useServer(id) {
     const current = prefs.get().servers.active;
     const watch = (e: Engine) => { e.on('state', (s) => ctx.emit('engine:state', s)); };

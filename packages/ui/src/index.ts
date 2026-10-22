@@ -18,6 +18,7 @@ export { ImageView, Lightbox, Citation, Reasoning, ImageStrip, type Source } fro
 export { Widget, RenderBoundary } from './render/Widget.tsx';
 export { copyText, copyRich, downloadText } from './render/download.ts';
 export * from './render/safe.ts';
+export { sanitizeHtml } from './render/sanitize-html.ts';
 export * from './render/blocks.ts';
 export * from './render/fences.ts';
 export * from './render/diff.ts';

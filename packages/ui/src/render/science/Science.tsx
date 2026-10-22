@@ -11,7 +11,8 @@ import { IconButton } from '../../components/primitives.tsx';
 import { autoY, parsePlotSpec, sample, ticks } from './fplot.ts';
 import { layoutMap, parseGeoJson } from './geo.ts';
 import { parseNotebook, type NbOutput } from './notebook.ts';
-import { checkDot, cleanGraphSvg } from './graphviz.ts';
+import { checkDot, cleanGraphSvg, themeGraphSvg } from './graphviz.ts';
+import { sanitizeHtml } from '../sanitize-html.ts';
 import { ZoomPan } from '../ZoomPan.tsx';
 import { CodeBlock } from '../CodeBlock.tsx';
 import { moleculeDocument } from '../artifact-doc.ts';
@@ -92,7 +93,7 @@ export function GraphvizView({ source, streaming }: { source: string; streaming?
     const refused = checkDot(source);
     if (refused) { setError(refused); return; }
     void loadGraphviz().then((gv) => {
-      const out = cleanGraphSvg(gv.dot(source, 'svg'));
+      const out = themeGraphSvg(cleanGraphSvg(gv.dot(source, 'svg')));
       if (alive) { setSvg(out); setError(''); }
     }).catch((e: unknown) => { if (alive) setError(e instanceof Error ? e.message : String(e)); });
     return () => { alive = false; };
@@ -100,7 +101,7 @@ export function GraphvizView({ source, streaming }: { source: string; streaming?
   if (streaming) return <p className="p-2 text-[11.5px] text-hx-muted">Graph arriving…</p>;
   if (error) throw new Error(error.split('\n')[0]);
   if (!svg) return <p className="p-4 text-[12px] text-hx-muted">Laying out…</p>;
-  return <ZoomPan className="h-[22rem]"><div data-graphviz="svg" className="h-full w-full [&>svg]:h-full [&>svg]:w-full [&>svg]:max-h-[21rem]" dangerouslySetInnerHTML={{ __html: svg }} /></ZoomPan>;
+  return <ZoomPan className="h-[22rem]"><div data-graphviz="svg" className="h-full w-full text-hx-primary [&>svg]:h-full [&>svg]:w-full [&>svg]:max-h-[21rem]" dangerouslySetInnerHTML={{ __html: svg }} /></ZoomPan>;
 }
 
 /** ```smiles: a 2D structure drawn by smiles-drawer (loaded on first use). One SMILES per line. */
@@ -164,7 +165,7 @@ export function GeoMap({ source, streaming }: { source: string; streaming?: bool
   );
 }
 
-/** ```ipynb: a notebook's cells and outputs. Markdown and code render as usual; HTML outputs go into a script-less frame. */
+/** ```ipynb: a notebook's cells and outputs. Markdown and code render as usual; HTML outputs are sanitized into the page. */
 export function NotebookView({ source, streaming, renderMarkdown }: { source: string; streaming?: boolean; renderMarkdown: (text: string) => React.ReactNode }): React.ReactElement {
   const parsed = useMemo(() => parseNotebook(source), [source]);
   if (parsed.error) { if (streaming) return <p className="p-2 text-[11.5px] text-hx-muted">Notebook arriving…</p>; throw new Error(parsed.error); }
@@ -173,7 +174,8 @@ export function NotebookView({ source, streaming, renderMarkdown }: { source: st
     switch (o.kind) {
       case 'text': return <pre key={k} className={`overflow-x-auto whitespace-pre-wrap px-3 py-1.5 font-mono text-[12px] ${o.stream === 'stderr' ? 'bg-hx-danger/8 text-hx-danger' : 'text-hx-primary'}`}>{o.text}</pre>;
       case 'image': return <img key={k} src={`data:${o.mime};base64,${o.data}`} alt="Cell output" className="my-1 max-w-full rounded" />;
-      case 'html': return <SandboxFrame key={k} doc={`<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:"><style>body{font:13px system-ui;margin:6px}table{border-collapse:collapse}td,th{border:1px solid #ddd;padding:3px 8px}</style>${o.html}`} scripted={false} label="Cell output" marker="notebook-html" initialHeight={150} />;
+      // Through the allowlist sanitizer into the page itself (no frame to measure, no scripts, no styles of its own).
+      case 'html': return <div key={k} data-notebook-html className="hx-nb-html hx-scroll overflow-x-auto px-3 py-1.5 text-[12.5px]" dangerouslySetInnerHTML={{ __html: sanitizeHtml(o.html) }} />;
       case 'markdown': return <div key={k} className="px-3">{renderMarkdown(o.text)}</div>;
       case 'json': return <div key={k} className="px-2"><JsonView source={o.json} /></div>;
       case 'error': return <pre key={k} className="overflow-x-auto whitespace-pre-wrap bg-hx-danger/8 px-3 py-1.5 font-mono text-[12px] text-hx-danger">{o.name}: {o.value}{o.traceback ? `\n${o.traceback}` : ''}</pre>;

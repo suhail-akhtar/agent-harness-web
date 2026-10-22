@@ -5,12 +5,13 @@
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, ConfirmDialog, EmptyState, Icon, Input, Modal, SchemaForm, Select, Spinner, cx, schemaText, toast, Textarea, Field } from '@harness/ui';
+import { Button, ConfirmDialog, EmptyState, Icon, Input, Kbd, Modal, SchemaForm, Select, Spinner, cx, schemaText, toast, Textarea, Field } from '@harness/ui';
+import { formatChord } from '../registry/keybindings';
 import type { Effort, Mode, WorkflowInfo } from '@harness/client';
 import type { JsonSchema } from '@harness/plugin-ui';
 import { useApp, openSession } from '../state/app';
 import { useData, client, clientInfo } from '../state/data';
-import { desktop } from '../bridge';
+import { desktop, platform } from '../bridge';
 import { ViewHost, type NativeProps } from '../registry/PluginView';
 import type { SettingsSection } from '../registry/registry';
 
@@ -287,4 +288,65 @@ export function ConfirmHost(): React.ReactElement | null {
   const c = useApp((s) => s.confirm);
   if (!c) return null;
   return <ConfirmDialog open title={c.title} body={<span className="whitespace-pre-wrap">{c.body}</span>} confirmLabel={c.confirmLabel} danger={c.danger} onAnswer={c.resolve} />;
+}
+
+/** Keys that are not commands (the composer, menus, dialogs): shown with the commands' own. */
+const FIXED_KEYS: Array<{ group: string; title: string; keys: string }> = [
+  { group: 'Composer', title: 'Send (or steer a running turn)', keys: 'Enter' },
+  { group: 'Composer', title: 'New line', keys: 'Shift+Enter' },
+  { group: 'Composer', title: 'Commands and mentions', keys: '/' },
+  { group: 'Anywhere', title: 'Close a dialog, a menu or the floating sidebar', keys: 'Escape' },
+];
+
+/** Help > Keyboard shortcuts: every command with a key (from the registry, so plugins' too) and the fixed ones. */
+export function ShortcutsSheet(): React.ReactElement | null {
+  const open = useApp((s) => s.shortcutsOpen);
+  const commands = useData((s) => s.registry.commands);
+  const [q, setQ] = useState('');
+  if (!open) return null;
+  const close = () => { useApp.setState({ shortcutsOpen: false }); setQ(''); };
+  const t = q.trim().toLowerCase();
+  const rows = [
+    ...commands.filter((c) => c.keys).map((c) => ({ group: c.category ?? 'Other', title: c.title, keys: c.keys!, id: c.qid })),
+    ...FIXED_KEYS.map((k) => ({ ...k, id: `fixed:${k.title}` })),
+  ].filter((r) => !t || `${r.group} ${r.title} ${r.keys}`.toLowerCase().includes(t));
+  const groups = [...new Set(rows.map((r) => r.group))];
+  return (
+    <Modal open onClose={close} title="Keyboard shortcuts" size="lg" footer={<><Button variant="ghost" onClick={() => { close(); useApp.getState().openSettings('core.settings:shortcuts'); }}>Change them in Settings</Button><Button variant="primary" onClick={close}>Done</Button></>}>
+      <div data-shortcuts>
+        <Input icon="search" autoFocus placeholder="Find a shortcut" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Find a shortcut" />
+        <div className="mt-3 grid gap-x-6 gap-y-4 sm:grid-cols-2">
+          {groups.map((g) => (
+            <section key={g}>
+              <h3 className="mb-1 text-[11.5px] font-medium uppercase tracking-wide text-hx-muted">{g}</h3>
+              {rows.filter((r) => r.group === g).map((r) => <div key={r.id} data-shortcut={r.id} className="flex items-center gap-2 py-1 text-[13px]"><span className="min-w-0 flex-1 truncate">{r.title}</span><Kbd keys={formatChord(r.keys, platform)} /></div>)}
+            </section>
+          ))}
+        </div>
+        {!rows.length && <p className="text-[12.5px] text-hx-muted">No shortcut matches.</p>}
+      </div>
+    </Modal>
+  );
+}
+
+/** Something shown over the whole window (an artifact opened in full window); Escape or the button closes it. */
+export function FullWindow(): React.ReactElement | null {
+  const fw = useApp((s) => s.fullWindow);
+  useEffect(() => {
+    if (!fw) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); useApp.setState({ fullWindow: null }); } };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [fw]);
+  if (!fw) return null;
+  return (
+    <div data-full-window role="dialog" aria-modal="true" aria-label={fw.title} className="fixed inset-0 z-[85] flex flex-col bg-hx-bg">
+      <div className="app-drag flex h-10 shrink-0 items-center gap-2 border-b border-hx-border-subtle px-3" style={{ paddingRight: 'max(12px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 12px))' }}>
+        <Icon name="expand" size={14} className="text-hx-muted" />
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{fw.title}</span>
+        <Button className="app-no-drag" size="sm" icon="collapse" data-close-full onClick={() => useApp.setState({ fullWindow: null })}>Close</Button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto p-3">{fw.body}</div>
+    </div>
+  );
 }

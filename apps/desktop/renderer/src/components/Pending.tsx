@@ -3,12 +3,14 @@
  * Drawn in the chat's attention bar and in the inbox; answering posts to the session.
  */
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import type { PendingRequest } from '@harness/client';
-import { Button, CodeBlock, DiffView, Icon, Input, Markdown, Textarea, cx, toast } from '@harness/ui';
+import type { JsonSchema } from '@harness/plugin-ui';
+import { Button, CodeBlock, DiffView, Icon, Input, Markdown, SchemaForm, Textarea, cx, toast, validate, withDefaults } from '@harness/ui';
 import { client, useData } from '../state/data';
+import { desktop } from '../bridge';
 
-export type Respond = (b: { requestId: string; decision: string; feedback?: string; answer?: string }) => Promise<void>;
+export type Respond = (b: { requestId: string; decision: string; feedback?: string; answer?: string | Record<string, unknown> }) => Promise<void>;
 
 export function respondFor(sessionId: string): Respond {
   return async (b) => {
@@ -19,6 +21,31 @@ export function respondFor(sessionId: string): Respond {
       if (!r.ok) toast('That request was already answered.', { kind: 'warning' });
     } catch (e) { toast((e as Error).message, { kind: 'error' }); void useData.getState().refreshApprovals(); }
   };
+}
+
+/** ask_user with a form: the JSON Schema drawn as a native form; the answer is the filled-in object (the server checks it again). */
+function FormQuestion({ p, busy, onSubmit }: { p: Extract<PendingRequest, { kind: 'question' }>; busy: boolean; onSubmit: (answer: Record<string, unknown>) => void }) {
+  const schema = p.form as unknown as JsonSchema;
+  const [value, setValue] = useState<Record<string, unknown>>(() => (withDefaults(schema, {}) as Record<string, unknown>) ?? {});
+  const [tried, setTried] = useState(false);
+  const errors = useMemo(() => validate(schema, value), [schema, value]);
+  const submit = () => {
+    setTried(true);
+    if (Object.keys(errors).length) return;
+    // Empty optional fields are left out (the form's schema refuses unknown fields, never missing optional ones).
+    const clean = Object.fromEntries(Object.entries(value).filter(([, v]) => v !== '' && v !== undefined && v !== null));
+    onSubmit(clean);
+  };
+  return (
+    <div data-question-form>
+      <div className="text-[13.5px] font-medium text-hx-primary">{p.question}</div>
+      {schema.description && <p className="mt-0.5 text-[12.5px] text-hx-muted">{schema.description}</p>}
+      <div className="mt-2 rounded-lg border border-hx-border-subtle bg-hx-bg px-3"><SchemaForm schema={schema} value={value} onChange={setValue} showAllErrors={tried} pickPath={() => desktop.openFolder()} idPrefix={`q-${p.requestId.slice(0, 8)}`} /></div>
+      <div className="mt-2 flex justify-end gap-2">
+        <Button size="sm" variant="primary" disabled={busy} data-submit-form onClick={submit}>Send</Button>
+      </div>
+    </div>
+  );
 }
 
 const KIND_LABEL: Record<PendingRequest['kind'], { icon: string; label: string }> = {
@@ -52,6 +79,8 @@ export function PendingCard({ p, respond, compact }: { p: PendingRequest; respon
         </div>
       </>
     );
+  } else if (p.kind === 'question' && p.form && typeof p.form === 'object') {
+    body = <FormQuestion p={p} busy={busy} onSubmit={(answer) => go({ requestId: p.requestId, decision: 'answer', answer })} />;
   } else if (p.kind === 'question') {
     body = (
       <>

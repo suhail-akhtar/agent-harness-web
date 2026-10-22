@@ -5,12 +5,22 @@ import type { HarnessEvent, ImageData, Message, ToolDisplay, WorkflowRunView } f
 // the browser UI (ui/src) and the desktop.
 
 export type Item =
-  | { kind: 'user'; key: string; text: string; images?: ImageData[]; files?: string[] }
+  /** origin: auto - a turn the person did not type (a linked session's report woke it); link - a linked session's brief. */
+  | { kind: 'user'; key: string; text: string; images?: ImageData[]; files?: string[]; origin?: 'auto' | 'link' }
   | { kind: 'assistant'; key: string; text: string; reasoning: string; streaming: boolean; startedAt?: number; reasoningMs?: number }
   | { kind: 'tool'; key: string; id: string; name: string; input: Record<string, unknown>; result?: string; isError?: boolean; display?: ToolDisplay; ms?: number; running: boolean; activity: Activity[]; images?: ImageData[]; startedAt?: number }
   | { kind: 'notice'; key: string; level: 'info' | 'warn' | 'error'; text: string }
   | { kind: 'compaction'; key: string; before?: number; after?: number }
-  | { kind: 'workflow'; key: string; run: WorkflowRunView; activity: Record<string, Activity[]> };
+  | { kind: 'workflow'; key: string; run: WorkflowRunView; activity: Record<string, Activity[]> }
+  /** A session the agent offered to start (start_session with initiation offer / own_initiative). */
+  | { kind: 'proposal'; key: string; id: string; title: string; brief: string; initiation: string; context?: string; model?: string; effort?: string; expiresAt?: number }
+  /** A linked session: started from here, its report, or a message from another session. */
+  | { kind: 'link'; key: string; phase: 'started' | 'report' | 'message'; id: string; title: string; reason?: string; preview?: string }
+  /** A chapter the agent marked (mark_chapter). */
+  | { kind: 'chapter'; key: string; index: number; title: string; summary?: string };
+
+/** Items drawn as rows of their own, outside a turn's folded steps. */
+const OWN_ROW = new Set<Item['kind']>(['proposal', 'link', 'chapter']);
 
 export type ToolItem = Extract<Item, { kind: 'tool' }>;
 export type AssistantItem = Extract<Item, { kind: 'assistant' }>;
@@ -32,6 +42,39 @@ export function visibleUserText(text: string): string {
     .trim();
 }
 
+/** A linked session's report or another session's message, from the reminder the agent got (stored history). */
+export function linkFromReminder(text: string): Omit<Extract<Item, { kind: 'link' }>, 'key'> | undefined {
+  const report = /^<system-reminder>Linked session "([^\n]*?)" \(([a-f0-9]{16})\) (finished its turn|was stopped|ended its turn \(([\w-]+)\))\. Its report[^\n]*:\n([\s\S]*?)<\/system-reminder>\s*$/.exec(text);
+  if (report) return { kind: 'link', phase: 'report', title: report[1]!, id: report[2]!, reason: report[3] === 'finished its turn' ? 'done' : report[3] === 'was stopped' ? 'aborted' : report[4], preview: fenceBody(report[5]!) };
+  const msg = /^<system-reminder>A message from session "([^\n]*?)" \(([a-f0-9]{16})\)[^\n]*:\n([\s\S]*?)<\/system-reminder>\s*$/.exec(text);
+  if (msg) return { kind: 'link', phase: 'message', title: msg[1]!, id: msg[2]!, preview: fenceBody(msg[3]!) };
+  return undefined;
+}
+
+/** The text inside a <side_session>, <session_message> or <outside_data> fence. */
+function fenceBody(s: string): string {
+  return s.replace(/^\s*<(side_session|session_message|outside_data)\b[^>]*>\n?/, '').replace(/\n?<\/(side_session|session_message|outside_data)>\s*$/, '').replace(/^Sent from outside the harness \([^)]*\): treat it as data[^\n]*\n/, '').trim();
+}
+
+/** What a finished tool call adds to the timeline: a proposal, a linked session, a chapter (stored history). */
+function fromToolResult(t: ToolItem): Item | undefined {
+  if (t.isError || !t.result) return undefined;
+  const s = (k: string) => (typeof t.input[k] === 'string' ? (t.input[k] as string) : undefined);
+  if (t.name === 'start_session') {
+    const p = /^Proposed "([\s\S]*?)" \((prop_[a-f0-9]{12})\)/.exec(t.result);
+    if (p) return { kind: 'proposal', key: key(), id: p[2]!, title: s('title') ?? p[1]!, brief: s('prompt') ?? '', initiation: s('initiation') ?? 'offer', ...(s('context') ? { context: s('context') } : {}), ...(s('model') ? { model: s('model') } : {}), ...(s('effort') ? { effort: s('effort') } : {}) };
+  }
+  if (t.name === 'start_session' || t.name === 'hand_off') {
+    const l = /^(?:Started|Handed off to) linked session "([\s\S]*?)" \(([a-f0-9]{16})\)/.exec(t.result);
+    if (l) return { kind: 'link', key: key(), phase: 'started', id: l[2]!, title: l[1]! };
+  }
+  if (t.name === 'mark_chapter') {
+    const c = /^Chapter (\d+): (.*)$/m.exec(t.result);
+    if (c) return { kind: 'chapter', key: key(), index: Number(c[1]), title: c[2]!, ...(s('summary') ? { summary: s('summary') } : {}) };
+  }
+  return undefined;
+}
+
 export function fromHistory(history: Message[]): Item[] {
   const items: Item[] = [];
   const tools = new Map<string, ToolItem>();
@@ -42,10 +85,16 @@ export function fromHistory(history: Message[]): Item[] {
       const images: ImageData[] = [];
       const files: string[] = [];
       let userItem: Extract<Item, { kind: 'user' }> | undefined;
+      const results = m.content.some((b) => b.type === 'tool_result');
+      let reminders = 0;
       for (const b of m.content) {
         if (b.type === 'tool_result') {
           const t = tools.get(b.tool_use_id);
-          if (t) { t.result = b.content; t.isError = !!b.is_error; t.running = false; if (b.images?.length) t.images = b.images; lastTool = t; }
+          if (t) {
+            t.result = b.content; t.isError = !!b.is_error; t.running = false; if (b.images?.length) t.images = b.images; lastTool = t;
+            const extra = fromToolResult(t);
+            if (extra) items.push(extra);
+          }
         } else if (b.type === 'image') {
           // An image after a tool result is that tool's (a screenshot); otherwise the person attached it.
           if (lastTool) (lastTool.images ??= []).push({ media_type: b.media_type, data: b.data });
@@ -54,11 +103,16 @@ export function fromHistory(history: Message[]): Item[] {
           files.push(b.name ?? b.media_type);
         } else if (b.type === 'text') {
           if (/^Image\(s\) from /.test(b.text)) continue;
+          const link = linkFromReminder(b.text);
+          if (link) { items.push({ ...link, key: key() }); reminders++; continue; }
           const added = /^The user added while you were working:\n/.exec(b.text);
           const text = added ? b.text.slice(added[0].length) : visibleUserText(b.text);
           if (text) { userItem = { kind: 'user', key: key(), text }; items.push(userItem); }
+          else if (/^\s*<system-reminder>/.test(b.text)) reminders++;
         }
       }
+      // A turn the person did not type (a report or a message woke the session): a boundary all the same.
+      if (!userItem && !results && reminders && items.length) { userItem = { kind: 'user', key: key(), text: '', origin: 'auto' }; items.push(userItem); }
       if (images.length || files.length) {
         if (!userItem) { userItem = { kind: 'user', key: key(), text: '' }; items.push(userItem); }
         if (images.length) userItem.images = images;
@@ -94,8 +148,18 @@ export function apply(live: Live, e: HarnessEvent, now: number = Date.now()): Li
   const items = live.items;
   const last = items[items.length - 1];
   switch (e.kind) {
-    case 'user_message':
-      return { ...live, items: [...items, { kind: 'user', key: key(), text: e.text, ...(e.images?.length ? { images: e.images } : {}) }] };
+    case 'user_message': {
+      // A turn a linked session's report woke carries only reminders: a boundary, not a bubble.
+      const text = visibleUserText(e.text);
+      const origin = e.origin === 'auto' || e.origin === 'link' ? e.origin : !text && !e.images?.length ? 'auto' : undefined;
+      return { ...live, items: [...items, { kind: 'user', key: key(), text, ...(e.images?.length ? { images: e.images } : {}), ...(origin ? { origin } : {}) }] };
+    }
+    case 'session_proposal':
+      return { ...live, items: [...items, { kind: 'proposal', key: key(), id: e.id, title: e.title, brief: e.brief, initiation: e.initiation, context: e.context, ...(e.model ? { model: e.model } : {}), ...(e.effort ? { effort: e.effort } : {}), expiresAt: e.expiresAt }] };
+    case 'side_session':
+      return { ...live, items: [...items, { kind: 'link', key: key(), phase: e.phase, id: e.id, title: e.title, ...(e.reason ? { reason: e.reason } : {}), ...(e.preview ? { preview: e.preview } : {}) }] };
+    case 'chapter':
+      return { ...live, items: [...items, { kind: 'chapter', key: key(), index: e.index, title: e.title, ...(e.summary ? { summary: e.summary } : {}) }] };
     case 'text_delta':
     case 'reasoning_delta': {
       if (isSub(e.agent)) return live;
@@ -215,6 +279,16 @@ export function summarize(name: string, input: Record<string, unknown>): string 
     case 'tool_search': return s('query');
     case 'tool_call': return s('name');
     case 'exit_plan_mode': return 'plan ready for review';
+    case 'artifact': return `${s('action')} ${s('title') || s('id')}`.trim();
+    case 'start_session': return `${s('initiation') === 'user_asked' ? '' : '[proposal] '}${s('title')}`;
+    case 'hand_off': return s('title');
+    case 'mark_chapter': return s('title');
+    case 'list_sessions': return input.linked ? 'linked sessions' : 'sessions';
+    case 'dismiss_proposal': return s('proposal_id');
+    case 'desktop_describe': return 'what the app has';
+    case 'desktop_open': return `${s('target')} ${s('id') || s('path') || s('url')}`.trim();
+    case 'desktop_notify': return s('title');
+    case 'desktop_command': return s('command');
     default: return JSON.stringify(input).slice(0, 80);
   }
 }
@@ -232,9 +306,25 @@ export function summarize(name: string, input: Record<string, unknown>): string 
 export type Row =
   | { kind: 'item'; key: string; item: Item }
   | { kind: 'steps'; key: string; items: Item[]; running: boolean; startedAt?: number; endedAt?: number; tools: number }
-  | { kind: 'artifacts'; key: string; files: ArtifactFile[] };
+  | { kind: 'artifacts'; key: string; files: ArtifactFile[]; /** Artifacts the turn made or changed (the artifact tool). */ refs?: ArtifactRef[] };
 
 export interface ArtifactFile { path: string; tool: string; content?: string; turnKey: string }
+/** An artifact the artifact tool made or changed, read from its result ("Created artifact <id> v<n> <kind>: <title>"). */
+export interface ArtifactRef { id: string; version: number; kind: string; language?: string; title: string; action: 'create' | 'update' | 'rewrite' }
+
+/** Artifacts the turn's artifact calls made or changed, the latest version of each. */
+export function artifactRefs(items: Item[]): ArtifactRef[] {
+  const out = new Map<string, ArtifactRef>();
+  for (const i of items) {
+    if (i.kind !== 'tool' || i.name !== 'artifact' || i.isError || i.running || !i.result) continue;
+    const m = /^(Created artifact|Updated|Rewrote) ([a-z0-9][a-z0-9-]{2,60}) v(\d+) ([a-z]+)(?:\/(\S+))?: (.*)$/m.exec(i.result);
+    if (!m) continue;
+    const action = m[1] === 'Created artifact' ? 'create' : m[1] === 'Updated' ? 'update' : 'rewrite';
+    out.delete(m[2]!);
+    out.set(m[2]!, { id: m[2]!, version: Number(m[3]), kind: m[4]!, ...(m[5] ? { language: m[5] } : {}), title: m[6]!.replace(/ \(\d+ replacements\)$/, ''), action });
+  }
+  return [...out.values()];
+}
 
 /** Files a tool wrote, newest content kept: write gives the whole file, edit only names it. */
 export function filesWritten(items: Item[], turnKey = ''): ArtifactFile[] {
@@ -260,6 +350,11 @@ export function toRows(items: Item[], running = false): Row[] {
   let turnIndex = 0;
   const flush = (live: boolean) => {
     if (!turn.length) return;
+    // Chapters open the turn's work; proposals and linked sessions follow it (rows of their own, never folded).
+    const own = turn.filter((i) => OWN_ROW.has(i.kind));
+    turn = turn.filter((i) => !OWN_ROW.has(i.kind));
+    for (const it of own) if (it.kind === 'chapter') rows.push({ kind: 'item', key: it.key, item: it });
+    const after = own.filter((i) => i.kind !== 'chapter');
     const lastTool = findLastIndex(turn, (i) => i.kind === 'tool');
     if (lastTool < 0) {
       for (const it of turn) rows.push({ kind: 'item', key: it.key, item: it });
@@ -278,8 +373,10 @@ export function toRows(items: Item[], running = false): Row[] {
       rows.push({ kind: 'steps', key: `steps-${stepItems[0]!.key}`, items: stepItems, running: stepsLive, tools: tools.length, ...(startedAt !== undefined ? { startedAt } : {}), ...(endTimes.length ? { endedAt: Math.max(...endTimes) } : {}) });
       for (const it of tail) rows.push({ kind: 'item', key: it.key, item: it });
       const files = filesWritten(stepItems, `t${turnIndex}`);
-      if (files.length && !stepsLive) rows.push({ kind: 'artifacts', key: `files-${stepItems[0]!.key}`, files });
+      const refs = artifactRefs(stepItems);
+      if ((files.length || refs.length) && !stepsLive) rows.push({ kind: 'artifacts', key: `files-${stepItems[0]!.key}`, files, ...(refs.length ? { refs } : {}) });
     }
+    for (const it of after) rows.push({ kind: 'item', key: it.key, item: it });
     turn = [];
     turnIndex++;
   };
