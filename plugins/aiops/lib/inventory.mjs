@@ -413,6 +413,9 @@ export async function loadInventory({ host, resolve, env = process.env, vaultPat
   }
   if (fromEnv(env, 'HARNESS_OPS_PROMETHEUS_URL')) out.monitoring.prometheus = env.HARNESS_OPS_PROMETHEUS_URL;
   if (fromEnv(env, 'HARNESS_OPS_LOKI_URL')) out.monitoring.loki = env.HARNESS_OPS_LOKI_URL;
+  // The operator's Grafana, Tempo and Jaeger from the environment win over a workspace's, like Prometheus and Loki:
+  // the tools treat an endpoint named there as the operator's (a read that sends nothing out).
+  for (const k of ['grafana', 'tempo', 'jaeger']) if (fromEnv(env, `HARNESS_OPS_${k.toUpperCase()}_URL`)) out.monitoring[k] = env[`HARNESS_OPS_${k.toUpperCase()}_URL`];
   // References from the workspace to hosts the operator file does not have: such a service is left out too.
   out.services = out.services.filter((s) => {
     if (!s.host || s.host === 'local' || out.hosts.some((h) => h.name === s.host)) return true;

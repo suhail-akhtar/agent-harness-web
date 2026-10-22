@@ -87,6 +87,8 @@ export function normalizeConfig(input) {
       scope: String(c.teams.scope ?? DEFAULTS.teams.scope),
     };
     if (c.teams.appPassword !== undefined && !t.appId) errors.push('teams.appId: the bot\'s Microsoft App ID is required');
+    // The bot answers only its own organisation: a request from another tenant is refused, and approvers are matched in this one.
+    if (c.teams.appPassword !== undefined && !t.tenantId) errors.push('teams.tenantId: your Microsoft Entra tenant id is required (requests from other tenants are refused)');
     if (errors.length === e0) out.teams = t;
   }
   if (c.pagerduty) {

@@ -553,7 +553,9 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     if (p === '/api/plugin-routes' || p.startsWith('/api/plugin-routes/')) {
       if (!admin) throw new HttpError(403, 'administrators only');
       const base = process.env.HARNESS_PUBLIC_URL?.replace(/\/+$/, '') || `http://${req.headers.host ?? '127.0.0.1'}`;
-      if (p === '/api/plugin-routes' && method === 'GET') {
+      // GET lists them; POST (which a cross-site page cannot send with the x-harness header) also makes the missing tokens.
+      if (p === '/api/plugin-routes' && (method === 'GET' || method === 'POST')) {
+        const mayIssue = method === 'POST';
         const out: Record<string, unknown>[] = [];
         const fresh = new Map<string, string>();
         for (const r of registry.routes) {
@@ -563,7 +565,8 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
             // Shown once: the first administrator to look gets it; after that only a rotation shows a new one.
             // Several methods on one path share its token.
             const issued = fresh.has(key) ? undefined : await harness.bridge.routeTokens.issued(key);
-            if (!issued) {
+            if (!issued && !mayIssue) entry.note = 'No token yet: POST /api/plugin-routes makes the missing ones (each shown once).';
+            else if (!issued) {
               if (!fresh.has(key)) fresh.set(key, await harness.bridge.routeTokens.issue(key));
               entry.token = fresh.get(key);
               entry.note = 'Shown once: callers pass it as ?token= or the x-harness-route-token header. Rotate it to get a new one.';
@@ -963,9 +966,10 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
    * not shown to the caller.
    */
   async function pluginRoute(req: http.IncomingMessage, res: http.ServerResponse, url: URL, plugin: string, rel: string, method: string): Promise<void> {
-    const lim = routeLimiter.take(`route:${req.socket.remoteAddress ?? ''}`);
-    if (!lim.ok) throw new HttpError(429, `Too many requests; try again in ${lim.retryAfterSec}s.`, { 'retry-after': String(lim.retryAfterSec) });
+    // Each route has its own budget per address: junk sent to one (or to paths that do not exist) cannot starve another's callers.
     const routes = harness.bridge.route(plugin, rel);
+    const lim = routeLimiter.take(`route:${routes.length ? `${plugin}/${rel}` : '?'}:${req.socket.remoteAddress ?? ''}`);
+    if (!lim.ok) throw new HttpError(429, `Too many requests; try again in ${lim.retryAfterSec}s.`, { 'retry-after': String(lim.retryAfterSec) });
     if (!routes.length) throw new HttpError(404, 'not found');
     const r = routes.find((x) => x.method === method);
     if (!r) throw new HttpError(405, 'method not allowed', { allow: routes.map((x) => x.method).join(', ') });

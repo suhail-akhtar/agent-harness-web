@@ -16,7 +16,7 @@
 // (.harness/ops/incident-memory/*.md|json), ranked by BM25 over their text with
 // boosts for shared services and alert names. No model, no external service.
 
-import { randomBytes } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { INCIDENT_DIR } from './incidents.mjs';
@@ -88,15 +88,37 @@ export async function recordEvidence(api, host, { tool, input, excerpt, links = 
   await fs.mkdir(path.dirname(file), { recursive: true });
   const id = newEvidenceId();
   const rec = { id, at: new Date(at).toISOString(), tool, kind: evidenceKind(tool, input), input: clipInput(input), ...(error ? { error: true } : {}), ...(excerpt ? { excerpt: redact(String(excerpt)).slice(0, 1500) } : {}), ...(links.length ? { links } : {}) };
-  await fs.appendFile(file, `${JSON.stringify(rec)}\n`);
+  await fs.appendFile(file, `${JSON.stringify({ ...rec, sig: sign(await ledgerKey(api), rec) })}\n`);
   return id;
 }
+
+/**
+ * The ledger is in the workspace, where an agent can write: each record is signed with a key the
+ * server keeps (the plugin's data folder), and a record without a valid signature does not count.
+ */
+async function ledgerKey(api) {
+  const file = path.join(api.dataDir, 'evidence.key');
+  const have = await fs.readFile(file).catch(() => null);
+  if (have?.length === 32) return have;
+  await fs.mkdir(api.dataDir, { recursive: true });
+  try { await fs.writeFile(file, randomBytes(32), { flag: 'wx', mode: 0o600 }); } catch (e) { if (e.code !== 'EEXIST') throw e; }
+  return fs.readFile(file);
+}
+const sign = (key, rec) => createHmac('sha256', key).update(JSON.stringify(rec)).digest('hex');
+const signed = (key, e) => {
+  if (!e || typeof e.sig !== 'string') return false;
+  const { sig, ...rec } = e;
+  const want = Buffer.from(sign(key, rec), 'hex');
+  const got = Buffer.from(sig, 'hex');
+  return got.length === want.length && timingSafeEqual(got, want);
+};
 
 export async function readEvidence(api, host) {
   const file = await api.workspacePath(host, EVIDENCE_FILE).catch(() => null);
   if (!file) return [];
   const text = await fs.readFile(file, 'utf8').catch(() => '');
-  return text.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return undefined; } }).filter(Boolean);
+  const key = await ledgerKey(api);
+  return text.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return undefined; } }).filter((e) => signed(key, e)).map(({ sig: _s, ...e }) => e);
 }
 
 export const citations = (text) => [...new Set(String(text ?? '').match(ID) ?? [])];

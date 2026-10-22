@@ -222,6 +222,10 @@ test('aiops k8s permissions: reads with the read-only kubeconfig are reads (not 
     assert.equal(decide(ctl, rollback, { mode: 'default', rules: exact, sandboxed: true }).action, 'allow', 'an operator rule for that exact change');
     assert.equal(decide(ctl, { ...rollback, target: 'deployment/payments' }, { mode: 'default', rules: exact, sandboxed: true }).action, 'ask');
     assert.equal(decide(ctl, { cluster: 'prod', action: 'scale', namespace: 'shop', target: 'deployment/checkout', replicas: 40 }, { mode: 'default', rules: exact, sandboxed: true }).action, 'ask');
+    // A service the operator's inventory does not map (a workspace's): never matched by an allow rule, always asked.
+    const wsScale = { cluster: 'prod', action: 'scale', namespace: 'shop', service: 'not-the-operators', replicas: 0 };
+    assert.match(ctl.ruleSubject!(wsScale), / <workspace mapping>$/);
+    assert.equal(decide(ctl, wsScale, { mode: 'default', rules: rules(['vault(ops-k8s-*)', 'k8s_control(prod scale:*)']), sandboxed: true }).action, 'ask');
     assert.match(ctl.summarize(rollback), /^CHANGE k8s prod: rollback deployment\/checkout in shop/);
     assert.match(ctl.summarize({ ...rollback, action: 'delete-pod', target: 'pod/x', force: true }), /\(FORCED\)/);
     // ops_check declares the clusters' read-only kubeconfigs, else their operator ones (its k8s rules read with them).

@@ -448,7 +448,7 @@ export class Hub {
     if (!DECISIONS[p.kind]?.includes(decision)) return refuse(`"${decision}" is not a decision for this request.`);
     const who = await this.resolvePerson(this.config.approvers, id, lookupEmail);
     if (!who) return refuse('You are not on the harness approver list for chat decisions, so this was not decided. Ask the operator to add you, or decide in the harness.');
-    if (who.scope === 'own' && p.owner && p.owner !== who.account) return refuse('You may decide only for sessions of your own harness account.', { account: who.account });
+    if (who.scope === 'own' && p.owner !== who.account) return refuse('You may decide only for sessions of your own harness account (not the operator\'s or another account\'s).', { account: who.account });
     if (this.config.approvals.onCallOnly && p.onCall?.length && !(id.email && p.onCall.includes(id.email)) && !who.emails.some((e) => p.onCall.includes(e))) return refuse('Only the person on call for this service may decide this request now.', { account: who.account });
     p.status = 'deciding';
     let done = false;
@@ -492,7 +492,13 @@ export class Hub {
         ref = { type: 'slack', channel: posted.channel ?? where.slackChannel, ts: posted.ts };
       } else ref = await this.postRoot(where.channel, { text: head, blocks, card: textCard(head) });
     }
-    const { id: sessionId } = await this.api.sessions.start(start);
+    let sessionId;
+    try {
+      ({ id: sessionId } = await this.api.sessions.start(start));
+    } catch (e) {
+      this.audit({ action: 'investigate', platform, by: userKey, account: who.account, result: 'denied', reason: this.clean(e.message, 300) });
+      return { ok: false, message: `The harness did not start the investigation: ${this.clean(e.message, 300)}` };
+    }
     this.store.data.sessions[sessionId] = { ...(this.store.data.sessions[sessionId] ?? {}), origin: { platform, by: userKey, ref }, account: who.account };
     this.store.save();
     const url = this.sessionUrl(sessionId);
@@ -651,6 +657,12 @@ export class Hub {
       this.audit({ action: 'teams.refused', reason: e.message, ip: req.ip, result: 'denied' });
       return { status: e instanceof BotAuthError ? e.status : 401, body: 'unauthorized' };
     }
+    // Only the operator's own tenant: a bot reachable from another organisation must not take its users' clicks or requests.
+    const tenant = activity.conversation?.tenantId ?? activity.channelData?.tenant?.id;
+    if (!t.tenantId || tenant !== t.tenantId) {
+      this.audit({ action: 'teams.refused', reason: `tenant ${tenant ?? '(none)'} is not the configured tenant`, ip: req.ip, result: 'denied' });
+      return { status: 403, body: 'forbidden' };
+    }
     // The conversation ids and serviceUrl an operator needs for channels.<name>.teams, recorded once each.
     const conv = activity.conversation?.id;
     if (conv && this.store.firstTime(`teams-conv:${conv}`)) this.audit({ action: 'teams.conversation', conversationId: conv, serviceUrl: activity.serviceUrl, tenant: activity.conversation?.tenantId ?? activity.channelData?.tenant?.id, team: activity.channelData?.team?.name, channel: activity.channelData?.channel?.name, result: 'ok' });
@@ -659,7 +671,8 @@ export class Hub {
     const id = { teamsAad: from.aadObjectId, teamsId: from.id };
     const lookupEmail = async () => {
       const m = await this.bg.teams.member(activity.serviceUrl, activity.conversation?.id, from.id);
-      return String(m.email ?? m.userPrincipalName ?? '').toLowerCase() || undefined;
+      // The sign-in name (UPN) in the operator's tenant, not the free-form mail attribute.
+      return String(m.userPrincipalName ?? '').toLowerCase() || undefined;
     };
     if (activity.type === 'invoke' && activity.name === 'adaptiveCard/action') {
       const a = activity.value?.action ?? {};

@@ -233,6 +233,32 @@ test('integrations Slack: incident thread, approval buttons, a signed click from
   assert.deepEqual(slack.problems, []);
 });
 
+test('integrations Slack: an approver limited to their own sessions cannot decide in an operator-owned one (an alert-started investigation has no owner)', async () => {
+  const { slack, f, hub } = await slackSetup({ approvers: [{ account: 'usr_bob', slack: ['U777'], scope: 'own' }] });
+  const open = (s: string, owner: string | undefined, req: string) => {
+    f.emit(s, { kind: 'tool_call', id: `o-${s}`, name: 'incident', input: { action: 'open', title: `Incident ${s}`, severity: 'sev2', services: ['checkout'] } }, { owner });
+    f.emit(s, { kind: 'tool_result', id: `o-${s}`, name: 'incident', content: `Opened inc-${s} (sev2).`, is_error: false, ms: 1 }, { owner });
+    f.waiting.add(req);
+    f.emit(s, { kind: 'approval_request', requestId: req, runId: 'run', node: 'approve', title: 'Approve the rollback', message: 'k8s_control rollback', files: [] }, { owner });
+  };
+  open('sess-op', undefined, 'req-op');
+  open('sess-bob', 'usr_bob', 'req-bob');
+  await hub.drain();
+  const route = f.routes.get('POST slack/interactivity');
+  const click = (requestId: string) => {
+    const payload = { type: 'block_actions', user: { id: 'U777' }, channel: { id: 'C0OPS' }, container: { channel_id: 'C0OPS' }, response_url: `${slack.url}/hooks/T1/resp`, actions: [{ action_id: 'harness_approve', value: JSON.stringify({ r: requestId, d: 'approve' }) }] };
+    const body = `payload=${encodeURIComponent(JSON.stringify(payload))}`;
+    return post(route, body, slackSign(SECRETS['int-slack-signing']!, body));
+  };
+  await click('req-op');
+  await hub.drain();
+  assert.equal(f.responds.length, 0, 'not decided in the operator-owned session');
+  assert.match(slack.hits('/hooks/T1/resp').at(-1)!.json.text, /only for sessions of your own harness account/);
+  await click('req-bob');
+  await hub.drain();
+  assert.deepEqual(f.responds.map((r) => [r.id, r.d.decision]), [['sess-bob', 'approve']]);
+});
+
 test('integrations Slack: sessions that are not about an incident are not forwarded by default; "all" forwards them to the approvals channel', async () => {
   const a = await slackSetup();
   a.f.emit('sess-x', { kind: 'permission_request', requestId: 'p-x', tool: 'bash', summary: 'rm -rf build', input: {} });
@@ -330,11 +356,11 @@ test('integrations Slack: /harness investigate answers at once (ephemeral) and t
 // ---------------- Teams ----------------
 
 async function teamsSetup(extra: Record<string, unknown> = {}) {
-  const bf = keep(await botFrameworkMock({ appId: 'app-123', appPassword: SECRETS['int-teams-password']!, members: { '29:bob': { email: 'bob@example.com' } } }));
+  const bf = keep(await botFrameworkMock({ appId: 'app-123', tenant: 'tenant-1', appPassword: SECRETS['int-teams-password']!, members: { '29:bob': { email: 'bob@example.com' } } }));
   const f = fakeApi();
   const inst = plugin.createIntegrations(f.api, { config: {
     publicUrl: 'https://harness.example.com',
-    teams: { appId: 'app-123', appPassword: 'int-teams-password', loginBase: bf.url, openIdMetadata: `${bf.url}/v1/.well-known/openidconfiguration`, serviceUrl: `${bf.url}/` },
+    teams: { appId: 'app-123', tenantId: 'tenant-1', appPassword: 'int-teams-password', loginBase: bf.url, openIdMetadata: `${bf.url}/v1/.well-known/openidconfiguration`, serviceUrl: `${bf.url}/` },
     channels: { ops: { teams: '19:ops@thread.tacv2' } },
     approvers: [{ account: 'usr_alice', teams: ['aad-alice'] }, { account: 'usr_bob', emails: ['bob@example.com'] }],
     approvals: { forward: 'all' },
@@ -360,7 +386,7 @@ test('integrations Teams: approval card, Action.Execute with a valid Bot Framewo
   assert.ok(!JSON.stringify(card).includes('](https://evil'), 'outside text is not a link');
   const route = f.routes.get('POST teams/messages');
   const invoke = (from: any, data: any, auth?: string, act: Record<string, unknown> = {}) => {
-    const activity = { type: 'invoke', name: 'adaptiveCard/action', channelId: 'msteams', serviceUrl: `${bf.url}/`, from, conversation: { id: '19:ops@thread.tacv2' }, value: { action: { type: 'Action.Execute', verb: 'harness.decide', data } }, ...act };
+    const activity = { type: 'invoke', name: 'adaptiveCard/action', channelId: 'msteams', serviceUrl: `${bf.url}/`, from, conversation: { id: '19:ops@thread.tacv2', tenantId: 'tenant-1' }, value: { action: { type: 'Action.Execute', verb: 'harness.decide', data } }, ...act };
     return post(route, JSON.stringify(activity), { authorization: auth ?? bf.sign({ serviceUrl: activity.serviceUrl }), 'content-type': 'application/json' });
   };
   // Bad tokens: another key, wrong audience, expired, serviceUrl mismatch, none, unendorsed channel.
@@ -378,6 +404,9 @@ test('integrations Teams: approval card, Action.Execute with a valid Bot Framewo
   }
   const unendorsed = await invoke({ id: '29:alice', aadObjectId: 'aad-alice' }, { requestId: 'req-t1', decision: 'approve' }, undefined, { channelId: 'webchat' });
   assert.equal(unendorsed.status, 403);
+  // A validly signed click from another organisation's tenant (a bot reachable from there): refused.
+  const foreign = await invoke({ id: '29:alice', aadObjectId: 'aad-alice' }, { requestId: 'req-t1', decision: 'approve' }, undefined, { conversation: { id: '19:ops@thread.tacv2', tenantId: 'evil-tenant' } });
+  assert.equal(foreign.status, 403);
   assert.equal(f.responds.length, 0);
   // Unknown user: an invoke message only they see.
   const nope = await invoke({ id: '29:mallory', aadObjectId: 'aad-mallory', name: 'Mallory' }, { requestId: 'req-t1', decision: 'approve' });
@@ -404,7 +433,7 @@ test('integrations Teams: approval card, Action.Execute with a valid Bot Framewo
   assert.equal(f.responds.at(-1)!.d.by, 'teams:aad-bob');
   assert.equal(bf.hits(/\/members\/29%3Abob$|\/members\/29:bob$/).length, 1);
   // Investigate from a mention.
-  const msg = { type: 'message', id: 'act-1', channelId: 'msteams', serviceUrl: `${bf.url}/`, from: { id: '29:alice', aadObjectId: 'aad-alice', name: 'Alice' }, conversation: { id: '19:ops@thread.tacv2' }, text: '<at>Harness</at> investigate checkout errors' };
+  const msg = { type: 'message', id: 'act-1', channelId: 'msteams', serviceUrl: `${bf.url}/`, from: { id: '29:alice', aadObjectId: 'aad-alice', name: 'Alice' }, conversation: { id: '19:ops@thread.tacv2', tenantId: 'tenant-1' }, text: '<at>Harness</at> investigate checkout errors' };
   const mr = await post(route, JSON.stringify(msg), { authorization: bf.sign({ serviceUrl: msg.serviceUrl }), 'content-type': 'application/json' });
   assert.equal(mr.status, 200);
   await hub.drain();

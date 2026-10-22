@@ -58,8 +58,10 @@ async function waitFor(what: string, fn: () => Promise<boolean>, ms = 90_000) {
   throw new Error(`timed out waiting for ${what}`);
 }
 
+let release: (() => void) | undefined;
 before(async () => {
   if (!run) return;
+  release = await stack.hold();
   await stack.up();
   await stack.reset();
   secrets = JSON.parse(await fs.readFile(stack.SECRETS_FILE, 'utf8'));
@@ -73,13 +75,14 @@ before(async () => {
   Object.assign(process.env, { HARNESS_OPS_INVENTORY: opFile, HARNESS_OPS_LOCAL_DOCKER: '1', HARNESS_OPS_LOCAL_DOCKER_ALLOW: 'hwtest-aiops-*' });
   dataDir = await tempDir();
   h = await createHarness({ dataDir, plugins: [PLUGIN], search: null, memory: 'off', scheduler: false });
-}, { timeout: 600_000 });
+}, { timeout: 3_600_000 }); // may wait its turn for the stack (stack.hold)
 
 after(async () => {
   if (!run) return;
   for (const [k, v] of Object.entries(envBefore)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   await h?.close();
   stack.down();
+  release?.();
 }, { timeout: 300_000 });
 
 test('stack: prometheus_query returns real series (instant and range), summarised', { skip }, async () => {

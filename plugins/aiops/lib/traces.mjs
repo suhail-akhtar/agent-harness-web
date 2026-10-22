@@ -263,7 +263,15 @@ export function register(api, shared) {
     if (want === 'jaeger') return j; if (want === 'tempo') return t;
     return t?.url ? t : j;
   };
-  const isOp = (i) => !!opBackend(str(i.backend))?.url || !!process.env.HARNESS_OPS_TEMPO_URL?.trim() || !!process.env.HARNESS_OPS_JAEGER_URL?.trim();
+  // The backend a call uses is the operator's when the operator's inventory or environment names it. Without an
+  // operator inventory, "auto" picks a workspace's Tempo unless HARNESS_OPS_TEMPO_URL names one (it wins over the workspace's).
+  const isOp = (i) => {
+    const envT = !!process.env.HARNESS_OPS_TEMPO_URL?.trim(); const envJ = !!process.env.HARNESS_OPS_JAEGER_URL?.trim();
+    const want = str(i.backend);
+    if (want === 'tempo') return !!opBackend('tempo')?.url || envT;
+    if (want === 'jaeger') return !!opBackend('jaeger')?.url || envJ;
+    return op() ? !!opBackend('')?.url || envT || envJ : envT;
+  };
 
   function pick(inv, want) {
     const t = endpointConfig(inv, 'tempo', vaultPatterns); const j = endpointConfig(inv, 'jaeger', vaultPatterns);

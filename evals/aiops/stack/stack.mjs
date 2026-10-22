@@ -23,6 +23,7 @@ import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -144,6 +145,29 @@ fi
   if (!inSshd('pgrep -f /usr/local/bin/billing-worker || true').trim()) {
     const r = spawnSync('docker', ['exec', '-d', '-u', 'ops', SSHD, '/usr/local/bin/billing-worker'], { encoding: 'utf8' });
     if (r.status !== 0) throw new Error(`could not start billing-worker: ${r.stderr}`);
+  }
+}
+
+/**
+ * The stack is one per machine: test files that use it (run in parallel by node --test)
+ * take turns. Held from before up() until after down(); a holder that died leaves a
+ * stale lock that the next one takes over. Returns release().
+ */
+export async function hold({ waitMs = 45 * 60_000 } = {}) {
+  const lock = path.join(os.tmpdir(), 'hwtest-aiops-stack.lock');
+  const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+  const until = Date.now() + waitMs;
+  for (;;) {
+    try {
+      fs.writeFileSync(lock, String(process.pid), { flag: 'wx' });
+      return () => { try { if (fs.readFileSync(lock, 'utf8') === String(process.pid)) fs.unlinkSync(lock); } catch { /* gone */ } };
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      const pid = Number(fs.readFileSync(lock, 'utf8').trim() || 0);
+      if (pid && pid !== process.pid && !alive(pid)) { try { fs.unlinkSync(lock); } catch { /* another took it */ } continue; }
+      if (Date.now() > until) throw new Error(`the hwtest-aiops stack is held by process ${pid} (${lock})`);
+      await new Promise((r) => setTimeout(r, 1000));
+    }
   }
 }
 

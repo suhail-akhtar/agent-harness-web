@@ -409,7 +409,7 @@ async function cyclePrometheus() {
 
 test('aiops P1 tools: permission classes, operator-only credentials, asked writes; anomalies and topology against a fake Prometheus; every result gets an evidence id the ledger keeps', async () => {
   const p = await cyclePrometheus();
-  const { h, tool } = await harness();
+  const { h, tool, dataDir } = await harness();
   const dir = await tempDir();
   const opFile = path.join(dir, 'op.json');
   const before = process.env.HARNESS_OPS_INVENTORY;
@@ -455,12 +455,18 @@ test('aiops P1 tools: permission classes, operator-only credentials, asked write
     const sp = await tool('topology').run({ action: 'spof' }, ctx);
     assert.match(sp.content, /orders \(service\): one instance/);
     // The ledger: the tools' own records, and the hook's for the older tools (with the id in a note after the result).
-    const ledger = await mem.readEvidence({ workspacePath: async (_h: unknown, rel: string) => path.join(ws, rel) }, new LocalHost(ws));
+    const ledger = await mem.readEvidence({ dataDir: path.join(dataDir, 'plugin-data', 'aiops'), workspacePath: async (_h: unknown, rel: string) => path.join(ws, rel) }, new LocalHost(ws));
     assert.ok(ledger.some((e: { tool: string; excerpt?: string }) => e.tool === 'anomalies' && /STRONG/.test(e.excerpt ?? '')));
     assert.ok(ledger.every((e: { id: string }) => /^ev-[0-9a-f]{6}$/.test(e.id)));
     const ev = await tool('evidence').run({ action: 'check', text: `Root cause: ${ledger.slice(0, 2).map((e: { id: string }) => `[${e.id}]`).join(' ')} [ev-000000]` }, ctx);
     assert.equal(ev.is_error, true);
     assert.match(ev.content, /unknown evidence id\(s\) ev-000000/);
+    // The ledger is in the workspace, where the agent can write: records it adds itself are not evidence.
+    await fs.appendFile(path.join(ws, mem.EVIDENCE_FILE), `${JSON.stringify({ id: 'ev-f0f0f0', at: new Date().toISOString(), tool: 'traces', kind: 'traces', input: '{}' })}
+${JSON.stringify({ id: 'ev-f1f1f1', at: new Date().toISOString(), tool: 'logs_search', kind: 'logs', input: '{}', sig: 'ab'.repeat(32) })}
+`);
+    const forged = await tool('evidence').run({ action: 'check', text: `Root cause: [${ledger[0].id}] [ev-f0f0f0] [ev-f1f1f1]` }, ctx);
+    assert.match(forged.content, /unknown evidence id\(s\) ev-f0f0f0, ev-f1f1f1/);
   } finally {
     if (before === undefined) delete process.env.HARNESS_OPS_INVENTORY; else process.env.HARNESS_OPS_INVENTORY = before;
     await h.close(); await p.close();
@@ -553,7 +559,7 @@ test('aiops P1 tools: grafana, traces (Tempo and Jaeger) against fake APIs - que
 });
 
 test('similar_incidents and the rca-evidence gate in a workspace: past incidents found at triage; a root cause without recorded citations fails the gate, one with them passes', async () => {
-  const { h, tool } = await harness();
+  const { h, tool, dataDir } = await harness();
   try {
     const ws = await workspace({ services: [{ name: 'shop-api', health: 'http://127.0.0.1:9/health' }] });
     const ctx = ctxFor(ws);
@@ -576,7 +582,7 @@ test('similar_incidents and the rca-evidence gate in a workspace: past incidents
     assert.equal(g[0]!.pass, false);
     assert.match(g[0]!.details!, /unknown evidence id\(s\) ev-111111, ev-222222/);
     await tool('similar_incidents').run({ text: 'certificate expired', services: ['shop-api'] }, ctx);
-    const ledger = await mem.readEvidence({ workspacePath: async (_h: unknown, rel: string) => path.join(ws, rel) }, new LocalHost(ws));
+    const ledger = await mem.readEvidence({ dataDir: path.join(dataDir, 'plugin-data', 'aiops'), workspacePath: async (_h: unknown, rel: string) => path.join(ws, rel) }, new LocalHost(ws));
     assert.equal(ledger.length, 2);
     await inc({ action: 'update', id: id2, note: `Root cause: the index is missing again [${ledger[0].id}] [${ledger.at(-1).id}]`, kind: 'note' });
     g = await runGates(h.registry, new LocalHost(ws), ['rca-evidence'], new AbortController().signal);

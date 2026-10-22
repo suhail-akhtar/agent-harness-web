@@ -375,7 +375,7 @@ alerts:
   const { server } = createApp({ harness, token: OPERATOR, loopback: true, localRoots: [work], uiDir: path.join(data, 'ui'), appRoot: data });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
-  const routes = await (await fetch(`${base}/api/plugin-routes`, { headers: { authorization: `Bearer ${OPERATOR}` } })).json() as { path: string; token?: string }[];
+  const routes = await (await fetch(`${base}/api/plugin-routes`, { method: 'POST', headers: { authorization: `Bearer ${OPERATOR}`, 'x-harness': '1' } })).json() as { path: string; token?: string }[];
   const token = (p: string) => routes.find((r) => r.path === p)!.token!;
   const post = async (p: string, body: unknown, headers: Record<string, string> = {}) => {
     const raw = typeof body === 'string' ? body : JSON.stringify(body);

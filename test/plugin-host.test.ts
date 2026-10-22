@@ -88,14 +88,18 @@ test('plugin routes: a token per route, shown once to administrators, rotated, c
     assert.equal((await t.call(undefined, 'POST', '/api/plugins/hosted/hook', 'x')).status, 401);
     const alice = await t.users.add('Alice', 'member');
     assert.equal((await t.call(alice.token, 'GET', '/api/plugin-routes')).status, 403, 'members never see route tokens');
-    const list = (await t.call(OPERATOR, 'GET', '/api/plugin-routes')).body as { plugin: string; method: string; path: string; auth: string; token?: string; url: string }[];
+    // Listing does not make tokens (a cross-site GET in an administrator's browser would use them up); POST does.
+    const listed = (await t.call(OPERATOR, 'GET', '/api/plugin-routes')).body as { path: string; token?: string; note: string }[];
+    assert.ok(listed.every((r) => r.token === undefined));
+    assert.match(listed.find((r) => r.path === 'hook')!.note, /No token yet: POST \/api\/plugin-routes/);
+    const list = (await t.call(OPERATOR, 'POST', '/api/plugin-routes')).body as { plugin: string; method: string; path: string; auth: string; token?: string; url: string }[];
     const post = list.find((r) => r.path === 'hook' && r.method === 'POST')!;
     const get = list.find((r) => r.path === 'hook' && r.method === 'GET')!;
     assert.match(post.token!, /^hwr_/);
     assert.equal(get.token, post.token, 'one token per path');
     assert.equal(list.find((r) => r.path === 'open/slack')!.token, undefined);
     assert.ok(post.url.endsWith('/api/plugins/hosted/hook'));
-    const again = (await t.call(OPERATOR, 'GET', '/api/plugin-routes')).body as { path: string; token?: string; issuedAt?: string }[];
+    const again = (await t.call(OPERATOR, 'POST', '/api/plugin-routes')).body as { path: string; token?: string; issuedAt?: string }[];
     assert.equal(again.find((r) => r.path === 'hook')!.token, undefined, 'shown once');
     assert.ok(again.find((r) => r.path === 'hook')!.issuedAt);
     const stored = await fs.readFile(path.join(t.data, 'plugin-routes.json'), 'utf8');
@@ -199,8 +203,17 @@ test('plugin events and sessions: every event harness-wide, a throwing handler i
     const theirs = await t.harness.sessions.create({ model: 'deepseek-flash', runtime: { kind: 'local', network: 'none', path: t.work }, owner: alice.user.id });
     await assert.rejects(api.sessions.send(theirs.meta.id, 'hi'), /HARNESS_PLUGIN_SESSION_OWNERS/);
     await assert.rejects(api.sessions.respond(theirs.meta.id, 'r', { decision: 'deny', by: 'x' }), /HARNESS_PLUGIN_SESSION_OWNERS/);
+    // A plugin cannot act as an account it was not given: no session started for it.
+    await assert.rejects(api.sessions.start({ title: 'as alice', model: 'deepseek-flash', prompt: 'hi', owner: alice.user.id, runtime: { kind: 'local', network: 'none', path: t.work } }), /may not start sessions for account .*HARNESS_PLUGIN_SESSION_OWNERS/);
+    // Another plugin's session for an account is not this plugin's to drive.
+    theirs.meta.startedBy = 'some-other-plugin';
+    await assert.rejects(api.sessions.respond(theirs.meta.id, 'r', { decision: 'deny', by: 'x' }), /HARNESS_PLUGIN_SESSION_OWNERS/);
     process.env.HARNESS_PLUGIN_SESSION_OWNERS = JSON.stringify({ hosted: [alice.user.id] });
-    try { assert.equal(await api.sessions.respond(theirs.meta.id, 'r', { decision: 'deny', by: 'x' }), false); } finally { delete process.env.HARNESS_PLUGIN_SESSION_OWNERS; }
+    try {
+      assert.equal(await api.sessions.respond(theirs.meta.id, 'r', { decision: 'deny', by: 'x' }), false);
+      const { id: forAlice } = await api.sessions.start({ title: 'for alice', model: 'deepseek-flash', runtime: { kind: 'local', network: 'none', path: t.work }, owner: alice.user.id });
+      assert.equal(t.harness.sessions.get(forAlice)!.meta.owner, alice.user.id);
+    } finally { delete process.env.HARNESS_PLUGIN_SESSION_OWNERS; }
   } finally { await t.close(); }
 });
 

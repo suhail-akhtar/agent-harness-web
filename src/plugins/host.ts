@@ -19,8 +19,9 @@ import type { PluginRoute, PluginSessions, PluginSessionStart } from './api.ts';
 // limited to what its manifest declared ("permissions": {"sessions": true, "routes": true}).
 //
 // Sessions a plugin may send to or answer for: the operator's own (no owner), the ones
-// a plugin started (an alert investigation, a chat request), and those of the accounts
+// it started itself (an alert investigation, a chat request), and those of the accounts
 // the operator lists for it in HARNESS_PLUGIN_SESSION_OWNERS ({"plugin": ["usr_...", "*"]}).
+// It may start sessions for those listed accounts only (else they are the operator's).
 // Every start, message and answer is appended to <data>/plugin-actions.jsonl with the plugin
 // and, for answers, who answered (`by`); the session shows the answer as a notice too.
 //
@@ -103,7 +104,7 @@ export function createBridge(o: { registry: Registry; dataDir: string; sessions:
   };
   /** Why the plugin may not drive this session, or undefined when it may. */
   const outOfReach = (plugin: string, s: Session): string | undefined => {
-    if (s.meta.owner === undefined || s.meta.startedBy) return undefined;
+    if (s.meta.owner === undefined || s.meta.startedBy === plugin) return undefined;
     const owners = operatorOwners(plugin);
     if (owners.includes('*') || owners.includes(s.meta.owner)) return undefined;
     return `session ${s.meta.id} belongs to an account the operator has not given ${plugin} (HARNESS_PLUGIN_SESSION_OWNERS)`;
@@ -126,6 +127,11 @@ export function createBridge(o: { registry: Registry; dataDir: string; sessions:
         if (!model) throw new Error('no model is available on this server');
         const runtime = st.runtime ?? { kind: 'local' as const, network: 'none' as const };
         if (runtime.kind === 'companion') throw new Error('a plugin cannot start a session on someone\'s computer (companion)');
+        // A session for an account is that account's work: only for accounts the operator gave this plugin.
+        if (st.owner !== undefined) {
+          const owners = operatorOwners(plugin);
+          if (!owners.includes('*') && !owners.includes(String(st.owner))) throw new Error(`${plugin} may not start sessions for account ${st.owner}: the operator has not given it that account (HARNESS_PLUGIN_SESSION_OWNERS)`);
+        }
         const why = bridge.mayRun?.(st.owner);
         if (why) throw new Error(why);
         const s = await mgr.create({ title, model, mode: st.mode ?? 'dontAsk', runtime, owner: st.owner });

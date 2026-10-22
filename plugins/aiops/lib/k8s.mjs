@@ -1157,7 +1157,10 @@ export function register(api, shared) {
       } else {
         const want = Number(input.replicas);
         if (!Number.isInteger(want) || want < 0) throw new Error('scale needs replicas (a whole number)');
-        const lim = { min: sc.svc?.k8s?.min_replicas ?? cluster.scale?.min ?? 1, max: sc.svc?.k8s?.max_replicas ?? cluster.scale?.max ?? 50 };
+        // A workspace's service can only tighten the cluster's guard rails (the operator's set them); an operator service sets its own.
+        const cmin = cluster.scale?.min ?? 1; const cmax = cluster.scale?.max ?? 50;
+        const smin = sc.svc?.k8s?.min_replicas; const smax = sc.svc?.k8s?.max_replicas;
+        const lim = sc.svc?.source === 'operator' ? { min: smin ?? cmin, max: smax ?? cmax } : { min: Math.max(smin ?? cmin, cmin), max: Math.min(smax ?? cmax, cmax) };
         if (want < lim.min || want > lim.max) throw new Error(`scale to ${want} is outside the guard rails for ${res.target} (${lim.min}..${lim.max}, from ${sc.svc?.k8s?.min_replicas !== undefined || sc.svc?.k8s?.max_replicas !== undefined ? `service ${sc.svc.name}'s k8s min_replicas/max_replicas` : cluster.scale ? `cluster ${cluster.name}'s scale` : 'the defaults'}): nothing changed`);
         const cur = before.spec?.replicas ?? 1;
         if (cur > 0 && want > Math.max(cur * 3, cur + 10)) throw new Error(`scale from ${cur} to ${want} is more than three times the current size: scale in steps (each one verified), or raise it in the inventory's guard rails`);
@@ -1335,7 +1338,8 @@ export function register(api, shared) {
       required: ['action'], additionalProperties: false,
     },
     kind: 'external', parallelSafe: false, untrusted: true, sendsOut: true,
-    ruleSubject: (i) => `${clusterName(i) ?? '?'} ${str(i.action)} ${str(i.namespace || op()?.services.find((s) => s.name === str(i.service))?.k8s?.namespace)}${i.target || i.service ? ` ${str(i.target || i.service)}` : ''}${i.replicas !== undefined ? ` replicas=${i.replicas}` : ''}${i.revision !== undefined ? ` revision=${i.revision}` : ''}${i.force || i.force_unowned || i.delete_emptydir_data ? ' <forced>' : ''}`,
+    // A service the operator's inventory does not define is mapped by the workspace: such a call matches no allow rule ("<" is never in a rule's prefix match), it is always asked.
+    ruleSubject: (i) => `${`${clusterName(i) ?? '?'} ${str(i.action)} ${str(i.namespace || op()?.services.find((s) => s.name === str(i.service))?.k8s?.namespace)}${i.target || i.service ? ` ${str(i.target || i.service)}` : ''}${i.replicas !== undefined ? ` replicas=${i.replicas}` : ''}${i.revision !== undefined ? ` revision=${i.revision}` : ''}${i.force || i.force_unowned || i.delete_emptydir_data ? ' <forced>' : ''}`}${i.service && !op()?.services.some((s) => s.name === str(i.service) && s.k8s) ? ' <workspace mapping>' : ''}`,
     availableIn: configured,
     summarize: (i) => `CHANGE k8s ${clusterName(i) ?? '?'}: ${str(i.action)} ${str(i.target || i.service)}${i.namespace ? ` in ${i.namespace}` : ''}${i.replicas !== undefined ? ` to ${i.replicas} replicas` : ''}${i.revision !== undefined ? ` to revision ${i.revision}` : ''}${i.force || i.force_unowned || i.delete_emptydir_data ? ' (FORCED)' : ''}`,
     async run(input, ctx) {

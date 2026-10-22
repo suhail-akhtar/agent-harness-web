@@ -44,8 +44,10 @@ async function waitFor(what: string, fn: () => Promise<boolean> | boolean, ms = 
 const watchState = async () => JSON.parse(await fs.readFile(path.join(dataDir, 'plugin-data', 'aiops', 'watch.json'), 'utf8').catch(() => '{}')) as { firing?: string[]; status?: { at: string; rules: number; firing: number; notEvaluated: string[] } };
 const investigations = () => h.sessions.list().filter((m) => m.startedBy === 'aiops');
 
+let release: (() => void) | undefined;
 before(async () => {
   if (!run) return;
+  release = await stack.hold();
   await stack.up();
   await stack.reset();
   const ws = await tempDir();
@@ -62,13 +64,14 @@ before(async () => {
   fake = new FakeProvider(Array.from({ length: 100 }, () => ({ text: 'Investigating.' })));
   // Every provider answers with the script: no paid model, whatever keys the environment has.
   for (const id of h.registry.providers.keys()) h.registry.setProviderInstance(id, fake);
-}, { timeout: 600_000 });
+}, { timeout: 3_600_000 }); // may wait its turn for the stack (stack.hold)
 
 after(async () => {
   if (!run) return;
   await h?.close();
   for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   stack.down();
+  release?.();
 }, { timeout: 300_000 });
 
 test('stack watch loop: real PromQL on its own timer, nothing started while healthy, one investigation when a fault is injected', { skip, timeout: 600_000 }, async () => {
