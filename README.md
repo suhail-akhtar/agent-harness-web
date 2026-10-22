@@ -2,7 +2,7 @@
 
 An agent harness that is also a framework. You give it requirements and it works in a workspace until the job is done: it plans, edits, runs, tests, fixes what fails and reports. It remembers what matters across sessions, researches the web with citations it checks, builds long projects feature by feature, and can publish its work as a pull request. You extend what it can do with **plugins**: tools, models, providers, sub-agents, skills, MCP services, quality gates, workflows, search backends and hooks. All of it goes through the same registry the built-ins use.
 
-It is tuned and tested on three cost-efficient models: **Claude Haiku 5.5**, **DeepSeek V4.1 Flash** (`deepseek-flash`) and **GPT-6 Luna**. The operator can add any model behind an OpenAI-compatible server (Ollama, vLLM, LM Studio, OpenRouter, Together, Groq, Azure OpenAI, Gemini) without code (see [Models and providers](#models-and-providers)), and plugins can add more.
+It is tuned and tested on three cost-efficient models: **Claude Haiku 5.5**, **DeepSeek V4.1 Flash** (`deepseek-flash`) and **GPT-6 Luna**; **Kimi K3, K2.7 Code and K2.6** (Moonshot AI) and **GLM-5.3-Flash** (Z.ai) are built in too. The operator can add any model behind an OpenAI-compatible server (Ollama, vLLM, LM Studio, OpenRouter, Together, Groq, Azure OpenAI, Gemini) without code (see [Models and providers](#models-and-providers)), and plugins can add more.
 
 **Picking the project up?** Read [docs/HANDOFF.md](docs/HANDOFF.md): its purpose, what is built, the results, how to run it on your own machine, and the next steps.
 
@@ -29,6 +29,7 @@ npm run sandbox:image:3d      # optional: the same plus Blender 4.2 LTS and Godo
 npm run sandbox:image:3d-export   # optional: the 3D image plus Godot's export templates (Linux, Web)
 npm run sandbox:image:desktop # optional: the sandbox plus a desktop (Xvfb, Firefox) for computer use
 export DEEPSEEK_API_KEY=... OPENAI_API_KEY=... ANTHROPIC_API_KEY=...   # or GW_ANTHROPIC_API_KEY
+export MOONSHOT_API_KEY=... ZAI_API_KEY=...   # optional: Kimi (Moonshot AI), GLM (Z.ai)
 npm start                     # http://127.0.0.1:4310, prints an access token
 ```
 
@@ -91,7 +92,7 @@ await s.send('Fix the failing tests');
 
 ## Models and providers
 
-Three providers are built in: Anthropic (Messages API, server-side compaction and context editing), OpenAI (Responses API) and DeepSeek (Chat Completions). A model whose provider has no key on the server is shown greyed out.
+Five providers are built in: Anthropic (Messages API, server-side compaction and context editing), OpenAI (Responses API), DeepSeek, Moonshot AI (Kimi) and Z.ai (GLM) (Chat Completions). A model whose provider has no key on the server is shown greyed out.
 
 **Any OpenAI-compatible server, configured by the operator.** List the models in `HARNESS_MODELS_JSON` (a JSON array, or `{ "models": [...] }`) or in a file named by `HARNESS_MODELS_FILE`; each appears in the model picker and works with every tool, sub-agent and workflow. Keys stay in the server's environment: an entry names the variable that holds its key (`apiKeyEnv`), never the key. A malformed entry stops the server at start with what is wrong.
 
@@ -135,6 +136,49 @@ What the provider handles: streamed text and tool calls (arguments split across 
 
 - **Ollama:** its default context is small; start it with `OLLAMA_CONTEXT_LENGTH` at least the `contextWindow` you configure (the harness's system prompt and tool schemas alone are several thousand tokens). Pick a model with tool support (`ollama show <model>` lists `tools` under capabilities).
 - **Tested** against local stand-ins for each variation (Azure's URL and header, no usage, split tool-call deltas, a server that rejects tools, non-streaming, reasoning in all three forms) and **against a real Ollama** in Docker (`test/compat-ollama.test.ts`): a whole harness session on `qwen2.5:0.5b` (a 400 MB model, temperature 0) streamed a plain answer with real token counts, then called `read` on a file, the loop ran it, and the model answered with the code word from the file. The test runs when Docker has the `ollama/ollama` image (`HARNESS_TEST_OLLAMA=1` pulls it, several GB; `HARNESS_TEST_OLLAMA_URL` uses a running server; `HARNESS_TEST_OLLAMA_MODEL` picks another model) and removes its container and model volume afterwards.
+
+### Kimi (Moonshot AI) and GLM (Z.ai)
+
+Built in, keyed by `MOONSHOT_API_KEY` and `ZAI_API_KEY`. Both use the platform's OpenAI-compatible Chat Completions endpoint, parsed by our own SSE reader (the same stall timeout and retry rules as the others). Prices are USD per million tokens from the official pages ([Kimi pricing](https://platform.kimi.ai/docs/pricing/chat), [Kimi caching](https://platform.kimi.ai/docs/guide/context-caching), [Z.ai pricing](https://docs.z.ai/guides/overview/pricing)), checked 2026-10-22.
+
+| Model id | Context / max output sent | Input / cached / cache write / output | Effort | Compacts at |
+|---|---|---|---|---|
+| `kimi-k3` | 1,048,576 / 64K | $3.00 / $0.30 / $3.00 (5 min tier; $6.00 for 1 h) / $15.00 | low, **high**, max (`reasoning_effort`) | 120K |
+| `kimi-k2.7-code` | 262,144 / 64K | $0.95 / $0.19 / - / $4.00 | high (always thinks) | 128K |
+| `kimi-k2.6` | 262,144 / 64K | $0.95 / $0.16 / - / $4.00 | low (thinking off), **high** | 128K |
+| `glm-5.3-flash` | 1M / 64K (128K allowed) | $0.15 / $0.03 / - / $0.50 | low, **high**, max (`reasoning_effort`) | 200K |
+
+All four take images. The compaction points are chosen for cost: every step re-reads the context at the cached rate, so K3 compacts earliest.
+
+**Why Chat Completions, not the platforms' Anthropic-compatible endpoints.** Every control the harness needs is documented on Chat Completions first: Kimi's `reasoning_effort`, `thinking.keep`, `prompt_cache_key`, `prompt_cache_options` and strict tool schemas; Z.ai's `thinking.clear_thinking`, `reasoning_effort` and `tool_stream`. Usage there reports cache reads and (Kimi) cache writes separately, and our Anthropic provider relies on Claude-only betas (context editing, server-side compaction) these endpoints do not have.
+
+What the providers use:
+- **Thinking, replayed.** Each assistant turn is sent back exactly as received, `reasoning_content` included. Kimi K3 and K2.7 Code require it (Preserved Thinking is always on); K2.6 gets `thinking: {type: "enabled", keep: "all"}`; GLM gets `thinking: {type: "enabled", clear_thinking: false}` (Preserved Thinking, which Z.ai recommends for agents). Keeping earlier reasoning in the prompt also keeps the cached prefix intact. The session's effort maps to `reasoning_effort` (K3, GLM: low / high / max) or to thinking off/on (K2.6); it is fixed per session, because Kimi documents that changing it invalidates the cache.
+- **Caching.** Both platforms cache prefixes automatically. The prefix stays byte-stable: the frozen system prompt, the session's sorted tools, then an append-only history. Kimi gets `prompt_cache_key` (the session id), as its docs advise for coding agents. `HARNESS_MOONSHOT_CACHE_TTL=1h` moves K3 to the 1-hour cache tier. Cache reads and writes come from `usage.prompt_tokens_details` (`cached_tokens`, `cache_write_tokens`) and are priced separately.
+- **Tools.** Parallel calls stream as split deltas and are put back together. `tool_choice` is `auto`, the only value every one of these models accepts with thinking on. Kimi tool schemas are sent `strict: true` when they keep to Moonshot's JSON Schema subset (MFJS), else `strict: false` instead of risking a rejected request. Z.ai streams tool arguments (`tool_stream`) and accepts at most 128 tools; a session with more fails with a clear message.
+- **Images.** Kimi takes a tool result's images inside the tool message; Z.ai's tool messages are text, so the images follow as user content. Base64 only (Kimi refuses image URLs).
+- **Errors.** Insufficient balance (Kimi `exceeded_current_quota_error`, Z.ai code 1113) is not retried and says to top up. On Kimi, that message also gives the balance left (one call to `/v1/users/me/balance`, made only on that error). Rate limits and overload are retried after `Retry-After`. Kimi's daily token limit and Z.ai's plan limits (1308-1321) reset hours later, so they are not retried. A prompt longer than the window, a refused key (naming the variable and the regional base URL) and an unknown model are not retried either. Z.ai's in-stream finish reasons map as follows: `sensitive` is a refusal, `model_context_window_exceeded` stops the turn, and `network_error` is retried.
+- **Diagnostics.** `moonshotBalance()` and `moonshotEstimateTokens()` in `src/providers/moonshot.ts` (Kimi's balance and token-estimate endpoints) are used by the live check below, not on every request.
+
+Not used, on purpose:
+- **Partial mode / prefill** and **JSON mode / structured output.** The loop never prefills or asks for a response format.
+- **Kimi's dynamic tool loading.** Tools are fixed per session.
+- **Built-in web search.** Kimi's `$web_search` was retired on 2026-10-20. Z.ai's `web_search` tool sends the query out and puts results in the context without the harness's permission checks or untrusted-content guard; the harness's own `web_search` tool covers this.
+- **Z.ai's tokenizer.** It is documented for `glm-4.6` only.
+- **`kimi-k2.7-code-highspeed`.** The provider knows its parameters, but it is not in the catalog.
+
+Base URLs: `MOONSHOT_BASE_URL` (default `https://api.moonshot.ai/v1`; keys from the China platform need `https://api.moonshot.cn/v1`) and `ZAI_BASE_URL` (default `https://api.z.ai/api/paas/v4`, billed to the account balance; `https://api.z.ai/api/coding/paas/v4` uses a GLM Coding Plan's quota; BigModel keys use `https://open.bigmodel.cn/api/paas/v4`). Kimi K3 is unlocked by a first top-up of at least $1. A new Kimi account (Tier0) is limited to 1 concurrent request and 3 a minute; the harness waits out the 429s, but sub-agents will queue.
+
+**Tested** in `test/moonshot.test.ts` and `test/zai.test.ts` against local stand-ins of each platform's documented wire format. The tests cover request fields per model, split tool-call deltas, reasoning replay, usage with cached and written tokens, every error class, and a whole harness session per provider. **Live check:** `node --env-file=.env scripts/live-providers.mjs`. It runs a write-then-read round trip per model through the CLI, plus a Kimi cache check. Results on 2026-10-22:
+
+| Model | Round trip | Calls | Cost | Cached |
+|---|---|---|---|---|
+| `kimi-k2.6` | pass | 3 | $0.0175 | 59% of input |
+| `kimi-k2.7-code` | pass | 3 | $0.0165 | 66% of input |
+| `kimi-k3` | pass | 3 | $0.0447 | 66% of input (11.5K tokens written) |
+| `glm-5.3-flash` | pass | 3 | $0.0057 | none reported |
+
+The Kimi cache check (two calls sharing a 2.9K-token prefix) read 2,048 tokens from the cache on the second call; Kimi caches in whole blocks. GLM-5.3-Flash reported no cached tokens across its three calls, which were seconds apart. The parsing of `cached_tokens` is covered by the tests, so this is the server's answer.
 
 ## The loop
 
@@ -899,7 +943,9 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 
 | Variable | Default | |
 |---|---|---|
-| `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` / `GW_ANTHROPIC_API_KEY` | | Models without a key are greyed out. |
+| `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` / `GW_ANTHROPIC_API_KEY`, `MOONSHOT_API_KEY`, `ZAI_API_KEY` | | Models without a key are greyed out. |
+| `MOONSHOT_BASE_URL` / `ZAI_BASE_URL` | `https://api.moonshot.ai/v1` / `https://api.z.ai/api/paas/v4` | Kimi China platform keys: `https://api.moonshot.cn/v1`. Z.ai GLM Coding Plan: `https://api.z.ai/api/coding/paas/v4`; BigModel (China): `https://open.bigmodel.cn/api/paas/v4`. |
+| `HARNESS_MOONSHOT_CACHE_TTL` | `5m` | `1h`: Kimi K3 writes its prompt cache to the 1-hour tier (writes cost $6 instead of $3 per million tokens; pays off when turns are more than 5 minutes apart). |
 | `HARNESS_MODELS_JSON` / `HARNESS_MODELS_FILE` | | The operator's OpenAI-compatible models (Ollama, vLLM, LM Studio, OpenRouter, Together, Groq, Azure OpenAI, Gemini, ...): a JSON array or `{ "models": [...] }`, inline / in a file. See Models and providers. Their keys are in the variables the entries name (`apiKeyEnv`). |
 | `HARNESS_CLUSTER` | off | `1`: this server shares its data folder with others (see Running several servers). |
 | `HARNESS_NODE_ID` / `HARNESS_NODE_URL` | host name and port / none | This server's unique id among them / the address the others pass a session's requests to (https, or http on loopback; without it they answer 409). |
