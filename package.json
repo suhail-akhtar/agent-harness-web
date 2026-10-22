@@ -7,6 +7,10 @@
   "engines": {
     "node": ">=22.18"
   },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
     "build": "node scripts/build.mjs",
     "start": "node scripts/run.mjs src/server/main.ts",
@@ -14,7 +18,7 @@
     "cli": "node scripts/run.mjs src/cli.ts",
     "bench": "node scripts/run.mjs bench/run.ts",
     "test": "node scripts/test.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p ui/tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p ui/tsconfig.json --noEmit && tsc -p packages/ui/tsconfig.json --noEmit && tsc -p apps/desktop/tsconfig.json --noEmit && tsc -p apps/desktop/renderer/tsconfig.json --noEmit",
     "sandbox:image": "docker build -t harness-sandbox:latest -f docker/Dockerfile.sandbox docker",
     "sandbox:image:3d": "docker build -t harness-sandbox-3d:latest -f docker/Dockerfile.sandbox-3d docker",
     "sandbox:image:3d-export": "docker build -t harness-sandbox-3d:export --build-arg=GODOT_EXPORT_TEMPLATES=1 -f docker/Dockerfile.sandbox-3d docker",
@@ -22,7 +26,10 @@
     "sandbox:image:ops": "docker build -t harness-sandbox-ops:latest -f docker/Dockerfile.sandbox-ops docker",
     "eval": "node scripts/run.mjs src/eval/cli.ts",
     "plugin": "node scripts/run.mjs src/plugins/cli.ts",
-    "users": "node scripts/run.mjs src/server/users-cli.ts"
+    "users": "node scripts/run.mjs src/server/users-cli.ts",
+    "desktop:dev": "npm run dev -w @harness/desktop",
+    "desktop:build": "npm run build:app -w @harness/desktop",
+    "desktop:test": "npm run test:e2e -w @harness/desktop"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0",

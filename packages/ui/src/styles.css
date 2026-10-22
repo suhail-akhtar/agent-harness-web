@@ -1,0 +1,145 @@
+/*
+ * The harness design system's base styles: token defaults (the theme builder overwrites them at
+ * runtime), reading typography for Markdown, code, diffs and the small animations components use.
+ *
+ * Components are styled with Tailwind utilities that read these variables (see the desktop's
+ * tailwind.config.js `hx` colours); this file carries what utilities cannot: prose, generated
+ * markup (KaTeX, Mermaid, highlighted code) and keyframes.
+ */
+
+:root {
+  --hx-bg: #faf9f6;
+  --hx-surface: #f4f3ef;
+  --hx-elevated: #fefefd;
+  --hx-hover: rgba(31, 30, 28, 0.05);
+  --hx-active: rgba(31, 30, 28, 0.08);
+  --hx-text-primary: #1f1e1c;
+  --hx-text-secondary: #5b5a56;
+  --hx-text-muted: #8c8a85;
+  --hx-border: rgba(31, 30, 28, 0.12);
+  --hx-border-subtle: rgba(31, 30, 28, 0.07);
+  --hx-accent: #d97757;
+  --hx-accent-hover: #bf6a4d;
+  --hx-accent-soft: rgba(217, 119, 87, 0.12);
+  --hx-accent-text: #b85a3c;
+  --hx-on-accent: #ffffff;
+  --hx-success: #188c4c;
+  --hx-warning: #a86c14;
+  --hx-danger: #c43030;
+  --hx-info: #2876a0;
+  --hx-code-bg: #f1f0ec;
+  --hx-focus: rgba(217, 119, 87, 0.55);
+  --hx-diff-add-bg: rgba(46, 160, 67, 0.12);
+  --hx-diff-add-gutter: #1a7f37;
+  --hx-diff-remove-bg: rgba(207, 34, 46, 0.1);
+  --hx-diff-remove-gutter: #cf222e;
+  --hx-diff-context: #8a8985;
+  --hx-sidebar: #f3f2ee;
+  --hx-pill: #ecebe7;
+  --hx-shadow: 0 10px 32px rgba(0, 0, 0, 0.12);
+  --hx-scrim: rgba(20, 18, 16, 0.32);
+
+  --hx-font: 'Inter', 'Segoe UI Variable', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
+  --hx-font-mono: 'Cascadia Code', 'JetBrains Mono', 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace;
+  --hx-font-size: 14px;
+  --hx-column: 768px;
+}
+
+/* ── Markdown ─────────────────────────────────────────────────────── */
+.markdown-body {
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--hx-text-primary);
+  overflow-wrap: anywhere;
+}
+.markdown-body > *:first-child { margin-top: 0; }
+.markdown-body > *:last-child { margin-bottom: 0; }
+.markdown-body p { margin: 0 0 14px; }
+.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4, .markdown-body h5, .markdown-body h6 {
+  font-weight: 650; line-height: 1.35; margin: 24px 0 10px; color: var(--hx-text-primary); scroll-margin-top: 16px; position: relative;
+}
+.markdown-body h1 { font-size: 22px; }
+.markdown-body h2 { font-size: 19px; }
+.markdown-body h3 { font-size: 16.5px; }
+.markdown-body h4, .markdown-body h5, .markdown-body h6 { font-size: 15px; }
+.markdown-body .heading-anchor { opacity: 0; margin-left: 6px; color: var(--hx-text-muted); text-decoration: none; font-weight: 400; }
+.markdown-body h1:hover .heading-anchor, .markdown-body h2:hover .heading-anchor, .markdown-body h3:hover .heading-anchor,
+.markdown-body h4:hover .heading-anchor { opacity: 1; }
+.markdown-body ul, .markdown-body ol { margin: 0 0 14px; padding-left: 22px; }
+.markdown-body ul { list-style: disc; }
+.markdown-body ol { list-style: decimal; }
+.markdown-body li { margin: 0 0 4px; }
+.markdown-body li::marker { color: var(--hx-text-muted); }
+.markdown-body li > ul, .markdown-body li > ol { margin-top: 4px; margin-bottom: 4px; }
+.markdown-body li > p { margin-bottom: 6px; }
+.markdown-body li.task-list-item { list-style: none; margin-left: -20px; }
+.markdown-body blockquote { border-left: 3px solid var(--hx-border); padding: 2px 0 2px 14px; margin: 0 0 14px; color: var(--hx-text-secondary); }
+.markdown-body a { color: var(--hx-accent-text); text-decoration: none; }
+.markdown-body a:hover { text-decoration: underline; }
+.markdown-body hr { border: 0; border-top: 1px solid var(--hx-border-subtle); margin: 24px 0; }
+.markdown-body strong { font-weight: 650; }
+.markdown-body del { color: var(--hx-text-muted); }
+.markdown-body img { max-width: 100%; }
+.markdown-body table { border-collapse: collapse; margin: 0; font-size: 14px; }
+.markdown-body th { font-weight: 600; padding: 8px 18px 8px 0; border-bottom: 1px solid var(--hx-border); white-space: nowrap; }
+.markdown-body td { padding: 8px 18px 8px 0; border-bottom: 1px solid var(--hx-border-subtle); vertical-align: top; }
+.markdown-body tr:last-child td { border-bottom: 0; }
+.markdown-body th:last-child, .markdown-body td:last-child { padding-right: 0; }
+.markdown-body code { font-family: var(--hx-font-mono); font-size: 0.86em; }
+.markdown-body :not(pre) > code { background: var(--hx-code-bg); border: 1px solid var(--hx-border-subtle); padding: 1px 5px; border-radius: 5px; }
+.markdown-body pre { margin: 0; }
+.markdown-body .katex-display { margin: 16px 0; overflow-x: auto; overflow-y: hidden; padding: 2px 0; }
+.markdown-body section.footnotes { margin-top: 20px; padding-top: 8px; border-top: 1px solid var(--hx-border-subtle); font-size: 13px; color: var(--hx-text-secondary); }
+.markdown-body section.footnotes h2 { font-size: 13px; margin: 6px 0; color: var(--hx-text-muted); }
+.markdown-body sup a, .markdown-body a[data-footnote-ref] { font-size: 11px; }
+.markdown-body .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); border: 0; }
+
+/* ── Diffs ────────────────────────────────────────────────────────── */
+.diff-row { display: grid; grid-template-columns: 40px 40px 18px 1fr; font-family: var(--hx-font-mono); font-size: 12px; line-height: 20px; }
+.diff-row.split { grid-template-columns: 40px 18px 1fr; }
+.diff-no { text-align: right; padding-right: 8px; color: var(--hx-text-muted); user-select: none; opacity: 0.8; }
+.diff-sign { text-align: center; user-select: none; }
+.diff-code { white-space: pre-wrap; word-break: break-word; padding-right: 12px; color: var(--hx-text-primary); }
+.diff-add { background: var(--hx-diff-add-bg); }
+.diff-add .diff-sign { color: var(--hx-diff-add-gutter); }
+.diff-del { background: var(--hx-diff-remove-bg); }
+.diff-del .diff-sign { color: var(--hx-diff-remove-gutter); }
+.diff-empty { background: repeating-linear-gradient(45deg, transparent, transparent 4px, var(--hx-hover) 4px, var(--hx-hover) 8px); }
+
+/* ── Motion ───────────────────────────────────────────────────────── */
+@keyframes hx-spin { to { transform: rotate(360deg); } }
+@keyframes hx-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+@keyframes hx-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes hx-pop { from { opacity: 0; transform: translateY(4px) scale(0.98); } to { opacity: 1; transform: none; } }
+@keyframes hx-slide-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.hx-spin { animation: hx-spin 0.9s linear infinite; }
+.hx-thinking { animation: hx-pulse 1.8s ease-in-out infinite; }
+.hx-fade-in { animation: hx-fade 140ms ease-out; }
+.hx-pop-in { animation: hx-pop 140ms ease-out; }
+.hx-slide-up { animation: hx-slide-up 180ms ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .hx-spin { animation-duration: 2.4s; }
+  .hx-fade-in, .hx-pop-in, .hx-slide-up { animation: none; }
+}
+html[data-motion='reduced'] .hx-fade-in, html[data-motion='reduced'] .hx-pop-in, html[data-motion='reduced'] .hx-slide-up { animation: none; }
+
+/* ── Scrollbars ───────────────────────────────────────────────────── */
+.hx-scroll::-webkit-scrollbar, .markdown-body ::-webkit-scrollbar { width: 10px; height: 10px; }
+.hx-scroll::-webkit-scrollbar-thumb, .markdown-body ::-webkit-scrollbar-thumb { background: transparent; border-radius: 6px; border: 3px solid transparent; background-clip: content-box; }
+.hx-scroll:hover::-webkit-scrollbar-thumb, .markdown-body :hover::-webkit-scrollbar-thumb { background: var(--hx-text-muted); background-clip: content-box; }
+
+/* Code token colours (one-light / one-dark families), switched with the theme's mode. */
+:root {
+  --hx-tok-comment: #8b8a85; --hx-tok-punct: #5c5b57; --hx-tok-prop: #a0522d; --hx-tok-tag: #c0392b; --hx-tok-const: #b0611a;
+  --hx-tok-deleted: #c0392b; --hx-tok-attr: #a0522d; --hx-tok-string: #2e7d32; --hx-tok-builtin: #0b6e99; --hx-tok-inserted: #2e7d32;
+  --hx-tok-keyword: #8e3fae; --hx-tok-fn: #2059b5; --hx-tok-type: #a0661a; --hx-tok-regex: #0b6e99; --hx-tok-var: #c0392b;
+}
+:root.dark, :root[data-theme='dark'] {
+  --hx-tok-comment: #7f848e; --hx-tok-punct: #abb2bf; --hx-tok-prop: #e5c07b; --hx-tok-tag: #e06c75; --hx-tok-const: #d19a66;
+  --hx-tok-deleted: #e06c75; --hx-tok-attr: #d19a66; --hx-tok-string: #98c379; --hx-tok-builtin: #56b6c2; --hx-tok-inserted: #98c379;
+  --hx-tok-keyword: #c678dd; --hx-tok-fn: #61afef; --hx-tok-type: #e5c07b; --hx-tok-regex: #56b6c2; --hx-tok-var: #e06c75;
+}
+
+/* Highlighted code (react-syntax-highlighter, Prism tokens): colours from the theme. */
+.hx-code { font-family: var(--hx-font-mono); font-size: 12.5px; line-height: 20px; }
+.hx-code.wrap code, .hx-code.wrap pre { white-space: pre-wrap !important; word-break: break-word; }
