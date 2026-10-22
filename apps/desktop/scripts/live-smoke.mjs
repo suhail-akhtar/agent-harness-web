@@ -38,7 +38,8 @@ if (!fs.existsSync(path.join(desktop, 'dist', 'main.cjs'))) { log('building the 
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), 'hd-smoke-data-'));
 const project = fs.mkdtempSync(path.join(os.tmpdir(), 'hd-smoke-project-'));
-const app = await _electron.launch({ executablePath: electronExe, args: [desktop], env: { ...process.env, HARNESS_DESKTOP_DATA: data, HARNESS_DESKTOP_NO_TRAY: '1' }, timeout: 60_000 });
+const app = await _electron.launch({ executablePath: electronExe, args: [desktop], env: { ...process.env, HARNESS_DESKTOP_DATA: data, HARNESS_DESKTOP_NO_TRAY: '1', HARNESS_DESKTOP_TEST: '1' }, timeout: 60_000 });
+const capture = async () => Buffer.from(await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG().toString('base64')), 'base64');
 const page = await app.firstWindow();
 const errors = [];
 page.on('pageerror', (e) => errors.push(e.message));
@@ -48,7 +49,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 try {
   await ready();
-  await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.unmaximize(); w.setSize(1280, 900); });
+  await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; if (w.isMaximized()) w.unmaximize(); w.setSize(1280, 900); });
   // The folder the sessions work in (the engine restarts with it as a root).
   await page.evaluate((dir) => window.harnessDesktop.invoke('projects:add', dir), project);
   await sleep(1500);
@@ -113,7 +114,7 @@ try {
     await page.locator('[data-virtual-list]').evaluate((el) => { el.scrollTop = el.scrollHeight; });
     await sleep(600);
     fs.mkdirSync(SHOTS, { recursive: true });
-    await page.screenshot({ path: path.join(SHOTS, `live-${model}.png`) });
+    fs.writeFileSync(path.join(SHOTS, `live-${model}.png`), await capture());
     results.push({ model, check: 'rich answer drawn', ok: Object.values(drew).every(Boolean) && failed === 0, detail: `${JSON.stringify(drew)} failed blocks=${failed}`, cost: d.meta.cost });
     log(`${model}: $${d.meta.cost.toFixed(4)} (total $${spent.toFixed(4)})`);
   }

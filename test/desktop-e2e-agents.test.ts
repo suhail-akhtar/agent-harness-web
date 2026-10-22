@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import { assertNotBlank, capture } from './fixtures/desktop/png.ts';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -62,7 +63,7 @@ test('desktop app end to end: the agent platform', { timeout: 15 * 60_000 }, asy
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'hd-e2e-ag-'));
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !/_API_KEY$|^GW_|^HARNESS_/.test(k)) env[k] = v;
-  Object.assign(env, { HARNESS_DESKTOP_DATA: data, HARNESS_DESKTOP_ENGINE: path.join(root, 'test', 'fixtures', 'desktop', 'scripted-agents-engine.ts'), HARNESS_DESKTOP_NO_TRAY: '1', HARNESS_PLUGIN_LOOPS: 'off' });
+  Object.assign(env, { HARNESS_DESKTOP_DATA: data, HARNESS_DESKTOP_TEST: '1', ...(process.env.HARNESS_E2E_SHOW ? { HARNESS_E2E_SHOW: process.env.HARNESS_E2E_SHOW } : {}), HARNESS_DESKTOP_ENGINE: path.join(root, 'test', 'fixtures', 'desktop', 'scripted-agents-engine.ts'), HARNESS_DESKTOP_NO_TRAY: '1', HARNESS_PLUGIN_LOOPS: 'off' });
   let app: import('playwright-core').ElectronApplication;
   try { app = await pw._electron.launch({ executablePath: electronExe, args: [desktop], env, timeout: 60_000 }); } catch (e) { t.skip(`Electron could not start here: ${(e as Error).message.split('\n')[0]}`); return; }
   if (SHOTS) fs.mkdirSync(SHOTS, { recursive: true });
@@ -71,8 +72,8 @@ test('desktop app end to end: the agent platform', { timeout: 15 * 60_000 }, asy
   const errors: Array<{ phase: string; text: string }> = [];
   page.on('pageerror', (e) => errors.push({ phase, text: `exception: ${e.message}` }));
   page.on('console', (m) => { const where = m.location().url ?? ''; if (m.type() === 'error' && !/\/plugins\/|^harness:\/\/preview|^about:srcdoc/.test(where)) errors.push({ phase, text: `console: ${m.text()} (${where})` }); });
-  const shot = async (name: string, el?: import('playwright-core').Locator) => { if (!SHOTS) return; await page.waitForTimeout(300); await (el ?? page).screenshot({ path: path.join(SHOTS, `${name}.png`) }); };
-  const setSize = (w: number, h: number) => app.evaluate(({ BrowserWindow }, s) => { const win = BrowserWindow.getAllWindows()[0]!; win.unmaximize(); win.setSize(s.w, s.h); }, { w, h });
+  const shot = async (name: string, el?: import('playwright-core').Locator) => { if (!SHOTS) return; await page.waitForTimeout(300); const png = await capture(app, el); assertNotBlank(png, name); fs.writeFileSync(path.join(SHOTS, `${name}.png`), png); };
+  const setSize = (w: number, h: number) => app.evaluate(({ BrowserWindow }, s) => { const win = BrowserWindow.getAllWindows()[0]!; if (win.isMaximized()) win.unmaximize(); win.setSize(s.w, s.h); }, { w, h });
   const invoke = (channel: string, ...args: unknown[]) => page.evaluate(([c, a]) => (window as unknown as { harnessDesktop: { invoke: (c: string, ...x: unknown[]) => Promise<unknown> } }).harnessDesktop.invoke(c as string, ...(a as unknown[])), [channel, args] as const);
   const api = (method: string, p: string, body?: unknown) => page.evaluate(async ([m, u, b]) => { const r = await fetch(u as string, { method: m as string, headers: { 'content-type': 'application/json', 'x-harness': '1' }, body: b === undefined ? undefined : JSON.stringify(b) }); return { status: r.status, body: await r.json().catch(() => null) }; }, [method, p, body] as const);
   const ready = () => page.waitForSelector('[data-engine-status="ready"]', { timeout: 90_000 });
@@ -85,7 +86,7 @@ test('desktop app end to end: the agent platform', { timeout: 15 * 60_000 }, asy
   const step = (name: string, fn: () => Promise<void>) => t.test(name, async () => {
     phase = name;
     try { await fn(); } catch (e) {
-      await page.screenshot({ path: path.join(os.tmpdir(), `hd-e2e-ag-fail-${name.slice(0, 40).replace(/[^a-z0-9]+/gi, '-')}.png`) }).catch(() => {});
+      await capture(app).then((png) => fs.writeFileSync(path.join(os.tmpdir(), `hd-e2e-ag-fail-${name.slice(0, 40).replace(/[^a-z0-9]+/gi, '-')}.png`), png)).catch(() => {});
       for (let i = 0; i < 3; i++) await page.keyboard.press('Escape').catch(() => {});
       throw e;
     }

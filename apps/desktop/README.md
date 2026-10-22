@@ -22,13 +22,26 @@ the installer. The output is in `apps/desktop/release/`.
 
 | Part | Where | What it does |
 |---|---|---|
-| Main process | `electron/` | Starts the **engine** (the harness server, `src/server/main.ts`, run from source in an Electron utility process) on `127.0.0.1` with a random port and token; `HARNESS_DATA` lives in the app's user data and `HARNESS_LOCAL_ROOTS` holds the projects the person opened. It restarts the engine with backoff and keeps a log tail. |
+| Main process | `electron/` | Starts the **engine** (the harness server, `src/server/main.ts`, run from source in an Electron utility process) on `127.0.0.1` with a random port and token; its data is in the **harness home** (`~/.harness/data`, shared with the server and the CLI) and `HARNESS_LOCAL_ROOTS` adds the projects the person opened elsewhere. It restarts the engine with backoff and keeps a log tail (also in `<home>/logs/engine.log`). |
 | `harness://app/` | `electron/protocol.ts` | Serves the interface, and proxies `harness://app/api/*` to the engine with the token added (the renderer never sees it). The same proxy serves a **remote server** (its URL, and a token kept with `safeStorage`). Plugin frames load from `harness://app/plugins/<name>/` under a sandbox CSP. |
 | `harness://preview/` | `electron/preview.ts` | An origin of its own for artifact previews (HTML, React, 3D molecules): no network, framed only by the app, never same-origin. |
 | Preload | `electron/preload.ts` | An allowlist of IPC channels, answered only for the top frame. |
 | Renderer | `renderer/src/` | The shell (sidebar, top and status bars, router, command palette, keybindings, toasts, themes, the engine gate, onboarding) and the built-in plugins, drawn from the registry (`registry/`). |
 | Shared packages | `packages/client`, `packages/ui`, `packages/plugin-ui` | The typed client, event reader and timeline; the design system and the rich renderers; the plugin UI contract and SDK. |
 | Product profile | `products/harness.json` | Name, app id, icon, accent, bundled and required plugins, sidebar order, home cards. `HARNESS_PRODUCT=path` picks another. |
+
+### The harness home
+
+Everything the agent works with lives under `~/.harness` (or `HARNESS_HOME`): `data/`, `workspaces/`
+(`default/`, and a folder per project made with Projects > New project), `tmp/` (each Scratch
+conversation gets a folder there; folders not changed for 7 days are removed on start and daily),
+`exports/`, `plugins/`, `logs/` and `settings.json`. Opening an existing folder keeps working in
+place. An older install's engine data (`<user data>/engine`) is moved in once at start (copied,
+checked, the old folder kept as `engine.backup-<date>`, a line in the log); if that fails the app keeps
+using the old folder. Settings > Application > Location shows the home and its folders with their sizes,
+opens them, sets the clean-up age, and moves the home (copied, checked, sessions' folders and projects
+follow, the engine restarts there; the old copy stays until you remove it there). The app's own files
+(window, prefs, grants) stay in Electron's user data.
 
 Also: one window (single instance), window bounds remembered, a tray (Open, New chat, Quit),
 notifications only when the window is not focused, `harness://open?session=...` deep links (stub),
@@ -66,7 +79,24 @@ changes, an On call card). Both are bundled, and still frames: the path any thir
   the handler gets `req.user` to answer each person with their own data.
 - One HTML file can serve several views: `init.contribution` says which; a view opened again with other
   params (`view.open('incidents', {id})`) starts again with them.
-- Settings sections with `scope: "app"` are the ones a frame reads (`settings.read`).
+- A frame reads and writes its own settings with `settings.get/set`: keys of a `scope: "app"` section live on
+  this computer, keys of a `scope: "account"` section with the person's account on the server (checked
+  against the schema, here and by the server, which keeps only a plugin's account keys); `operator` keys are
+  read-only. Engineering keeps the person's choices (approval, stack, review strictness, the roles' models)
+  with the account and the panel's display on this computer; Operations the investigation models.
+- `registry.has({ renderer | view | panel | command | plugin })` and `registry.list(kind)` say what else is
+  installed (ids and yes/no only, no capability needed). `render.show({ fence, source, rect })` draws a block
+  with one of the host's renderers over a rectangle of the frame (Operations' Topology hands a `diagram` spec
+  to core.diagrams that way when it is there, and draws its own SVG otherwise).
+- Badges and status items while none of the plugin's pages is open: `ui.badges` in the manifest,
+  `[{ "name": "open", "route": "console/badges", "every": 30, "signal": true }]`: the app reads the plugin's
+  own signed-in route as the person every `every` seconds (15 at least; paused while the window is hidden)
+  and at once when the server half calls `api.signal(name)`. The route answers the value, or an object with
+  a value per badge name. Operations' open-incident badge and its status items work that way.
+- Commands marked `agent` (with an `inputSchema`) are agent-callable through `desktop_command`: Engineering's
+  start feature and quality gates panel, Operations' open incident and ops check. The server checks the args,
+  asks the person (default mode), and the app runs the command and answers what it did (a route's answer, the
+  page it opened).
 - `workflows.start(name, input)` opens the workflow dialog after the person says yes; opened from a page,
   the dialog runs it in a new conversation in the folder they pick.
 - Home cards and renderers size themselves (`frame.resize` with the body's height); live values such as a
@@ -136,7 +166,10 @@ A plugin renderer for a fence language or an artifact kind replaces the default.
 
 | Variable | |
 |---|---|
-| `HARNESS_DESKTOP_DATA` | The app's data folder (default: Electron's user data). |
+| `HARNESS_DESKTOP_DATA` | The app's data folder (default: Electron's user data). Set without `HARNESS_HOME`, the harness home is `<it>/home` (tests and side-by-side editions never touch `~/.harness`). |
+| `HARNESS_HOME` | The harness home (default `~/.harness`, or where a move put it: `~/.harness-location`). |
+| `HARNESS_DESKTOP_TEST=1` | Set by the end-to-end tests and the live scripts: the window is never shown, focused or flashed, no tray, no system notifications, no taskbar entry; playwright still drives it and takes its screenshots (each checked not to be blank). |
+| `HARNESS_E2E_SHOW=1` | With the tests or live scripts: show the window, to watch them run. |
 | `HARNESS_DESKTOP_ENGINE` | Another engine entry (the tests use a scripted one). |
 | `HARNESS_DESKTOP_DEV_PLUGINS` | Folders of plugins under development (path-delimited). |
 | `HARNESS_DESKTOP_NO_TRAY`, `HARNESS_DESKTOP_HIDDEN` | No tray icon; start without showing the window (tests). |
@@ -152,6 +185,12 @@ A plugin renderer for a fence language or an artifact kind replaces the default.
   `desktop-agents-ui` (sub-agents, cost per model, the desktop tools' checks, workflow layout,
   breadcrumbs, the recommended model), `desktop-server-gaps` (workflows added mid-session, models
   while starting).
+- `test/home.test.ts` (the harness home: resolution, first run, the tmp clean-up with links planted in it,
+  migration, the move, the server's and the CLI's defaults) and `test/desktop-plugin-followups.test.ts`
+  (registry.has/list, render.show's checks, badge sources and their polling, settings scopes in the app and on
+  the server, the aiops inventory gates only in operations projects).
+- The Electron files (`test/desktop-*e2e*.test.ts`) run after the rest of `npm test`, one at a time, with
+  hidden windows (`HARNESS_E2E_SHOW=1` shows them).
 - End to end: `test/desktop-e2e.test.ts` drives the app with playwright-core against a scripted
   engine (no paid calls); it skips itself when Electron cannot start. `test/desktop-e2e-agents.test.ts`
   does the same for the agent platform (artifacts, Library, sub-agents, linked sessions and
@@ -176,3 +215,7 @@ A plugin renderer for a fence language or an artifact kind replaces the default.
   $0.076 (artifact), $0.096 (two linked sessions), $0.025 (desktop tools); DeepSeek $0.003, $0.003,
   $0.0004; the delegated review $0.017 (Claude $0.016 of it; it found the off-by-one in `last.js`);
   Kimi $0.018 (it called desktop_describe); GLM $0.002 (one call).
+  `node --env-file=<path to .env> apps/desktop/scripts/live-home.mjs` checks the harness home and plugin
+  commands on claude-sonnet-5-5 (effort medium): a file written in `<home>/workspaces/default` and read
+  back, then an Operations incident (from an alert) opened in the app by the agent with `desktop_command`
+  (asked first), under a $0.50 cap.

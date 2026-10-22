@@ -11,6 +11,7 @@
 //   kimi-k2.6                          one short check: the quality gates of that repository
 //   glm-5.3-flash                      at most two calls: the alerts tool
 // It stops a step before the cap (HARNESS_LIVE_CAP_USD, at most $3.00). Key values are never printed.
+import { capture } from './png.ts';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -41,7 +42,7 @@ const fixture = process.env.HARNESS_LIVE_OPS_INVENTORY ? undefined : await start
 const env: Record<string, string> = {};
 for (const [k, v] of Object.entries(process.env)) if (v !== undefined && k !== 'NODE_TEST_CONTEXT') env[k] = v;
 Object.assign(env, {
-  HARNESS_DESKTOP_DATA: data, HARNESS_DESKTOP_NO_TRAY: '1',
+  HARNESS_DESKTOP_DATA: data, HARNESS_DESKTOP_NO_TRAY: '1', HARNESS_DESKTOP_TEST: '1', ...(process.env.HARNESS_E2E_SHOW ? { HARNESS_E2E_SHOW: process.env.HARNESS_E2E_SHOW } : {}), 
   HARNESS_PLUGINS: ['quality-gates', 'sdlc', 'aiops'].map((p) => path.join(root, 'plugins', p)).join(path.delimiter),
   HARNESS_OPS_INVENTORY: process.env.HARNESS_LIVE_OPS_INVENTORY ?? fixture!.inventory, HARNESS_OPS_ALERTS_PATH: opsDir,
   HARNESS_OPS_ALERTS_INVESTIGATE: '0', HARNESS_OPS_WATCH_SECONDS: '0', HARNESS_PLUGIN_LOOPS: 'off',
@@ -54,7 +55,7 @@ const api = (method: string, p: string, body?: unknown) => page.evaluate(async (
 const invoke = (channel: string, ...args: unknown[]) => page.evaluate(([c, a]) => (window as unknown as { harnessDesktop: { invoke: (c: string, ...x: unknown[]) => Promise<unknown> } }).harnessDesktop.invoke(c as string, ...(a as unknown[])), [channel, args] as const);
 const ready = () => page.waitForSelector('[data-engine-status="ready"]', { timeout: 120_000 });
 const frame = (sel: string) => page.frameLocator(`${sel} iframe`);
-const shot = async (name: string) => { await sleep(600); fs.mkdirSync(SHOTS, { recursive: true }); await page.screenshot({ path: path.join(SHOTS, `live-${name}.png`) }); };
+const shot = async (name: string) => { await sleep(600); fs.mkdirSync(SHOTS, { recursive: true }); fs.writeFileSync(path.join(SHOTS, `live-${name}.png`), await capture(app)); };
 let spent = 0;
 const costOf = async (id: string) => Number((await api('GET', `/api/sessions/${id}`)).body?.meta?.cost ?? 0);
 
@@ -84,7 +85,7 @@ const lastText = (d: any) => (d?.history ?? []).filter((m: any) => m.role === 'a
 
 try {
   await ready();
-  await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]!; w.unmaximize(); w.setSize(1360, 900); });
+  await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]!; if (w.isMaximized()) w.unmaximize(); w.setSize(1360, 900); });
   await invoke('prefs:set', { onboardingDone: true, defaultMode: 'acceptEdits' });
   for (const dir of [repo, opsDir]) { await invoke('projects:add', dir); await sleep(1500); await ready(); }
   for (let i = 0; i < 60 && (await api('GET', '/api/health')).status !== 200; i++) await sleep(500);

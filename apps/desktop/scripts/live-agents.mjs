@@ -50,14 +50,15 @@ fs.writeFileSync(path.join(project, 'last.js'), 'export function last(a) {\n  re
 const git = (...a) => execFileSync('git', ['-C', project, ...a], { stdio: 'pipe' });
 git('init', '-q'); git('-c', 'user.email=live@example.com', '-c', 'user.name=Live', 'add', '.'); git('-c', 'user.email=live@example.com', '-c', 'user.name=Live', 'commit', '-q', '-m', 'init');
 
-const app = await _electron.launch({ executablePath: electronExe, args: [desktop], env: { ...process.env, HARNESS_DESKTOP_DATA: data, HARNESS_DESKTOP_NO_TRAY: '1' }, timeout: 60_000 });
+const app = await _electron.launch({ executablePath: electronExe, args: [desktop], env: { ...process.env, HARNESS_DESKTOP_DATA: data, HARNESS_DESKTOP_NO_TRAY: '1', HARNESS_DESKTOP_TEST: '1' }, timeout: 60_000 });
+const capture = async () => Buffer.from(await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG().toString('base64')), 'base64');
 const page = await app.firstWindow();
 const errors = [];
 page.on('pageerror', (e) => errors.push(e.message));
 const api = (method, p, body) => page.evaluate(async ([m, u, b]) => { const r = await fetch(u, { method: m, headers: { 'content-type': 'application/json', 'x-harness': '1' }, body: b === undefined ? undefined : JSON.stringify(b) }); return { status: r.status, body: await r.json().catch(() => null) }; }, [method, p, body]);
 const invoke = (channel, ...args) => page.evaluate(([c, a]) => window.harnessDesktop.invoke(c, ...a), [channel, args]);
 const ready = () => page.waitForSelector('[data-engine-status="ready"]', { timeout: 120_000 });
-const shot = async (name) => { fs.mkdirSync(SHOTS, { recursive: true }); await sleep(500); await page.screenshot({ path: path.join(SHOTS, `live-agents-${name}.png`) }); };
+const shot = async (name) => { fs.mkdirSync(SHOTS, { recursive: true }); await sleep(500); fs.writeFileSync(path.join(SHOTS, `live-agents-${name}.png`), await capture()); };
 
 /** Everything a session (and the sessions it started) cost. */
 async function costOf(id, seen = new Set()) {
@@ -107,7 +108,7 @@ const room = (need) => { if (spent() + need > CAP) { log(`stopping: $${spent().t
 
 try {
   await ready();
-  await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.unmaximize(); w.setSize(1440, 900); });
+  await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; if (w.isMaximized()) w.unmaximize(); w.setSize(1440, 900); });
   await invoke('projects:add', project);
   await sleep(1500);
   await ready();

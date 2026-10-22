@@ -148,6 +148,14 @@ function createWindow(): void {
   });
   if (b.maximized && !quiet) mainWindow.maximize();
   mainWindow.once('ready-to-show', () => { if (!process.env.HARNESS_DESKTOP_HIDDEN && !quiet) mainWindow?.show(); });
+  if (quiet) {
+    // A window never shown makes no compositor frames by itself, so the hit-test data of plugin frames
+    // (out-of-process iframes) goes stale and a click lands on the old layout. A one-pixel capture that
+    // keeps the page hidden makes it render a frame: every 150 ms, while the tests drive it.
+    const w = mainWindow;
+    const beat = setInterval(() => { if (w.isDestroyed()) { clearInterval(beat); return; } void w.webContents.capturePage({ x: 0, y: 0, width: 1, height: 1 }, { stayHidden: true, stayAwake: true }).catch(() => {}); }, 150);
+    w.on('closed', () => clearInterval(beat));
+  }
   void mainWindow.loadURL(`${APP_ORIGIN}/`);
   const save = () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
