@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Start a feature</title>
+<link rel="stylesheet" href="kit.css">
+<style>
+  .page { max-width: 760px; }
+  .flow { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 10px 0 18px; font-size: 12px; color: var(--hx-text-muted); }
+  .flow span.step { background: var(--hx-pill); border-radius: 6px; padding: 2px 7px; color: var(--hx-text-secondary); }
+  details { margin: 6px 0 14px; } summary { cursor: pointer; font-size: 13px; font-weight: 500; }
+  .models { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
+  @media (max-width: 640px) { .models { grid-template-columns: 1fr; } }
+</style>
+<script src="harness://app/sdk/plugin-ui.js"></script>
+<script src="kit.js"></script>
+</head>
+<body>
+<div class="page">
+  <h1>Start a feature</h1>
+  <p class="sub">The build-feature workflow takes your request to a reviewed, documented delivery. You confirm before it starts, and you can watch every step in the conversation and on the Delivery board.</p>
+  <div class="flow" aria-hidden="true"><span class="step">Requirements</span>→<span class="step">Architecture &amp; ADRs</span>→<span class="step">Plan</span>→<span class="step">Build, test-first</span>→<span class="step">Quality gates</span>→<span class="step">Code &amp; security review</span>→<span class="step">Docs</span>→<span class="step">Delivered</span></div>
+  <form id="form" class="card" novalidate>
+    <label class="field"><span>What should be built?</span><textarea id="request" name="request" required placeholder="A slugify(text) utility: lower-case, ASCII only, words joined by dashes, at most 80 characters, with unit tests."></textarea><small>Write it as you would for a team: the behaviour, the limits, what done means.</small></label>
+    <label class="field"><span>Stack</span><input type="text" id="stack" name="stack" placeholder="What the repository already uses"><small>A language, a framework, libraries to use or avoid.</small></label>
+    <div class="field"><span style="display:block;font-size:12.5px;font-weight:500;margin-bottom:4px">Design approval</span>
+      <div class="seg" role="group" aria-label="Design approval" id="approval">
+        <button type="button" data-value="manual">Ask me first</button><button type="button" data-value="auto">Go straight on</button>
+      </div>
+      <small class="muted" style="display:block;margin-top:4px">“Ask me first” stops after the requirements and architecture until you approve them.</small>
+    </div>
+    <details id="more"><summary>Models for each role</summary>
+      <p class="muted small">Empty: the conversation's model. Another model is a delegation: it is used only if your delegation setting (Settings &gt; Agents) allows that model, and the step is refused otherwise.</p>
+      <div class="models">
+        <label class="field"><span>Analyst and architect</span><input type="text" id="analystModel" placeholder="e.g. claude-sonnet-5-5"></label>
+        <label class="field"><span>Planner and engineer</span><input type="text" id="engineerModel" placeholder="the conversation's"></label>
+        <label class="field"><span>Reviewers</span><input type="text" id="reviewerModel" placeholder="e.g. kimi-k2.6"></label>
+      </div>
+    </details>
+    <p class="error" id="problem" hidden></p>
+    <div class="row"><span class="spacer"></span><button type="button" class="btn ghost" id="board">Back to Delivery</button><button type="submit" class="btn primary" id="go">Continue</button></div>
+  </form>
+</div>
+<script>
+Kit.start(async (harness) => {
+  const $ = (id) => document.getElementById(id);
+  let s = {};
+  try { s = (await harness.settings.get()) || {}; } catch { s = {}; }
+  let approval = s.approval === 'auto' ? 'auto' : 'manual';
+  const seg = () => { for (const b of $('approval').querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.value === approval)); };
+  for (const b of $('approval').querySelectorAll('button')) b.addEventListener('click', () => { approval = b.dataset.value; seg(); });
+  seg();
+  $('stack').value = s.stack || '';
+  for (const k of ['analystModel', 'engineerModel', 'reviewerModel']) $(k).value = s[k] || '';
+  if (s.analystModel || s.engineerModel || s.reviewerModel) $('more').open = true;
+  if (harness.params.request) $('request').value = harness.params.request;
+  $('request').focus();
+  $('board').addEventListener('click', () => harness.view.open('delivery'));
+  $('form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const request = $('request').value.trim();
+    const problem = $('problem');
+    if (request.length < 10) { problem.textContent = 'Say what to build (a sentence or more).'; problem.hidden = false; $('request').focus(); return; }
+    problem.hidden = true;
+    const input = { request, approval };
+    const stack = $('stack').value.trim();
+    if (stack) input.stack = stack;
+    for (const k of ['analystModel', 'engineerModel', 'reviewerModel']) { const v = $(k).value.trim(); if (v) input[k] = v; }
+    // The host asks you, then shows the workflow's start dialog with these inputs: nothing runs before you press Start there.
+    try { await harness.workflows.start('build-feature', input); }
+    catch (err) { problem.textContent = err.message; problem.hidden = false; }
+  });
+});
+</script>
+</body>
+</html>

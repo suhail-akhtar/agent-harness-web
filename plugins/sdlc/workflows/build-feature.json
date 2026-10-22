@@ -4,18 +4,21 @@
   "inputs": {
     "request": { "description": "What to build: the requirements as you would write them for a team.", "required": true },
     "stack": { "description": "Stack preference or constraints (optional).", "default": "Use what the repository already uses; otherwise choose a mainstream stack with few dependencies." },
-    "approval": { "description": "\"auto\" to skip the design approval step, \"manual\" to approve requirements and architecture before building.", "default": "manual" }
+    "approval": { "description": "\"auto\" to skip the design approval step, \"manual\" to approve requirements and architecture before building.", "default": "manual" },
+    "analystModel": { "description": "Model for the analyst and the architect (optional; another model than the conversation's is a delegation).", "default": "" },
+    "engineerModel": { "description": "Model for the planner and the engineer (optional).", "default": "" },
+    "reviewerModel": { "description": "Model for the code and security reviewers (optional; a second opinion from another provider).", "default": "" }
   },
   "start": "requirements",
   "maxAgentRuns": 24,
   "nodes": {
     "requirements": {
-      "type": "agent", "title": "Requirements", "agent": "analyst",
+      "type": "agent", "title": "Requirements", "agent": "analyst", "model": "{{input.analystModel}}",
       "prompt": "Write docs/requirements.md for this request, following the requirements-spec skill.\n\n<request>\n{{input.request}}\n</request>\n\nStack/constraints: {{input.stack}}\nEarlier feedback to take into account: {{feedback}}\n\nReport: the requirement IDs with one line each, and your assumptions.",
       "next": "architecture"
     },
     "architecture": {
-      "type": "agent", "title": "Architecture & ADRs", "agent": "architect",
+      "type": "agent", "title": "Architecture & ADRs", "agent": "architect", "model": "{{input.analystModel}}",
       "prompt": "Design the solution for docs/requirements.md. Write docs/architecture.md and ADRs in docs/adr/.\nStack/constraints: {{input.stack}}\nFeedback from the design review, if any: {{feedback}}\n\nReport: the stack, the components, and the ADR titles.",
       "next": "approval-mode"
     },
@@ -30,12 +33,12 @@
       "next": { "on": { "approve": "plan", "reject": "requirements" } }
     },
     "plan": {
-      "type": "agent", "title": "Implementation plan", "agent": "planner",
+      "type": "agent", "title": "Implementation plan", "agent": "planner", "model": "{{input.engineerModel}}",
       "prompt": "Write docs/plan.md for docs/requirements.md and docs/architecture.md.\n\nReport: the task list in one line per task.",
       "next": "implement"
     },
     "implement": {
-      "type": "agent", "title": "Implement (test-first)", "agent": "engineer",
+      "type": "agent", "title": "Implement (test-first)", "agent": "engineer", "model": "{{input.engineerModel}}",
       "prompt": "Implement docs/plan.md, task by task, test-first, following docs/architecture.md. Every requirement in docs/requirements.md must be implemented and covered by tests. Run the quality_gates tool before you finish and fix what fails.\n\nReport: what you built (files), the test command and its result.",
       "next": "gates"
     },
@@ -44,7 +47,7 @@
       "next": { "on": { "pass": "review", "fail": "fix", "exhausted": "failed" } }
     },
     "fix": {
-      "type": "agent", "title": "Fix failing gates", "agent": "engineer",
+      "type": "agent", "title": "Fix failing gates", "agent": "engineer", "model": "{{input.engineerModel}}",
       "prompt": "The quality gates failed. Fix the root causes in the code (change a test only if the test itself is wrong, and say so).\n\n{{feedback}}\n\nReport: what was wrong and what you changed.",
       "next": "gates"
     },
@@ -53,17 +56,17 @@
       "next": { "on": { "REQUEST_CHANGES": "address-review" }, "default": "docs" }
     },
     "code-review": {
-      "type": "agent", "title": "Code review", "agent": "code-reviewer",
+      "type": "agent", "title": "Code review", "agent": "code-reviewer", "model": "{{input.reviewerModel}}",
       "prompt": "Review the implementation against docs/requirements.md. Write docs/reviews/code-review.md.",
       "decide": ["APPROVE", "REQUEST_CHANGES"]
     },
     "security-review": {
-      "type": "agent", "title": "Security review", "agent": "security-reviewer",
+      "type": "agent", "title": "Security review", "agent": "security-reviewer", "model": "{{input.reviewerModel}}",
       "prompt": "Review the implementation for security problems. Write docs/reviews/security-review.md.",
       "decide": ["APPROVE", "REQUEST_CHANGES"]
     },
     "address-review": {
-      "type": "agent", "title": "Address review findings", "agent": "engineer",
+      "type": "agent", "title": "Address review findings", "agent": "engineer", "model": "{{input.engineerModel}}",
       "prompt": "Address every BLOCKING and MAJOR finding in docs/reviews/code-review.md and docs/reviews/security-review.md, with tests for each fix. Note how each was resolved at the end of the review file.\n\nCode review: {{state.code-review}}\n\nSecurity review: {{state.security-review}}\n\nReport: each finding and its resolution.",
       "next": "gates-final"
     },
@@ -72,7 +75,7 @@
       "next": { "on": { "pass": "docs", "fail": "fix-final", "exhausted": "failed" } }
     },
     "fix-final": {
-      "type": "agent", "title": "Fix failing gates", "agent": "engineer",
+      "type": "agent", "title": "Fix failing gates", "agent": "engineer", "model": "{{input.engineerModel}}",
       "prompt": "The quality gates failed after the review fixes. Fix the root causes.\n\n{{feedback}}",
       "next": "gates-final"
     },

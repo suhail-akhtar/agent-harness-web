@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Features in flight</title>
+<link rel="stylesheet" href="kit.css">
+<style>
+  body { background: transparent; }
+  .item { display: flex; gap: 8px; align-items: center; width: 100%; text-align: left; font: inherit; color: inherit; background: transparent; border: 0; border-radius: 8px; padding: 5px 6px; cursor: pointer; }
+  .item:hover { background: var(--hx-hover); }
+  .item .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+</style>
+<script src="harness://app/sdk/plugin-ui.js"></script>
+<script src="kit.js"></script>
+</head>
+<body class="card-frame">
+<div id="out" class="small muted">Loading…</div>
+<script>
+Kit.start(async (harness) => {
+  const { h, mount, chip } = Kit;
+  const out = document.getElementById('out');
+  const stageTitle = {};
+  const render = (data) => {
+    for (const s of data.stages) stageTitle[s.id] = s.title;
+    const flying = data.deliveries.filter((d) => d.status === 'running' || d.status === 'waiting');
+    const failing = data.deliveries.filter((d) => d.gates.fail > 0 && d.status !== 'succeeded');
+    const shown = [...new Map([...flying, ...failing].map((d) => [d.id, d])).values()].slice(0, 5);
+    mount(out,
+      shown.length ? shown.map((d) => h('button', { type: 'button', class: 'item', 'data-home-delivery': d.id, onclick: () => harness.view.open('delivery', { id: d.id }) },
+        h('span', { class: `dot ${d.gates.fail ? 'bad' : d.status === 'waiting' ? 'warn' : 'info live'}` }),
+        h('span', { class: 't' }, d.title),
+        d.gates.fail ? chip(`${d.gates.fail} failing`, 'bad') : chip(stageTitle[d.stage] || d.stage, d.status === 'waiting' ? 'waiting' : 'running'))) : h('div', { class: 'small muted', 'data-empty': '' }, data.deliveries.length ? 'Nothing in flight, no failing gates.' : 'No features yet.'),
+      h('div', { style: { marginTop: '6px' } }, h('button', { type: 'button', class: 'btn sm ghost', onclick: () => harness.view.open(shown.length ? 'delivery' : 'start-feature') }, shown.length || data.deliveries.length ? 'Open Delivery' : 'Start a feature')),
+    );
+  };
+  Kit.autoHeight(harness);
+  let last = { deliveries: [] };
+  await Kit.live(harness, async () => { last = await Kit.route(harness, 'deliveries'); render(last); }, { ms: 20_000, busyMs: 4_000, busy: () => last.deliveries.some((d) => d.status === 'running') });
+});
+</script>
+</body>
+</html>

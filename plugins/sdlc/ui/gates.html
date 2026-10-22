@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quality gates</title>
+<link rel="stylesheet" href="kit.css">
+<style>
+  body { background: var(--hx-bg); }
+  .wrap { padding: 14px 14px 30px; }
+  .gate { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 9px 0; border-bottom: 1px solid var(--hx-border-subtle); }
+  .gate .name { font-weight: 500; font-size: 13px; }
+  .gate .sum { font-size: 12px; color: var(--hx-text-secondary); overflow-wrap: anywhere; }
+  .now { display: flex; gap: 8px; align-items: center; padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, var(--hx-info) 10%, transparent); font-size: 12.5px; margin-bottom: 10px; }
+  .tests { display: flex; gap: 10px; align-items: baseline; margin: 6px 0 12px; }
+  .tests b { font-size: 22px; font-weight: 600; }
+</style>
+<script src="harness://app/sdk/plugin-ui.js"></script>
+<script src="kit.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <div class="row"><h2 style="margin:0;flex:1">Quality gates</h2><button type="button" class="btn sm" id="all">Run all</button></div>
+  <div id="out" class="muted small" style="margin-top:8px">Loading…</div>
+</div>
+<script>
+Kit.start(async (harness) => {
+  const { h, mount, chip, ago } = Kit;
+  const session = harness.params.id || (harness.context && harness.context.sessionId) || '';
+  const out = document.getElementById('out');
+  if (!/^[a-f0-9]{16}$/.test(session)) { mount(out, h('div', { class: 'empty' }, h('b', {}, 'Open a conversation'), 'The gates of the conversation next to this panel show here.')); document.getElementById('all').disabled = true; return; }
+  let settings = {};
+  try { settings = (await harness.settings.get()) || {}; } catch { settings = {}; }
+  let data = null;
+  let status = 'idle';
+
+  async function rerun(names) {
+    const list = names.length ? names : (settings.gates || []);
+    const text = list.length
+      ? `Run the quality gate${list.length > 1 ? 's' : ''} ${list.join(', ')} again (quality_gates tool with gates: ${JSON.stringify(list)}) and report each result.`
+      : 'Run every applicable quality gate again (quality_gates tool) and report each result.';
+    try { await harness.sessions.send(session, text); await harness.notify.toast(list.length ? `Running ${list.join(', ')}` : 'Running the gates', { kind: 'info' }); }
+    catch (e) { await harness.notify.toast(e.message, { kind: 'error' }); }
+  }
+  document.getElementById('all').addEventListener('click', () => rerun([]));
+
+  function render() {
+    const g = data;
+    const running = g.running;
+    const visibleGates = g.gates.filter((x) => settings.advisory !== 'hide' || x.status !== 'warn');
+    const failing = visibleGates.filter((x) => x.status === 'fail').length;
+    mount(out,
+      running ? h('div', { class: 'now', 'data-gates-running': '' }, h('span', { class: 'dot info live' }), `Running ${running.gates === 'applicable' ? 'every applicable gate' : running.gates.join(', ')} (${running.source === 'tool' ? 'asked by the agent' : 'workflow step'}) since ${ago(running.since)}`) : null,
+      g.tests ? h('div', { class: 'tests', 'data-tests': '' }, h('b', {}, `${g.tests.passed}/${g.tests.total}`), h('span', { class: 'muted small' }, `tests passed${g.tests.failed ? `, ${g.tests.failed} failing` : ''}${g.tests.skipped ? `, ${g.tests.skipped} skipped` : ''} · ${ago(g.tests.at)}`)) : null,
+      visibleGates.length ? h('div', { class: 'small', style: { marginBottom: '4px' } }, failing ? chip(`${failing} failing`, 'bad') : chip('All blocking gates pass', 'ok')) : null,
+      visibleGates.length ? visibleGates.map((x) => h('div', { class: 'gate', 'data-gate': x.name, 'data-status': x.status },
+        chip(x.status === 'pass' ? 'PASS' : x.status === 'fail' ? 'FAIL' : 'WARN', x.status),
+        h('div', {}, h('div', { class: 'name' }, x.name), h('div', { class: 'sum' }, x.summary), h('div', { class: 'muted small' }, `${x.source === 'tool' ? 'quality_gates tool' : x.source.replace('workflow:', 'workflow step ')} · ${ago(x.at)}`)),
+        h('button', { type: 'button', class: 'btn sm', 'aria-label': `Run ${x.name} again`, onclick: () => rerun([x.name]) }, 'Run again'))) : running ? null : h('div', { class: 'empty', 'data-empty': '' }, h('b', {}, 'No gate has run here yet'), 'The workflow\'s gate steps and the agent\'s quality_gates calls show here as they run.'),
+      g.deliveries.length ? h('div', { class: 'muted small', style: { marginTop: '12px' } }, 'Feature: ', h('a', { href: '#', onclick: (e) => { e.preventDefault(); harness.view.open('delivery', { id: g.deliveries[0].id }); } }, g.deliveries[0].title)) : null,
+    );
+  }
+
+  const load = async () => {
+    data = await Kit.route(harness, 'gates', { session });
+    try { const s = await harness.sessions.get(session); status = s.status; } catch { /* gone */ }
+    render();
+  };
+  await Kit.live(harness, load, { ms: 10_000, busyMs: 1_500, busy: () => !!(data && data.running) || status !== 'idle' });
+});
+</script>
+</body>
+</html>

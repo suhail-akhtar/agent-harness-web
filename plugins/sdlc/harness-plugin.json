@@ -1,8 +1,312 @@
 {
   "name": "sdlc",
-  "version": "1.0.0",
-  "description": "Software delivery lifecycle: role agents (analyst, architect, planner, engineer, reviewers, tech writer), engineering skills, and the build-feature workflow from requirements to a verified, reviewed, documented delivery.",
+  "version": "1.1.0",
+  "description": "Software delivery lifecycle: role agents (analyst, architect, planner, engineer, reviewers, tech writer), engineering skills, and the build-feature workflow from requirements to a verified, reviewed, documented delivery. In the desktop: a Delivery board of features by stage with their gates, tests and cost, a Start feature form, a Quality gates panel next to a conversation, /feature, /review and /gates.",
+  "main": "index.mjs",
   "agents": "agents",
   "skills": "skills",
-  "workflows": "workflows"
+  "workflows": "workflows",
+  "permissions": {
+    "sessions": true,
+    "routes": true
+  },
+  "ui": {
+    "apiVersion": 1,
+    "displayName": "Engineering",
+    "icon": "rocket",
+    "category": "Engineering",
+    "trust": "frame",
+    "capabilities": [
+      "sessions.read",
+      "sessions.start",
+      "events.subscribe",
+      "routes.call",
+      "files.read",
+      "workflows.start",
+      "settings.read"
+    ],
+    "contributes": {
+      "navItems": [
+        {
+          "id": "delivery",
+          "title": "Delivery",
+          "icon": "rocket",
+          "view": "delivery",
+          "placement": "primary",
+          "order": 40
+        }
+      ],
+      "views": [
+        {
+          "id": "delivery",
+          "title": "Delivery",
+          "icon": "rocket",
+          "description": "Features from requirement to delivered: stage, gates, tests and cost.",
+          "kind": "frame",
+          "entry": "ui/delivery.html"
+        },
+        {
+          "id": "start-feature",
+          "title": "Start a feature",
+          "icon": "play",
+          "description": "Starts the build-feature workflow with your request.",
+          "kind": "frame",
+          "entry": "ui/start.html"
+        }
+      ],
+      "panels": [
+        {
+          "id": "gates",
+          "title": "Quality gates",
+          "icon": "shield",
+          "kind": "frame",
+          "entry": "ui/gates.html",
+          "where": "session"
+        }
+      ],
+      "commands": [
+        {
+          "id": "open-delivery",
+          "title": "Open the Delivery board",
+          "category": "Engineering",
+          "icon": "rocket",
+          "action": {
+            "type": "open-view",
+            "view": "delivery"
+          }
+        },
+        {
+          "id": "start-feature",
+          "title": "Start a feature",
+          "category": "Engineering",
+          "icon": "play",
+          "action": {
+            "type": "open-view",
+            "view": "start-feature"
+          },
+          "agent": {
+            "description": "Opens the Start a feature form (the build-feature workflow: requirements, design, plan, test-first build, quality gates, reviews, docs) with the request filled in; the person reviews it and starts it.",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "request": {
+                  "type": "string",
+                  "description": "What to build, as you would write it for a team."
+                }
+              },
+              "required": [
+                "request"
+              ]
+            }
+          }
+        },
+        {
+          "id": "run-gates",
+          "title": "Show the quality gates of this conversation",
+          "category": "Engineering",
+          "icon": "shield",
+          "action": {
+            "type": "open-panel",
+            "panel": "gates"
+          },
+          "agent": {
+            "description": "Opens the Quality gates panel next to the conversation, where each gate's result shows as it runs and the person can run a gate again. Run the gates themselves with the quality_gates tool."
+          }
+        }
+      ],
+      "slashCommands": [
+        {
+          "name": "feature",
+          "description": "Build a feature: requirements to a reviewed delivery (build-feature)",
+          "action": {
+            "type": "workflow",
+            "workflow": "build-feature"
+          }
+        },
+        {
+          "name": "review",
+          "description": "Review the changes against the requirements",
+          "action": {
+            "type": "prompt",
+            "prompt": "Review the changes in this workspace against docs/requirements.md (or what I asked for): correctness, edge cases, tests and security. Run the tests. List each finding as BLOCKING, MAJOR or MINOR with file:line and the fix, then say APPROVE or REQUEST_CHANGES. {args}"
+          }
+        },
+        {
+          "name": "gates",
+          "description": "Run the quality gates and fix what fails",
+          "action": {
+            "type": "prompt",
+            "prompt": "Run the quality gates (quality_gates tool) and report each one as PASS, FAIL or WARN with its numbers; fix what fails and run them again. {args}"
+          }
+        }
+      ],
+      "composerChips": [
+        {
+          "id": "target-branch",
+          "title": "Branch",
+          "icon": "git-branch",
+          "kind": "select",
+          "setting": "sdlc.targetBranch",
+          "options": [
+            "main",
+            "develop",
+            "release"
+          ]
+        },
+        {
+          "id": "test-level",
+          "title": "Tests",
+          "icon": "flask",
+          "kind": "select",
+          "setting": "sdlc.testLevel",
+          "options": [
+            "unit",
+            "integration",
+            "end-to-end"
+          ]
+        }
+      ],
+      "settings": [
+        {
+          "id": "engineering",
+          "title": "Engineering",
+          "icon": "rocket",
+          "group": "agent",
+          "scope": "app",
+          "order": 45,
+          "schema": {
+            "type": "object",
+            "title": "Engineering defaults",
+            "description": "How features start from the Delivery board and the Start a feature form on this computer. A role's model other than the conversation's is a delegation: it is used only where your delegation setting (Settings > Agents) allows that model, and refused otherwise.",
+            "properties": {
+              "approval": {
+                "type": "string",
+                "title": "Design approval",
+                "description": "Approve the requirements and architecture before the build starts, or go straight on.",
+                "enum": [
+                  "manual",
+                  "auto"
+                ],
+                "enumLabels": [
+                  "Ask me first",
+                  "Go straight on"
+                ],
+                "default": "manual",
+                "order": 1
+              },
+              "stack": {
+                "type": "string",
+                "title": "Stack preference",
+                "description": "Empty: what the repository already uses.",
+                "maxLength": 300,
+                "default": "",
+                "order": 2
+              },
+              "gates": {
+                "type": "array",
+                "title": "Gates the panel runs again",
+                "description": "Empty: every gate that applies.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "node-test",
+                    "node-typecheck",
+                    "node-lint",
+                    "node-build",
+                    "python-test",
+                    "python-lint",
+                    "go-test",
+                    "rust-test",
+                    "java-test",
+                    "secrets",
+                    "conflict-markers",
+                    "todo-markers",
+                    "large-files"
+                  ]
+                },
+                "default": [],
+                "order": 3
+              },
+              "advisory": {
+                "type": "string",
+                "title": "Advisory gates",
+                "description": "TODO markers and large files: shown as warnings, or left out of the board.",
+                "enum": [
+                  "show",
+                  "hide"
+                ],
+                "enumLabels": [
+                  "Show them",
+                  "Leave them out"
+                ],
+                "default": "show",
+                "order": 4
+              },
+              "strictness": {
+                "type": "string",
+                "title": "Review strictness",
+                "description": "What /review and the board's Review button ask for.",
+                "enum": [
+                  "lenient",
+                  "standard",
+                  "strict"
+                ],
+                "enumLabels": [
+                  "Blocking issues only",
+                  "Blocking and major",
+                  "Everything, minor included"
+                ],
+                "default": "standard",
+                "order": 5
+              },
+              "analystModel": {
+                "type": "string",
+                "title": "Model: analyst and architect",
+                "description": "Empty: the conversation's model.",
+                "maxLength": 80,
+                "default": "",
+                "order": 6
+              },
+              "engineerModel": {
+                "type": "string",
+                "title": "Model: planner and engineer",
+                "description": "Empty: the conversation's model.",
+                "maxLength": 80,
+                "default": "",
+                "order": 7
+              },
+              "reviewerModel": {
+                "type": "string",
+                "title": "Model: code and security reviewers",
+                "description": "A second opinion from another provider is a good use of delegation. Empty: the conversation's model.",
+                "maxLength": 80,
+                "default": "",
+                "order": 8
+              }
+            }
+          }
+        }
+      ],
+      "renderers": [
+        {
+          "id": "gate-results",
+          "for": {
+            "tool": "quality_gates"
+          },
+          "kind": "frame",
+          "entry": "ui/gate-results.html",
+          "height": 120
+        }
+      ],
+      "homeCards": [
+        {
+          "id": "in-flight",
+          "title": "Features in flight",
+          "kind": "frame",
+          "entry": "ui/home.html",
+          "order": 40
+        }
+      ]
+    }
+  }
 }
