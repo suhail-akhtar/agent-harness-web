@@ -29,3 +29,6 @@ export * from './render/science/geo.ts';
 export * from './render/science/notebook.ts';
 export { KATEX_MACROS, KATEX_OPTIONS } from './render/katex-setup.ts';
 export * from './render/science/graphviz.ts';
+export { BIO_BY_LANG, BIO_DECLARED, bioBlock, type BioKind } from './render/biology/kinds.ts';
+/** The biology renderers and their parsers (a separate chunk: loaded on first use). */
+export const loadBiology = () => import('./render/biology/Biology.tsx');

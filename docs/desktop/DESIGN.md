@@ -331,6 +331,9 @@ Lazily loaded, sandboxed where they run code, with no network: KaTeX with enviro
 Vega-Lite (and ECharts) for statistics (histograms, box/violin, regression, heatmaps, annotated series);
 a `dashboard` spec (KPI cards, charts and tables in a grid; defined in packages/plugin-ui so plugins and
 models share it); tables with sort, filter, column statistics and pivots; notebooks (ipynb); GeoJSON as SVG.
+Biology the same way: sequences, alignments, phylogenetic trees, plasmid maps, genome tracks, protein
+3D and feature tracks, pathways, volcano / MA / survival / Manhattan plots and clustered heatmaps;
+their compact formats live in a core skill offered only to sessions whose client declares them.
 The client's declaration of what it renders stays under 150 tokens: it is in every request's cached prefix.
 
 ## 15. Cost

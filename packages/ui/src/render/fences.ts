@@ -4,8 +4,10 @@
  * language replaces the default for that language (the host passes `renderFence`).
  */
 
+import { BIO_BY_LANG, BIO_DECLARED, BIO_KINDS, bioBlock, type BioKind } from './biology/kinds.ts';
+
 export type FenceKind = 'chart' | 'viz' | 'mermaid' | 'diagram' | 'math' | 'table' | 'csv' | 'tsv' | 'json' | 'html' | 'svg' | 'react' | 'diff'
-  | 'plot' | 'graphviz' | 'smiles' | 'molecule' | 'geojson' | 'notebook' | 'dashboard' | 'code';
+  | 'plot' | 'graphviz' | 'smiles' | 'molecule' | 'geojson' | 'notebook' | 'dashboard' | BioKind | 'code';
 
 const BY_LANG: Record<string, FenceKind> = {
   chart: 'chart', echarts: 'chart',
@@ -28,6 +30,8 @@ const BY_LANG: Record<string, FenceKind> = {
   geojson: 'geojson',
   ipynb: 'notebook', notebook: 'notebook',
   dashboard: 'dashboard',
+  // Biology (sequences, alignments, trees, plasmids, tracks, proteins, pathways, statistics): biology/kinds.ts.
+  ...BIO_BY_LANG,
 };
 
 /** Every fence language with a renderer of its own (for the client descriptor a session is told about). */
@@ -49,10 +53,10 @@ export function fenceKind(lang: string, source = ''): FenceKind {
 }
 
 /** The kinds drawn inside the shared widget frame (copy, download, expand, hide, error state). */
-export const FRAMED: ReadonlySet<FenceKind> = new Set(['chart', 'viz', 'mermaid', 'math', 'table', 'csv', 'tsv', 'json', 'plot', 'graphviz', 'smiles', 'molecule', 'geojson', 'notebook', 'dashboard']);
+export const FRAMED: ReadonlySet<FenceKind> = new Set(['chart', 'viz', 'mermaid', 'math', 'table', 'csv', 'tsv', 'json', 'plot', 'graphviz', 'smiles', 'molecule', 'geojson', 'notebook', 'dashboard', ...BIO_KINDS]);
 
 /** The short list a session is told about: one name per kind (the client declaration stays small). */
-export const DECLARED_FENCES = ['mermaid', 'chart', 'vega-lite', 'math', 'table', 'csv', 'json', 'html', 'svg', 'jsx', 'diff', 'diagram', 'plot', 'dot', 'smiles', 'pdb', 'sdf', 'geojson', 'ipynb', 'dashboard'] as const;
+export const DECLARED_FENCES = ['mermaid', 'chart', 'vega-lite', 'math', 'table', 'csv', 'json', 'html', 'svg', 'jsx', 'diff', 'diagram', 'plot', 'dot', 'smiles', 'pdb', 'sdf', 'geojson', 'ipynb', 'dashboard', ...BIO_DECLARED] as const;
 
 /** File extension for a kind's download. */
 export function extensionFor(kind: FenceKind, lang: string): string {
@@ -73,6 +77,6 @@ export function extensionFor(kind: FenceKind, lang: string): string {
     case 'molecule': return ['pdb', 'sdf', 'mol', 'mol2', 'xyz', 'cif'].includes(lang.toLowerCase()) ? lang.toLowerCase() : 'pdb';
     case 'geojson': return 'geojson';
     case 'notebook': return 'ipynb';
-    default: return lang || 'txt';
+    default: return bioBlock(kind, lang)?.ext ?? (lang || 'txt');
   }
 }

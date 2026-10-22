@@ -12,6 +12,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { KITCHEN_SINK } from './fixtures/desktop/rich.ts';
 import { SCIENCE_KITCHEN_SINK } from './fixtures/desktop/science.ts';
+import { BIO_KITCHEN_SINK } from './fixtures/desktop/biology.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const desktop = path.join(root, 'apps', 'desktop');
@@ -128,6 +129,7 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
 
     let sessionId = '';
     let richId = '';
+    let bioId = '';
     await step('a session in a folder: a permission request in the attention bar and the inbox, approved, and the tool card', async () => {
       // The engine restarts to take the new folder as a root: watch it go down and come back.
       await page.evaluate(() => { const w = window as unknown as { __restarted: boolean }; w.__restarted = false; const el = document.querySelector('[data-engine-status]')!; new MutationObserver(() => { if (el.getAttribute('data-engine-status') !== 'ready') w.__restarted = true; }).observe(el, { attributes: true }); });
@@ -658,6 +660,125 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       // And the Restart button in Settings > Application.
       await invoke('engine:restart');
       await ready();
+    });
+
+    await step('biology: sequences, alignments, trees, plasmids, tracks, proteins, pathways, statistics', async () => {
+      const before = errors.length;
+      const r = await api('POST', '/api/sessions/import', { runtime: 'local', bundle: { ...longBundle(0), source: { ...longBundle(0).source, title: 'Biology sink' }, history: [{ role: 'user', content: [{ type: 'text', text: 'Show me the biology renderers.' }] }, { role: 'assistant', content: [{ type: 'text', text: BIO_KITCHEN_SINK }] }] } });
+      assert.equal(r.status, 201, JSON.stringify(r.body));
+      const id = (r.body as { id: string }).id;
+      bioId = id;
+      await page.click('[data-nav="core.chat:search"]');
+      await page.click(`[data-session-row="${id}"] button`);
+      const inSession = `[data-session="${id}"] [data-assistant-message]`;
+      await page.waitForSelector(`${inSession} [data-seq-map]`, { timeout: 30_000 });
+      // The lazy chunk, Vega (four plots), Graphviz (the pathway) and the 3D frame all arrive.
+      await page.waitForFunction((s) => document.querySelectorAll(`${s} [data-bioplot] [data-chart="vega"] svg`).length >= 4, inSession, { timeout: 30_000 });
+      await page.waitForSelector(`${inSession} [data-pathway] [data-graphviz="svg"] svg`, { timeout: 30_000 });
+      const widgets = ['Sequence', 'Alignment', 'Tree', 'Plasmid map', 'Genome tracks', '3D structure', 'Protein features', 'Pathway', 'Volcano plot', 'MA plot', 'Heatmap', 'Survival curve', 'Manhattan plot'];
+      const drawn = await page.$$eval(`${inSession} [data-widget]`, (els) => els.map((e) => ({ kind: e.getAttribute('data-widget'), drawn: !!e.querySelector(':scope > div:nth-child(2) svg:not([data-icon]), :scope > div:nth-child(2) canvas, :scope > div:nth-child(2) iframe'), state: e.getAttribute('data-state') })));
+      for (const w of widgets) assert.ok(drawn.some((d) => d.kind === w && d.drawn), `${w} is drawn (${JSON.stringify(drawn.filter((d) => d.kind === w))})`);
+      assert.equal(drawn.length, 17, 'every block of the sink');
+      assert.deepEqual(drawn.filter((d) => !d.drawn || d.state !== 'ok'), [], 'every block has its drawing and no error state');
+      assert.equal(await page.locator(`${inSession} [data-render-error]`).count(), 0, 'no error placeholders');
+      // The 3D protein: cartoon, two chains, a ligand, a residue picker (in its sandboxed frame).
+      const protein = await (async () => {
+        for (let i = 0; i < 80; i++) {
+          for (const f of page.frames().filter((x) => x.url().startsWith('harness://preview/'))) {
+            const v = await f.evaluate(() => ({ residues: Number(document.body.getAttribute('data-residues') ?? 0), chains: Number(document.body.getAttribute('data-chains') ?? 0), ligands: Number(document.body.getAttribute('data-ligands') ?? 0), picker: document.querySelectorAll('select#res option').length })).catch(() => null);
+            if (v && v.residues > 10) return v;
+          }
+          await page.waitForTimeout(250);
+        }
+        return null;
+      })();
+      assert.deepEqual(protein, { residues: 66, chains: 2, ligands: 1, picker: 67 }, '3Dmol read the coiled coil');
+      for (const sb of await page.$$eval(`${inSession} iframe[data-artifact-frame]`, (els) => els.map((e) => e.getAttribute('sandbox')))) assert.doesNotMatch(String(sb), /allow-same-origin/);
+      // Interaction: reverse complement, translation, selection by feature, tree layout and collapse, plasmid views, tracks zoom.
+      const seq = page.locator(`${inSession} [data-sequence="dna"]`).first();
+      const first = await seq.locator('[data-i="0"]').textContent();
+      await seq.locator('button:has-text("Reverse complement")').click();
+      assert.notEqual(await seq.locator('[data-i="0"]').textContent(), first, 'the reverse complement is shown');
+      await seq.locator('button:has-text("Reverse complement")').click();
+      await seq.locator('button:has-text("Translate (3 frames)")').click();
+      assert.ok(await seq.locator('[data-frame="1"]').count() >= 1, 'three-frame translation rows');
+      await seq.locator('[data-seq-map] [data-feature]').nth(1).dispatchEvent('click');
+      assert.match(String(await seq.locator('[data-seq-selection]').textContent()), /Selected 73–162 \(90 bp\)/);
+      const tree = page.locator(`${inSession} [data-phylo]`).first();
+      await tree.locator('[data-collapse]').nth(1).click();
+      assert.ok(await tree.locator('text=/\\(\\d+ leaves\\)/').count() >= 1, 'a clade collapses');
+      await tree.locator('button:has-text("expand all")').click();
+      await tree.locator('button:has-text("Circular")').click();
+      await tree.locator('[data-tree="circular"]').waitFor({ timeout: 5_000 });
+      const plasmid = page.locator(`${inSession} [data-plasmid]`).first();
+      await plasmid.locator('[data-plasmid-map="circular"] path[data-feature="CDS"]').last().dispatchEvent('click');
+      assert.match(String(await plasmid.locator('[data-plasmid-detail]').textContent()), /AmpR · CDS · 1,626–2,486 \(861 bp\)/);
+      const tracks = page.locator(`${inSession} [data-tracks]`).first();
+      const ticks = () => tracks.locator('[data-genome-tracks] > g > text').allTextContents();
+      const ticks0 = (await ticks()).join(',');
+      await tracks.locator('button[aria-label="Zoom in"]').click();
+      assert.notEqual((await ticks()).join(','), ticks0, 'the tracks zoom');
+      await page.locator(`${inSession} [data-msa] button:has-text("Identity")`).first().click();
+      assert.equal(await page.locator(`${inSession} [data-render-error]`).count(), 0, 'interaction broke nothing');
+      // Close-ups (light), then one dark overview.
+      const shotEl = async (name: string, sel: string) => { const el = page.locator(`${inSession} ${sel}`).first(); await el.scrollIntoViewIfNeeded(); await shot(name, el); };
+      const shotTall = async (name: string, sel: string) => {
+        await setSize(1280, 1000);
+        await page.evaluate(() => { document.documentElement.style.zoom = '0.7'; });
+        try { await shotEl(name, sel); } finally { await page.evaluate(() => { document.documentElement.style.zoom = ''; }); await setSize(1280, 820); }
+      };
+      await tree.locator('button:has-text("Rectangular")').click();
+      await shotTall('render-bio-sequence', '[data-widget="Sequence"]');
+      await shotEl('render-bio-msa', '[data-widget="Alignment"]');
+      await shotEl('render-bio-tree', '[data-widget="Tree"]');
+      await tree.locator('button:has-text("Circular")').click();
+      await shotTall('render-bio-tree-circular', '[data-widget="Tree"]');
+      await shotTall('render-bio-plasmid', '[data-widget="Plasmid map"]');
+      await plasmid.locator('button:has-text("Linear")').click();
+      await shotEl('render-bio-plasmid-linear', '[data-widget="Plasmid map"]');
+      await shotEl('render-bio-tracks', '[data-widget="Genome tracks"] >> nth=2');
+      await shotEl('render-bio-gff', '[data-widget="Genome tracks"]');
+      await page.waitForTimeout(800);
+      await shotEl('render-bio-protein-3d', '[data-widget="3D structure"]');
+      await shotEl('render-bio-uniprot', '[data-widget="Protein features"]');
+      await shotTall('render-bio-pathway', '[data-widget="Pathway"]');
+      await shotEl('render-bio-volcano', '[data-widget="Volcano plot"]');
+      await shotEl('render-bio-ma', '[data-widget="MA plot"]');
+      await shotTall('render-bio-heatmap', '[data-widget="Heatmap"]');
+      await shotEl('render-bio-survival', '[data-widget="Survival curve"]');
+      await shotEl('render-bio-manhattan', '[data-widget="Manhattan plot"]');
+      await newChat();
+      assert.deepEqual(errors.slice(before), [], 'no console errors or exceptions while drawing biology');
+    });
+
+    // Last, so the biology session and its theme switch cannot touch the timing-sensitive steps above.
+    await step('biology in dark: every block follows the theme', async () => {
+      assert.ok(bioId, 'the biology session exists');
+      const before = errors.length;
+      const inSession = `[data-session="${bioId}"] [data-assistant-message]`;
+      await page.click('[data-nav="core.chat:search"]');
+      await page.click(`[data-session-row="${bioId}"] button`);
+      await page.waitForSelector(`${inSession} [data-seq-map]`, { timeout: 30_000 });
+      const theme = ((await invoke('prefs:get')) as { theme?: string }).theme ?? 'system';
+      await invoke('prefs:set', { theme: 'dark' });
+      await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
+      await page.waitForFunction((s) => document.querySelectorAll(`${s} [data-bioplot] [data-chart="vega"] svg`).length >= 4, inSession, { timeout: 30_000 });
+      await page.waitForSelector(`${inSession} [data-pathway] [data-graphviz="svg"] svg`, { timeout: 30_000 });
+      await setSize(1280, 1000);
+      await page.evaluate(() => { document.documentElement.style.zoom = '0.55'; });
+      try {
+        await page.locator(`${inSession} [data-widget="Plasmid map"]`).first().evaluate((el) => el.scrollIntoView({ block: 'start' }));
+        await page.waitForTimeout(1200);
+        await shot('render-bio-dark');
+      } finally {
+        await page.evaluate(() => { document.documentElement.style.zoom = ''; });
+        await setSize(1280, 820);
+        await invoke('prefs:set', { theme });
+        await page.waitForTimeout(400);
+      }
+      assert.equal(await page.locator(`${inSession} [data-render-error]`).count(), 0, 'the theme switch broke nothing');
+      await newChat();
+      assert.deepEqual(errors.slice(before), [], 'no console errors or exceptions');
     });
 
     // Expected: the refusals the frame probe provokes on purpose, the engine's own crash (requests cut

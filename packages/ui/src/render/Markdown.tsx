@@ -31,6 +31,7 @@ import { Artifact } from './Artifact.tsx';
 import { PatchView } from './DiffView.tsx';
 import { Citation, ImageView, type Source } from './Media.tsx';
 import { RenderBoundary, Widget } from './Widget.tsx';
+import { bioBlock } from './biology/kinds.ts';
 
 // The science and BI blocks load with their first use (Graphviz's wasm, smiles-drawer and the rest).
 const Science = () => import('./science/Science.tsx');
@@ -40,6 +41,9 @@ const LZ = {
   plot: lazyBlock('FunctionPlot'), graphviz: lazyBlock('GraphvizView'), smiles: lazyBlock('SmilesView'), molecule: lazyBlock('Molecule3D'),
   geojson: lazyBlock('GeoMap'), notebook: lazyBlock('NotebookView'), dashboard: lazyBlock('Dashboard'),
 };
+// The biology blocks (biology/kinds.ts) load with their first use too, as one chunk.
+const bioLazy = new Map<string, React.ComponentType<Record<string, unknown>>>();
+const bioComponent = (name: string) => bioLazy.get(name) ?? bioLazy.set(name, React.lazy(() => import('./biology/Biology.tsx').then((m) => ({ default: (m as unknown as Record<string, React.ComponentType<Record<string, unknown>>>)[name]! })))).get(name)!;
 const loadingBlock = <p className="p-3 text-[12px] text-hx-muted">Loading…</p>;
 const nestedMarkdown = (text: string) => <Markdown text={text} />;
 
@@ -75,6 +79,8 @@ export function FencedBlock({ lang, source, streaming = false, renderFence, onFi
     return <RenderBoundary fallback={(e, retry) => <div className="my-2 rounded-lg border border-hx-danger/40 p-2 text-[12px] text-hx-danger" data-render-error>A plugin renderer for {lang} failed: {e} <button type="button" className="underline" onClick={retry}>Try again</button><CodeBlock code={source} language={lang} /></div>}>{custom}</RenderBoundary>;
   }
   const kind = fenceKind(lang, source);
+  const bio = bioBlock(kind, lang);
+  if (bio) { const C = bioComponent(bio.component); return <Widget kind={bio.title} source={source} extension={bio.ext} onFix={onFix}><React.Suspense fallback={loadingBlock}><C source={source} streaming={streaming} format={lang.toLowerCase()} /></React.Suspense></Widget>; }
   let drawn: React.ReactElement;
   switch (kind) {
     case 'chart': drawn = <Chart source={source} streaming={streaming} />; break;
