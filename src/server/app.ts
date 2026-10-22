@@ -16,10 +16,20 @@ import { OUTPUT_STYLES } from '../core/prompt.ts';
 import { loadUserInstructions, loadUserSettings, saveUserInstructions, saveUserSettings } from '../core/settings.ts';
 import { McpbError } from '../mcp/mcpb.ts';
 import { VAULT_KINDS, type VaultActor, VaultError, type VaultKind, type VaultScope } from '../vault/store.ts';
-import { resolveIn, walk } from '../tools/paths.ts';
+import { PathError, resolveIn, walk } from '../tools/paths.ts';
 import { view } from '../tools/tasks.ts';
-import { type BrowserSessions, isSsoAdmin, NOBODY_ALLOWED, type OidcClient, OidcError, refusal } from './oidc.ts';
+import { BrowserSessions, isSsoAdmin, NOBODY_ALLOWED, type OidcClient, OidcError, refusal } from './oidc.ts';
 import { type ConcurrencyLimits, concurrencyLimits, concurrencyRefusal, RateLimiter, type Role, type SpendLedger, type UserStore } from './users.ts';
+import { UI_API_VERSION } from '../../packages/plugin-ui/src/manifest.ts';
+import { approvalItem, type HubEvent } from '../kernel/events.ts';
+import { PluginStateError } from '../kernel/harness.ts';
+import { cleanBaseUrl, providerBaseUrl, testProvider } from '../kernel/provider-keys.ts';
+import { resolveUiFile, UI_CSP, UI_CSP_DOCUMENT } from '../plugins/ui.ts';
+import { SessionBusyError } from '../core/session.ts';
+import type { ImageBlock, Message } from '../core/types.ts';
+import { DESKTOP_TOKEN_PREFIX, DesktopAuthError, DesktopSignIn, withParams } from './desktop-auth.ts';
+import { effectiveSettings } from './settings-api.ts';
+import { cleanName as cleanAttachmentName, deletePath, fileTree, gitDiff, gitLog, gitStatus, renamePath, saveUploads, searchFiles, WorkspaceError, WRITE_LIMIT, writeFile } from './workspace-api.ts';
 
 // The HTTP side: JSON API, an SSE stream per session, the built UI, and the
 // companion endpoints. Provider keys stay in this process.
@@ -47,8 +57,11 @@ export interface AppOptions {
   rateLimit?: number;
   /** Messages and workflow starts per minute per principal. */
   messageRateLimit?: number;
-  /** Single sign-on (OpenID Connect) and the browser sessions it signs in; needs `users`. */
-  sso?: { client: OidcClient; sessions: BrowserSessions };
+  /**
+   * Single sign-on (OpenID Connect) and the browser sessions it signs in; needs `users`.
+   * `desktop`: the desktop app's bearer sessions (default <data>/desktop-sessions.json).
+   */
+  sso?: { client: OidcClient; sessions: BrowserSessions; desktop?: BrowserSessions };
   /** Per-account limits on running turns and sandbox sessions (default: from the environment). */
   limits?: ConcurrencyLimits;
   /** Requests per minute per address to plugin routes (default HARNESS_ROUTE_RATE_LIMIT, else 600). */
@@ -81,6 +94,33 @@ async function readRaw(req: http.IncomingMessage, limit: number): Promise<string
   return Buffer.concat(chunks).toString('utf8');
 }
 
+/** A raw body as bytes (a file written from the desktop). */
+async function readBody(req: http.IncomingMessage, limit: number): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const c of req) {
+    size += (c as Buffer).length;
+    if (size > limit) throw new HttpError(413, `body too large (${Math.round(limit / 1048576)} MB at most)`);
+    chunks.push(c as Buffer);
+  }
+  return Buffer.concat(chunks);
+}
+
+/** Bytes under a folder, links not followed; stops counting once past `cap`. */
+async function treeSize(dir: string, cap: number): Promise<number> {
+  let total = 0;
+  const walk = async (d: string): Promise<void> => {
+    for (const e of await fs.readdir(d, { withFileTypes: true }).catch(() => [])) {
+      if (total > cap) return;
+      const full = path.join(d, e.name);
+      if (e.isDirectory()) await walk(full);
+      else if (e.isFile()) total += (await fs.lstat(full).catch(() => ({ size: 0 }))).size;
+    }
+  };
+  await walk(dir);
+  return total;
+}
+
 async function readJson(req: http.IncomingMessage, limit = 1_000_000): Promise<Record<string, unknown>> {
   if (!(req.headers['content-type'] ?? '').includes('application/json')) throw new HttpError(415, 'expected application/json');
   const chunks: Buffer[] = [];
@@ -107,6 +147,19 @@ export function safeEqual(a: string, b: string): boolean {
   const hb = crypto.createHash('sha256').update(b).digest();
   return crypto.timingSafeEqual(ha, hb);
 }
+
+/** The HTTP API's version: raised when a change would break a client (the desktop checks it). */
+export const API_VERSION = 1;
+const STARTED = Date.now();
+let packageVersion: string | undefined;
+async function harnessVersion(appRoot: string): Promise<string> {
+  packageVersion ??= await fs.readFile(path.join(appRoot, 'package.json'), 'utf8').then((t) => String((JSON.parse(t) as { version?: string }).version ?? '0.0.0'))
+    .catch(() => fs.readFile(new URL('../../package.json', import.meta.url), 'utf8').then((t) => String((JSON.parse(t) as { version?: string }).version ?? '0.0.0'), () => '0.0.0'));
+  return packageVersion;
+}
+/** Image types a model can be sent; anything else attached is saved as a file. */
+const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+const ATTACH_MAX = 20 * 1024 * 1024;
 
 const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.mjs': 'text/javascript; charset=utf-8', '.map': 'application/json' };
 const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -189,6 +242,12 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
   const ssoOnly = !!sso?.client.cfg.only;
   const ssoSecure = sso?.client.secure ? '; Secure' : '';
   const tokenSecure = o.loopback ? '' : '; Secure';
+  // The desktop's bearer sessions (sign-in through the system browser, RFC 8252): hashed on disk
+  // like browser sessions, longer-lived (HARNESS_DESKTOP_SESSION_DAYS, default 30; 14 idle days).
+  const desktopDays = Math.max(1, Number(process.env.HARNESS_DESKTOP_SESSION_DAYS ?? 30) || 30);
+  const desktop = sso ? sso.desktop ?? new BrowserSessions(harness.dataDir, { file: 'desktop-sessions.json', idleMs: Math.min(14, desktopDays) * 86_400_000, maxMs: desktopDays * 86_400_000 }) : undefined;
+  const desktopReady = sso && !sso.desktop ? desktop!.load().then(() => undefined, (e: Error) => console.error(`desktop sessions not loaded: ${e.message}`)) : Promise.resolve();
+  const desktopSignIn = new DesktopSignIn();
   // An account's sessions use every operator-scope vault entry only when it is an administrator (as the server sees it now).
   if (harness.vault && o.users) {
     harness.vault.isAdmin = (id) => {
@@ -237,12 +296,21 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     return { id: acc.id, name: acc.name, role: acc.role };
   }
 
+  /** The person behind a desktop bearer session; checked on every request like a browser session. */
+  function desktopPrincipal(token: string): Principal | undefined {
+    if (!sso || !desktop) return undefined;
+    const u = o.users!.get(desktop.get(token.slice(DESKTOP_TOKEN_PREFIX.length)) ?? '');
+    if (!u?.sso || u.disabled || refusal(sso.client.cfg, u.sso.email)) return undefined;
+    return { id: u.id, name: u.name, role: isSsoAdmin(sso.client.cfg, u.sso.email) ? 'admin' : 'member', email: u.sso.email };
+  }
+
   function who(req: http.IncomingMessage): { p: Principal; viaSession: boolean } | undefined {
     // Passed on by another server: its signature, nothing else, says who it is.
     const forwarded = req.headers['x-harness-cluster-auth'];
     if (typeof forwarded === 'string') { const p = forwardedPrincipal(req, forwarded); return p && { p, viaSession: false }; }
     if (o.authOff) return { p: { name: 'operator', role: 'admin' }, viaSession: false };
     const bearer = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1];
+    if (bearer?.startsWith(DESKTOP_TOKEN_PREFIX)) { const p = desktopPrincipal(bearer); return p && { p, viaSession: false }; }
     const byBearer = principalFor(bearer);
     if (byBearer) return { p: byBearer, viaSession: false };
     const bySession = ssoPrincipal(req);
@@ -261,23 +329,47 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     const p = url.pathname;
     if (p === '/auth/config' && method === 'GET') return send(res, 200, { oidc: !!sso, only: ssoOnly, login: sso ? '/auth/login' : null });
     if (p === '/auth/logout' && method === 'POST') return logout(req, res);
-    if (!sso || method !== 'GET' || (p !== '/auth/login' && p !== '/auth/callback')) throw new HttpError(404, 'not found');
+    const desktopRoute = p === '/auth/desktop/start' ? method === 'GET' : p === '/auth/desktop/token' && method === 'POST';
+    if (!sso || (!desktopRoute && (method !== 'GET' || (p !== '/auth/login' && p !== '/auth/callback')))) throw new HttpError(404, 'not found');
     // Anyone may start a sign-in: rate-limit by address.
     const r = limiter.take(`ip:${req.socket.remoteAddress ?? ''}`);
     if (!r.ok) throw new HttpError(429, `Too many requests; try again in ${r.retryAfterSec}s.`, { 'retry-after': String(r.retryAfterSec) });
-    if (p === '/auth/login') {
+    await desktopReady;
+    if (p === '/auth/desktop/token') {
+      // The app trades its one-time code and PKCE verifier for a bearer session.
+      const b = await readJson(req, 16_384);
+      let userId: string;
+      try { userId = desktopSignIn.redeem(b.code, b.code_verifier, b.redirect_uri); } catch (e) { if (e instanceof DesktopAuthError) throw new HttpError(e.status, e.message); throw e; }
+      const u = o.users!.get(userId);
+      if (!u?.sso || u.disabled || refusal(sso.client.cfg, u.sso.email)) throw new HttpError(403, 'This account may not sign in (disabled, or no longer allowed).');
+      const id = await desktop!.create(u.id);
+      const created = desktop!.createdAt(id) ?? Date.now();
+      return send(res, 200, { token: `${DESKTOP_TOKEN_PREFIX}${id}`, expiresAt: new Date(created + desktop!.maxMs).toISOString(), user: { id: u.id, name: u.name, role: isSsoAdmin(sso.client.cfg, u.sso.email) ? 'admin' : 'member', email: u.sso.email } });
+    }
+    let desk: ReturnType<DesktopSignIn['check']> | undefined;
+    if (p === '/auth/desktop/start') {
+      try { desk = desktopSignIn.check(url.searchParams); } catch (e) { if (e instanceof DesktopAuthError) return signInFailed(res, e.status, e.message); throw e; }
+    }
+    if (p === '/auth/login' || desk) {
       let started: { url: string; binding: string };
       try { started = await sso.client.start(); } catch (e) { return signInFailed(res, e instanceof OidcError ? e.status : 502, (e as Error).message); }
+      // An app's sign-in: the callback sends this browser to the app's loopback address instead of setting a cookie.
+      if (desk) desktopSignIn.begin(started.binding, desk);
       res.writeHead(302, { location: started.url, 'cache-control': 'no-store', 'set-cookie': `hw_oidc=${started.binding}; HttpOnly; SameSite=Lax; Path=/auth/callback; Max-Age=600${ssoSecure}` });
       return void res.end();
     }
     const cfg = sso.client.cfg;
+    const app = desktopSignIn.take(cookie(req, 'hw_oidc'));
     try {
       const id = await sso.client.finish(url.searchParams, cookie(req, 'hw_oidc'));
       const why = refusal(cfg, id.email);
       if (why) throw new OidcError(403, why);
       if (o.users!.bySso(id.iss, id.sub)?.disabled) throw new OidcError(403, 'This account is disabled. Ask an administrator.');
       const u = await o.users!.signInSso({ iss: id.iss, sub: id.sub, email: id.email }, isSsoAdmin(cfg, id.email) ? 'admin' : 'member');
+      if (app) {
+        res.writeHead(302, { location: desktopSignIn.issue(app, u.id), 'cache-control': 'no-store', 'set-cookie': `hw_oidc=; HttpOnly; SameSite=Lax; Path=/auth/callback; Max-Age=0${ssoSecure}` });
+        return void res.end();
+      }
       const sid = await sso.sessions.create(u.id, id.idToken);
       res.writeHead(302, {
         location: `${cfg.publicUrl}/`,
@@ -290,6 +382,11 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       return void res.end();
     } catch (e) {
       if (!(e instanceof OidcError)) throw e;
+      // The app waits on its loopback address: it hears why (RFC 6749 error parameters).
+      if (app) {
+        res.writeHead(302, { location: withParams(app.redirect, { error: e.status === 403 ? 'access_denied' : 'server_error', error_description: e.message.slice(0, 300), state: app.state }), 'cache-control': 'no-store' });
+        return void res.end();
+      }
       return signInFailed(res, e.status, e.message);
     }
   }
@@ -298,6 +395,13 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
   async function logout(req: http.IncomingMessage, res: http.ServerResponse) {
     // A cross-site page cannot set this header, so it cannot sign people out either.
     if (req.headers['x-harness'] !== '1') throw new HttpError(403, 'missing x-harness header');
+    // The desktop's bearer session ends here too (revoked on the server; the app forgets it).
+    const bearer = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1];
+    if (bearer?.startsWith(DESKTOP_TOKEN_PREFIX) && desktop) {
+      await desktopReady;
+      await desktop.delete(bearer.slice(DESKTOP_TOKEN_PREFIX.length));
+      return send(res, 200, { ok: true });
+    }
     const sid = cookie(req, 'hw_sid');
     // Signed in through the provider: sign out there too, where it offers that.
     const providerLogout = sso && sid && sso.sessions.get(sid) ? await sso.client.logoutUrl(sso.sessions.idToken(sid)).catch(() => undefined) : undefined;
@@ -398,6 +502,138 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     });
   }
 
+  /** A person changed workspace files: the session is told (its next step sees it) and the global stream says so. */
+  function userChanged(s: Session, me: Principal, change: 'wrote' | 'renamed' | 'deleted' | 'uploaded', paths: string[]): void {
+    s.userChangedFiles(change, paths, me.name);
+    harness.events.publish('notices', { level: 'info', text: `${me.name} ${change} ${paths.join(', ')}`, sessionId: s.meta.id }, { owner: s.meta.owner });
+  }
+
+  /**
+   * A message with attachments (at most 10, 20 MB in all): images go to a model that can see
+   * them as image blocks with the message (when it starts a turn); every other file - and an
+   * image the model cannot see - is saved under .harness/uploads/ and named in the message.
+   */
+  async function sendWithAttachments(s: Session, text: string, raw: unknown): Promise<{ state: string; images: string[]; files: string[] }> {
+    if (!Array.isArray(raw)) throw new HttpError(400, 'attachments must be a list of {name, mediaType, base64}');
+    if (raw.length > 10) throw new HttpError(400, 'at most 10 attachments');
+    let total = 0;
+    const atts = raw.map((a: unknown) => {
+      const x = (a && typeof a === 'object' ? a : {}) as Record<string, unknown>;
+      if (typeof x.name !== 'string' || !x.name.trim() || typeof x.base64 !== 'string') throw new HttpError(400, 'every attachment needs name and base64');
+      const data = Buffer.from(x.base64, 'base64');
+      total += data.length;
+      return { name: x.name, mediaType: typeof x.mediaType === 'string' ? x.mediaType.toLowerCase() : 'application/octet-stream', data };
+    });
+    if (total > ATTACH_MAX) throw new HttpError(413, 'attachments are at most 20 MB in all');
+    const vision = harness.registry.model(s.meta.model).vision;
+    const looksLike = (t: string, d: Buffer) => (t === 'image/png' ? d.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+      : t === 'image/jpeg' ? d[0] === 0xff && d[1] === 0xd8 : t === 'image/gif' ? d.subarray(0, 4).toString('latin1') === 'GIF8' : t === 'image/webp' ? d.subarray(8, 12).toString('latin1') === 'WEBP' : false);
+    const asImage = (a: { mediaType: string; data: Buffer }) => vision && s.status === 'idle' && IMAGE_TYPES.has(a.mediaType) && looksLike(a.mediaType, a.data);
+    const images = atts.filter(asImage);
+    const files = atts.filter((a) => !images.includes(a));
+    const save = async (list: typeof atts) => {
+      if (!list.length) return [] as string[];
+      if (s.meta.runtime.kind === 'companion') throw new HttpError(501, 'Files attached to a companion session cannot be saved on that computer from here; images can go to a model that sees images.');
+      try { return await saveUploads(s, list.map((a) => ({ name: a.name, data: a.data }))); } catch (e) { if (e instanceof WorkspaceError) throw new HttpError(e.status, e.message); throw e; }
+    };
+    let saved = await save(files);
+    const note = (imgs: typeof atts, paths: string[]) => [
+      ...(imgs.length ? [`[Images attached to this message: ${imgs.map((a) => cleanAttachmentName(a.name)).join(', ')}]`] : []),
+      ...(paths.length ? [`[Files attached, saved in the workspace: ${paths.join(', ')}]`] : []),
+    ].join('\n');
+    const blocks = (imgs: typeof atts): ImageBlock[] => imgs.map((a) => ({ type: 'image', media_type: a.mediaType, data: a.data.toString('base64') }));
+    try {
+      const state = await s.send(`${text}\n\n${note(images, saved)}`.trim(), images.length ? { images: blocks(images) } : {});
+      return { state, images: images.map((a) => cleanAttachmentName(a.name)), files: saved };
+    } catch (e) {
+      if (!(e instanceof SessionBusyError)) throw e;
+      // The session started working meanwhile: the images are saved as files instead.
+      saved = [...saved, ...await save(images)];
+      return { state: await s.send(`${text}\n\n${note([], saved)}`.trim()), images: [], files: saved };
+    }
+  }
+
+  /**
+   * Forks a session at a turn: a new session (the requester's) with the conversation up to
+   * that turn, the same model, mode and runtime settings, and a workspace of its own - never
+   * the original's folder. Sandbox and data-folder workspaces are copied when small enough
+   * (HARNESS_FORK_COPY_MB, default 200; else it starts empty and says so); a server folder
+   * gets a new git worktree of its repository (without the original's uncommitted changes);
+   * a server folder that is not a repository, and a companion session, are refused.
+   */
+  async function fork(s: Session, me: Principal, b: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const r = s.meta.runtime;
+    if (r.kind === 'companion') throw new HttpError(501, 'A companion session works in a folder on someone\'s computer: it cannot be forked into a folder of its own from here.');
+    if (r.kind === 'local' && me.role !== 'admin') throw new HttpError(403, 'Server folders are for administrators.');
+    const typed = (msg: Message) => msg.role === 'user' && !msg.compactionSummary && !msg.content.some((x) => x.type === 'tool_result') && msg.content.some((x) => x.type === 'text' && !x.text.startsWith('<system-reminder>'));
+    const starts = s.history.map((msg, i) => (typed(msg) ? i : -1)).filter((i) => i >= 0);
+    const turn = b.turn === undefined ? starts.length : Number(b.turn);
+    if (!Number.isInteger(turn) || turn < 0 || turn > starts.length) throw new HttpError(400, `turn must be a whole number from 0 to ${starts.length}`);
+    const cut = turn < starts.length ? starts[turn]! : s.history.length;
+    const history = s.history.slice(0, cut);
+    const whole = cut === s.history.length;
+    let runtime: SessionMeta['runtime'] = { kind: r.kind, network: r.network, ...(r.sandbox ? { sandbox: r.sandbox } : {}), ...(r.image ? { image: r.image } : {}), ...(r.setup ? { setup: r.setup } : {}) };
+    let worktree = false;
+    let note: string | undefined;
+    if (r.kind === 'local' && r.path) {
+      const repo = r.worktree ? r.path : await fs.stat(path.join(r.path, '.git')).then(() => r.path, () => undefined);
+      if (!repo) throw new HttpError(409, 'This session works in a server folder that is not a git repository: a fork would share the folder with it. Fork a session in a sandbox, or one with its own worktree.');
+      runtime = { ...runtime, path: repo };
+      worktree = true;
+      note = 'The fork works in a new git worktree of the repository, from its current commit: uncommitted changes of the original are not in it.';
+    }
+    if (runtime.kind === 'docker' || (runtime.kind === 'local' && runtime.sandbox === 'docker')) capped('sandboxes', me.id);
+    const f = await harness.sessions.create({
+      title: `Fork of ${s.meta.title}`.slice(0, 80), model: s.meta.model, effort: s.meta.effort, mode: s.meta.mode, runtime, owner: me.id, worktree,
+      allowHosts: r.network === 'allowlist' ? await s.allowHosts() : undefined,
+    }).catch((e: Error) => { throw e.name === 'WorktreeError' || e.constructor.name === 'WorktreeError' ? new HttpError(400, e.message) : e; });
+    // Its own copy of the files, when they are the session's alone (a sandbox's or the data folder's).
+    if (!worktree) {
+      const cap = Math.max(1, Number(process.env.HARNESS_FORK_COPY_MB ?? 200) || 200) * 1024 * 1024;
+      const size = await treeSize(s.workspace, cap);
+      if (size <= cap) await fs.cp(s.workspace, f.workspace, { recursive: true, force: true, verbatimSymlinks: true }).catch((e: Error) => { note = `The workspace could not be copied: ${e.message}`; });
+      else note = `The workspace is larger than ${Math.round(cap / 1048576)} MB: the fork starts with an empty one.`;
+    }
+    const keep = cut > s.meta.contextStart;
+    await f.adoptHistory({ history, todos: whole ? s.meta.todos : [], tainted: !!s.meta.tainted, contextStart: keep ? s.meta.contextStart : 0, compactions: keep ? s.meta.compactions : 0, lastPromptTokens: whole ? s.meta.lastPromptTokens : 0 });
+    f.meta.forkedFrom = { id: s.meta.id, turn };
+    f.meta.turns = turn;
+    if (s.meta.outputStyle) f.meta.outputStyle = s.meta.outputStyle;
+    if (s.meta.gitUrl) f.meta.gitUrl = s.meta.gitUrl;
+    const first = history.find(typed);
+    if (first && s.meta.firstPrompt) f.meta.firstPrompt = s.meta.firstPrompt;
+    await f.saveMeta();
+    harness.events.sessionChanged('updated', f);
+    return { ...f.meta, status: f.status, ...(note ? { note } : {}) };
+  }
+
+  /** The model catalog as clients see it (GET /api/models, and /api/config's models). */
+  const modelCatalog = () => harness.registry.listModels().map((m) => ({ id: m.id, label: m.label, provider: m.provider, contextWindow: m.contextWindow, compactAt: m.compactAt, effort: m.effort, efforts: m.efforts, available: m.available, vision: m.vision, notes: m.notes }));
+
+  /** A plugin as GET /api/plugins lists it: never its folder. */
+  const pluginView = (e: import('../kernel/harness.ts').PluginEntry) => ({
+    name: e.name, version: e.version, description: e.description, source: e.source, enabled: e.enabled, required: e.required,
+    contributes: e.loaded?.contributes ?? [], signature: e.signature ?? null, permissions: e.loaded?.permissions ?? null,
+    ...(e.ui ? { ui: e.ui, uiBase: `/api/plugins/${e.name}/ui/` } : {}), ...(e.uiError ? { uiError: e.uiError } : {}), ...(e.uiHash ? { uiHash: e.uiHash } : {}),
+    ...(e.error ? { error: e.error } : {}),
+  });
+
+  /**
+   * GET /api/events: everything this person may see, as server-sent events framed like a
+   * session's (`id: <seq>` and `data: {seq, topic, payload}`), replayed after Last-Event-ID
+   * (or ?after=) from the ring, a comment every 20 s; ?topics=a,b narrows it.
+   */
+  function globalEvents(req: http.IncomingMessage, res: http.ServerResponse, url: URL, me: Principal): void {
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive', 'x-accel-buffering': 'no' });
+    const after = Number(url.searchParams.get('after') ?? req.headers['last-event-id'] ?? 0) || 0;
+    const topics = new Set((url.searchParams.get('topics') ?? '').split(',').map((t) => t.trim()).filter(Boolean));
+    const visible = (e: HubEvent) => ('all' in e.audience || mayUse(me, e.audience.owner)) && (!topics.size || topics.has(e.topic));
+    res.write('retry: 3000\n\n');
+    const off = harness.events.subscribe(after, (e) => { if (visible(e)) res.write(`id: ${e.seq}\ndata: ${JSON.stringify({ seq: e.seq, topic: e.topic, payload: e.payload })}\n\n`); });
+    const ping = setInterval(() => res.write(': ping\n\n'), 20_000);
+    req.on('close', () => { off(); clearInterval(ping); });
+  }
+
   async function route(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://x');
     const p = url.pathname;
@@ -405,7 +641,15 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     // Accounts, sign-ins, spend and companions another server sharing the data folder changed
     // (a stat at most once a second each; nothing is read unless a file changed).
     if (p.startsWith('/api/') || p.startsWith('/auth/')) {
-      await Promise.all([o.users?.refresh(), sso?.sessions.refresh(), o.spend?.refresh()]);
+      await Promise.all([o.users?.refresh(), sso?.sessions.refresh(), o.spend?.refresh(), desktopReady.then(() => desktop?.refresh())]);
+    }
+
+    // ---- health: before sign-in, so it says only that the server is up and which version ----
+    if (p === '/api/health' && method === 'GET') {
+      let signedIn = false;
+      try { signedIn = !!who(req); } catch { /* a refused token is just not signed in */ }
+      const base = { ok: true, version: await harnessVersion(o.appRoot), apiVersion: API_VERSION };
+      return send(res, 200, signedIn ? { ...base, uptimeSec: Math.round((Date.now() - STARTED) / 1000), node: process.version } : base);
     }
 
     // ---- companion protocol (its own token) ----
@@ -441,8 +685,9 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     }
 
     // ---- plugin routes: /api/plugins/<plugin>/<path> (webhooks: alerts, chat, CI/CD) ----
+    // (The server's own paths there - ui/..., enable, disable - are signed-in routes below; no plugin may register them.)
     const pr = /^\/api\/plugins\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/(.+)$/.exec(p);
-    if (pr) return pluginRoute(req, res, url, pr[1]!, pr[2]!, method);
+    if (pr && !/^(ui\/|enable$|disable$)/.test(pr[2]!)) return pluginRoute(req, res, url, pr[1]!, pr[2]!, method);
 
     // ---- triggers: a secret URL starts a stored prompt (Slack, a GitHub webhook, a phone shortcut) ----
     const trig = /^\/api\/triggers\/(hwt_[A-Za-z0-9_-]{20,64})$/.exec(p);
@@ -490,6 +735,97 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
 
     if (p === '/api/me' && method === 'GET') return send(res, 200, { ...me, spentToday: o.spend?.spentToday(me.id) ?? 0, accounts: (o.users?.size ?? 0) > 0 });
 
+    // ---- for desktop clients: version, the global event stream, waiting requests ----
+    if (p === '/api/version' && method === 'GET') return send(res, 200, { version: await harnessVersion(o.appRoot), apiVersion: API_VERSION, uiApiVersion: UI_API_VERSION });
+    if (p === '/api/events' && method === 'GET') return globalEvents(req, res, url, me);
+    if (p === '/api/approvals' && method === 'GET') {
+      await sessions.sync();
+      const out = [];
+      for (const m of sessions.list()) {
+        if (!mayUse(me, m.owner)) continue;
+        const s = sessions.get(m.id)!;
+        for (const ev of s.pendingRequests()) out.push(approvalItem(s, ev, harness.events.askedAt((ev as { requestId: string }).requestId)));
+      }
+      return send(res, 200, out.sort((a, b) => a.at - b.at));
+    }
+
+    // ---- providers and models (keys only in: never returned or logged) ----
+    if (p === '/api/models' && method === 'GET') return send(res, 200, modelCatalog());
+    if (p === '/api/providers' && method === 'GET') {
+      await harness.providerKeys.refresh();
+      return send(res, 200, [...registry.providers.entries()].map(([id, def]) => {
+        const k = registry.keyInfo(id);
+        const baseUrl = providerBaseUrl(registry, id);
+        return {
+          id, label: def.label ?? id, keyEnv: def.keyEnv, configured: k.source !== 'none' || !!def.keyless || registry.hasInstance(id), source: k.source,
+          ...(baseUrl ? { baseUrl } : {}), baseUrlEditable: !!def.defaultBaseUrl,
+          models: [...registry.models.values()].filter((m) => m.provider === id).map((m) => m.id), ...(def.keyless ? { keyless: true } : {}),
+        };
+      }));
+    }
+    const prov = /^\/api\/providers\/([^/]+)(?:\/(key|test))?$/.exec(p);
+    if (prov) {
+      if (!admin) throw new HttpError(403, 'administrators only');
+      const id = decodeURIComponent(prov[1]!);
+      const def = registry.providers.get(id);
+      if (!def) throw new HttpError(404, 'no such provider');
+      const actor: VaultActor = { account: me.id, admin: true, label: me.id ? `account:${me.id}` : 'operator' };
+      if (!prov[2] && method === 'PUT') {
+        const b = await readJson(req, 100_000);
+        if (b.apiKey !== undefined && (typeof b.apiKey !== 'string' || b.apiKey.trim().length < 8 || b.apiKey.length > 4096 || /\s/.test(b.apiKey.trim()))) throw new HttpError(400, 'apiKey must be the key as one string (8-4096 characters, no spaces)');
+        if (b.baseUrl !== undefined && b.baseUrl !== null && b.baseUrl !== '' && !def.defaultBaseUrl) throw new HttpError(400, `${id}'s address is set where it is configured (HARNESS_MODELS_JSON), not here`);
+        let baseUrl: string | undefined;
+        try { baseUrl = b.baseUrl === undefined || b.baseUrl === null || b.baseUrl === '' ? undefined : cleanBaseUrl(b.baseUrl); } catch (e) { throw new HttpError(400, (e as Error).message); }
+        try {
+          if (typeof b.apiKey === 'string') await harness.providerKeys.setKey(id, b.apiKey.trim(), actor);
+        } catch (e) { throw e instanceof VaultError ? new HttpError(e.status, e.message) : new HttpError(409, (e as Error).message); }
+        if (b.baseUrl !== undefined) await harness.providerKeys.setBaseUrl(id, baseUrl);
+        const k = registry.keyInfo(id);
+        return send(res, 200, { id, configured: k.source !== 'none' || !!def.keyless, source: k.source, ...(harness.providerKeys.baseUrl(id) ? { baseUrl: harness.providerKeys.baseUrl(id) } : {}), ...(k.source === 'env' && typeof b.apiKey === 'string' ? { note: `The environment's key (${def.keyEnv.join(' or ')}) is in use and wins over the stored one.` } : {}) });
+      }
+      if (prov[2] === 'key' && method === 'DELETE') {
+        try { return send(res, 200, { ok: await harness.providerKeys.removeKey(id, actor), source: registry.keyInfo(id).source }); } catch (e) { throw e instanceof VaultError ? new HttpError(e.status, e.message) : e; }
+      }
+      if (prov[2] === 'test' && method === 'POST') return send(res, 200, await testProvider(registry, id));
+      throw new HttpError(405, 'method not allowed');
+    }
+
+    // ---- plugins: the list with their UI halves, their UI files, switching on and off ----
+    if (p === '/api/plugins' && method === 'GET') return send(res, 200, harness.plugins.list().map(pluginView));
+    const pui = /^\/api\/plugins\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/ui\/(.+)$/.exec(p);
+    if (pui && method === 'GET') {
+      const e = harness.plugins.get(pui[1]!);
+      if (!e?.enabled || !e.ui) throw new HttpError(404, 'not found');
+      // The raw path: each segment is checked before it is decoded (no "..", no dotfiles, no encoded slashes).
+      const raw = (req.url ?? '').split('?')[0]!.replace(/^\/api\/plugins\/[^/]+\/ui\//, '');
+      if (raw.split('/').some((seg) => /%2f|%5c|%00/i.test(seg))) throw new HttpError(404, 'not found');
+      const f = await resolveUiFile(e.dir, e.ui, raw);
+      if (!f) throw new HttpError(404, 'not found');
+      const data = await fs.readFile(f.file);
+      res.writeHead(200, {
+        'content-type': f.type, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer',
+        'content-security-policy': /^text\/html|^image\/svg/.test(f.type) ? UI_CSP_DOCUMENT : UI_CSP,
+        ...(e.uiHash ? { etag: `"${e.uiHash.slice(0, 32)}"` } : {}),
+      });
+      return void res.end(data);
+    }
+    const pst = /^\/api\/plugins\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})(?:\/(enable|disable))?$/.exec(p);
+    if (pst && ((method === 'POST' && pst[2]) || (method === 'DELETE' && !pst[2])) && pst[1] !== 'install' && pst[1] !== 'catalogue') {
+      if (!admin) throw new HttpError(403, 'administrators only: plugins change what every session can do');
+      try {
+        if (method === 'DELETE') { await harness.plugins.uninstall(pst[1]!); return send(res, 200, { ok: true }); }
+        return send(res, 200, pluginView(await harness.plugins.setEnabled(pst[1]!, pst[2] === 'enable')));
+      } catch (e) { if (e instanceof PluginStateError) throw new HttpError(e.status, e.message); throw e; }
+    }
+
+    // ---- the settings in force for this person, with where each comes from ----
+    if (p === '/api/settings/effective' && method === 'GET') {
+      const sidQ = url.searchParams.get('session');
+      let workspace: string | undefined;
+      if (sidQ) { const s = sessionFor(me, sidQ); if (s.meta.runtime.kind !== 'companion') workspace = s.workspace; }
+      return send(res, 200, { ...(await effectiveSettings({ dataDir: harness.dataDir, owner: me.id, workspace, plugins: harness.plugins.list() })), ...(sidQ ? { session: sidQ } : {}) });
+    }
+
     // ---- a person's own instructions and settings, for every session they own ----
     if (p === '/api/me/instructions' || p === '/api/me/settings') {
       const dataDir = harness.dataDir;
@@ -532,7 +868,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       const docker = await dockerAvailable();
       const image = dockerDefaults().image;
       return send(res, 200, {
-        models: registry.listModels().map((m) => ({ id: m.id, label: m.label, provider: m.provider, contextWindow: m.contextWindow, compactAt: m.compactAt, effort: m.effort, efforts: m.efforts, available: m.available, vision: m.vision, notes: m.notes })),
+        models: modelCatalog(),
         runtimes: {
           docker, dockerImage: docker ? (await imageExists(image) ? image : null) : null,
           // The images a new sandbox session may pick (allowed by the operator and built).
@@ -598,7 +934,26 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
 
     if (p === '/api/sessions' && method === 'GET') {
       await sessions.sync();
-      return send(res, 200, sessions.list().filter((m) => mayUse(me, m.owner)).map((m) => ({ ...m, status: sessions.statusOf(m.id) })));
+      const q = url.searchParams;
+      const all = sessions.list().filter((m) => mayUse(me, m.owner));
+      // Without query, archived, limit or before: the plain array, as before.
+      if (!['query', 'archived', 'limit', 'before'].some((k) => q.has(k))) return send(res, 200, all.map((m) => ({ ...m, status: sessions.statusOf(m.id) })));
+      const needle = (q.get('query') ?? '').trim().toLowerCase();
+      const archived = q.get('archived') === '1';
+      const limit = Math.min(200, Math.max(1, Number(q.get('limit')) || 50));
+      // The cursor is the last row's "updatedAt:id" (newest first).
+      const before = /^(\d+)(?::([a-f0-9]{16}))?$/.exec(q.get('before') ?? '');
+      const firstText = (id: string) => {
+        const h = sessions.get(id)?.history.find((x) => x.role === 'user');
+        return (h?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join(' ');
+      };
+      const hits = all.filter((m) => !!m.archived === archived)
+        .filter((m) => !before || m.updatedAt < Number(before[1]) || (m.updatedAt === Number(before[1]) && !!before[2] && m.id < before[2]))
+        .sort((a, b) => b.updatedAt - a.updatedAt || (a.id < b.id ? 1 : -1))
+        .filter((m) => !needle || m.title.toLowerCase().includes(needle) || (m.firstPrompt ?? firstText(m.id)).toLowerCase().includes(needle));
+      const page = hits.slice(0, limit);
+      const last = page.at(-1);
+      return send(res, 200, { sessions: page.map((m) => ({ ...m, status: sessions.statusOf(m.id) })), ...(hits.length > limit && last ? { next: `${last.updatedAt}:${last.id}` } : {}) });
     }
     if (p === '/api/sessions' && method === 'POST') {
       const b = await readJson(req);
@@ -843,6 +1198,34 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         try { return send(res, 202, await s.resumeRun(rm[2]!)); } catch (e) { throw new HttpError(409, (e as Error).message); }
       }
     }
+    // ---- a session's workspace from the desktop: tree, search, upload, rename; git status, diff, log ----
+    const fg = /^\/api\/sessions\/([a-f0-9]{16})\/(files|git)\/(\w+)$/.exec(p);
+    if (fg) {
+      const s = sessionFor(me, fg[1]!);
+      const what = `${fg[2]}/${fg[3]}`;
+      try {
+        if (what === 'files/tree' && method === 'GET') return send(res, 200, await fileTree(s, url.searchParams.get('path') ?? '', Math.min(3, Math.max(1, Number(url.searchParams.get('depth')) || 1))));
+        if (what === 'files/search' && method === 'GET') return send(res, 200, await searchFiles(s, url.searchParams.get('q') ?? '', { content: url.searchParams.get('content') === '1', limit: Number(url.searchParams.get('limit')) || undefined }));
+        if (what === 'files/rename' && method === 'POST') {
+          const b = await readJson(req);
+          const r = await renamePath(s, b.from, b.to, b.overwrite === true);
+          userChanged(s, me, 'renamed', [r.from, r.to]);
+          return send(res, 200, r);
+        }
+        if (what === 'files/upload' && method === 'POST') {
+          const b = await readJson(req, Math.ceil(WRITE_LIMIT * 1.4) + 4096);
+          if (typeof b.base64 !== 'string') throw new HttpError(400, 'base64 is required');
+          const r = await writeFile(s, b.path, Buffer.from(b.base64, 'base64'));
+          userChanged(s, me, 'uploaded', [r.path]);
+          return send(res, 201, r);
+        }
+        if (what === 'git/status' && method === 'GET') return send(res, 200, await gitStatus(s));
+        if (what === 'git/diff' && method === 'GET') return send(res, 200, await gitDiff(s, url.searchParams.get('path'), url.searchParams.get('staged') === '1'));
+        if (what === 'git/log' && method === 'GET') return send(res, 200, await gitLog(s, Number(url.searchParams.get('limit')) || 50));
+      } catch (e) { if (e instanceof WorkspaceError) throw new HttpError(e.status, e.message); throw e; }
+      throw new HttpError(404, 'not found');
+    }
+
     const m = /^\/api\/sessions\/([a-f0-9]{16})(?:\/(\w+))?$/.exec(p);
     if (m) {
       const s = sessionFor(me, m[1]!);
@@ -857,17 +1240,50 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
           effort: EFFORTS.includes(b.effort as Effort) ? b.effort as Effort : undefined,
           mode: MODES.includes(b.mode as PermissionMode) ? b.mode as PermissionMode : undefined,
         });
+        // Filing: pinned to the top, a group (folder) name ('' removes it).
+        if (typeof b.pinned === 'boolean') { if (b.pinned) s.meta.pinned = true; else delete s.meta.pinned; }
+        if (typeof b.group === 'string') { const g = b.group.replace(/\s+/g, ' ').trim().slice(0, 60); if (g) s.meta.group = g; else delete s.meta.group; }
+        if (typeof b.pinned === 'boolean' || typeof b.group === 'string') await s.saveMeta();
+        harness.events.sessionChanged('updated', s);
         return send(res, 200, s.meta);
+      }
+      if ((action === 'archive' || action === 'unarchive') && method === 'POST') {
+        if (action === 'archive') s.meta.archived = true; else delete s.meta.archived;
+        await s.saveMeta();
+        harness.events.sessionChanged('updated', s);
+        return send(res, 200, s.meta);
+      }
+      if (action === 'history' && method === 'GET') {
+        // Paged history (the full GET still returns all of it): `after` messages skipped, `limit` returned.
+        const after = Math.max(0, Math.floor(Number(url.searchParams.get('after')) || 0));
+        const limit = Math.min(500, Math.max(1, Math.floor(Number(url.searchParams.get('limit')) || 100)));
+        const page = s.history.slice(after, after + limit);
+        return send(res, 200, { total: s.history.length, after, messages: page, ...(after + page.length < s.history.length ? { next: after + page.length } : {}) });
+      }
+      if (action === 'fork' && method === 'POST') return send(res, 201, await fork(s, me, await readJson(req)));
+      if (action === 'files' && (method === 'PUT' || method === 'DELETE')) {
+        try {
+          if (method === 'DELETE') {
+            const r = await deletePath(s, url.searchParams.get('path') ?? '');
+            userChanged(s, me, 'deleted', [r.path]);
+            return send(res, 200, { ok: true, ...r });
+          }
+          const r = await writeFile(s, url.searchParams.get('path') ?? '', await readBody(req, WRITE_LIMIT));
+          userChanged(s, me, 'wrote', [r.path]);
+          return send(res, 200, r);
+        } catch (e) { if (e instanceof WorkspaceError) throw new HttpError(e.status, e.message); throw e; }
       }
       if (action === 'messages' && method === 'POST') {
         limited(messageLimiter, me);
-        const b = await readJson(req);
+        const b = await readJson(req, Math.ceil(ATTACH_MAX * 1.4) + 1_000_000);
         if (typeof b.text !== 'string' || !b.text.trim()) throw new HttpError(400, 'text is required');
         const over = o.spend?.over(s.meta.owner);
         if (over) throw new HttpError(429, over);
         // A message to a working session joins its turn; one to an idle session starts a turn.
         if (s.status === 'idle') capped('running', s.meta.owner);
-        return send(res, 202, { state: await s.send(b.text.slice(0, 200_000)) });
+        const text = b.text.slice(0, 200_000);
+        if (b.attachments === undefined) return send(res, 202, { state: await s.send(text) });
+        return send(res, 202, await sendWithAttachments(s, text, b.attachments));
       }
       if (action === 'abort' && method === 'POST') { s.abort(); return send(res, 200, { ok: true }); }
       if (action === 'export' && method === 'GET') {
@@ -927,7 +1343,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         if (s.meta.runtime.kind === 'companion') throw new HttpError(400, 'Files of a companion session live on that computer.');
         const host = { root: s.workspace, displayRoot: s.workspace };
         const rel = url.searchParams.get('path') || '.';
-        const target = await resolveIn(host, rel);
+        const target = await resolveIn(host, rel).catch((e: Error) => { throw e instanceof PathError ? new HttpError(400, e.message) : e; });
         const st = await fs.stat(target).catch(() => null);
         if (!st) throw new HttpError(404, 'not found');
         if (st.isDirectory()) {

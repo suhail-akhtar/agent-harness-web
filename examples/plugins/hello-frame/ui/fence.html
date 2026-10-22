@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>hello fence</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="out" class="card">...</div>
+<script>
+// A renderer for ```hello code fences: the host passes the fence's text as context.code.
+(function () {
+  var PROTOCOL = 'harness-ui/1';
+  addEventListener('message', function (e) {
+    if (e.source !== parent || !e.data || e.data.protocol !== PROTOCOL || e.data.kind !== 'init') return;
+    var code = String((e.data.context && e.data.context.code) || '').trim();
+    document.getElementById('out').textContent = code ? 'Hello, ' + code + '!' : 'Hello!';
+    parent.postMessage({ protocol: PROTOCOL, kind: 'call', id: 1, method: 'frame.resize', params: { height: document.body.scrollHeight } }, '*');
+  });
+})();
+</script>
+</body>
+</html>

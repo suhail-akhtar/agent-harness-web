@@ -95,6 +95,7 @@ export class SessionManager {
   async create(opts: Parameters<typeof Session.create>[1]): Promise<Session> {
     const s = await Session.create(this.deps, opts);
     this.sessions.set(s.meta.id, s);
+    this.lifecycle('created', s);
     return s;
   }
 
@@ -105,7 +106,12 @@ export class SessionManager {
     if (elsewhere) throw new SessionElsewhereError(elsewhere);
     await s.destroy();
     this.sessions.delete(id);
+    this.lifecycle('deleted', s);
     return true;
+  }
+
+  private lifecycle(type: 'created' | 'deleted', s: Session): void {
+    try { this.deps.onLifecycle?.(type, s); } catch { /* a listener never breaks the manager */ }
   }
 
   /** Live sessions an account owns (undefined: the single-user server's, or the operator's). */

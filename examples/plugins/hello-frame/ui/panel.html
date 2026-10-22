@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hello panel</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h2>Hello panel</h2>
+  <p id="where" class="muted">Next to a session.</p>
+</main>
+<script>
+(function () {
+  var PROTOCOL = 'harness-ui/1';
+  addEventListener('message', function (e) {
+    if (e.source !== parent || !e.data || e.data.protocol !== PROTOCOL || e.data.kind !== 'init') return;
+    var ctx = e.data.context || {};
+    document.getElementById('where').textContent = ctx.sessionId ? 'Next to session ' + ctx.sessionId + '.' : 'Next to a page.';
+  });
+})();
+</script>
+</body>
+</html>

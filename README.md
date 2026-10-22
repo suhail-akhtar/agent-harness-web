@@ -92,7 +92,7 @@ await s.send('Fix the failing tests');
 
 ## Models and providers
 
-Five providers are built in: Anthropic (Messages API, server-side compaction and context editing), OpenAI (Responses API), DeepSeek, Moonshot AI (Kimi) and Z.ai (GLM) (Chat Completions). A model whose provider has no key on the server is shown greyed out.
+Five providers are built in: Anthropic (Messages API, server-side compaction and context editing), OpenAI (Responses API), DeepSeek, Moonshot AI (Kimi) and Z.ai (GLM) (Chat Completions). A model whose provider has no key on the server is shown greyed out. A key comes from the server's environment, else from one an administrator set through the API (`PUT /api/providers/:id`, kept in the key vault, in force at the next request without a restart; see [HTTP API for desktop clients](#http-api-for-desktop-clients)).
 
 **Any OpenAI-compatible server, configured by the operator.** List the models in `HARNESS_MODELS_JSON` (a JSON array, or `{ "models": [...] }`) or in a file named by `HARNESS_MODELS_FILE`; each appears in the model picker and works with every tool, sub-agent and workflow. Keys stay in the server's environment: an entry names the variable that holds its key (`apiKeyEnv`), never the key. A malformed entry stops the server at start with what is wrong.
 
@@ -313,6 +313,10 @@ An install from a URL:
 4. loads it for new sessions.
 
 The UI's **Plugins** dialog lists what is loaded, how each plugin was admitted, and what it declared it needs.
+
+**The UI half** (for the desktop app, and any host): an optional `ui` section in `harness-plugin.json` adds navigation entries, pages, panels, commands, slash commands, settings sections, renderers, home cards, status items, themes, prompts and onboarding steps - the contract is `packages/plugin-ui` and [docs/desktop/DESIGN.md](docs/desktop/DESIGN.md) section 4. The server validates it when the plugin loads (`validateUiManifest`; `native` trust only for bundled or signature-verified plugins, else at most `frame`); a bad section is reported as `uiError` in `GET /api/plugins` and never stops the server half. A frame's files are served at `/api/plugins/<name>/ui/<entry path>`: only files under the top-level folder(s) its frame entries live in (an entry at the top level: that file alone), never a dotfile, a `..` path or a link that leads out of that folder, with `Cache-Control: no-cache` and, for HTML and SVG, `Content-Security-Policy: default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; frame-ancestors *; sandbox allow-scripts allow-forms` - frames reach the host only through `postMessage`. `uiHash` (SHA-256 over the `ui` section and every servable file) changes with any of them, so a person's grant to a frame plugin can be tied to it. The paths `ui/...`, `enable` and `disable` under `/api/plugins/<name>/` are the server's: a plugin cannot register routes there. Examples: `plugins/research` (a declarative prompt board, commands and a `/research` slash command), `plugins/quality-gates` (an account settings section from a JSON Schema) and `examples/plugins/hello-frame` (a frame page, a session panel and a renderer for ` ```hello ` fences that implement the frame protocol in an inline script, calling the plugin's own route).
+
+**Switching plugins off and on** (administrators, `POST /api/plugins/<name>/disable` and `/enable`): a plugin switched off leaves the registry at once - its tools, agents, workflows, gates, skills, hooks, routes and event handlers - so new sessions (and new tool lists) go without it, its background loops get no lease and it may not start or drive sessions; switched on, everything comes back. The choice is kept in `<data>/plugins-state.json`: a plugin off at a start is listed but not loaded (none of its code runs) until it is switched on, which loads it then. `HARNESS_REQUIRED_PLUGINS` (comma-separated names) cannot be switched off. `DELETE /api/plugins/<name>` removes a catalogue-installed plugin (its folder under `<data>/plugins`); bundled and operator plugins are switched off instead. Every change is a `plugins` event on the global stream.
 
 **Declared permissions are enforced on the channels the harness hands out.** `permissions.routes` and `permissions.sessions` are the only way to `registerRoute`, `api.sessions` and `api.events`. A plugin's `permissions.secrets` are the only secrets `api.secret(name)` returns, and the only `${VAR}`s its MCP servers' configuration expands; an undeclared secret expands to nothing. `api.fetch` reaches only the hosts in `permissions.network`, with redirects re-checked; a private address needs an exact entry. Its tools' `ctx.services.vault` reveals only the key vault entries `permissions.vault` names (globs); any other is refused and audited (see [Key Vault](#key-vault)). MCP servers never inherit the server's environment. Before this, they received every provider key on the machine. Plugin code still runs in the server process, so code that ignores these channels is not contained: that is what signing and review are for.
 
@@ -1038,6 +1042,101 @@ HARNESS_HOST=0.0.0.0
 - **Companions** keep a long poll open to one server, and jobs for a companion session are sent from the server driving it: point a companion at one server's own address (its `HARNESS_NODE_URL`), or route `/api/companion/*` to one server at the load balancer.
 - **Tested** with two servers in one process on one temporary folder (`test/cluster.test.ts`): a session made on one is listed and read on the other; while one runs a turn, the other's own attempt is refused, a message sent to it is passed on to the holder and joins its turn, its event stream is the holder's, and a request already passed on gets the 409; after the turn the other server takes its turn and its model is sent the first server's history; a deleted session disappears from both; a holder that stops beating loses the session to the other after the lease time, which closes the interrupted turn and answers; with both servers' timers due at the same moment a schedule fires once, and after the leader stops the other fires the next; accounts made on both at once, spend charged on both, sign-ins and companions made on one are all seen by the other; three writers' atomic writes are never read half-written, 40 overlapping locked read-change-writes lose nothing, and a lock left by a crash is broken; a heartbeat held between its read and its write while another server takes the lease over (or while the lease is released) does not write over the takeover (or bring the lease back); a request line naming another host is still passed only to the holder's origin, a lease whose address is unsigned, signed with another secret or plain http off loopback is not passed to, a server without the secret passes nothing on, a listed peer receives no token or cookie and a cluster header bound to the method, path and query, and the receiving server refuses a header with a wrong secret, for another path, too old, or for a disabled account; vault values one server handed out in a session are hidden on the other after it reads the session again, and neither a reload nor the other server's save loses a name.
 
+## HTTP API
+
+Everything the browser UI does goes through this JSON API, and so can scripts, the desktop app and other servers. Sign in with `Authorization: Bearer <token>` (the operator's `HARNESS_TOKEN`, an account's personal token, or a desktop session), the `hw_token` cookie (`POST /api/login`), or a single sign-on browser session. Every request other than a `GET` needs the header `x-harness: 1` (a cross-site page cannot send it) and a JSON body where it takes one. Members see and change only what they own: someone else's session reads as missing (404). Requests for a session another server is working on are passed to that server (see [Running several servers](#running-several-servers)).
+
+| Route | |
+|---|---|
+| `GET /api/health` | Without signing in: `{ok, version, apiVersion}` only. Signed in: also `uptimeSec`, `node`. |
+| `GET /api/me`, `GET`/`PUT /api/me/settings`, `GET`/`PUT /api/me/instructions` | Who you are; your own settings (rules, limits, plugins' account sections) and instructions |
+| `GET /api/config` | Models, runtimes, companions, plugins, output styles |
+| `GET`/`POST /api/sessions`, `GET`/`PATCH`/`DELETE /api/sessions/:id` | Sessions (see below for search and paging) |
+| `POST /api/sessions/:id/messages`, `/abort`, `/respond`, `/rewind` | A message (with attachments, below), stop, answer a request, rewind files |
+| `GET /api/sessions/:id/events` | The session's event stream (SSE, `Last-Event-ID` / `?after=`) |
+| `GET /api/sessions/:id/files?path=` | Read a workspace file or list a folder (vault values hidden) |
+| `GET /api/sessions/:id/export`, `POST /api/sessions/import` | A session as one file, and back |
+| `GET`/`POST /api/sessions/:id/workflows`, `GET /api/sessions/:id/runs/:run`, `POST .../resume` | Workflows and their runs |
+| `GET /api/sessions/:id/capabilities`, `/checkpoints`, `/trace`, `/sources`, `GET`/`PUT .../network` | What a session has, did and may reach |
+| `/api/schedules`, `/api/triggers/:token` | Scheduled prompts and triggers |
+| `/api/memory`, `/api/memory/file` | Memory |
+| `/api/vault/...` | The key vault (see [Key Vault](#key-vault)) |
+| `/api/users` | Accounts (administrators) |
+| `/api/companions` | Companions |
+| `GET /api/plugins/catalogue`, `POST /api/plugins/install`, `/api/plugin-routes` | Plugin catalogue and routes' tokens (administrators) |
+| `/api/mcpb` | MCP bundles (administrators) |
+| `/api/plugins/<plugin>/<path>` | Plugins' own routes (before sign-in, see [Plugins](#plugins)) |
+| `/auth/config`, `/auth/login`, `/auth/callback`, `/auth/logout`, `/auth/desktop/*` | Single sign-on |
+
+### HTTP API for desktop clients
+
+What the desktop app (`docs/desktop/DESIGN.md`, section 7) needs beyond the above. `apiVersion` is 1; it goes up only for a change that would break a client.
+
+**Version and events**
+
+| Route | |
+|---|---|
+| `GET /api/version` | `{version, apiVersion, uiApiVersion}` |
+| `GET /api/events` | One stream of everything you may see, as server-sent events framed like a session's: `id: <seq>` and `data: {seq, topic, payload}`, a comment every 20 s, replay from a ring of the last 1000 (`HARNESS_EVENTS_RING`) after `Last-Event-ID` or `?after=` (an id from before a restart replays the ring); `?topics=a,b` narrows it. Topics: `sessions` (`{type: created\|updated\|deleted, session}`: made, retitled, archived, pinned, filed, deleted), `session` (`{id, status, title, lastSeq}` on status and title changes), `approvals` (`{type: added, sessionId, requestId, kind, title, summary, tool?, at}` for permission requests, questions, plans and workflow approvals in any session; `{type: resolved, sessionId, requestId, decision, at}`), `schedules` (`{type: fired\|changed, id, title, enabled, nextRun, lastRun, lastResult, sessionId, result}`), `plugins` (`{type: changed, name, what}`), `notices` (`{level, text, sessionId?}`: a session's warnings and errors, and files a person changed). Filtered per person: the sessions and schedules they may use; administrators see all. Each server streams what happens on it. |
+| `GET /api/approvals` | What waits for you now, across sessions (the `added` shape) |
+
+**Providers and models**
+
+| Route | |
+|---|---|
+| `GET /api/models` | The model catalog (as in `/api/config`) |
+| `GET /api/providers` | `[{id, label, keyEnv, configured, source: env\|vault\|none, baseUrl?, baseUrlEditable, models, keyless?}]` |
+| `PUT /api/providers/:id` | Administrators: `{apiKey?, baseUrl?}` (`baseUrl: null` or `""` goes back to the default). The key is stored as the operator-scope vault entry `provider-<id>-key` (administrators only, audited) and never returned or logged; it applies to the next request of every session, no restart. A key in the environment still wins. Base URLs are kept in `<data>/providers.json`. |
+| `DELETE /api/providers/:id/key` | Administrators: removes the stored key |
+| `POST /api/providers/:id/test` | Administrators: `{ok, latencyMs, model, error?}` from the cheapest real call: the provider's models list (Anthropic's, OpenAI's and OpenAI-compatible addresses), else a one-word request to its first model. The key never appears in the answer. |
+
+**Plugins**
+
+| Route | |
+|---|---|
+| `GET /api/plugins` | `[{name, version, description, source: bundled\|installed\|env, enabled, required, contributes, signature, permissions, ui?, uiBase?, uiError?, uiHash?}]` (see [Plugins](#plugins), the UI half) |
+| `GET /api/plugins/:name/ui/<path>` | A frame's file, `<path>` as the manifest names it (`ui/index.html`) |
+| `POST /api/plugins/:name/enable`, `/disable` | Administrators: switched on or off now and after restarts |
+| `DELETE /api/plugins/:name` | Administrators: a catalogue-installed plugin, folder and all |
+
+**A session's files and git** (local and Docker runtimes; a companion session's files are on that computer: 501)
+
+| Route | |
+|---|---|
+| `GET /api/sessions/:id/files/tree?path=&depth=1` | `{path, entries: [{name, path, type: file\|dir, size, mtime, heavy?, symlink?, children?}], truncated?}`: one folder (`depth` up to 3), at most 2000 entries each; `node_modules`, `.git` and other heavy folders are listed (`heavy: true`), never walked |
+| `PUT /api/sessions/:id/files?path=` | The raw body (up to 10 MB) as the file, parent folders made |
+| `POST /api/sessions/:id/files/rename` | `{from, to, overwrite?}` |
+| `DELETE /api/sessions/:id/files?path=` | A file or folder (a link: the link, never what it points at) |
+| `POST /api/sessions/:id/files/upload` | `{path, base64}` |
+| `GET /api/sessions/:id/files/search?q=&content=0\|1&limit=` | Names, or lines (`{path, matches: [{line, text}]}`, vault values hidden); heavy folders, links and binary files skipped |
+| `GET /api/sessions/:id/git/status`, `/git/diff?path=&staged=0\|1`, `/git/log?limit=` | `{repo, branch, upstream, ahead, behind, files: [{path, from?, index, worktree}]}`, a diff (vault values hidden), commits |
+
+Every path stays inside the workspace: resolved through links like the agent's file tools, so `..`, an absolute path elsewhere or a link that leads out is refused (400); writes are also refused on the workspace itself and anywhere in a `.git` folder (403). Git runs where the session's commands run - its sandbox, or the server folder - with no fsmonitor, hooks, external diff or textconv programs. A person's change is not an agent tool call (nobody is asked), but the session hears of it: the agent's next step is told which files the user changed (and reads them again before editing), `FileChanged` hooks run with `tool: "user"`, and the session and the global stream show a notice.
+
+**Sessions**
+
+| Route | |
+|---|---|
+| `GET /api/sessions?query=&archived=0\|1&limit=&before=` | With any of these: `{sessions, next?}`, newest first, searching titles and the first message typed; `archived` defaults to 0; `next` is the cursor for `before`. Without them: the plain array, as before. |
+| `POST /api/sessions/:id/archive`, `/unarchive` | `meta.archived` |
+| `PATCH /api/sessions/:id` | Also `pinned: boolean`, `group: string` (`""` removes it) |
+| `GET /api/sessions/:id/history?after=&limit=` | `{total, after, messages, next?}` (`limit` up to 500); the full `GET` stays |
+| `POST /api/sessions/:id/fork` | `{turn?}` (default: all): a new session of yours with the conversation up to that turn, the same model, mode and runtime settings, and a workspace of its own - never the original's folder. A sandbox's or data-folder workspace is copied when it is under `HARNESS_FORK_COPY_MB` (200; else it starts empty and says so in `note`); a server-folder session gets a new git worktree of its repository (without the original's uncommitted changes); a server folder that is not a repository (409) and a companion session (501) are refused. Untrusted content the original read still counts. |
+| `POST /api/sessions/:id/messages` | Also `attachments: [{name, mediaType, base64}]` (at most 10, 20 MB in all): PNG, JPEG, GIF and WebP images go to a model that sees images as image blocks with the message (when it starts a turn); other files, and images for a model that does not see them, are saved as `.harness/uploads/<name>` (a free name) and named in the message. Answers `{state, images, files}`. |
+
+**Settings**
+
+| Route | |
+|---|---|
+| `GET /api/settings/effective?session=` | `{settings: [{key, value, source: default\|operator\|account\|project, scope, locked, max?, layers}], project}`: every limit, rule list and operator-only setting in force for you, where its value comes from and whether you can change it (`PUT /api/me/settings`), with the project's `.harness/settings.json` when a session is named; plugins' settings sections as `plugins.<name>.<key>` (account sections stored with your settings as `plugins: {<name>: {...}}`). |
+
+**Desktop sign-in on a single sign-on server** (RFC 8252: the system browser and a loopback redirect, with PKCE)
+
+1. The app opens `GET /auth/desktop/start?redirect_uri=http://127.0.0.1:<port>/callback&state=<state>&code_challenge=<S256 of its verifier>&code_challenge_method=S256` in the system browser. Only `http://127.0.0.1`, `http://localhost` or `http://[::1]` with an explicit port are accepted (400 otherwise, before anyone is sent to the provider).
+2. The person signs in at the provider through the server's usual flow (allowlists, disabled accounts and administrators exactly as for a browser).
+3. The server sends the browser to the redirect URI with `code` (one time, 60 seconds, bound to the challenge) and the app's `state`; a refusal comes back as `error=access_denied` with the `state`.
+4. The app posts `POST /auth/desktop/token {code, code_verifier}` (JSON) and gets `{token, expiresAt, user}`. A wrong verifier burns the code. The token (`hwd_...`) is a bearer session for `/api/*`, kept hashed in `<data>/desktop-sessions.json`, checked on every request like a browser session (a disabled account or one dropped from the allowlist stops working at once), ending after 14 idle days or `HARNESS_DESKTOP_SESSION_DAYS` (30) at most; `POST /auth/logout` with it revokes it.
+
 ## Durability, checkpoints, trace
 
 - **History** is append-only JSONL. If the server stops mid-turn, every unfinished tool call gets a result saying so (the transcript stays valid). The session is idle again on restart, and with `HARNESS_AUTO_RESUME=1` it continues on its own.
@@ -1187,6 +1286,10 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 | `HARNESS_PLUGIN_NETWORK` | | Hosts the operator grants a plugin beyond its manifest's `permissions.network`, as JSON: `{"devops": ["github.acme.internal"], "aiops": ["prometheus.internal:9090"]}` (a GitHub Enterprise or internal monitoring address). Only the operator can widen a plugin's reach. |
 | `HARNESS_PLUGIN_CATALOGUE` | | Signed plugins to install from the UI/API: a folder, or the https URL of an `index.json`. |
 | `HARNESS_ROUTE_RATE_LIMIT` | 600 | Requests a minute per address to plugin routes (`/api/plugins/<plugin>/...`). |
+| `HARNESS_REQUIRED_PLUGINS` | | Comma-separated plugin names that cannot be switched off (`POST /api/plugins/:name/disable` answers 409). |
+| `HARNESS_EVENTS_RING` | 1000 | Events the global stream (`GET /api/events`) keeps for replay. |
+| `HARNESS_FORK_COPY_MB` | 200 | A forked session's workspace is copied up to this size; larger ones start empty. |
+| `HARNESS_DESKTOP_SESSION_DAYS` | 30 | How long a desktop sign-in's bearer session lasts at most (14 idle days end it sooner). |
 | `HARNESS_PLUGIN_SESSION_OWNERS` | none | Accounts a plugin may act for, as JSON: `{"integrations": ["usr_...", "*"]}` - it may start sessions owned by them and message and answer for their sessions. Without it a plugin reaches only the operator's sessions and the ones it started itself, and starts sessions as the operator's. Chat-started investigations owned by the person who asked, and `HARNESS_OPS_ALERTS_OWNER`, need the account listed here. |
 | `HARNESS_PLUGIN_LOOPS` | on | `off`: plugins' server-side loops do nothing here (`api.lease()` is false); the eval runner, the CLI and the test runner turn them off. |
 | `HARNESS_CHANGES_MAX_MB` | 20 | The change journal (`<data>/changes.jsonl`) keeps its newest half past this size. |

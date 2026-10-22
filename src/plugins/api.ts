@@ -58,7 +58,14 @@ export interface ProviderDef {
   keyEnv: string[];
   /** Works without a key (a local server): available even when no keyEnv variable is set. */
   keyless?: boolean;
-  create(apiKey: string): Provider;
+  /** Its name in a settings page (default: the id). */
+  label?: string;
+  /** The API's address when nothing else is set (shown in settings; an administrator may set another). */
+  defaultBaseUrl?: string;
+  /** The environment variable the operator may set the address with (it wins over the default, not over the API's). */
+  baseUrlEnv?: string;
+  /** `opts.baseUrl`: an address an administrator set through the API (PUT /api/providers/:id); else the provider's own default. */
+  create(apiKey: string, opts?: { baseUrl?: string }): Provider;
 }
 
 export interface PluginAPI {
@@ -282,4 +289,10 @@ export interface PluginManifest {
    * session's events). routes: api.registerRoute (HTTP endpoints under /api/plugins/<name>/).
    */
   permissions?: { network?: string[]; secrets?: string[]; vault?: string[]; sessions?: boolean; routes?: boolean };
+  /**
+   * The plugin's UI half (navigation entries, pages, panels, commands, settings sections,
+   * renderers...): see packages/plugin-ui. Validated with validateUiManifest when the plugin
+   * loads; a bad section is reported (uiError) and never stops the server half.
+   */
+  ui?: unknown;
 }

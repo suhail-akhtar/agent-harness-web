@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -444,6 +445,132 @@ test('without single sign-on, /auth/config says so and its routes do not exist',
   const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
   assert.deepEqual(await (await fetch(`${base}/auth/config`)).json(), { oidc: false, only: false, login: null });
   assert.equal((await fetch(`${base}/auth/login`, { redirect: 'manual' })).status, 404);
+  assert.equal((await fetch(`${base}/auth/desktop/start?redirect_uri=http://127.0.0.1:5000/cb`, { redirect: 'manual' })).status, 404, 'desktop sign-in is for single sign-on servers');
   await new Promise<void>((r) => server.close(() => r()));
   await harness.close();
+});
+
+// ---- the desktop app's sign-in (RFC 8252: system browser, loopback redirect, PKCE) ----
+
+const pkce = () => { const verifier = crypto.randomBytes(48).toString('base64url'); return { verifier, challenge: crypto.createHash('sha256').update(verifier).digest('base64url') }; };
+
+/** The app's half: opens /auth/desktop/start in "the browser", which signs in at the provider and lands on the app's loopback address. */
+async function desktopSignIn(t: Awaited<ReturnType<typeof setup>>, idp: Idp, o: { redirect?: string; challenge?: string; state?: string; knobs?: Knobs } = {}) {
+  idp.next = o.knobs ?? {};
+  const q = new URLSearchParams({ redirect_uri: o.redirect ?? 'http://127.0.0.1:53123/callback', state: o.state ?? 'app-state-1234', code_challenge: o.challenge ?? pkce().challenge, code_challenge_method: 'S256' });
+  const start = await fetch(`${t.base}/auth/desktop/start?${q}`, { redirect: 'manual' });
+  if (start.status !== 302) return { status: start.status, location: '', setCookie: [] as string[], text: await start.text() };
+  const binding = start.headers.getSetCookie().find((c) => c.startsWith('hw_oidc='))!.split(';')[0]!;
+  const atIdp = await fetch(start.headers.get('location')!, { redirect: 'manual' });
+  const back = new URL(atIdp.headers.get('location')!);
+  const done = await fetch(t.base + back.pathname + back.search, { redirect: 'manual', headers: { cookie: binding } });
+  return { status: done.status, location: done.headers.get('location') ?? '', setCookie: done.headers.getSetCookie(), text: await done.text() };
+}
+
+test('desktop sign-in: system browser to the provider, back to the app\'s loopback address with a one-time code; the code and its PKCE verifier buy a bearer session that logout revokes', async () => {
+  const idp = await fakeIdp();
+  const t = await setup(idp);
+  const { verifier, challenge } = pkce();
+  const r = await desktopSignIn(t, idp, { challenge, redirect: 'http://127.0.0.1:53123/callback?keep=1' });
+  assert.equal(r.status, 302, r.text);
+  const back = new URL(r.location!);
+  assert.equal(`${back.origin}${back.pathname}`, 'http://127.0.0.1:53123/callback', 'the app\'s own loopback address');
+  assert.equal(back.searchParams.get('state'), 'app-state-1234');
+  assert.equal(back.searchParams.get('keep'), '1', 'its own parameters kept');
+  const code = back.searchParams.get('code')!;
+  assert.match(code, /^[\w-]{40,}$/);
+  assert.ok(!r.setCookie!.some((c) => c.startsWith('hw_sid=')), 'no browser session is made for the app');
+
+  const token = async (body: unknown) => {
+    const res = await fetch(`${t.base}/auth/desktop/token`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    return { status: res.status, body: await res.json() as Record<string, any> };
+  };
+  const got = await token({ code, code_verifier: verifier });
+  assert.equal(got.status, 200, JSON.stringify(got.body));
+  assert.match(got.body.token, /^hwd_[\w-]{40,}$/);
+  assert.ok(Date.parse(got.body.expiresAt) > Date.now() + 29 * 86_400_000, 'about 30 days');
+  assert.deepEqual({ name: got.body.user.name, role: got.body.user.role, email: got.body.user.email }, { name: 'alice@example.com', role: 'member', email: 'alice@example.com' });
+  // The bearer session works on the API like any sign-in, and is stored hashed.
+  const me = await t.call('GET', '/api/me', { token: got.body.token });
+  assert.equal(me.status, 200);
+  assert.equal(me.body.id, got.body.user.id);
+  assert.equal((await t.call('GET', '/api/sessions', { token: got.body.token })).status, 200);
+  const stored = await fs.readFile(path.join(t.data, 'desktop-sessions.json'), 'utf8');
+  assert.ok(!stored.includes(got.body.token.slice(4)), 'only a hash on disk');
+  assert.equal((await t.call('POST', '/api/sessions', { token: got.body.token, headers: { 'x-harness': '' } })).status, 403, 'writes still need the x-harness header');
+  // Used once: the same code again is refused, even with the right verifier.
+  assert.equal((await token({ code, code_verifier: verifier })).status, 400);
+  // Logout with the bearer revokes it.
+  assert.equal((await t.call('POST', '/auth/logout', { token: got.body.token })).status, 200);
+  assert.equal((await t.call('GET', '/api/me', { token: got.body.token })).status, 401);
+  // An administrator by HARNESS_OIDC_ADMINS is one in the app too.
+  const boss = pkce();
+  const rb = await desktopSignIn(t, idp, { challenge: boss.challenge, knobs: { email: 'boss@example.com', sub: 'sub-boss' } });
+  const tb = await token({ code: new URL(rb.location!).searchParams.get('code'), code_verifier: boss.verifier });
+  assert.equal(tb.body.user.role, 'admin');
+  assert.equal((await t.call('GET', '/api/users', { token: tb.body.token })).status, 200);
+  // A disabled account's bearer session stops working.
+  await t.users.setDisabled(tb.body.user.id, true);
+  assert.equal((await t.call('GET', '/api/me', { token: tb.body.token })).status, 401);
+  await t.close();
+  await idp.close();
+});
+
+test('desktop sign-in refuses: a wrong verifier (and the code is then gone), a reused or unknown code, a redirect that is not loopback with a port, a missing or plain challenge, and tells the app when the provider refuses', async () => {
+  const idp = await fakeIdp();
+  const t = await setup(idp);
+  const token = async (body: unknown) => (await fetch(`${t.base}/auth/desktop/token`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).status;
+
+  // A wrong verifier fails, and burns the code: guessing gets one try.
+  const p1 = pkce();
+  const r1 = await desktopSignIn(t, idp, { challenge: p1.challenge });
+  const code1 = new URL(r1.location!).searchParams.get('code')!;
+  assert.equal(await token({ code: code1, code_verifier: pkce().verifier }), 400);
+  assert.equal(await token({ code: code1, code_verifier: p1.verifier }), 400, 'gone after the wrong try');
+  assert.equal(await token({ code: 'made-up-code', code_verifier: p1.verifier }), 400);
+  assert.equal(await token({ code: code1 }), 400);
+  const p2 = pkce();
+  const code2 = new URL((await desktopSignIn(t, idp, { challenge: p2.challenge, redirect: 'http://localhost:40000/cb' })).location!).searchParams.get('code')!;
+  assert.equal(await token({ code: code2, code_verifier: p2.verifier, redirect_uri: 'http://localhost:40001/cb' }), 400, 'a different redirect');
+  const p3 = pkce();
+  const code3 = new URL((await desktopSignIn(t, idp, { challenge: p3.challenge, redirect: 'http://[::1]:40000/cb' })).location!).searchParams.get('code')!;
+  assert.equal(await token({ code: code3, code_verifier: p3.verifier }), 200, '[::1] is loopback too');
+  assert.equal((await fetch(`${t.base}/auth/desktop/token`, { method: 'POST', body: 'code=x' })).status, 415);
+
+  // Only loopback redirects with an explicit port, before anyone is sent to the provider.
+  for (const redirect of ['http://evil.example:53123/cb', 'https://127.0.0.1:53123/cb', 'http://127.0.0.1/cb', 'http://127.0.0.1.evil.example:5/cb', 'http://user:pw@127.0.0.1:5/cb', 'myapp://callback', 'http://127.0.0.1:5/cb#frag', 'http://10.0.0.1:5/cb']) {
+    const r = await desktopSignIn(t, idp, { redirect });
+    assert.equal(r.status, 400, `${redirect}: ${r.status}`);
+  }
+  const plain = await fetch(`${t.base}/auth/desktop/start?${new URLSearchParams({ redirect_uri: 'http://127.0.0.1:5/cb', state: 'app-state-1234', code_challenge: pkce().challenge, code_challenge_method: 'plain' })}`, { redirect: 'manual' });
+  assert.equal(plain.status, 400);
+  assert.equal((await desktopSignIn(t, idp, { challenge: 'short' })).status, 400);
+  assert.equal((await desktopSignIn(t, idp, { state: '' })).status, 400);
+
+  // The provider's refusal (a domain not allowed) goes back to the app as an error, with its state.
+  const no = await desktopSignIn(t, idp, { knobs: { email: 'mallory@elsewhere.example', sub: 'sub-m' } });
+  assert.equal(no.status, 302);
+  const err = new URL(no.location!);
+  assert.equal(err.searchParams.get('error'), 'access_denied');
+  assert.equal(err.searchParams.get('state'), 'app-state-1234');
+  assert.equal(err.searchParams.get('code'), null);
+  await t.close();
+  await idp.close();
+});
+
+test('desktop sign-in codes last 60 seconds', async () => {
+  const { DesktopSignIn } = await import('../src/server/desktop-auth.ts');
+  let now = 1_000_000;
+  const d = new DesktopSignIn({ now: () => now });
+  const { verifier, challenge } = pkce();
+  const s = d.check(new URLSearchParams({ redirect_uri: 'http://127.0.0.1:9/cb', state: 'state-12345', code_challenge: challenge, code_challenge_method: 'S256' }));
+  d.begin('binding', s);
+  const start = d.take('binding')!;
+  assert.equal(d.take('binding'), undefined, 'a start is taken once');
+  const code = new URL(d.issue(start, 'usr_1')).searchParams.get('code')!;
+  now += 61_000;
+  assert.throws(() => d.redeem(code, verifier), /expired/);
+  const code2 = new URL(d.issue(start, 'usr_1')).searchParams.get('code')!;
+  now += 30_000;
+  assert.equal(d.redeem(code2, verifier), 'usr_1');
 });
