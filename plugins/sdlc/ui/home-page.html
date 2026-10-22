@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Engineering</title>
+<link rel="stylesheet" href="kit.css">
+<style>
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 4px 0 18px; }
+  .kpi { text-align: left; font: inherit; color: inherit; border: 1px solid var(--hx-border-subtle); border-radius: 12px; background: var(--hx-elevated); padding: 12px 14px; cursor: pointer; }
+  .kpi:hover { border-color: var(--hx-border); }
+  .kpi b { display: block; font-size: 26px; font-weight: 600; letter-spacing: -.02em; line-height: 1.1; }
+  .kpi.hot b { color: var(--hx-danger); } .kpi.warm b { color: var(--hx-warning); } .kpi.calm b { color: var(--hx-success); }
+  .grid { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+  .feat { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; width: 100%; text-align: left; font: inherit; color: inherit; background: transparent; border: 0; border-top: 1px solid var(--hx-border-subtle); padding: 9px 2px; cursor: pointer; }
+  .feat:first-child { border-top: 0; }
+  .feat:hover { background: var(--hx-hover); }
+  .feat .t { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+  .stages { grid-column: 2 / 4; display: flex; gap: 3px; }
+  .stages i { flex: 1; height: 4px; border-radius: 2px; background: var(--hx-pill); }
+  .stages i.done { background: var(--hx-success); } .stages i.now { background: var(--hx-info); } .stages i.bad { background: var(--hx-danger); }
+  .card h2 { margin: 0 0 8px; display: flex; align-items: center; gap: 8px; }
+  .card h2 .spacer { flex: 1; }
+  .actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
+  .action { display: flex; gap: 8px; align-items: center; text-align: left; font: inherit; font-size: 12.5px; color: inherit; border: 1px solid var(--hx-border-subtle); border-radius: 10px; background: var(--hx-elevated); padding: 9px 11px; cursor: pointer; }
+  .action:hover { border-color: var(--hx-border); background: var(--hx-hover); }
+  .action code { font: 12px var(--hx-font-mono); color: var(--hx-accent-text); }
+  form.quick { display: flex; gap: 8px; margin: 0 0 18px; }
+  form.quick input { flex: 1; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+</style>
+<script src="harness://app/sdk/plugin-ui.js"></script>
+<script src="kit.js"></script>
+</head>
+<body>
+<div class="page" data-eng-home>
+  <div class="head">
+    <div class="grow"><h1>Engineering</h1><div class="sub">Features from requirement to a reviewed, documented delivery: stage, gates, tests and cost.</div></div>
+    <button type="button" class="btn" data-go="delivery">Delivery board</button>
+    <button type="button" class="btn primary" data-go="start-feature" data-eng-start>Start a feature</button>
+  </div>
+  <form class="quick" id="quick" data-eng-quick>
+    <input type="text" id="request" placeholder="What should be built? (opens Start a feature with it)" aria-label="Feature request">
+    <button type="submit" class="btn">Start</button>
+  </form>
+  <div class="kpis" id="kpis"><div class="muted">Loading…</div></div>
+  <div class="grid">
+    <section class="card" data-eng-flight><h2>In flight<span class="spacer"></span><button type="button" class="btn sm ghost" data-go="delivery">All features</button></h2><div id="flight" class="muted small">Loading…</div></section>
+    <div class="stack">
+      <section class="card" data-eng-gates><h2>Quality gates<span class="spacer"></span><button type="button" class="btn sm ghost" data-go="quality">Gates</button></h2><div id="gates" class="muted small">Loading…</div></section>
+      <section class="card" data-eng-recent><h2>Recently delivered</h2><div id="recent" class="muted small">Loading…</div></section>
+    </div>
+  </div>
+  <h2>Quick actions</h2>
+  <div class="actions" id="actions"></div>
+</div>
+<script>
+// The Engineering home: features in flight with their stage, failing gates across features, recent
+// deliveries, and the ways to start work - all from the plugin's own delivery index (routes).
+Kit.start(async (harness) => {
+  const { h, mount, chip, ago, money } = Kit;
+  const $ = (id) => document.getElementById(id);
+  for (const b of document.querySelectorAll('[data-go]')) b.addEventListener('click', () => harness.view.open(b.getAttribute('data-go')));
+  $('quick').addEventListener('submit', (e) => { e.preventDefault(); const r = $('request').value.trim(); harness.view.open('start-feature', r ? { request: r } : {}); });
+  const actions = [
+    ['Build a feature', '/feature ', 'The build-feature workflow, requirements to delivery'],
+    ['Review the changes', '/review ', 'Against the requirements; BLOCKING, MAJOR or MINOR'],
+    ['Run the quality gates', '/gates ', 'Tests, types, lint, build, secrets; fix what fails'],
+    ['Ask about Engineering', 'What can the Engineering plugin do here? Load its guide (sdlc-guide) and show me its pages and commands with an example.', 'Prefills a question for the agent'],
+  ];
+  mount($('actions'), actions.map(([title, prompt, hint]) => h('button', { type: 'button', class: 'action', 'data-eng-action': title, onclick: () => harness.composer.prefill(prompt, { newChat: true }) },
+    h('span', { style: { flex: '1' } }, h('b', {}, title), h('div', { class: 'muted small' }, hint)), prompt.startsWith('/') ? h('code', {}, prompt.trim()) : null)));
+  const inFlight = (d) => d.status === 'running' || d.status === 'waiting';
+  let last = { deliveries: [], stages: [] };
+  const load = async () => {
+    const data = await Kit.route(harness, 'deliveries');
+    last = data;
+    const order = data.stages.map((s) => s.id);
+    const title = Object.fromEntries(data.stages.map((s) => [s.id, s.title]));
+    const flying = data.deliveries.filter(inFlight);
+    const waiting = data.deliveries.filter((d) => d.status === 'waiting');
+    const failing = data.deliveries.filter((d) => d.gates.fail > 0 && d.status !== 'succeeded');
+    const week = Date.now() - 7 * 86_400_000;
+    const delivered = data.deliveries.filter((d) => d.status === 'succeeded' && d.updatedAt >= week);
+    const cost = data.deliveries.reduce((n, d) => n + (d.cost || 0), 0);
+    mount($('kpis'),
+      h('button', { type: 'button', class: `kpi ${flying.length ? 'warm' : 'calm'}`, 'data-kpi': 'flight', 'data-value': String(flying.length), onclick: () => harness.view.open('delivery') }, h('b', {}, String(flying.length)), h('span', { class: 'muted small' }, `in flight${waiting.length ? ` · ${waiting.length} waiting for you` : ''}`)),
+      h('button', { type: 'button', class: `kpi ${failing.length ? 'hot' : 'calm'}`, 'data-kpi': 'failing', 'data-value': String(failing.length), onclick: () => harness.view.open('quality') }, h('b', {}, String(failing.length)), h('span', { class: 'muted small' }, 'features with failing gates')),
+      h('button', { type: 'button', class: 'kpi calm', 'data-kpi': 'delivered', onclick: () => harness.view.open('delivery') }, h('b', {}, String(delivered.length)), h('span', { class: 'muted small' }, 'delivered this week')),
+      h('button', { type: 'button', class: 'kpi', 'data-kpi': 'cost', onclick: () => harness.view.open('delivery') }, h('b', {}, money(cost)), h('span', { class: 'muted small' }, `spent on ${data.deliveries.length} feature${data.deliveries.length === 1 ? '' : 's'}`)),
+    );
+    const stageBar = (d) => { const i = order.indexOf(d.stage); return h('div', { class: 'stages', title: title[d.stage] || d.stage }, order.map((s, j) => h('i', { class: j < i ? 'done' : j === i ? (d.gates.fail ? 'bad' : 'now') : '' }))); };
+    const featRow = (d) => h('button', { type: 'button', class: 'feat', 'data-home-feature': d.id, onclick: () => harness.view.open('delivery', { id: d.id }) },
+      h('span', { class: `dot ${d.gates.fail ? 'bad' : d.status === 'waiting' ? 'warn' : 'info live'}` }), h('span', { class: 't' }, d.title),
+      h('span', { class: 'row' }, d.status === 'waiting' ? chip('Needs you', 'waiting') : chip(title[d.stage] || d.stage, 'running'), h('span', { class: 'muted small' }, money(d.cost))), stageBar(d));
+    mount($('flight'), flying.length ? flying.map(featRow) : h('div', { class: 'empty', 'data-empty': '' }, h('b', {}, 'Nothing in flight'), data.deliveries.length ? 'Start the next feature, or review what was delivered.' : 'Start a feature: the agents write the requirements, a design, a plan, the code test first, run the gates and review it.'));
+    const gateRows = failing.length ? failing : data.deliveries.filter((d) => d.gates.pass + d.gates.fail + d.gates.warn > 0).slice(0, 4);
+    mount($('gates'), gateRows.length ? gateRows.slice(0, 6).map((d) => h('button', { type: 'button', class: 'feat', 'data-home-gates': d.id, onclick: () => harness.view.open('delivery', { id: d.id }) },
+      h('span', { class: `dot ${d.gates.fail ? 'bad' : 'ok'}` }), h('span', { class: 't' }, d.title),
+      h('span', { class: 'row' }, d.gates.fail ? chip(`${d.gates.fail} failing`, 'bad') : null, chip(`${d.gates.pass} pass`, 'pass'), d.gates.warn ? chip(`${d.gates.warn} warn`, 'warn') : null),
+      d.gates.failing.length ? h('div', { class: 'muted small', style: { gridColumn: '2 / 4' } }, d.gates.failing.join(', ')) : null)) : h('div', { class: 'muted small', 'data-empty': '' }, 'No gate has run yet.'));
+    const recent = data.deliveries.filter((d) => d.status === 'succeeded').slice(0, 5);
+    mount($('recent'), recent.length ? recent.map((d) => h('button', { type: 'button', class: 'feat', 'data-home-delivered': d.id, onclick: () => harness.view.open('delivery', { id: d.id }) },
+      h('span', { class: 'dot ok' }), h('span', { class: 't' }, d.title), h('span', { class: 'muted small' }, `${ago(d.updatedAt)} · ${money(d.cost)}`))) : h('div', { class: 'muted small' }, 'Nothing delivered yet.'));
+  };
+  await Kit.live(harness, load, { ms: 20_000, busyMs: 4_000, busy: () => last.deliveries.some((d) => d.status === 'running') });
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quality gates</title>
+<link rel="stylesheet" href="kit.css">
+<script src="harness://app/sdk/plugin-ui.js"></script>
+<script src="kit.js"></script>
+</head>
+<body>
+<div class="page" data-eng-quality>
+  <div class="head">
+    <div class="grow"><h1>Quality gates</h1><div class="sub">Every feature's gates: tests, type checks, lint, builds and scans, failing first. Open one for its gate table and the conversation that ran it.</div></div>
+    <button type="button" class="btn" id="run" data-eng-run-gates>Run the gates in a conversation…</button>
+  </div>
+  <div class="row filters" id="filters" role="toolbar" aria-label="Show" style="margin-bottom:12px"></div>
+  <div id="out" class="muted">Loading…</div>
+</div>
+<script>
+Kit.start(async (harness) => {
+  const { h, mount, chip, ago } = Kit;
+  const out = document.getElementById('out');
+  let filter = harness.params.filter || 'failing';
+  let data = { deliveries: [] };
+  document.getElementById('run').onclick = () => harness.composer.prefill('/gates ', { newChat: true });
+  const render = () => {
+    const withGates = data.deliveries.filter((d) => d.gates.pass + d.gates.fail + d.gates.warn > 0);
+    const shown = withGates.filter((d) => filter === 'all' || (filter === 'failing' ? d.gates.fail > 0 : d.gates.fail === 0)).sort((a, b) => b.gates.fail - a.gates.fail || b.updatedAt - a.updatedAt);
+    mount(document.getElementById('filters'), [['failing', 'Failing'], ['passing', 'Passing'], ['all', 'All']].map(([id, label]) => h('button', { type: 'button', class: `btn sm ${filter === id ? '' : 'ghost'}`, 'aria-pressed': String(filter === id), onclick: () => { filter = id; render(); } }, label)));
+    mount(out, shown.length ? h('table', { 'data-quality-table': '' },
+      h('thead', {}, h('tr', {}, h('th', {}, 'Feature'), h('th', {}, 'Gates'), h('th', {}, 'Failing'), h('th', {}, 'Tests'), h('th', {}, 'Updated'))),
+      h('tbody', {}, shown.map((d) => h('tr', { class: 'click', 'data-quality-row': d.id, onclick: () => harness.view.open('delivery', { id: d.id }) },
+        h('td', {}, h('b', {}, d.title)),
+        h('td', {}, h('span', { class: 'row' }, d.gates.fail ? chip(`${d.gates.fail} fail`, 'fail') : null, chip(`${d.gates.pass} pass`, 'pass'), d.gates.warn ? chip(`${d.gates.warn} warn`, 'warn') : null)),
+        h('td', { class: 'small' }, d.gates.failing.join(', ') || '—'),
+        h('td', { class: 'small' }, d.tests ? `${d.tests.passed ?? 0}/${(d.tests.passed ?? 0) + (d.tests.failed ?? 0)} passed` : '—'),
+        h('td', { class: 'small muted' }, ago(d.updatedAt)))))) : h('div', { class: 'empty', 'data-empty': '' }, h('b', {}, withGates.length ? 'Nothing here' : 'No gate has run yet'), 'Gates run inside a feature (build-feature) or with /gates in a conversation.'));
+  };
+  await Kit.live(harness, async () => { data = await Kit.route(harness, 'deliveries'); render(); }, { ms: 20_000 });
+});
+</script>
+</body>
+</html>

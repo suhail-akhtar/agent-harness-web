@@ -186,6 +186,7 @@ function useNativeTool(name: string): { qid: string; C: React.ComponentType<Nati
   return C ? { qid: r.qid, C } : undefined;
 }
 
+/** A native plugin's renderer of a tool's result, drawn once (under its card, or for a folded turn), inside a boundary. */
 function NativeToolOutput({ item, sessionId }: { item: ToolItem; sessionId: string }) {
   const n = useNativeTool(item.name);
   if (!n || item.running) return null;

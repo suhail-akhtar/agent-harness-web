@@ -11,28 +11,15 @@ import { navigate, openPluginPanel, useApp } from '../../state/app';
 import { AgentsPanel } from './Panel';
 import { AgentsPage, watchLinkedNews } from './Page';
 import { ChapterDivider, LinkCard, ProposalCard } from './Cards';
+import { AgentsHome } from './Home';
+import { meta, ui } from './manifest';
+import guide from './GUIDE.md?raw';
 
 export const coreAgents: BuiltinPlugin = {
-  name: 'core.agents', version: '0.1.0', description: 'Agents: sub-agents, background work, linked sessions and proposals, live; split view and chapters.',
-  ui: {
-    apiVersion: 1, displayName: 'Agents', icon: 'bot', trust: 'native', capabilities: [],
-    contributes: {
-      navItems: [{ id: 'agents', title: 'Agents', icon: 'bot', view: 'agents', order: 22, badge: 'core.agents.working' }],
-      views: [{ id: 'agents', title: 'Agents', kind: 'native', component: 'AgentsPage' }],
-      panels: [{ id: 'agents', title: 'Agents', icon: 'bot', kind: 'native', component: 'AgentsPanel', where: 'session' }],
-      renderers: [
-        { id: 'proposal', for: { event: 'proposal' }, kind: 'native', component: 'ProposalCard' },
-        { id: 'link', for: { event: 'link' }, kind: 'native', component: 'LinkCard' },
-        { id: 'chapter', for: { event: 'chapter' }, kind: 'native', component: 'ChapterDivider' },
-      ],
-      commands: [
-        { id: 'page', title: 'Show every agent at work', category: 'Agents', icon: 'bot', action: { type: 'open-view', view: 'agents' }, agent: { description: 'Open the Agents page: every conversation, sub-agent, background task and linked session at work, with Stop.' } },
-        { id: 'panel', title: 'Show this conversation\'s agents', category: 'Agents', icon: 'bot', keybinding: 'Mod+Shift+E', handler: 'panel' },
-        { id: 'close-split', title: 'Close the conversation beside', category: 'View', icon: 'x', handler: 'closeSplit' },
-      ],
-    },
-  },
-  components: { AgentsPanel, AgentsPage, ProposalCard, LinkCard, ChapterDivider },
+  ...meta,
+  ui,
+  guide,
+  components: { AgentsHome, AgentsPanel, AgentsPage, ProposalCard, LinkCard, ChapterDivider },
   handlers: {
     panel: () => {
       const r = useApp.getState().route;

@@ -124,7 +124,7 @@ test('devops registers its tools, gates, agents, skills and three valid workflow
     assert.deepEqual(p.permissions?.secrets, ['HARNESS_GITHUB_TOKEN']);
     const { skillsIn } = await import('../src/skills/skills.ts');
     const names = (await skillsIn(path.join(root, 'plugins', 'devops', 'skills'), 'devops')).map((s: { name: string }) => s.name).sort();
-    assert.deepEqual(names, ['ci-debugging', 'docker-hardening', 'kubernetes-operations', 'terraform-practices']);
+    assert.deepEqual(names, ['ci-debugging', 'devops-guide', 'docker-hardening', 'kubernetes-operations', 'terraform-practices'], 'its guide for agents (a skill) too');
     // The security reviewer only looks.
     assert.ok(!h.registry.agents.get('security-reviewer-iac')!.tools!.includes('bash'));
   } finally { await h.close(); }

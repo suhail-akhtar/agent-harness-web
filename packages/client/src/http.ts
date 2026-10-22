@@ -43,7 +43,9 @@ export interface ClientOptions {
 /** An agent-callable command of the app's own plugins (the server cannot read their manifests). */
 export interface ClientCommand { id: string; description: string; inputSchema?: Record<string, unknown> }
 /** Sent when a session is created: the client kind, its version, the fence languages and kinds it renders, the tools it answers (client_call) and its agent-callable commands. */
-export interface ClientDescriptor { kind: 'desktop' | 'web' | string; version: string; renderers: string[]; tools: string[]; commands?: ClientCommand[] }
+/** A plugin on in the app, for the session's one-line plugin index (its guide is the skill `<name>-guide`). */
+export interface ClientPluginDecl { name: string; title?: string; purpose: string; from: 'app' | 'server'; tools?: string[] }
+export interface ClientDescriptor { kind: 'desktop' | 'web' | string; version: string; renderers: string[]; tools: string[]; commands?: ClientCommand[]; plugins?: ClientPluginDecl[] }
 
 export interface NewSession {
   title?: string; model?: string; effort?: Effort; mode?: Mode;
@@ -166,7 +168,7 @@ export class HarnessClient {
     },
     get: (id: string) => this.get<SessionDetail>(`/api/sessions/${id}`),
     create: (b: NewSession) => this.post<SessionMeta>('/api/sessions', b),
-    patch: (id: string, b: { title?: string; model?: string; effort?: Effort; mode?: Mode; pinned?: boolean; group?: string | null }) => this.patch<SessionMeta>(`/api/sessions/${id}`, b),
+    patch: (id: string, b: { title?: string; model?: string; effort?: Effort; mode?: Mode; pinned?: boolean; group?: string | null; /** The app's plugins now (one was switched on or off). */ clientPlugins?: ClientPluginDecl[] }) => this.patch<SessionMeta>(`/api/sessions/${id}`, b),
     remove: (id: string) => this.del<{ ok: boolean }>(`/api/sessions/${id}`),
     /** Sends a message; attachments (new) need a server that accepts them. */
     send: (id: string, text: string, attachments?: Attachment[]) => this.post<{ state: string; images?: number; files?: string[] }>(`/api/sessions/${id}/messages`, { text, ...(attachments?.length ? { attachments } : {}) }),

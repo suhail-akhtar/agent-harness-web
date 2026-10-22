@@ -8,6 +8,7 @@
   "workflows": "workflows",
   "ui": {
     "apiVersion": 1,
+    "guide": "GUIDE.md",
     "displayName": "Research",
     "icon": "compass",
     "category": "Knowledge",

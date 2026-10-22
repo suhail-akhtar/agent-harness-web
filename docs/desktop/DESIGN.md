@@ -550,3 +550,53 @@ hold pages of visuals in one of nine layouts. Every change is an op from one cat
 versioned in the artifact store, undoable. Published pages are the same renderers served at
 `/p/<slug>`, refreshed live over server-sent events. Contribution points added: `dataSources`,
 `dashboardWidgets`, `dashboardTemplates`, `blockActions`. Details in the README.
+
+## 23. Plugins as modules
+
+A full plugin is a module of the app: a menu, a home, and a guide agents use.
+
+- **Menu** (`ui.menu: {title?, icon?, order?, collapsed?, items}`): items are nav item ids (this
+  plugin's, or another's as `<plugin>:<id>`: core.agents lists core.artifacts' Library), or inline
+  `{id, title, icon?, view, params?, badge?, children?}` (sub-items one level deep), checked by
+  `validateUiManifest`; a manifest without one is unchanged. The registry makes each a group
+  (`registry.groups`; an item is drawn in the first group that names it); a third party's plugin with
+  several nav items and no menu gets a group from them; plain plugins (one nav item) and the core's
+  items (New chat, Search, Inbox, Activity, Projects, Plugins) stay at the top level.
+- **Sidebar**: a group is a header (icon and title open its home; a chevron folds it) with its items
+  and badges (a folded group adds them up). The person folds (chevron, Left/Right on the header) and
+  reorders (the header's menu, Alt+Shift+Up/Down, dragging a header onto another); both are
+  remembered (`prefs.menus`). The rail (collapsed or narrow) shows a group as one icon whose flyout
+  lists Home and its items. The palette lists "Plugin › Home" and "Plugin › Item"; breadcrumbs read
+  "Plugin > Page", the plugin linking to its home.
+- **Home** (`ui.home: <view id>`): opened by the header and by `desktop_open {"target":"view","id":
+  "<plugin>"}`. Without one, `core.shell:plugin-home?plugin=<name>` draws it from the manifest
+  (`homeModel` in registry/modules.ts): what it is, its pages as cards, its commands and slash commands
+  as actions, settings, status items, home cards, "Ask the agent about <plugin>" (typed in, never
+  sent) and "Guide for agents". Written homes: Engineering and Operations (frames), Dashboards and
+  Agents (native).
+- **Guide** (`ui.guide: GUIDE.md`, or a `<plugin>-guide` skill in its `skills` folder): the authored
+  Markdown (frontmatter `description` is the one-sentence purpose; what it is for, when, how, worked
+  examples) merged at `<!-- generated -->` with sections generated from the manifest and the server
+  half (packages/plugin-ui/src/guide.ts): menu, pages as desktop_open targets, panels, agent-callable
+  commands with their argument schemas, the person's commands, slash commands, settings and their
+  fields, renderers, tools, workflows, agents, gates, skills. The generated half is made each time, so
+  it never goes stale (test/desktop-modules.test.ts fails if a command or view is missing).
+- **Index**: the app declares `client.plugins` (`[{name, title, purpose, from: app|server, tools?}]`,
+  every enabled plugin with a guide); the server renders one line each at the end of the client block
+  of the system prompt, `<plugin>: <purpose>; guide: load skill <plugin>-guide`. A server plugin's
+  line uses the server's own purpose (no line when the server does not have it on); the app's
+  built-ins (core.*) give theirs; another app plugin gets no line (its words are not the app's;
+  desktop_describe lists it, fenced). Each guide is a skill (`<plugin>-guide`, not in `<skills>`): the
+  server's from the plugin folder, the app's through `desktop_describe {plugin, guide: true}` with the
+  details of the engine tools it names. 11 plugins cost about 490 tokens (about 40 a line) in the
+  system prompt and 46 in the skill tool's list.
+- **On and off**: groups, homes and palette entries follow the registry live. Before the next message
+  the app sends `PATCH /api/sessions/:id {clientPlugins}` when its plugins changed; the server
+  re-renders only the index lines and swaps the guide skills (the agent's tool definitions follow), so
+  the rest of the cached prefix stays byte for byte.
+- **desktop_describe**: each plugin with its purpose, guide, home, menu, agent-callable commands and
+  tools, and the server's guided plugins without pages; `{plugin}` describes one in depth.
+
+Tests: test/desktop-modules.test.ts, test/desktop-modules-server.test.ts, and the Electron run
+test/desktop-modules-e2e.test.ts (screenshots in docs/screenshots/desktop/modules/). Live:
+`node --env-file=<.env> apps/desktop/scripts/live-modules.mjs`.

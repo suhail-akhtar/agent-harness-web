@@ -75,7 +75,13 @@ test('both UI halves validate as frame plugins (never native), with every entry 
   const aiops = validateUiManifest(JSON.parse(await fs.readFile(path.join(PLUGINS, 'aiops', 'harness-plugin.json'), 'utf8')).ui);
   assert.deepEqual(aiops.contributes.slashCommands.map((s) => s.name), ['incident', 'investigate', 'ops-check']);
   assert.equal(aiops.contributes.navItems[0]!.badge, 'aiops.open');
-  assert.deepEqual(aiops.contributes.views.map((v) => v.id), ['incidents', 'alerts', 'services', 'topology', 'changes']);
+  assert.deepEqual(aiops.contributes.views.map((v) => v.id), ['home', 'incidents', 'alerts', 'services', 'topology', 'changes']);
+  // Each is a module: a menu (Operations: Incidents, Alerts, Services, Topology, Changes; Engineering: Delivery, Start a feature, Gates), a home, a guide.
+  assert.equal(aiops.home, 'home');
+  assert.equal(sdlc.home, 'home');
+  assert.equal(aiops.menu!.items.length, 5);
+  assert.equal(sdlc.menu!.items.length, 3);
+  for (const p of ['sdlc', 'aiops']) await fs.access(path.join(PLUGINS, p, 'GUIDE.md'));
   // Role models reach the workflows' agent nodes from their inputs.
   const bf = JSON.parse(await fs.readFile(path.join(PLUGINS, 'sdlc', 'workflows', 'build-feature.json'), 'utf8'));
   assert.equal(bf.nodes['code-review'].model, '{{input.reviewerModel}}');

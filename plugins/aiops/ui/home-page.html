@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Operations</title>
+<link rel="stylesheet" href="kit.css">
+<style>
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 4px 0 18px; }
+  .kpi { text-align: left; font: inherit; color: inherit; border: 1px solid var(--hx-border-subtle); border-radius: 12px; background: var(--hx-elevated); padding: 12px 14px; cursor: pointer; }
+  .kpi:hover { border-color: var(--hx-border); }
+  .kpi b { display: block; font-size: 26px; font-weight: 600; letter-spacing: -.02em; line-height: 1.1; }
+  .kpi.hot b { color: var(--hx-danger); } .kpi.warm b { color: var(--hx-warning); } .kpi.calm b { color: var(--hx-success); }
+  .grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+  .item { display: flex; gap: 10px; align-items: center; width: 100%; text-align: left; font: inherit; color: inherit; background: transparent; border: 0; border-top: 1px solid var(--hx-border-subtle); padding: 8px 2px; cursor: pointer; }
+  .item:first-child { border-top: 0; }
+  .item:hover { background: var(--hx-hover); }
+  .item .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card h2 { margin: 0 0 8px; display: flex; align-items: center; gap: 8px; }
+  .card h2 .spacer { flex: 1; }
+  .slo { display: grid; grid-template-columns: minmax(0, 1fr) 110px 74px; gap: 4px 10px; align-items: center; font-size: 12.5px; }
+  .actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
+  .action { display: flex; gap: 8px; align-items: center; text-align: left; font: inherit; font-size: 12.5px; color: inherit; border: 1px solid var(--hx-border-subtle); border-radius: 10px; background: var(--hx-elevated); padding: 9px 11px; cursor: pointer; }
+  .action:hover { border-color: var(--hx-border); background: var(--hx-hover); }
+  .action code { font: 12px var(--hx-font-mono); color: var(--hx-accent-text); }
+  .svc { display: inline-flex; gap: 6px; align-items: center; border: 1px solid var(--hx-border-subtle); border-radius: 999px; padding: 3px 10px; font-size: 12px; margin: 0 6px 6px 0; cursor: pointer; background: var(--hx-elevated); color: inherit; font-family: inherit; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+</style>
+<script src="harness://app/sdk/plugin-ui.js"></script>
+<script src="kit.js"></script>
+</head>
+<body>
+<div class="page" data-ops-home>
+  <div class="head">
+    <div class="grow"><h1>Operations</h1><div class="sub" id="sub">On call at a glance.</div></div>
+    <button type="button" class="btn" id="check" data-ops-home-check>Run ops check</button>
+    <button type="button" class="btn primary" id="incident" data-ops-home-incident>Open an incident…</button>
+  </div>
+  <div id="note"></div>
+  <div class="kpis" id="kpis"><div class="muted">Loading…</div></div>
+  <div class="grid">
+    <div class="stack">
+      <section class="card" data-ops-home-incidents><h2>Open incidents<span class="spacer"></span><button type="button" class="btn sm ghost" data-go="incidents">All incidents</button></h2><div id="incidents" class="muted small">Loading…</div></section>
+      <section class="card" data-ops-home-alerts><h2>Firing alerts<span class="spacer"></span><button type="button" class="btn sm ghost" data-go="alerts">All alerts</button></h2><div id="alerts" class="muted small">Loading…</div></section>
+    </div>
+    <div class="stack">
+      <section class="card" data-ops-home-slos><h2>SLO error budgets<span class="spacer"></span><button type="button" class="btn sm ghost" data-go="services">Services</button></h2><div id="slos" class="muted small">Loading…</div></section>
+      <section class="card" data-ops-home-services><h2>Services<span class="spacer"></span><button type="button" class="btn sm ghost" data-go="topology">Topology</button></h2><div id="services" class="muted small">Loading…</div></section>
+    </div>
+  </div>
+  <h2>Quick actions</h2>
+  <div class="actions" id="actions"></div>
+</div>
+<script>
+// The Operations home: the on-call summary (open incidents, firing alerts, SLO budgets, service
+// health) from the plugin's own read-only console routes, and the quick actions. Nothing here
+// changes a system: an incident or an investigation is a prompt the person sends.
+Kit.start(async (harness) => {
+  const { h, mount, chip, age } = Kit;
+  const $ = (id) => document.getElementById(id);
+  const route = (p, body) => Kit.route(harness, `console/${p}`, body);
+  let settings = {};
+  try { settings = (await harness.settings.get()) || {}; } catch { settings = {}; }
+  const rank = { info: 0, warning: 1, critical: 2 };
+  const min = settings.minSeverity || 'info';
+  const tone = (s) => ({ healthy: 'ok', degraded: 'warn', critical: 'bad' }[s] || '');
+  for (const b of document.querySelectorAll('[data-go]')) b.addEventListener('click', () => harness.view.open(b.getAttribute('data-go')));
+  $('incident').onclick = () => harness.composer.prefill('/incident ', { newChat: true });
+  $('check').onclick = async () => {
+    $('check').disabled = true;
+    try { const r = await Kit.route(harness, 'console/ops-check', {}); mount($('note'), h('div', { class: 'card small', style: { marginBottom: '12px' }, 'data-ops-home-checked': '' }, r.text || 'Checked.')); await load(); }
+    catch (e) { mount($('note'), h('div', { class: 'error', style: { marginBottom: '12px' } }, e.message)); }
+    finally { $('check').disabled = false; }
+  };
+  const actions = [
+    ['Open an incident', '/incident ', 'Opens a record, triages it read-only, writes the timeline'],
+    ['Investigate a symptom', '/investigate ', 'The incident-response workflow: evidence, root cause, a refuter, a runbook'],
+    ['Check the alert rules now', null, 'The ops check: PromQL, probes and health URLs, no model'],
+    ['Ask about Operations', 'What can the Operations plugin do here? Load its guide (aiops-guide) and show me its pages and commands with an example.', 'Prefills a question for the agent'],
+  ];
+  mount($('actions'), actions.map(([title, prompt, hint]) => h('button', { type: 'button', class: 'action', 'data-ops-action': title, onclick: () => (prompt ? harness.composer.prefill(prompt, { newChat: true }) : $('check').click()) },
+    h('span', { style: { flex: '1' } }, h('b', {}, title), h('div', { class: 'muted small' }, hint)), prompt && prompt.startsWith('/') ? h('code', {}, prompt.trim()) : null)));
+
+  async function load() {
+    const [s, al, sv] = await Promise.all([route('summary'), route('alerts').catch(() => ({ groups: [], firing: 0 })), route('services').catch(() => ({ services: [], inventory: false }))]);
+    const firing = Object.entries(s.bySeverity).filter(([k]) => rank[k] >= rank[min]).reduce((a, [, v]) => a + v, 0);
+    await harness.badge.set('open', s.open || null).catch(() => {});
+    await harness.badge.set('firing', firing || null).catch(() => {});
+    const slos = (s.slo || []).filter((o) => !o.error && typeof o.budgetLeft === 'number').sort((a, b) => a.budgetLeft - b.budgetLeft);
+    const atRisk = slos.filter((o) => o.budgetLeft < 0.5).length;
+    const degraded = (sv.services || []).filter((x) => x.state === 'degraded' || x.state === 'critical').length;
+    $('sub').textContent = `${s.watch || ''}`.trim() || 'On call at a glance.';
+    mount($('kpis'),
+      h('button', { type: 'button', class: `kpi ${s.open ? 'hot' : 'calm'}`, 'data-kpi': 'open', 'data-value': String(s.open), onclick: () => harness.view.open('incidents') }, h('b', {}, String(s.open)), h('span', { class: 'muted small' }, 'open incidents')),
+      h('button', { type: 'button', class: `kpi ${s.bySeverity.critical ? 'hot' : firing ? 'warm' : 'calm'}`, 'data-kpi': 'firing', 'data-value': String(firing), onclick: () => harness.view.open('alerts') }, h('b', {}, String(firing)), h('span', { class: 'muted small' }, `firing alerts${s.bySeverity.critical ? ` · ${s.bySeverity.critical} critical` : ''}`)),
+      h('button', { type: 'button', class: `kpi ${atRisk ? 'warm' : 'calm'}`, 'data-kpi': 'slo', onclick: () => harness.view.open('services') }, h('b', {}, `${atRisk}/${slos.length}`), h('span', { class: 'muted small' }, 'SLOs under half their budget')),
+      h('button', { type: 'button', class: `kpi ${degraded ? 'warm' : 'calm'}`, 'data-kpi': 'services', onclick: () => harness.view.open('services') }, h('b', {}, sv.inventory ? `${(sv.services || []).length - degraded}/${(sv.services || []).length}` : '—'), h('span', { class: 'muted small' }, sv.inventory ? 'services healthy' : 'no inventory on the server')),
+    );
+    mount($('incidents'), s.top.length ? s.top.map((x) => h('button', { type: 'button', class: 'item', 'data-home-incident': x.id, onclick: () => harness.view.open('incidents', { id: x.id }) },
+      chip(String(x.severity).toUpperCase(), x.severity), h('span', { class: 't' }, x.title), (x.services || []).length ? h('span', { class: 'muted small' }, x.services.join(', ')) : null, h('span', { class: 'muted small' }, age(x.openedAt)))) : h('div', { class: 'muted small', 'data-empty': '' }, 'No open incidents.'));
+    const rows = (al.groups || []).flatMap((g) => g.alerts.filter((a) => a.status === 'firing' && rank[a.severity] >= rank[min]).map((a) => ({ ...a, key: g.key })));
+    mount($('alerts'), rows.length ? rows.slice(0, 8).map((a) => h('button', { type: 'button', class: 'item', 'data-home-alert': a.name, onclick: () => harness.view.open('alerts') },
+      h('span', { class: `dot ${a.severity === 'critical' ? 'bad' : a.severity === 'warning' ? 'warn' : 'info'} live` }), h('span', { class: 't' }, a.name, h('span', { class: 'muted small' }, ` · ${a.key}`)), h('span', { class: 'muted small' }, age(a.firstSeen)))) : h('div', { class: 'muted small', 'data-empty': '' }, 'Nothing is firing.'));
+    mount($('slos'), slos.length ? h('div', { class: 'slo' }, slos.slice(0, 8).flatMap((o) => [
+      h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, `${o.service}/${o.name}`),
+      h('div', { class: 'bar' }, h('span', { class: o.budgetLeft < 0.1 ? 'bad' : o.budgetLeft < 0.5 ? 'warn' : '', style: { width: `${Math.max(2, Math.min(100, Math.round(o.budgetLeft * 100)))}%` } })),
+      h('span', { class: 'muted', style: { textAlign: 'right' } }, `${o.budgetLeft < 0 ? 'spent' : `${Math.round(o.budgetLeft * 100)}%`} · ${Number(o.burn1h || 0).toFixed(1)}x`),
+    ])) : h('div', { class: 'muted small' }, 'No SLOs in the inventory.'));
+    mount($('services'), (sv.services || []).length ? (sv.services || []).map((x) => h('button', { type: 'button', class: 'svc', 'data-home-service': x.name, onclick: () => harness.view.open('services') }, h('span', { class: `dot ${tone(x.state)}` }), x.name, x.openIncidents ? chip(String(x.openIncidents), 'bad') : null)) : h('div', { class: 'muted small' }, sv.note || 'No services yet.'));
+  }
+  await Kit.live(harness, load, { topics: ['session', 'approvals'], ms: Math.max(5, Number(settings.refreshSeconds) || 30) * 1000 });
+});
+</script>
+</body>
+</html>

@@ -7,7 +7,7 @@
  */
 
 import {
-  qualify, type CommandContribution, type ComposerChipContribution, type HomeCardContribution, type NavItemContribution, type OnboardingContribution,
+  qualify, GENERATED_HOME_VIEW, type MenuItemRef, type IconName, type CommandContribution, type ComposerChipContribution, type HomeCardContribution, type NavItemContribution, type OnboardingContribution,
   type PanelContribution, type PromptContribution, type RendererContribution, type SettingsContribution, type SlashCommandContribution,
   type StatusItemContribution, type ThemeContribution, type UiManifest, type UiTrust, type ViewContribution,
   type DataSourceContribution, type WidgetContribution, type BlockActionContribution, type DashboardTemplateContribution,
@@ -29,10 +29,34 @@ export interface PluginEntry {
   uiError?: string;
   uiHash?: string;
   native?: NativeModule;
+  /** The authored guide (Markdown) when the app has it: a built-in's GUIDE.md. */
+  guide?: string;
+  /** The server's word on its guide: the plugin's one-sentence purpose (server plugins). */
+  guideInfo?: { purpose: string };
+  /** Server plugins: what the loaded plugin added ("tool:name", "workflow:name" ...). */
+  contributes?: string[];
 }
 
 type Q<T> = T & { qid: string; plugin: string };
-export type NavItem = Q<NavItemContribution>;
+/** `group`: the plugin whose menu shows it (it is drawn there, not at the top level); `parent`: the item it is a sub-item of. */
+export type NavItem = Q<NavItemContribution> & { group?: string; parent?: string };
+
+export interface Route { view: string; params?: Record<string, string> }
+/** One entry of a group: a nav item (this plugin's, another's, or one the menu defines), with its sub-items. */
+export interface MenuEntry { qid: string; plugin: string; title: string; icon?: IconName; view: string; params?: Record<string, string>; badge?: string; children: MenuEntry[] }
+/** A plugin as a module in the sidebar: a header (icon, title: opens its home) and its items. */
+export interface MenuGroup {
+  plugin: string;
+  title: string;
+  icon: IconName;
+  order: number;
+  /** Folded until the person unfolds it (their choice is remembered). */
+  collapsed: boolean;
+  home: Route;
+  /** The plugin declared its home (else the shell draws one from the manifest). */
+  homeDeclared: boolean;
+  items: MenuEntry[];
+}
 export type View = Q<ViewContribution> & { trust: UiTrust };
 export type Panel = Q<PanelContribution> & { trust: UiTrust };
 export type Command = Q<CommandContribution> & { keys?: string; defaultKeys?: string; /** Its chord is taken by this command (which keeps it). */ keyConflict?: string };
@@ -72,6 +96,10 @@ export interface Registry {
   widgets: Widget[];
   blockActions: BlockAction[];
   dashboardTemplates: DashboardTemplate[];
+  /** Plugins as modules: one group each in the sidebar, in the person's order. */
+  groups: MenuGroup[];
+  /** Every active plugin's home: its declared view, else the page the shell draws from its manifest. */
+  homes: Map<string, Route>;
   errors: Array<{ plugin: string; error: string }>;
   conflicts: Array<{ kind: 'slash' | 'keybinding'; key: string; ids: string[] }>;
 }
@@ -87,6 +115,8 @@ export interface RegistryOptions {
   platform?: string;
   /** Required plugins (the product's), always active. */
   required?: string[];
+  /** The person's order of the sidebar's groups (plugin names); others follow by their menu's order. */
+  menuOrder?: string[];
 }
 
 const GROUP_ORDER = ['app', 'agent', 'integrations', 'plugins', 'admin'];
@@ -96,7 +126,7 @@ const isBuiltin = (p: PluginEntry) => p.source === 'builtin';
 export function buildRegistry(entries: PluginEntry[], o: RegistryOptions = {}): Registry {
   const r: Registry = {
     plugins: entries, active: [], navItems: [], views: new Map(), panels: new Map(), commands: [], slashCommands: [], composerChips: [], settings: [],
-    renderers: { tool: new Map(), event: new Map(), fence: new Map(), artifact: new Map() }, homeCards: [], statusItems: [], themes: [], prompts: [], onboarding: [], dataSources: [], widgets: [], blockActions: [], dashboardTemplates: [], errors: [], conflicts: [],
+    renderers: { tool: new Map(), event: new Map(), fence: new Map(), artifact: new Map() }, homeCards: [], statusItems: [], themes: [], prompts: [], onboarding: [], dataSources: [], widgets: [], blockActions: [], dashboardTemplates: [], groups: [], homes: new Map(), errors: [], conflicts: [],
   };
   const required = new Set(o.required ?? []);
   // Built-ins first, so a third-party plugin's renderer (later) replaces a built-in default.
@@ -148,6 +178,7 @@ export function buildRegistry(entries: PluginEntry[], o: RegistryOptions = {}): 
   r.settings.sort((a, b) => GROUP_ORDER.indexOf(a.group ?? 'plugins') - GROUP_ORDER.indexOf(b.group ?? 'plugins') || byOrder(a, b));
   r.statusItems.sort(byOrder);
   r.onboarding.sort(byOrder);
+  buildMenus(r, o.menuOrder ?? []);
   // Two commands on one chord: the first keeps it, both are reported (Settings > Shortcuts shows them).
   // The core's commands come first (built-ins load first), so the core always keeps its keys; a later
   // command on a taken chord loses it (it can still be run from the palette or rebound) and the clash is reported.
@@ -165,6 +196,64 @@ export function buildRegistry(entries: PluginEntry[], o: RegistryOptions = {}): 
     } else taken.set(k, cmd.qid);
   }
   return r;
+}
+
+/**
+ * Plugins as modules. A plugin with a `ui.menu` (or a third-party plugin with several nav items and
+ * none) becomes a group: its items are the nav items it names (its own, or another plugin's while that
+ * one is on) and the ones the menu defines (sub-items one level deep). An item is drawn in one group
+ * only (the first that names it). Groups follow the person's order, then their menu's, then title.
+ * Every active plugin gets a home: its declared view, else the page the shell draws from its manifest.
+ */
+function buildMenus(r: Registry, personOrder: string[]): void {
+  const claimed = new Set<string>();
+  for (const p of r.active) {
+    const ui = p.ui!;
+    const declared = ui.home ? qualify(p.name, ui.home) : undefined;
+    const home: Route = declared && r.views.has(declared) ? { view: declared } : r.views.has(GENERATED_HOME_VIEW) ? { view: GENERATED_HOME_VIEW, params: { plugin: p.name } } : (() => { const n = r.navItems.find((x) => x.plugin === p.name); return n ? { view: n.view, ...(n.params ? { params: n.params } : {}) } : { view: GENERATED_HOME_VIEW, params: { plugin: p.name } }; })();
+    r.homes.set(p.name, home);
+    let refs: MenuItemRef[] | undefined = ui.menu?.items;
+    if (!refs && !isBuiltin(p)) {
+      const own = r.navItems.filter((n) => n.plugin === p.name && n.placement !== 'footer');
+      if (own.length >= 2) refs = own.map((n) => n.id);
+    }
+    if (!refs) continue;
+    const entry = (it: MenuItemRef, parent?: string): MenuEntry | undefined => {
+      if (typeof it === 'string') {
+        const qid = it.includes(':') ? it : `${p.name}:${it}`;
+        const n = r.navItems.find((x) => x.qid === qid);
+        if (!n || claimed.has(qid)) return undefined;
+        claimed.add(qid);
+        n.group = p.name;
+        if (parent) n.parent = parent;
+        return { qid, plugin: n.plugin, title: n.title, ...(n.icon ? { icon: n.icon } : {}), view: n.view, ...(n.params ? { params: n.params } : {}), ...(n.badge ? { badge: n.badge } : {}), children: [] };
+      }
+      const qid = `${p.name}:${it.id}`;
+      if (claimed.has(qid)) return undefined;
+      claimed.add(qid);
+      const view = qualify(p.name, it.view);
+      r.navItems.push({ id: it.id, title: it.title, view, qid, plugin: p.name, group: p.name, ...(it.icon ? { icon: it.icon } : {}), ...(it.params ? { params: it.params } : {}), ...(it.badge ? { badge: it.badge } : {}), ...(parent ? { parent } : {}) });
+      const children = (it.children ?? []).map((c) => entry(c, qid)).filter((x): x is MenuEntry => !!x);
+      return { qid, plugin: p.name, title: it.title, ...(it.icon ? { icon: it.icon } : {}), view, ...(it.params ? { params: it.params } : {}), ...(it.badge ? { badge: it.badge } : {}), children };
+    };
+    const items = refs.map((it) => entry(it)).filter((x): x is MenuEntry => !!x);
+    if (!items.length) continue;
+    r.groups.push({ plugin: p.name, title: ui.menu?.title ?? ui.displayName ?? p.name, icon: ui.menu?.icon ?? ui.icon ?? 'puzzle', order: ui.menu?.order ?? 100, collapsed: !!ui.menu?.collapsed, home, homeDeclared: !!declared && home.view === declared, items });
+  }
+  const rank = (n: string) => { const i = personOrder.indexOf(n); return i < 0 ? 1e6 : i; };
+  r.groups.sort((a, b) => rank(a.plugin) - rank(b.plugin) || a.order - b.order || a.title.localeCompare(b.title));
+}
+
+/** The group a page belongs to: its plugin's, or the one whose items open it. */
+export function groupOf(r: Registry, view: string): MenuGroup | undefined {
+  const plugin = view.slice(0, Math.max(0, view.indexOf(':')));
+  const flat = (g: MenuGroup) => g.items.flatMap((e) => [e, ...e.children]);
+  return r.groups.find((g) => flat(g).some((e) => e.view === view)) ?? r.groups.find((g) => g.plugin === plugin);
+}
+
+/** Whether a route is a plugin's home (the generated one names its plugin in params). */
+export function isHomeRoute(home: Route, route: Route): boolean {
+  return home.view === route.view && (home.params?.plugin ?? '') === (route.params?.plugin ?? '');
 }
 
 /** "ctrl+shift+p" and "Shift+Ctrl+P" are the same chord. */

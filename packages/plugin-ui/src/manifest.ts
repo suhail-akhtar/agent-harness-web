@@ -267,6 +267,43 @@ export interface UiContributes {
 
 export const CONTRIBUTION_POINTS = ['navItems', 'views', 'panels', 'commands', 'slashCommands', 'composerChips', 'settings', 'renderers', 'homeCards', 'statusItems', 'themes', 'prompts', 'onboarding', 'dataSources', 'dashboardWidgets', 'blockActions', 'dashboardTemplates'] as const;
 
+/**
+ * An item of a plugin's own menu (`ui.menu.items`): a nav item by id (this plugin's, or another's as
+ * "<plugin>:<id>": core.agents lists the Library of core.artifacts), or an item of its own.
+ */
+export type MenuItemRef = string | MenuItemInline;
+/** A menu item the menu itself defines: like a nav item, with sub-items (one level deep). */
+export interface MenuItemInline {
+  id: string;
+  title: string;
+  icon?: IconName;
+  /** A view id: `<id>` of this plugin's views, or `<plugin>:<id>`. */
+  view: string;
+  params?: Record<string, string>;
+  /** A live value shown as a count (see NavItemContribution.badge). */
+  badge?: string;
+  /** Sub-items: refs or inline items without children of their own. */
+  children?: Array<string | Omit<MenuItemInline, 'children'>>;
+}
+/**
+ * The plugin as a module of the app: one group in the sidebar (a header with its icon and title that
+ * opens the plugin's home, its items under it), "Plugin > Item" in the palette and the breadcrumbs.
+ */
+export interface MenuContribution {
+  /** The group's title (default: displayName). */
+  title?: string;
+  icon?: IconName;
+  /** Where the group sits among the others until the person reorders them (default 100). */
+  order?: number;
+  /** Starts folded (the person's choice is remembered either way). */
+  collapsed?: boolean;
+  items: MenuItemRef[];
+}
+
+export const MENU_MAX_ITEMS = 40;
+export const MENU_MAX_CHILDREN = 20;
+export const TOOL_NAME = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
+
 export interface UiManifest {
   apiVersion: number;
   displayName?: string;
@@ -279,6 +316,14 @@ export interface UiManifest {
   contributes: Required<UiContributes>;
   /** Badge values the host keeps current while no page of the plugin is open (see BadgeSource). */
   badges?: BadgeSource[];
+  /** The plugin's menu: it shows as a group in the sidebar (see MenuContribution). */
+  menu?: MenuContribution;
+  /** The plugin's landing page (a view id); without one the shell draws a home from the manifest. */
+  home?: string;
+  /** The plugin's guide for agents: a Markdown file in the plugin folder (frontmatter `description`: its one-sentence purpose). */
+  guide?: string;
+  /** Tools of the plugin's server half (or of the engine) its pages drive: named in its guide and in desktop_describe. */
+  tools?: string[];
 }
 
 /** The subset of JSON Schema the settings and form renderer understands. */
@@ -423,6 +468,52 @@ export function validateValue(schema: JsonSchema, value: unknown, where = 'answe
     if (schema.pattern !== undefined) { let re: RegExp | undefined; try { re = new RegExp(schema.pattern); } catch { /* checked with the schema */ } if (re && !re.test(value.slice(0, 10_000))) out.push(`${where}: does not match the expected format`); }
   }
   return out;
+}
+
+const QREF = /^([a-z0-9][a-z0-9._-]{0,62}:)?[a-z0-9][a-z0-9._-]{0,62}$/i;
+
+/**
+ * `ui.menu`: refs name this plugin's nav items (or "<plugin>:<id>" another's, resolved when the app
+ * builds its registry); inline items are checked like nav items; sub-items one level deep; an id once.
+ */
+function checkMenu(raw: unknown, navItems: Array<Record<string, unknown>>, views: Array<Record<string, unknown>>): MenuContribution {
+  if (!isObj(raw)) throw new ManifestError('"ui.menu" is an object: { "title"?, "icon"?, "order"?, "collapsed"?, "items": [...] }.');
+  const m = raw;
+  if (m.title !== undefined && (typeof m.title !== 'string' || !m.title.trim() || m.title.length > 40)) throw new ManifestError('"ui.menu.title" is at most 40 characters.');
+  if (m.icon !== undefined && !(ICON_NAMES as readonly string[]).includes(String(m.icon))) throw new ManifestError(`"ui.menu.icon": unknown icon "${String(m.icon)}".`);
+  if (m.order !== undefined && (typeof m.order !== 'number' || !Number.isFinite(m.order))) throw new ManifestError('"ui.menu.order" is a number.');
+  if (m.collapsed !== undefined && typeof m.collapsed !== 'boolean') throw new ManifestError('"ui.menu.collapsed" is true or false.');
+  if (!Array.isArray(m.items) || !m.items.length || m.items.length > MENU_MAX_ITEMS) throw new ManifestError(`"ui.menu.items" is a list of 1 to ${MENU_MAX_ITEMS} items: nav item ids, or { "id", "title", "view", "children"? }.`);
+  const seen = new Set<string>();
+  const navIds = new Set(navItems.map((n) => String(n.id)));
+  const item = (it: unknown, where: string, depth: number): MenuItemRef => {
+    if (typeof it === 'string') {
+      if (!QREF.test(it)) throw new ManifestError(`${where}: "${it}" is not a nav item id ("<id>" or "<plugin>:<id>").`);
+      if (!it.includes(':') && !navIds.has(it)) throw new ManifestError(`${where}: "${it}" is not one of this plugin's nav items (name another plugin's as "<plugin>:<id>").`);
+      if (seen.has(it)) throw new ManifestError(`${where}: "${it}" is in the menu twice.`);
+      seen.add(it);
+      return it;
+    }
+    if (!isObj(it)) throw new ManifestError(`${where}: an item is a nav item id or an object.`);
+    if (typeof it.id !== 'string' || !ID.test(it.id)) throw new ManifestError(`${where}: every inline item needs an "id" (letters, digits, dot, dash).`);
+    if (seen.has(it.id) || navIds.has(it.id)) throw new ManifestError(`${where}: the id "${it.id}" is taken (by another item or a nav item).`);
+    seen.add(it.id);
+    if (typeof it.title !== 'string' || !it.title.trim() || it.title.length > 80) throw new ManifestError(`${where}: item "${it.id}" needs a "title" (at most 80 characters).`);
+    if (it.icon !== undefined && !(ICON_NAMES as readonly string[]).includes(String(it.icon))) throw new ManifestError(`${where}: item "${it.id}": unknown icon "${String(it.icon)}".`);
+    if (typeof it.view !== 'string' || !QREF.test(it.view)) throw new ManifestError(`${where}: item "${it.id}" needs a "view".`);
+    if (!it.view.includes(':') && !views.some((v) => v.id === it.view)) throw new ManifestError(`${where}: item "${it.id}" opens "${it.view}", which is not one of this plugin's views.`);
+    if (it.params !== undefined && (!isObj(it.params) || !Object.values(it.params).every((v) => typeof v === 'string'))) throw new ManifestError(`${where}: item "${it.id}": "params" are text values.`);
+    if (it.badge !== undefined && (typeof it.badge !== 'string' || !/^[a-zA-Z0-9._-]{1,80}$/.test(it.badge))) throw new ManifestError(`${where}: item "${it.id}": "badge" is "<plugin>.<name>".`);
+    const out: MenuItemInline = { id: it.id, title: it.title.trim(), view: it.view, ...(it.icon !== undefined ? { icon: it.icon as IconName } : {}), ...(it.params ? { params: it.params as Record<string, string> } : {}), ...(it.badge ? { badge: it.badge } : {}) };
+    if (it.children !== undefined) {
+      if (depth > 0) throw new ManifestError(`${where}: item "${it.id}": sub-items go one level deep.`);
+      if (!Array.isArray(it.children) || it.children.length > MENU_MAX_CHILDREN) throw new ManifestError(`${where}: item "${it.id}": "children" is a list of at most ${MENU_MAX_CHILDREN} items.`);
+      out.children = it.children.map((c, i) => item(c, `${where} > ${it.id}[${i}]`, depth + 1) as Omit<MenuItemInline, 'children'>);
+    }
+    return out;
+  };
+  const items = m.items.map((it, i) => item(it, `"ui.menu.items[${i}]"`, 0));
+  return { items, ...(typeof m.title === 'string' ? { title: m.title.trim() } : {}), ...(m.icon !== undefined ? { icon: m.icon as IconName } : {}), ...(typeof m.order === 'number' ? { order: m.order } : {}), ...(typeof m.collapsed === 'boolean' ? { collapsed: m.collapsed } : {}) };
 }
 
 /**
@@ -620,8 +711,23 @@ export function validateUiManifest(input: unknown, opts: { trustCeiling?: UiTrus
     });
   }
 
+  const menu = m.menu === undefined ? undefined : checkMenu(m.menu, navItems, views);
+  let home: string | undefined;
+  if (m.home !== undefined) {
+    if (typeof m.home !== 'string' || !/^([a-z0-9][a-z0-9._-]{0,62}:)?[a-z0-9][a-z0-9._-]{0,62}$/i.test(m.home)) throw new ManifestError('"ui.home" is a view id ("<id>" of this plugin\'s views, or "<plugin>:<id>").');
+    if (!m.home.includes(':') && !views.some((v) => v.id === m.home)) throw new ManifestError(`"ui.home" names "${m.home}", which is not one of this plugin's views.`);
+    home = m.home;
+  }
+  if (m.guide !== undefined && (!isPluginFile(m.guide) || !/\.md$/i.test(String(m.guide)))) throw new ManifestError('"ui.guide" is a Markdown file inside the plugin folder (e.g. "GUIDE.md").');
+  let tools: string[] | undefined;
+  if (m.tools !== undefined) {
+    if (!Array.isArray(m.tools) || m.tools.length > 40 || !m.tools.every((t) => typeof t === 'string' && TOOL_NAME.test(t))) throw new ManifestError('"ui.tools" is a list of at most 40 tool names.');
+    tools = [...new Set(m.tools as string[])];
+  }
+
   return {
     apiVersion,
+    ...(menu ? { menu } : {}), ...(home ? { home } : {}), ...(m.guide !== undefined ? { guide: String(m.guide) } : {}), ...(tools ? { tools } : {}),
     displayName: typeof m.displayName === 'string' ? m.displayName.slice(0, 60) : undefined,
     icon: typeof m.icon === 'string' && (ICON_NAMES as readonly string[]).includes(m.icon) ? m.icon as IconName : undefined,
     category: typeof m.category === 'string' ? m.category.slice(0, 40) : undefined,

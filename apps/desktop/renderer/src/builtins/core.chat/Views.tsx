@@ -8,7 +8,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { Attachment, Effort, Mode } from '@harness/client';
 import { Button, EmptyState, Icon, IconButton, Input, Popover, MenuList, Spinner, Tooltip, cx, toast, type MenuItem } from '@harness/ui';
 import { useApp, openSession, navigate, setCrumb } from '../../state/app';
-import { useData, client, clientInfo } from '../../state/data';
+import { useData, client, clientInfo, notePluginsTold, syncClientPlugins } from '../../state/data';
 import { desktop, scratchFolder } from '../../bridge';
 import { TopBar } from '../../shell/Bars';
 import { HomeCardHost } from '../../registry/PluginView';
@@ -70,6 +70,7 @@ export function Home(): React.ReactElement {
       const spec = useData.getState().models.find((m) => m.id === model);
       const s = await client.sessions.create({ title: text.replace(/\s+/g, ' ').slice(0, 60) || 'New conversation', model, effort: effortFor({ ...value, model }, spec?.efforts), mode: value.mode, runtime: 'local', ...(path ? { path } : {}), client: clientInfo() });
       useData.getState().upsertSession(s);
+      notePluginsTold(s.id);
       openSession(s.id);
       await client.sessions.send(s.id, text + chipContext(), attachments);
       return true;
@@ -143,7 +144,7 @@ export function Session({ params }: { params: Record<string, string> }): React.R
     if (running || !queue.length) return;
     const [next, ...rest] = queue;
     setQueue(rest);
-    void client.sessions.send(id, next!).catch((e: Error) => toast(e.message, { kind: 'error' }));
+    void syncClientPlugins(id).then(() => client.sessions.send(id, next!)).catch((e: Error) => toast(e.message, { kind: 'error' }));
   }, [running, queue.length]);
 
   const patch = async (v: Partial<ComposerValue>) => {
@@ -160,6 +161,8 @@ export function Session({ params }: { params: Record<string, string> }): React.R
     try {
       const want = effortFor(value, spec?.efforts);
       if (want && want !== s.meta?.effort) { const m = await client.sessions.patch(id, { effort: want }); set((x) => ({ ...x, meta: m })); }
+      // A plugin switched on or off since this conversation was told: its plugin index and guides follow.
+      await syncClientPlugins(id);
       await client.sessions.send(id, text + chipContext(), attachments);
       return true;
     } catch (e) { toast((e as Error).message, { kind: 'error' }); return false; }
