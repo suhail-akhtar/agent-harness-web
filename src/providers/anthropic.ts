@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Block, Message } from '../core/types.ts';
 import type { ModelSpec } from '../core/models.ts';
 import type { Provider, ProviderRequest, ProviderResponse, StopKind, ToolSpec } from './types.ts';
@@ -12,7 +13,24 @@ import { ProviderError } from './types.ts';
 // so the transcript we send stays append-only: that keeps the cache valid and
 // keeps preserved-thinking signatures valid on Haiku 5.5.
 
-const IDLE_MS = Number(process.env.HARNESS_STREAM_IDLE_MS ?? 180_000);
+const idleMs = () => Number(process.env.HARNESS_STREAM_IDLE_MS ?? 180_000);
+
+/**
+ * The stream is alive while bytes arrive. The SDK drops the API's `ping` events before we see
+ * them, so a model thinking quietly for minutes (Haiku did, past 180s, on a long hypothesis step)
+ * looked stalled, and every retry stalled the same way. Every chunk off the wire - pings included -
+ * resets the request's idle timer (the request's own, through async context); a connection that
+ * sends nothing at all is still caught.
+ */
+const liveness = new AsyncLocalStorage<() => void>();
+const livenessFetch = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+  const alive = liveness.getStore();
+  const res = await fetch(input, init);
+  if (!alive || !res.body) return res;
+  alive();
+  const body = res.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({ transform(chunk, c) { alive(); c.enqueue(chunk); } }));
+  return new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers });
+}) as typeof fetch;
 const BETAS = ['context-management-2025-06-27'];
 const COMPACT_BETA = 'compact-2026-01-12';
 /** The API's minimum trigger for server-side compaction. */
@@ -39,7 +57,7 @@ export class AnthropicProvider implements Provider {
 
   constructor(apiKey: string, baseUrl?: string) {
     // The SDK reads ANTHROPIC_BASE_URL; ignore it unless explicitly meant for us.
-    this.client = new Anthropic({ apiKey, baseURL: baseUrl || process.env.HARNESS_ANTHROPIC_BASE_URL || 'https://api.anthropic.com', maxRetries: 0 });
+    this.client = new Anthropic({ apiKey, baseURL: baseUrl || process.env.HARNESS_ANTHROPIC_BASE_URL || 'https://api.anthropic.com', maxRetries: 0, fetch: livenessFetch });
   }
 
   async send(req: ProviderRequest): Promise<ProviderResponse> {
@@ -72,12 +90,12 @@ export class AnthropicProvider implements Provider {
     let stalled = false;
     const bump = () => {
       clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => { stalled = true; ctl.abort(new Error('stalled')); }, IDLE_MS);
+      idleTimer = setTimeout(() => { stalled = true; ctl.abort(new Error('stalled')); }, idleMs());
     };
     try {
       bump();
       const params = { ...this.body(req), betas: this.contextEditing ? [...BETAS, ...(this.compactsServerSide(req.model, req.compactAt) ? [COMPACT_BETA] : [])] : [] };
-      const stream = this.client.beta.messages.stream(params as unknown as Anthropic.Beta.Messages.MessageCreateParamsStreaming, { signal: ctl.signal });
+      const stream = liveness.run(bump, () => this.client.beta.messages.stream(params as unknown as Anthropic.Beta.Messages.MessageCreateParamsStreaming, { signal: ctl.signal }));
       stream.on('streamEvent', bump);
       stream.on('text', (d) => req.onText?.(d));
       stream.on('thinking', (d) => req.onReasoning?.(d));
@@ -85,7 +103,7 @@ export class AnthropicProvider implements Provider {
       try {
         msg = await stream.finalMessage();
       } catch (err) {
-        if (stalled) throw new ProviderError(`stream stalled for ${IDLE_MS / 1000}s`, 0, true);
+        if (stalled) throw new ProviderError(`stream stalled for ${idleMs() / 1000}s`, 0, true);
         throw err;
       }
       return fromAnthropic(req.model.id, msg);

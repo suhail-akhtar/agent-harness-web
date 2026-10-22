@@ -54,3 +54,45 @@ test('a model server that takes the request and never answers is a retryable err
     srv.close();
   }
 });
+
+test('anthropic: a model thinking quietly for longer than the idle time (only pings on the wire) is not a stall; a silent connection still is', async () => {
+  const { AnthropicProvider } = await import('../src/providers/anthropic.ts');
+  const { getModel } = await import('../src/core/models.ts');
+  const sockets = new Set<import('node:net').Socket>();
+  let mode: 'pings' | 'silent' = 'pings';
+  const ev = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  const srv = http.createServer((req, res) => {
+    req.resume();
+    req.on('end', async () => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(ev('message_start', { type: 'message_start', message: { id: 'm1', type: 'message', role: 'assistant', model: 'claude-haiku-5-5', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 5, output_tokens: 1 } } }));
+      // 900 ms with nothing but pings (or nothing at all), against a 300 ms idle limit.
+      for (let i = 0; i < 9; i++) { await new Promise((r) => setTimeout(r, 100)); if (mode === 'pings' && !res.destroyed) res.write(ev('ping', { type: 'ping' })); }
+      if (res.destroyed) return;
+      res.write(ev('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }));
+      res.write(ev('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'thought it through' } }));
+      res.write(ev('content_block_stop', { type: 'content_block_stop', index: 0 }));
+      res.write(ev('message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 4 } }));
+      res.end(ev('message_stop', { type: 'message_stop' }));
+    });
+  });
+  srv.on('connection', (s) => sockets.add(s));
+  await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+  const before = process.env.HARNESS_STREAM_IDLE_MS;
+  process.env.HARNESS_STREAM_IDLE_MS = '300';
+  try {
+    const p = new AnthropicProvider('test-key', `http://127.0.0.1:${(srv.address() as { port: number }).port}`);
+    const req = { model: getModel('claude-haiku-5-5'), system: 's', tools: [], messages: [{ role: 'user' as const, content: [{ type: 'text' as const, text: 'hi' }] }], effort: 'low' as const, signal: new AbortController().signal, cacheKey: 'k' };
+    const ok = await p.send(req);
+    assert.match(JSON.stringify(ok.message.content), /thought it through/, 'pings kept it alive past the idle time');
+    mode = 'silent';
+    const err = await p.send(req).then(() => undefined, (e: unknown) => e);
+    assert.ok(err instanceof ProviderError, String(err));
+    assert.match((err as Error).message, /stream stalled for 0\.3s/);
+    assert.equal((err as ProviderError).retryable, true);
+  } finally {
+    if (before === undefined) delete process.env.HARNESS_STREAM_IDLE_MS; else process.env.HARNESS_STREAM_IDLE_MS = before;
+    for (const s of sockets) s.destroy();
+    srv.close();
+  }
+});
