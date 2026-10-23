@@ -1,0 +1,10 @@
+{
+  "name": "com.harness.bridge",
+  "version": "1.0.0",
+  "displayName": "Harness Bridge",
+  "description": "The agent harness's link into Unity: a localhost-only, token-protected editor bridge (scene, GameObjects, components, prefabs, scripts, play mode, captures, the console), batch entry points for -executeMethod (level building, imports, captures, tests, builds, play sessions, project descriptions) and a small runtime (input injection, game state, playback with frames and metrics, the AI player's step mode). Installed by the harness into Packages/; safe to remove.",
+  "unity": "2022.3",
+  "author": { "name": "Agent Harness" },
+  "keywords": ["harness", "automation", "agents", "testing"],
+  "dependencies": {}
+}

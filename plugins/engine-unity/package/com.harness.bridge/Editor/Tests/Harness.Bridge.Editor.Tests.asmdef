@@ -1,0 +1,31 @@
+{
+    "name": "Harness.Bridge.Editor.Tests",
+    "rootNamespace": "Harness.Bridge.Editor",
+    "references": [
+        "Harness.Bridge",
+        "Harness.Bridge.Editor",
+        "UnityEditor.TestRunner",
+        "UnityEngine.TestRunner"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "HARNESS_TEST_FRAMEWORK"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.unity.test-framework",
+            "expression": "1.1.0",
+            "define": "HARNESS_TEST_FRAMEWORK"
+        }
+    ],
+    "noEngineReferences": false
+}
