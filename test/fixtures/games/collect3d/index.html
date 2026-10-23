@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Gem Field</title>
+<style>html,body{margin:0;height:100%;background:#0d1117;display:grid;place-items:center}canvas{display:block}</style>
+<script type="importmap">{"imports":{"three":"./vendor/three/build/three.module.js"}}</script>
+</head>
+<body>
+<script type="module">
+// A Three.js collect game for the Studio player tests: a cube on a field with two walls and
+// four gems; the arrows move it (left/right on x, up/down on z). Needs vendor/three (the test
+// copies it in with add_library's installer).
+import * as THREE from 'three';
+const DT = 1 / 60, SPEED = 6;
+const renderer = new THREE.WebGLRenderer({ antialias: false });
+renderer.setSize(640, 400);
+renderer.setPixelRatio(1);
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x16202c);
+const camera = new THREE.PerspectiveCamera(55, 640 / 400, 0.1, 100);
+scene.add(new THREE.HemisphereLight(0xdde8ff, 0x223344, 1.2));
+const sun = new THREE.DirectionalLight(0xffffff, 1.5);
+sun.position.set(5, 10, 4);
+scene.add(sun);
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(24, 24), new THREE.MeshStandardMaterial({ color: 0x3a5a40 }));
+ground.rotation.x = -Math.PI / 2;
+scene.add(ground);
+const walls = [{ x: 0, z: -3, w: 10, d: 1 }, { x: 3, z: 4, w: 1, d: 6 }];
+for (const w of walls) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w.w, 1.5, w.d), new THREE.MeshStandardMaterial({ color: 0x8d99ae }));
+  m.position.set(w.x, 0.75, w.z);
+  scene.add(m);
+}
+const player = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ color: 0x4cc9f0 }));
+scene.add(player);
+const gemGeo = new THREE.OctahedronGeometry(0.45);
+const gemMat = new THREE.MeshStandardMaterial({ color: 0xffd166, emissive: 0x553300 });
+const g = { state: 'playing', pos: { x: 0, y: 0.5, z: 6 }, collected: 0, won: false, time: 0, events: [] };
+g.gems = [[-8, -8], [8, -6], [-6, 8], [7, 7]].map(([x, z]) => { const m = new THREE.Mesh(gemGeo, gemMat); m.position.set(x, 0.6, z); scene.add(m); return { x, z, mesh: m, taken: false }; });
+const held = new Set();
+const KEYS = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
+addEventListener('keydown', (e) => { const a = KEYS[e.code]; if (a) { e.preventDefault(); held.add(a); } });
+addEventListener('keyup', (e) => { const a = KEYS[e.code]; if (a) held.delete(a); });
+const hits = (x, z) => Math.abs(x) > 11.5 || Math.abs(z) > 11.5 || walls.some((w) => Math.abs(x - w.x) < w.w / 2 + 0.5 && Math.abs(z - w.z) < w.d / 2 + 0.5);
+function update(dt) {
+  if (g.state !== 'playing') return;
+  g.time += dt;
+  const dx = (held.has('right') ? 1 : 0) - (held.has('left') ? 1 : 0);
+  const dz = (held.has('down') ? 1 : 0) - (held.has('up') ? 1 : 0);
+  const p = g.pos;
+  if (dx && !hits(p.x + dx * SPEED * dt, p.z)) p.x += dx * SPEED * dt;
+  if (dz && !hits(p.x, p.z + dz * SPEED * dt)) p.z += dz * SPEED * dt;
+  for (const gem of g.gems) if (!gem.taken && Math.hypot(gem.x - p.x, gem.z - p.z) < 0.9) { gem.taken = true; gem.mesh.visible = false; g.collected++; g.events.push({ type: 'pickup', detail: `gem ${g.collected}/4` }); }
+  if (g.collected === 4) { g.state = 'won'; g.won = true; g.events.push({ type: 'goal', detail: 'all gems' }); }
+}
+function draw() {
+  player.position.set(g.pos.x, g.pos.y, g.pos.z);
+  for (const gem of g.gems) gem.mesh.rotation.y = g.time * 2;
+  camera.position.set(g.pos.x, 11, g.pos.z + 10);
+  camera.lookAt(g.pos.x, 0, g.pos.z);
+  renderer.render(scene, camera);
+}
+let last = performance.now(), acc = 0;
+renderer.setAnimationLoop((now) => { acc += Math.min(0.25, (now - last) / 1000); last = now; while (acc >= DT) { update(DT); acc -= DT; } draw(); });
+window.__game = {
+  get state() { return g.state; },
+  get player() { return { ...g.pos }; },
+  get gems() { return g.collected; },
+  total: 4,
+  get won() { return g.won; },
+  get targets() { return g.gems.filter((x) => !x.taken).map((x) => ({ x: x.x, y: 0.5, z: x.z })); },
+  inputs: ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'],
+  get events() { return g.events; },
+};
+</script>
+</body>
+</html>

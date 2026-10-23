@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Maze Runner</title>
+<style>html,body{margin:0;height:100%;background:#0b0f14;display:grid;place-items:center}canvas{display:block}</style></head>
+<body><canvas id="c" width="440" height="360"></canvas>
+<script>
+// A top-down maze for the Studio player tests: three coins in its corners, an exit that opens
+// once they are all taken. Arrow keys move; corners help a player that is a little off the lane.
+const T = 40, DT = 1 / 60, SIZE = 24, SPEED = 150;
+const MAP = [
+  '###########',
+  '#S..#...#C#',
+  '#.#.#.#.#.#',
+  '#.#...#...#',
+  '#.#####.###',
+  '#...C.#...#',
+  '###.#.###.#',
+  '#C..#....E#',
+  '###########',
+];
+const ctx = document.getElementById('c').getContext('2d');
+const held = new Set();
+const KEYS = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
+addEventListener('keydown', (e) => { const a = KEYS[e.code]; if (a) { e.preventDefault(); held.add(a); } });
+addEventListener('keyup', (e) => { const a = KEYS[e.code]; if (a) held.delete(a); });
+
+const g = { state: 'playing', coins: [], collected: 0, won: false, time: 0, events: [] };
+MAP.forEach((row, y) => [...row].forEach((ch, x) => {
+  if (ch === 'S') g.player = { x: x * T + T / 2, y: y * T + T / 2 };
+  if (ch === 'C') g.coins.push({ x: x * T + T / 2, y: y * T + T / 2, taken: false });
+  if (ch === 'E') g.exit = { x: x * T + T / 2, y: y * T + T / 2 };
+}));
+const wall = (tx, ty) => (MAP[ty]?.[tx] ?? '#') === '#';
+function blocked(x, y) {
+  const h = SIZE / 2 - 0.01;
+  return [[x - h, y - h], [x + h, y - h], [x - h, y + h], [x + h, y + h]].some(([px, py]) => wall(Math.floor(px / T), Math.floor(py / T)));
+}
+function moveAxis(axis, dir, dt) {
+  const p = g.player, step = dir * SPEED * dt;
+  const nx = axis === 'x' ? p.x + step : p.x, ny = axis === 'y' ? p.y + step : p.y;
+  if (!blocked(nx, ny)) { p.x = nx; p.y = ny; return; }
+  // Corner help: slide toward the lane's centre when the lane ahead is open.
+  const tx = Math.floor(p.x / T), ty = Math.floor(p.y / T);
+  if (axis === 'x' && !wall(tx + dir, ty)) { const c = ty * T + T / 2; p.y += Math.sign(c - p.y) * Math.min(Math.abs(c - p.y), SPEED * dt); }
+  if (axis === 'y' && !wall(tx, ty + dir)) { const c = tx * T + T / 2; p.x += Math.sign(c - p.x) * Math.min(Math.abs(c - p.x), SPEED * dt); }
+}
+function update(dt) {
+  if (g.state !== 'playing') return;
+  g.time += dt;
+  const dx = (held.has('right') ? 1 : 0) - (held.has('left') ? 1 : 0);
+  const dy = (held.has('down') ? 1 : 0) - (held.has('up') ? 1 : 0);
+  if (dx) moveAxis('x', dx, dt);
+  if (dy) moveAxis('y', dy, dt);
+  const p = g.player;
+  for (const c of g.coins) if (!c.taken && Math.hypot(c.x - p.x, c.y - p.y) < 20) { c.taken = true; g.collected++; g.events.push({ type: 'pickup', detail: `coin ${g.collected}/${g.coins.length}` }); }
+  if (g.collected === g.coins.length && Math.hypot(g.exit.x - p.x, g.exit.y - p.y) < 18) { g.state = 'won'; g.won = true; g.events.push({ type: 'goal', detail: 'out of the maze' }); }
+}
+function draw() {
+  ctx.fillStyle = '#0b0f14'; ctx.fillRect(0, 0, 440, 360);
+  MAP.forEach((row, y) => [...row].forEach((ch, x) => { if (ch === '#') { ctx.fillStyle = '#334155'; ctx.fillRect(x * T, y * T, T, T); } }));
+  const open = g.collected === g.coins.length;
+  ctx.fillStyle = open ? '#22c55e' : '#7f1d1d'; ctx.fillRect(g.exit.x - 14, g.exit.y - 14, 28, 28);
+  ctx.fillStyle = '#facc15'; for (const c of g.coins) if (!c.taken) { ctx.beginPath(); ctx.arc(c.x, c.y, 8, 0, Math.PI * 2); ctx.fill(); }
+  ctx.fillStyle = '#38bdf8'; ctx.fillRect(g.player.x - SIZE / 2, g.player.y - SIZE / 2, SIZE, SIZE);
+  if (g.state === 'won') { ctx.fillStyle = '#e2e8f0'; ctx.font = '700 32px system-ui'; ctx.textAlign = 'center'; ctx.fillText('Escaped!', 220, 190); }
+}
+let last = performance.now(), acc = 0;
+function frame(now) { acc += Math.min(0.25, (now - last) / 1000); last = now; while (acc >= DT) { update(DT); acc -= DT; } draw(); requestAnimationFrame(frame); }
+requestAnimationFrame(frame);
+window.__game = {
+  get state() { return g.state; },
+  get player() { return { x: g.player.x, y: g.player.y }; },
+  get coins() { return g.collected; },
+  total: 3,
+  get won() { return g.won; },
+  get targets() { const left = g.coins.filter((c) => !c.taken).map(({ x, y }) => ({ x, y })); return left.length ? left : [{ ...g.exit }]; },
+  inputs: ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'],
+  get events() { return g.events; },
+};
+</script>
+</body>
+</html>
