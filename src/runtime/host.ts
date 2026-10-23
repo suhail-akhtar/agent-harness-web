@@ -44,6 +44,9 @@ export function scrubbedEnv(extra: Record<string, string> = {}): NodeJS.ProcessE
     // Git's environment config is one group (COUNT, KEY_n, VALUE_n): it can carry
     // credentials (http.extraHeader), and half of it makes every git command fail.
     if (/^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+|PARAMETERS)$/.test(k)) continue;
+    // What npm set for the server's own script (npm_package_json, npm_config_local_prefix,
+    // INIT_CWD...): paths into the harness checkout, nothing a command needs (npm sets its own).
+    if (/^npm_/.test(k) || k === 'INIT_CWD') continue;
     env[k] = v;
   }
   return { ...env, ...extra };
@@ -197,11 +200,14 @@ export class LocalHost implements ToolHost {
   /** More folders sandboxed commands may write (a worktree's git data). */
   private writable: string[] = [];
   private readable: string[] = [];
+  /** Folders sandboxed commands cannot read (WrapOptions.hidden). */
+  readonly hidden: string[];
   private net: LocalNetOptions;
   private egress?: Promise<LocalEgress>;
-  constructor(root: string, opts: { sandbox?: OsSandboxKind; network?: 'none' | 'full' | 'allowlist'; writable?: string[]; readable?: string[] } & LocalNetOptions = {}) {
+  constructor(root: string, opts: { sandbox?: OsSandboxKind; network?: 'none' | 'full' | 'allowlist'; writable?: string[]; readable?: string[]; hidden?: string[] } & LocalNetOptions = {}) {
     this.writable = opts.writable ?? [];
     this.readable = opts.readable ?? [];
+    this.hidden = opts.sandbox ? opts.hidden ?? [] : [];
     this.root = root;
     this.displayRoot = root;
     const sh = resolveShell();
@@ -220,7 +226,7 @@ export class LocalHost implements ToolHost {
   withRoot(root: string, more: { writable?: string[]; readable?: string[] } = {}): LocalHost {
     return new LocalHost(root, {
       ...(this.osSandbox ? { sandbox: this.osSandbox, network: this.networkPolicy } : {}),
-      writable: [...this.writable, ...(more.writable ?? [])], readable: [...this.readable, ...(more.readable ?? [])], ...this.net,
+      writable: [...this.writable, ...(more.writable ?? [])], readable: [...this.readable, ...(more.readable ?? [])], hidden: this.hidden, ...this.net,
     });
   }
 
@@ -235,7 +241,7 @@ export class LocalHost implements ToolHost {
 
   /** How a sandboxed command is wrapped, and what its environment adds (the proxy, the credential gateway). */
   private async sandboxing(): Promise<{ wrap: WrapOptions; env: Record<string, string> }> {
-    const wrap: WrapOptions = { root: this.root, network: this.networkPolicy, writable: this.writable, readable: this.readable };
+    const wrap: WrapOptions = { root: this.root, network: this.networkPolicy, writable: this.writable, readable: this.readable, hidden: this.hidden };
     if (this.networkPolicy !== 'allowlist') return { wrap, env: {} };
     const p = await this.proxy();
     const origin = sandboxProxyOrigin(this.osSandbox!, p);

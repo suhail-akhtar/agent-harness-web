@@ -20,8 +20,11 @@
 //
 // The checks are public (this repository is), so an agent must not download them:
 // web_fetch and web_search refuse the repository's GitHub URLs (HARNESS_EVAL_DENY_HOSTS
-// replaces the list). Commands are contained only by a sandbox (HARNESS_LOCAL_SANDBOX);
-// each result records what was refused and how commands were really contained.
+// replaces the list). Commands are contained only by a sandbox: eval runs use the OS
+// sandbox where there is one, else Docker (HARNESS_EVAL_SANDBOX overrides), with the
+// harness checkout hidden from the OS sandbox (case folders and git history); Docker
+// mounts only the workspace. Each result records what was refused and how commands
+// were really contained.
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -29,6 +32,8 @@ import { runGates } from '../gates/gates.ts';
 import type { Harness } from '../kernel/harness.ts';
 import { createHarness } from '../kernel/harness.ts';
 import { LocalHost, run } from '../runtime/host.ts';
+import type { LocalSandbox } from '../runtime/os-sandbox.ts';
+import { allowedImages } from '../runtime/docker.ts';
 import { defaultSettings } from '../core/settings.ts';
 import { fileURLToPath } from 'node:url';
 import type { ToolServices } from '../tools/types.ts';
@@ -188,10 +193,52 @@ export async function evalDenyList(env: NodeJS.ProcessEnv = process.env): Promis
   return repos.flatMap((r) => [`github.com/${r}`, `raw.githubusercontent.com/${r}`, `codeload.github.com/${r}`, `media.githubusercontent.com/media/${r}`, `api.github.com/repos/${r}`]);
 }
 
+/**
+ * The folders an eval run's commands must not read: the harness checkout (its evals/
+ * and its git history hold every case's checks), the main checkout when this is a git
+ * worktree of it, and the folders the cases were loaded from. Real paths (the sandboxes
+ * match those), existing ones only.
+ */
+export async function evalHiddenPaths(caseDirs: string[] = []): Promise<string[]> {
+  const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const out = [root, ...caseDirs.map((d) => path.dirname(path.dirname(d)))];
+  const common = await run('git', ['-C', root, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { timeoutMs: 10_000 }).catch(() => undefined);
+  const dir = common?.code === 0 ? common.stdout.trim() : '';
+  if (dir) out.push(path.basename(dir) === '.git' ? path.dirname(dir) : dir);
+  const real = await Promise.all(out.map((p) => fs.realpath(path.resolve(p)).catch(() => undefined)));
+  return [...new Set(real.filter((p): p is string => !!p))];
+}
+
+/**
+ * The sandbox an eval run's commands use. Default 'auto': the OS sandbox where this
+ * machine has one (bubblewrap, Seatbelt), else Docker when the sandbox image is there
+ * (on Windows: commands then run on Linux), else none (and the result says so).
+ * HARNESS_EVAL_SANDBOX=auto|bwrap|seatbelt|docker|off chooses instead.
+ */
+export function evalSandbox(env: NodeJS.ProcessEnv = process.env): LocalSandbox | 'auto' {
+  const want = env.HARNESS_EVAL_SANDBOX?.trim().toLowerCase() || 'auto';
+  if (['auto', 'bwrap', 'seatbelt', 'docker', 'off'].includes(want)) return want as LocalSandbox | 'auto';
+  throw new Error(`HARNESS_EVAL_SANDBOX=${want}: use auto, bwrap, seatbelt, docker or off`);
+}
+
+/**
+ * The image of an eval run's Docker sandbox: the devops image when the cases need it
+ * (HARNESS_DEVOPS_IMAGE: in a Docker sandbox the devops tools run in the session's own
+ * container, and the plain image has none of their programs), else the default. The
+ * eval runner is the operator here, so that image is allowed for its sessions.
+ */
+export function evalImage(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const ops = env.HARNESS_DEVOPS_IMAGE?.trim();
+  if (!ops) return undefined;
+  if (!allowedImages(env).includes(ops)) env.HARNESS_SANDBOX_IMAGES = [env.HARNESS_SANDBOX_IMAGES, ops].filter(Boolean).join(',');
+  return ops;
+}
+
 /** How a session's commands were contained, in words, for the results (the case folder is on this machine's disk). */
-export function describeContainment(h: { sandbox: string; network: string }): string {
-  if (h.sandbox === 'none') return `not contained: commands run on this machine with its network (network ${h.network}) and can read the case folder; set HARNESS_LOCAL_SANDBOX to contain them`;
+export function describeContainment(h: { sandbox: string; network: string; hidden?: string[] }): string {
+  if (h.sandbox === 'none') return `not contained: commands run on this machine with its network (network ${h.network}) and can read the case folder; set HARNESS_EVAL_SANDBOX to contain them`;
   if (h.sandbox === 'docker') return `docker, network ${h.network}: only the workspace is mounted`;
+  if (h.hidden?.length) return `${h.sandbox}, network ${h.network}: the harness checkout is hidden (case folders and git history)`;
   return `${h.sandbox}, network ${h.network}: the disk is readable (the case folder too)`;
 }
 
@@ -339,7 +386,9 @@ export async function runOne(c: EvalCase, model: string, repeat: number, out: st
   const timer = setTimeout(() => ac.abort(), (c.timeoutMin ?? 90) * 60_000);
   const pauses = pauseWatch();
   try {
-    const s = await h.sessions.create({ model, ...(cfg?.effort ? { effort: cfg.effort } : {}), mode: 'bypass', runtime: { kind: 'local', network: 'none', path: ws } });
+    // Commands in a sandbox (the OS one, else Docker), the harness checkout (the checks) hidden from them.
+    const image = evalImage();
+    const s = await h.sessions.create({ model, ...(cfg?.effort ? { effort: cfg.effort } : {}), mode: 'bypass', runtime: { kind: 'local', network: 'none', path: ws, sandbox: evalSandbox(), ...(image ? { image } : {}), hidden: await evalHiddenPaths([c.dir]) } });
     // Recorded as it is, not as asked: without a sandbox, network 'none' is not enforced.
     run.isolation = { deniedUrls, commands: describeContainment(await s.hostInfo()) };
     const errors: string[] = [];

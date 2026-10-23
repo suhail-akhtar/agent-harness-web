@@ -121,6 +121,13 @@ export interface WrapOptions {
   writable?: string[];
   /** Folders that must be visible read-only even under /tmp (a worktree's repository .git), bound before `writable`. */
   readable?: string[];
+  /**
+   * Folders commands must not read at all (an eval run's harness checkout: its case
+   * folders and git history hold the hidden checks). bubblewrap mounts an empty folder
+   * over each; Seatbelt refuses reading their contents. The workspace stays visible
+   * even inside one.
+   */
+  hidden?: string[];
 }
 
 /** bubblewrap: the command line that runs `cmd` contained. */
@@ -140,6 +147,9 @@ export function bwrapArgs(cmd: string, o: WrapOptions): string[] {
   // Credentials in the home folder: an empty folder over each, /dev/null over each file.
   for (const d of SECRET_DIRS) { const p = path.posix.join(home, d); if (exists(p) && !root.startsWith(p)) args.push('--tmpfs', p); }
   for (const f of SECRET_FILES) { const p = path.posix.join(home, f); if (exists(p)) args.push('--ro-bind', '/dev/null', p); }
+  // Hidden folders: empty. A workspace inside one is bound back below (bubblewrap makes its mount point in the empty folder).
+  // One inside the workspace is not hidden (the workspace is the agent's own).
+  for (const h of o.hidden ?? []) { const p = path.posix.resolve(h); if (exists(p) && !(p + '/').startsWith(root + '/')) args.push('--tmpfs', p); }
   // Daemon and session sockets: empty folders and /dev/null in their place. By their
   // real paths, once each (/var/run is usually a link to /run).
   const real = (p: string) => { if (o.exists) return p; try { return realpathSync(p); } catch { return p; } };
@@ -180,6 +190,10 @@ export function seatbeltProfile(o: WrapOptions): string {
     `(allow file-write* ${writable.map((p) => `(subpath ${sbString(p)})`).join(' ')})`,
     `(deny file-read* file-write* ${[...SECRET_DIRS.map((d) => `(subpath ${sbString(path.posix.join(home, d))})`), ...SECRET_FILES.map((f) => `(literal ${sbString(path.posix.join(home, f))})`)].join(' ')})`,
   ];
+  // Hidden folders: their contents unreadable (listing, reading a file). Metadata stays,
+  // so a workspace inside one still resolves its own path.
+  const hidden = (o.hidden ?? []).map((h) => path.posix.resolve(h)).filter((p) => !(p + '/').startsWith(root + '/'));
+  if (hidden.length) lines.push(`(deny file-read-data file-write* ${hidden.map((p) => `(subpath ${sbString(p)})`).join(' ')})`);
   // The workspace itself stays readable even if it sits under one of those, but not its git hooks and config.
   lines.push(`(allow file-read* file-write* (subpath ${sbString(root)}))`);
   lines.push(`(deny file-write* (subpath ${sbString(path.posix.join(root, '.git/hooks'))}) (literal ${sbString(path.posix.join(root, '.git/config'))}))`);

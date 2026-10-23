@@ -313,3 +313,73 @@ test('the eval deny list: host and path-prefix entries, every redirect hop, sear
   assert.doesNotMatch(s.content, /agent-harness-web\/blob|hidden/);
   assert.match(s.content, /modelcontextprotocol/);
 });
+
+test('eval runs contain their commands by default: auto (the OS sandbox, else Docker), HARNESS_EVAL_SANDBOX chooses, the harness checkout is what they must not read', async () => {
+  const { evalSandbox, evalImage, evalHiddenPaths, describeContainment } = await import('../src/eval/runner.ts');
+  assert.equal(evalSandbox({}), 'auto');
+  assert.equal(evalSandbox({ HARNESS_EVAL_SANDBOX: ' Docker ' }), 'docker');
+  assert.equal(evalSandbox({ HARNESS_EVAL_SANDBOX: 'off' }), 'off');
+  assert.throws(() => evalSandbox({ HARNESS_EVAL_SANDBOX: 'none' }), /use auto, bwrap, seatbelt, docker or off/);
+  // The checkout (its evals/ and git history), the main checkout of a worktree, and wherever the cases came from.
+  const root = await tempDir();
+  const caseDir = path.join(root, 'evals', 'demo', 'peek');
+  await fs.mkdir(caseDir, { recursive: true });
+  const hidden = await evalHiddenPaths([caseDir]);
+  const repo = await fs.realpath(path.resolve(import.meta.dirname, '..'));
+  assert.ok(hidden.includes(repo), `${repo} in ${hidden.join(', ')}`);
+  assert.ok(hidden.includes(await fs.realpath(path.join(root, 'evals'))));
+  assert.ok(hidden.every((p) => !p.endsWith(`${path.sep}.git`)), 'a checkout, not its .git folder');
+  assert.match(describeContainment({ sandbox: 'bwrap', network: 'none', hidden }), /harness checkout is hidden/);
+  assert.match(describeContainment({ sandbox: 'seatbelt', network: 'none' }), /the disk is readable/);
+  assert.match(describeContainment({ sandbox: 'none', network: 'full' }), /HARNESS_EVAL_SANDBOX/);
+  // The devops cases' image is the Docker sandbox's, allowed for the runner's sessions.
+  const env: NodeJS.ProcessEnv = { HARNESS_DEVOPS_IMAGE: 'harness-sandbox-ops:latest', HARNESS_SANDBOX_IMAGES: 'x:1' };
+  assert.equal(evalImage(env), 'harness-sandbox-ops:latest');
+  assert.equal(env.HARNESS_SANDBOX_IMAGES, 'x:1,harness-sandbox-ops:latest');
+  assert.equal(evalImage({}), undefined);
+});
+
+test('commands never see the server\'s npm variables (they point into the harness checkout)', async () => {
+  const { scrubbedEnv } = await import('../src/runtime/host.ts');
+  const saved = { a: process.env.npm_package_json, b: process.env.INIT_CWD, c: process.env.npm_config_local_prefix };
+  process.env.npm_package_json = '/repo/package.json';
+  process.env.INIT_CWD = '/repo';
+  process.env.npm_config_local_prefix = '/repo';
+  try {
+    const env = scrubbedEnv();
+    assert.equal(env.npm_package_json, undefined);
+    assert.equal(env.INIT_CWD, undefined);
+    assert.equal(env.npm_config_local_prefix, undefined);
+    assert.ok(env.PATH ?? env.Path, 'the rest stays');
+  } finally {
+    for (const [k, v] of [['npm_package_json', saved.a], ['INIT_CWD', saved.b], ['npm_config_local_prefix', saved.c]] as const) if (v === undefined) delete process.env[k]; else process.env[k] = v;
+  }
+});
+
+const { detectOsSandbox } = await import('../src/runtime/os-sandbox.ts');
+const { dockerAvailable, imageExists } = await import('../src/runtime/docker.ts');
+const canContain = !!detectOsSandbox() || ((await dockerAvailable()) && (await imageExists('harness-sandbox:latest')));
+test('an eval run\'s commands cannot read the case folder (the hidden checks): auto contains them', { skip: !canContain && 'no OS sandbox and no Docker sandbox image here' }, async () => {
+  const saved = process.env.HARNESS_EVAL_SANDBOX;
+  process.env.HARNESS_EVAL_SANDBOX = 'auto';
+  try {
+    const root = await tempDir();
+    const dir = path.join(root, 'evals', 'demo', 'peek');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'acceptance.sh'), 'echo HIDDEN-CHECK-BODY');
+    await fs.writeFile(path.join(dir, 'eval.json'), JSON.stringify({ name: 'peek', prompt: 'x', checks: [{ name: 'hidden', run: 'bash {{case}}/acceptance.sh' }] }));
+    const cases = await loadCases(path.join(root, 'evals'));
+    const out = path.join(root, 'out');
+    await fs.mkdir(out);
+    const target = `${dir.split(path.sep).join('/')}/acceptance.sh`;
+    const p = new FakeProvider([{ calls: [{ name: 'bash', input: { command: `cat '${target}' 2>&1; echo END` } }] }, { text: 'Done.' }]);
+    const [r] = await runEvals({ cases, models: ['deepseek-flash'], repeats: 1, out, concurrency: 1, plugins: [], setup: (h) => h.registry.setProviderInstance('deepseek', p) });
+    const blocks = (JSON.parse(p.snapshots.at(-1)!) as { content: unknown }[]).flatMap((m) => (Array.isArray(m.content) ? m.content as { type: string; content: unknown }[] : []));
+    const result = JSON.stringify(blocks.find((b) => b.type === 'tool_result')?.content);
+    assert.match(result, /END/, result);
+    assert.doesNotMatch(result, /HIDDEN-CHECK-BODY/, 'the agent read its own hidden check');
+    // The checks themselves still run on this machine, with the case folder.
+    assert.equal(r!.checks[0]!.pass, true, r!.checks[0]!.detail);
+    assert.match(r!.isolation!.commands, /^(docker, network none: only the workspace is mounted|(bwrap|seatbelt), network none: the harness checkout is hidden)/);
+  } finally { if (saved === undefined) delete process.env.HARNESS_EVAL_SANDBOX; else process.env.HARNESS_EVAL_SANDBOX = saved; }
+});

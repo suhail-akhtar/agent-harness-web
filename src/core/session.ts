@@ -74,7 +74,7 @@ export interface SessionMeta {
    * or 'off'. Default: HARNESS_LOCAL_SANDBOX, else off. `image`: a Docker sandbox's
    * image, one the operator allows (default: HARNESS_SANDBOX_IMAGE).
    */
-  runtime: { kind: RuntimeKind; network: 'none' | 'full' | 'allowlist'; companionId?: string; path?: string; sandbox?: LocalSandbox | 'auto'; image?: string; /** Docker: a setup script run as root with network before the session starts (snapshot-cached). */ setup?: string; /** local: the session works in its own git worktree of `path`, on its own branch. */ worktree?: Worktree };
+  runtime: { kind: RuntimeKind; network: 'none' | 'full' | 'allowlist'; companionId?: string; path?: string; sandbox?: LocalSandbox | 'auto'; image?: string; /** Docker: a setup script run as root with network before the session starts (snapshot-cached). */ setup?: string; /** local: the session works in its own git worktree of `path`, on its own branch. */ worktree?: Worktree; /** local, OS sandbox: folders its commands cannot read (an eval run's case folders). */ hidden?: string[] };
   createdAt: number;
   updatedAt: number;
   usage: Usage;
@@ -734,7 +734,7 @@ export class Session {
       else {
         // An allowlist: the egress proxy runs as a local process, the sandbox's only way out.
         this.host = new LocalHost(this.workspace, {
-          sandbox: choice.kind, network: r.network, policyFile: this.policyFile(), credentials: this.deps.sandboxCredentials,
+          sandbox: choice.kind, network: r.network, policyFile: this.policyFile(), credentials: this.deps.sandboxCredentials, hidden: r.hidden,
           onEgress: (e) => { if (!e.allowed && !blocked.has(e.host)) { blocked.add(e.host); this.emit({ kind: 'notice', level: 'warn', text: `The sandbox tried to reach ${e.host}:${e.port}, which is not allowed (${e.why}). Allow it in the session's network settings if it should be.` }); } },
           ...(r.worktree ? { writable: worktreeWritable(r.worktree), readable: [r.worktree.commonDir] } : {}),
         });
@@ -749,10 +749,10 @@ export class Session {
   }
 
   /** Where this session's commands really run: the host, whether it contains them, and the network they have. */
-  async hostInfo(): Promise<{ kind: ToolHost['kind']; sandbox: string; network: ToolHost['networkPolicy'] }> {
+  async hostInfo(): Promise<{ kind: ToolHost['kind']; sandbox: string; network: ToolHost['networkPolicy']; hidden: string[] }> {
     const h = await this.getHost();
     const sandbox = h instanceof LocalHost ? h.osSandbox ?? 'none' : h.sandboxed ? h.kind : 'none';
-    return { kind: h.kind, sandbox, network: h.networkPolicy };
+    return { kind: h.kind, sandbox, network: h.networkPolicy, hidden: h instanceof LocalHost ? h.hidden : [] };
   }
 
   private policyFile(): string { return path.join(this.dir, 'egress', 'allow.json'); }

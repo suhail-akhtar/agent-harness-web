@@ -68,6 +68,28 @@ test('Seatbelt: writes only to the workspace and temp folders, credential folder
   assert.deepEqual(w.args.slice(-3), ['bash', '-c', 'make']);
 });
 
+test('hidden folders (the harness checkout in an eval run): bubblewrap mounts an empty folder over each, Seatbelt refuses their contents; a workspace inside one stays visible', () => {
+  const o = { root: '/repo/out/run/ws', network: 'none' as const, home: '/home/u', exists: (p: string) => p !== '/gone', hidden: ['/repo', '/gone', '/repo/out/run/ws/sub', '/other/evals'] };
+  const a = bwrapArgs('cat x', o);
+  const at = (flag: string, p: string) => a.findIndex((x, i) => x === flag && a[i + 1] === p);
+  assert.ok(at('--tmpfs', '/repo') > 0 && at('--tmpfs', '/other/evals') > 0, a.join(' '));
+  assert.ok(at('--bind', '/repo/out/run/ws') > at('--tmpfs', '/repo'), 'the workspace is bound back after the folder that holds it is emptied');
+  assert.equal(at('--tmpfs', '/gone'), -1, 'only folders that exist can be masked');
+  assert.equal(at('--tmpfs', '/repo/out/run/ws/sub'), -1, 'nothing inside the workspace is hidden from it');
+  const p = seatbeltProfile(o);
+  const lines = p.split('\n');
+  const deny = lines.indexOf('(deny file-read-data file-write* (subpath "/repo") (subpath "/gone") (subpath "/other/evals"))');
+  assert.ok(deny > 0, p);
+  assert.ok(lines.indexOf('(allow file-read* file-write* (subpath "/repo/out/run/ws"))') > deny, 'the workspace is allowed after the deny (the later rule wins)');
+  assert.doesNotMatch(bwrapArgs('x', { root: '/w', network: 'none', home: '/h', exists: () => true }).join(' '), /--tmpfs \/repo/);
+  assert.doesNotMatch(seatbeltProfile({ root: '/w', network: 'none', home: '/h' }), /file-read-data/);
+  // The host carries them to every command it wraps, and to a sub-agent's worktree; unsandboxed, there is nothing to hide with.
+  const host = new LocalHost('/w', { sandbox: 'bwrap', network: 'none', hidden: ['/repo'] });
+  assert.deepEqual(host.hidden, ['/repo']);
+  assert.deepEqual(host.withRoot('/w2').hidden, ['/repo']);
+  assert.deepEqual(new LocalHost('/w', { hidden: ['/repo'] }).hidden, []);
+});
+
 test('an allowlist in the OS sandboxes: bubblewrap keeps no network but a bridge to the proxy\'s socket; Seatbelt allows one connection, to the proxy', () => {
   const a = bwrapArgs('npm ci', { root: '/w', network: 'allowlist', home: '/h', exists: () => false, proxy: { port: 41234, socket: '/tmp/hw-egress-abc/proxy.sock' }, node: '/usr/bin/node' });
   const s = a.join(' ');
@@ -195,6 +217,24 @@ test('bubblewrap for real: what a sandboxed command can and cannot do', { skip: 
   }
 });
 
+test('bubblewrap for real: a hidden folder reads as empty, a workspace inside it as itself', { skip: !hasBwrap && 'not Linux with a working bubblewrap' }, async () => {
+  // Not under /tmp (the sandbox has its own /tmp, which would hide it anyway).
+  const hidden = await fs.mkdtemp(path.join(os.homedir(), 'hw-hidden-'));
+  try {
+    await fs.mkdir(path.join(hidden, 'evals', 'pack', 'case'), { recursive: true });
+    await fs.writeFile(path.join(hidden, 'evals', 'pack', 'case', 'acceptance.sh'), 'HIDDEN-CHECK');
+    const ws = path.join(hidden, 'out', 'ws');
+    await fs.mkdir(ws, { recursive: true });
+    await fs.writeFile(path.join(ws, 'mine.txt'), 'MINE');
+    const host = new LocalHost(ws, { sandbox: 'bwrap', network: 'none', hidden: [hidden] });
+    const r = await host.exec(`cat ${hidden}/evals/pack/case/acceptance.sh 2>&1; ls -A ${hidden} | wc -l; cat mine.txt; echo new > made.txt && echo WROTE`, { timeoutMs: 20_000 });
+    assert.doesNotMatch(r.stdout, /HIDDEN-CHECK/, r.stdout);
+    assert.match(r.stdout, /MINE/, r.stdout + r.stderr);
+    assert.match(r.stdout, /WROTE/);
+    assert.equal(await fs.readFile(path.join(ws, 'made.txt'), 'utf8'), 'new\n');
+  } finally { await fs.rm(hidden, { recursive: true, force: true }); }
+});
+
 test('bubblewrap for real: a worktree commits on its branch; the repository\'s hooks and config stay read-only', { skip: !hasBwrap && 'not Linux with a working bubblewrap' }, async () => {
   const { createWorktree, worktreeWritable } = await import('../src/git/worktree.ts');
   const repo = await tempDir();
@@ -220,7 +260,7 @@ test('bubblewrap verified inside a Linux container (from any host with Docker)',
   const r = spawnSync('docker', ['run', '--rm', '--privileged', '-v', `${repo}:/repo:ro`, ...extra, '-w', '/repo', 'harness-sandbox:latest', 'bash', '-c',
     'apt-get update -qq >/dev/null && apt-get install -y -qq bubblewrap >/dev/null && node --test --disable-warning=ExperimentalWarning --test-name-pattern="for real" test/os-sandbox.test.ts'], { encoding: 'utf8', timeout: 300_000 });
   const out = r.stdout + r.stderr;
-  assert.match(out, /# pass 3\b/, out.slice(-3000));
+  assert.match(out, /# pass 4\b/, out.slice(-3000));
   assert.match(out, /# fail 0\b/, out.slice(-3000));
   assert.match(out, /# skipped 0\b/, 'it really ran there, not skipped');
 });

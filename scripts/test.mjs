@@ -22,9 +22,11 @@ const isElectron = (f) => /(^|[\\/])[^\\/]*e2e[^\\/]*\.test\.ts$/.test(f);
 const batches = [files.filter((f) => !isElectron(f)), ...files.filter(isElectron).map((f) => [f])].filter((b) => b.length);
 
 // Plugins' background loops (the aiops watch loop) stay off in tests unless a test turns them on.
+// Eval runs in tests run their commands unsandboxed (the default, auto, would pick a Docker sandbox
+// wherever one exists) unless a test asks for one.
 // The harness home is a temporary folder of the run's own (never the person's ~/.harness), removed after.
 const home = process.env.HARNESS_HOME ? null : fs.mkdtempSync(path.join(os.tmpdir(), 'harness-test-home-'));
-const env = { HARNESS_PLUGIN_LOOPS: 'off', ...(home ? { HARNESS_HOME: home } : {}), ...process.env };
+const env = { HARNESS_PLUGIN_LOOPS: 'off', HARNESS_EVAL_SANDBOX: 'off', ...(home ? { HARNESS_HOME: home } : {}), ...process.env };
 const run = (batch) => new Promise((resolve) => {
   const child = spawn(process.execPath, ['--test', '--test-force-exit', '--disable-warning=ExperimentalWarning', ...flags, ...batch], { stdio: 'inherit', cwd: root, env });
   child.on('exit', (code, signal) => resolve(code ?? (signal ? 1 : 0)));
