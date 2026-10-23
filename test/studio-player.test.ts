@@ -274,9 +274,6 @@ test('engines: detection by project files; Godot, Unreal and Unity answer unavai
   assert.equal(await driver.detectEngine(g), 'unity');
   const host = new LocalHost(root);
   // engine-godot, engine-unity and engine-unreal ship drivers; with no project, editor or build they say why they cannot start.
-  for (const engine of [] as string[]) {
-    await assert.rejects(driver.startSession(host, { engine }), (e: Error & { unavailable?: boolean }) => e.unavailable === true && new RegExp(`engine-${engine}`).test(e.message));
-  }
   await assert.rejects(driver.startSession(new LocalHost(await tempDir()), { engine: 'godot' }), /no Godot project here/);
   await assert.rejects(driver.startSession(host, { engine: 'unity' }), /harness bridge|build/);
   await assert.rejects(driver.startSession(host, { engine: 'unreal' }), /no Unreal project|Unreal Engine is not installed/);

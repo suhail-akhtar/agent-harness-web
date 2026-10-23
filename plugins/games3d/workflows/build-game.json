@@ -1,6 +1,6 @@
 {
   "name": "build-game",
-  "description": "From an idea to a finished game: design document and playtest scenarios, (approval), build (a browser game by default, a Godot 4 project with engine=godot), gates with a fix loop (web-console and playtest; godot-project and the game's scripted self-test), independent playtest, polish, final gates, how-to-play README.",
+  "description": "From an idea to a finished game: design document and playtest scenarios, (approval), build (a browser game from a Studio web template by default, a Godot 4 project with engine=godot), gates with a fix loop (web-console, playtest, web-game, game-starts, no-softlock; godot-project and the game's scripted self-test), independent playtest with the AI player's bots, polish, final gates (the playtest report passing), how-to-play README. make-game is the full production line with stages and asset gates.",
   "inputs": {
     "idea": {
       "description": "The game: genre, theme, what the player does, anything that must be in it.",
@@ -71,7 +71,7 @@
       "title": "Build & play",
       "agent": "game-engineer",
       "maxSteps": 150,
-      "prompt": "Build the game in docs/game-design.md (index.html at the workspace root). Tech: {{input.tech}}. Keep playtest.json passing (extend it if you add features; never weaken a scenario to make it pass). Play it with the browser tool and look at the screenshots as you go.",
+      "prompt": "Build the game in docs/game-design.md. Start from the Studio web template that fits it (studio_template list, then studio_template create: it writes index.html, game.json, src/main.js with the shared engine in src/engine/, builds its Studio assets and .studio/project.json; load web-game-templates); for an idea no template fits, write index.html yourself with the game-architecture skill's structure. Tech: {{input.tech}}. Keep playtest.json passing (extend it if you add features; never weaken a scenario to make it pass). Play it with game_bot {\"mode\": \"goal\"} and the browser tool, and look at the frames as you go.",
       "next": "gates"
     },
     "gates": {
@@ -79,7 +79,10 @@
       "title": "Console & playtests",
       "gates": [
         "web-console",
-        "playtest"
+        "playtest",
+        "web-game",
+        "game-starts",
+        "no-softlock"
       ],
       "maxFailures": 4,
       "next": {
@@ -105,7 +108,7 @@
         "APPROVE",
         "REQUEST_CHANGES"
       ],
-      "prompt": "Playtest the game against docs/game-design.md and write docs/playtest-report.md.\n\n<idea>\n{{input.idea}}\n</idea>",
+      "prompt": "Playtest the game against docs/game-design.md: game_playtest with the goal and checks the design implies (bots goal, explore, monkey), then play it yourself with game_play, and write docs/playtest-report.md.\n\n<idea>\n{{input.idea}}\n</idea>",
       "next": {
         "on": {
           "REQUEST_CHANGES": "polish"
@@ -118,7 +121,7 @@
       "title": "Address the playtest",
       "agent": "game-engineer",
       "maxSteps": 120,
-      "prompt": "Address every BLOCKING and MAJOR finding in docs/playtest-report.md; add a playtest.json scenario for each bug you fix so it stays fixed. Play it again to confirm, and add a \"Resolution\" line under each finding.\n\n{{state.playtest}}",
+      "prompt": "Address every BLOCKING and MAJOR finding in docs/playtest-report.md; add a playtest.json scenario for each bug you fix so it stays fixed. Play it again to confirm, and add a \"Resolution\" line under each finding.\n\n{{state.playtest}} Run game_playtest with the goal again at the end so the latest report is the polished game.",
       "next": "gates-final"
     },
     "gates-final": {
@@ -126,7 +129,10 @@
       "title": "Console & playtests",
       "gates": [
         "web-console",
-        "playtest"
+        "playtest",
+        "web-game",
+        "no-softlock",
+        "playtest-pass"
       ],
       "maxFailures": 3,
       "next": {
@@ -172,7 +178,9 @@
       "title": "Console & playtests",
       "gates": [
         "web-console",
-        "playtest"
+        "playtest",
+        "web-game",
+        "playtest-pass"
       ],
       "maxFailures": 1,
       "next": {

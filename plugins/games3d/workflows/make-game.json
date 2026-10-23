@@ -1,0 +1,766 @@
+{
+  "name": "make-game",
+  "description": "Studio's production line, from a brief to a packaged, playtested game in the web (Canvas or Three.js templates), Godot or Unreal, 2D, 2.5D or 3D: production plan, concept and GDD (approval), art direction and asset plan (approval), assets from the Studio builders with the asset gates, prototype with the engine's gates and the player's bots, bot playtest, vertical slice (approval), levels from studio_procgen with the solver, UI and sound, polish against the budgets, build and package, full playtest with bots and the AI player (approval), report. Every stage is gated and loops back with the evidence, a limited number of times. Unity is not covered yet.",
+  "inputs": {
+    "brief": {
+      "description": "The game: what the player does, the goal, the theme, anything that must be in it.",
+      "required": true
+    },
+    "engine": {
+      "description": "\"web\" (Canvas 2D or Three.js, the Studio web templates), \"godot\" (Godot 4) or \"unreal\" (Unreal Engine 5, Blueprints and Python; Blender for the models). Unity is not covered yet.",
+      "default": "web"
+    },
+    "dimension": {
+      "description": "\"2d\", \"2.5d\" or \"3d\"",
+      "default": "2d"
+    },
+    "genre": {
+      "description": "Genre (platformer, top-down action, puzzle, isometric adventure, side-scroller, third-person, first-person...); empty lets the designer choose from the brief",
+      "default": ""
+    },
+    "budget": {
+      "description": "Spend and time limits, e.g. \"$3 of model calls, procedural assets only\"",
+      "default": "procedural assets only, no paid generation"
+    },
+    "sources": {
+      "description": "Asset sources allowed: \"procedural\", \"procedural+cc0\", or \"all\" (paid generators too, within their spend caps)",
+      "default": "procedural"
+    },
+    "approval": {
+      "description": "\"manual\": the person approves the concept, the art, the vertical slice and the release; \"auto\": no checkpoints",
+      "default": "manual"
+    }
+  },
+  "state": {
+    "finalRounds": {
+      "type": "number",
+      "reducer": "sum",
+      "description": "Rounds of fixes after the full playtest (two at most)"
+    }
+  },
+  "start": "plan",
+  "maxAgentRuns": 60,
+  "nodes": {
+    "plan": {
+      "type": "agent",
+      "title": "Production plan",
+      "agent": "producer",
+      "effort": "medium",
+      "prompt": "Stage: plan. Load the game-production skill. Plan the production of this game, in scope and on budget.\n\n<brief>\n{{input.brief}}\n</brief>\nEngine: {{input.engine}}\nDimension: {{input.dimension}}\nGenre: {{input.genre}}\nBudget: {{input.budget}}\nAsset sources allowed: {{input.sources}}\n\nWrite .studio/project.json (plugins/games3d/sdk/FORMATS.md: name, engine, dimension, genre, design \"design/GDD.md\", budgets, stages plan, concept, art, assets, prototype, playtest, vertical-slice, content, polish, build, full-playtest, report, each {\"id\", \"title\", \"status\": \"pending\"}; plan \"done\") and design/production-plan.md: the first version's scope and what is cut for later, the starting point (web: the studio_template that fits, from studio_template list; godot: its project.create template 2d, 2.5d or 3d; unreal: its project.create template), the asset list in one line each, the budget (model spend, time) and the risks. Unity is not covered yet: if the engine is unity, say so and stop.\nFeedback, if any: {{feedback}}",
+      "next": "engine-supported"
+    },
+    "engine-supported": {
+      "type": "branch",
+      "title": "An engine Studio covers?",
+      "value": "{{input.engine}}",
+      "next": {
+        "on": {
+          "unity": "not-yet",
+          "web": "concept",
+          "godot": "concept",
+          "unreal": "concept",
+          "browser": "concept"
+        },
+        "default": "concept"
+      }
+    },
+    "concept": {
+      "type": "agent",
+      "title": "Concept and GDD",
+      "agent": "game-designer",
+      "effort": "medium",
+      "prompt": "Stage: concept. Load the game-design skill. Write design/GDD.md from the brief and design/production-plan.md with the skill's GDD template: Pitch, Core loop, Controls, Mechanics, Rules (win and lose), Levels, Art direction, Audio, UI, Balancing (the numbers: speeds, jump height in tiles, health, counts), Scope. Make the goal exactly what the game reports as won (web templates: window.__game.won; Godot: StudioHook \"won\"; Unreal: the kit's win event), and list the state a bot reads (player, score, targets). For Godot add a \"Self-test\" section. Set the concept stage to \"review\" in .studio/project.json.\n\n<brief>\n{{input.brief}}\n</brief>\nEngine: {{input.engine}}, dimension: {{input.dimension}}, genre: {{input.genre}}\nFeedback, if any (fix exactly this): {{feedback}}",
+      "next": "concept-gates"
+    },
+    "concept-gates": {
+      "type": "gate",
+      "title": "Project and design document",
+      "gates": [
+        "studio-project"
+      ],
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "approve-concept-mode",
+          "fail": "concept",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "approve-concept-mode": {
+      "type": "branch",
+      "title": "Approve the concept: ask the person?",
+      "value": "{{input.approval}}",
+      "next": {
+        "on": {
+          "auto": "art"
+        },
+        "default": "approve-concept"
+      }
+    },
+    "approve-concept": {
+      "type": "approval",
+      "title": "Approve the concept",
+      "message": "The game design document is ready. Approve it to go on to art direction, or send it back with what to change.\n\n{{state.concept}}",
+      "files": [
+        "design/GDD.md",
+        "design/production-plan.md",
+        ".studio/project.json"
+      ],
+      "next": {
+        "on": {
+          "approve": "art",
+          "reject": "concept"
+        }
+      }
+    },
+    "art": {
+      "type": "agent",
+      "title": "Art direction and asset plan",
+      "agent": "art-director",
+      "effort": "medium",
+      "prompt": "Stage: art. Load the asset-pipeline and game-art-2d skills. Write design/style-guide.md (the look in words, a palette of 6-16 hex colours, sprite or tile sizes in px or polygon budgets and real sizes in metres for 3D, outline and shading rules, lighting, what must read at a glance) and design/asset-plan.json: {\"style\": \"...\", \"palette\": [...], \"assets\": [{\"id\", \"kind\", \"tool\", \"input\", \"purpose\"}]} - every asset the game loads, under the id the game will use (web: the ids game.json names; studio_template info lists a template's), built procedurally first (studio_sprite, studio_procgen, studio_audio; studio_model for 3D models in Blender), and only from studio_source when the sources allowed ({{input.sources}}) include it. Keep it consistent: one palette, one scale, seeds recorded.\nFeedback, if any: {{feedback}}",
+      "next": "approve-art-mode"
+    },
+    "approve-art-mode": {
+      "type": "branch",
+      "title": "Approve the art direction: ask the person?",
+      "value": "{{input.approval}}",
+      "next": {
+        "on": {
+          "auto": "assets"
+        },
+        "default": "approve-art"
+      }
+    },
+    "approve-art": {
+      "type": "approval",
+      "title": "Approve the art direction",
+      "message": "The style guide and the asset plan are ready. Approve to build the assets, or send them back.\n\n{{state.art}}",
+      "files": [
+        "design/style-guide.md",
+        "design/asset-plan.json"
+      ],
+      "next": {
+        "on": {
+          "approve": "assets",
+          "reject": "art"
+        }
+      }
+    },
+    "assets": {
+      "type": "parallel",
+      "title": "Assets",
+      "branches": [
+        "make-art",
+        "make-audio"
+      ],
+      "next": "asset-gates"
+    },
+    "make-art": {
+      "type": "agent",
+      "title": "Make the art",
+      "agent": "technical-artist",
+      "maxSteps": 120,
+      "prompt": "Stage: assets. Build every asset in design/asset-plan.json that is not audio or music, with its tool and input under its id (studio_sprite, studio_procgen, studio_image; studio_model for 3D, with Blender). Look at each preview; anything off the style guide (palette, size, outline) is rebuilt now. Levels from studio_procgen must come out finishable (it proves platformers with its solver). For Unreal and Godot 3D, models are .glb in metres. Report the ids made."
+    },
+    "make-audio": {
+      "type": "agent",
+      "title": "Make the sound",
+      "agent": "audio-designer",
+      "prompt": "Stage: audio. Build every audio and music asset in design/asset-plan.json with studio_audio under its id (sfx presets with seeds; one music loop at the tempo the style guide implies). Report the ids and what each is for."
+    },
+    "asset-gates": {
+      "type": "gate",
+      "title": "Asset checks",
+      "gates": [
+        "asset-plan",
+        "asset-manifest",
+        "asset-budget",
+        "asset-2d",
+        "asset-3d",
+        "audio-valid",
+        "level-playable"
+      ],
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "prototype",
+          "fail": "fix-assets",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "fix-assets": {
+      "type": "agent",
+      "title": "Fix the assets",
+      "agent": "technical-artist",
+      "prompt": "Stage: fix-assets. The asset checks failed. Rebuild or fix exactly the assets named (a wrong kind, a missing file, an unfinishable level, a sheet whose frames do not match, a silent sound), keeping ids and the style guide.\n\n{{feedback}}",
+      "next": "asset-gates"
+    },
+    "prototype": {
+      "type": "agent",
+      "title": "Prototype",
+      "agent": "game-engineer",
+      "maxSteps": 150,
+      "prompt": "Stage: prototype. Build the playable prototype: a graybox level and the core mechanic from design/GDD.md, in {{input.engine}} (dimension {{input.dimension}}). Load web-game-templates (web), godot-essentials (godot) or unreal-essentials (unreal).\n- web: studio_template create with the template the plan names (it keeps the assets already made under their ids and builds the template's missing ones), then change game.json (title, tuning, levels) and src/main.js for the design.\n- godot: godot project.create (template 2d, 2.5d or 3d by the dimension, project \"game\"), then scripts/main.gd: the mechanic, StudioHook state (player, score, won, targets) and a --selftest that checks each rule.\n- unreal: unreal project.create (the third-person template for 3D), then a script with harness_ue (coin_game_kit, build_level with the collectibles on a route, set_default_maps) and unreal test checks; package for Win64 so the game can be played.\nThen play it: game_bot {\"mode\": \"goal\"} must reach the goal. Engine notes - web: the Studio web template in the workspace root (index.html, game.json, src/main.js, src/engine/), assets referenced as \"asset:<id>\" in game.json. godot: the Godot 4 project in game/ (godot tool; StudioHook publishes player, score, won, targets; assets in game/assets via asset.import or the builders' export). unreal: the Unreal project made by unreal project.create (Blueprints and editor Python through harness_ue; Blender .glb models through unreal asset.import; a packaged Win64 build for playing).",
+      "next": "prototype-check"
+    },
+    "prototype-check": {
+      "type": "branch",
+      "title": "Prototype: which engine's checks",
+      "value": "{{input.engine}}",
+      "next": {
+        "on": {
+          "godot": "prototype-gates-godot",
+          "unreal": "prototype-gates-unreal"
+        },
+        "default": "prototype-gates-web"
+      }
+    },
+    "prototype-gates-web": {
+      "type": "gate",
+      "title": "Prototype (web)",
+      "gates": [
+        "web-game",
+        "game-starts",
+        "no-softlock"
+      ],
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "playtest",
+          "fail": "prototype-fix",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "prototype-gates-godot": {
+      "type": "gate",
+      "title": "Prototype (godot)",
+      "gates": [
+        "godot-project",
+        "godot-selftest",
+        "game-starts",
+        "no-softlock"
+      ],
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "playtest",
+          "fail": "prototype-fix",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "prototype-gates-unreal": {
+      "type": "gate",
+      "title": "Prototype (unreal)",
+      "gates": [
+        "unreal-project",
+        "unreal-automation"
+      ],
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "playtest",
+          "fail": "prototype-fix",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "prototype-fix": {
+      "type": "agent",
+      "title": "Fix: Prototype",
+      "agent": "game-engineer",
+      "maxSteps": 150,
+      "prompt": "Stage: prototype-fix. The prototype checks failed. Fix the game (never weaken a check; change a test only when the test is wrong, and say why), then play it again with game_bot goal.\n\nThe checks that failed, with their evidence:\n{{feedback}}",
+      "next": "prototype-check"
+    },
+    "playtest": {
+      "type": "agent",
+      "title": "Bot playtest",
+      "agent": "playtester",
+      "decide": [
+        "APPROVE",
+        "REQUEST_CHANGES"
+      ],
+      "prompt": "Stage: playtest. Prove the prototype with game_playtest: the goal from design/GDD.md in words, checks it implies (e.g. {\"path\": \"won\", \"op\": \"==\", \"value\": true, \"when\": \"ever\"}), bots goal, explore and monkey. Read its evidence frames. Write docs/playtest-prototype.md with findings ([BLOCKING|MAJOR|MINOR], replay file, evidence frame). Answer APPROVE when the goal was reached with no crash, softlock or error, else REQUEST_CHANGES.",
+      "next": {
+        "on": {
+          "REQUEST_CHANGES": "playtest-fix"
+        },
+        "default": "playtest-gates"
+      }
+    },
+    "playtest-gates": {
+      "type": "gate",
+      "title": "Playtest passes",
+      "gates": [
+        "playtest-pass"
+      ],
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "slice",
+          "fail": "playtest-fix",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "playtest-fix": {
+      "type": "agent",
+      "title": "Fix what the playtest found",
+      "agent": "game-engineer",
+      "maxSteps": 120,
+      "prompt": "Stage: playtest-fix. Fix every BLOCKING and MAJOR finding of the playtest (docs/playtest-prototype.md, the latest .studio/playtests report): replay each bug first (game_bot scripted with its replay file), save it as a regression (saveAs with expect), fix it, then run game_playtest again with the same goal so the latest report passes.\n\n{{feedback}}",
+      "next": "playtest-gates"
+    },
+    "slice": {
+      "type": "agent",
+      "title": "Vertical slice",
+      "agent": "game-engineer",
+      "maxSteps": 150,
+      "prompt": "Stage: vertical-slice. Bring one level to its final look: every placeholder replaced by the assets made (web: game.json \"asset:<id>\" references; godot: the sprites, tiles and models in game/assets loaded by scripts/main.gd; unreal: the Blender meshes imported with unreal asset.import and placed by a script), animation states, feedback on every action (particles, shake, sound), readable HUD. Keep the bots winning (game_bot goal) and look at the frames yourself.",
+      "next": "slice-check"
+    },
+    "slice-check": {
+      "type": "branch",
+      "title": "Vertical slice: which engine's checks",
+      "value": "{{input.engine}}",
+      "next": {
+        "on": {
+          "godot": "slice-gates-godot",
+          "unreal": "slice-gates-unreal"
+        },
+        "default": "slice-gates-web"
+      }
+    },
+    "slice-gates-web": {
+      "type": "gate",
+      "title": "Vertical slice (web)",
+      "gates": [
+        "web-game",
+        "game-starts",
+        "no-softlock",
+        "asset-manifest"
+      ],
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "approve-slice-mode",
+          "fail": "slice-fix",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "slice-gates-godot": {
+      "type": "gate",
+      "title": "Vertical slice (godot)",
+      "gates": [
+        "godot-project",
+        "godot-selftest",
+        "game-starts"
+      ],
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "approve-slice-mode",
+          "fail": "slice-fix",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "slice-gates-unreal": {
+      "type": "gate",
+      "title": "Vertical slice (unreal)",
+      "gates": [
+        "unreal-project",
+        "unreal-automation"
+      ],
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "approve-slice-mode",
+          "fail": "slice-fix",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "slice-fix": {
+      "type": "agent",
+      "title": "Fix: Vertical slice",
+      "agent": "game-engineer",
+      "maxSteps": 150,
+      "prompt": "Stage: slice-fix. The vertical-slice checks failed. Fix them and play again.\n\nThe checks that failed, with their evidence:\n{{feedback}}",
+      "next": "slice-check"
+    },
+    "approve-slice-mode": {
+      "type": "branch",
+      "title": "Approve the vertical slice: ask the person?",
+      "value": "{{input.approval}}",
+      "next": {
+        "on": {
+          "auto": "levels"
+        },
+        "default": "approve-slice"
+      }
+    },
+    "approve-slice": {
+      "type": "approval",
+      "title": "Approve the vertical slice",
+      "message": "One level has its final look. Play it (or look at the latest playtest frames) and approve to make the rest of the content, or send it back.\n\n{{state.slice}}",
+      "files": [
+        "design/GDD.md",
+        "docs/playtest-prototype.md"
+      ],
+      "next": {
+        "on": {
+          "approve": "levels",
+          "reject": "slice"
+        }
+      }
+    },
+    "levels": {
+      "type": "agent",
+      "title": "Levels",
+      "agent": "level-designer",
+      "maxSteps": 120,
+      "prompt": "Stage: content. Load procedural-generation. Make the levels design/GDD.md lists (a first version: 3 unless it says otherwise) with studio_procgen (platformer levels are proven finishable by its solver with the game's physics; dungeons, caves, mazes and maps by start-to-exit paths), difficulty rising from the first, and wire them into the game (web: game.json levels; godot and unreal: built from the level rows in the engine). Keep the bots finishing every level (game_bot goal with seconds enough for all of them).",
+      "next": "ui"
+    },
+    "ui": {
+      "type": "agent",
+      "title": "UI and sound",
+      "agent": "ui-designer",
+      "prompt": "Stage: ui. The screens and the sound: title (name, how to start, the controls), HUD (what the player needs every second), pause, win and game-over screens that say what happened and how to play again; studio_sprite ui or icon assets where they help; every sound in the GDD's audio list wired to its moment and the music looping. Readable at the game's size: check with game_play frames.",
+      "next": "ui-check"
+    },
+    "ui-check": {
+      "type": "branch",
+      "title": "UI and sound: which engine's checks",
+      "value": "{{input.engine}}",
+      "next": {
+        "on": {
+          "godot": "ui-gates-godot",
+          "unreal": "ui-gates-unreal"
+        },
+        "default": "ui-gates-web"
+      }
+    },
+    "ui-gates-web": {
+      "type": "gate",
+      "title": "UI and sound (web)",
+      "gates": [
+        "web-game",
+        "level-playable",
+        "game-starts",
+        "no-softlock"
+      ],
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "polish",
+          "fail": "ui-fix",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "ui-gates-godot": {
+      "type": "gate",
+      "title": "UI and sound (godot)",
+      "gates": [
+        "godot-project",
+        "godot-selftest",
+        "level-playable",
+        "no-softlock"
+      ],
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "polish",
+          "fail": "ui-fix",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "ui-gates-unreal": {
+      "type": "gate",
+      "title": "UI and sound (unreal)",
+      "gates": [
+        "unreal-project",
+        "level-playable"
+      ],
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "polish",
+          "fail": "ui-fix",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "ui-fix": {
+      "type": "agent",
+      "title": "Fix: UI and sound",
+      "agent": "game-engineer",
+      "prompt": "Stage: ui-fix. The content checks failed (levels, screens or wiring). Fix them and play again.\n\nThe checks that failed, with their evidence:\n{{feedback}}",
+      "next": "ui-check"
+    },
+    "polish": {
+      "type": "agent",
+      "title": "Polish",
+      "agent": "game-engineer",
+      "maxSteps": 150,
+      "prompt": "Stage: polish. Juice (anticipation, impact, particles, screen shake, sound on every action, easing) and the performance budget in .studio/project.json budgets (fps, frame time, memory): measure with game_playtest (metrics) or the engine's play metrics, fix what is over. Then run game_playtest with the goal so the latest report reflects the polished game.",
+      "next": "polish-check"
+    },
+    "polish-check": {
+      "type": "branch",
+      "title": "Polish: which engine's checks",
+      "value": "{{input.engine}}",
+      "next": {
+        "on": {
+          "godot": "polish-gates-godot",
+          "unreal": "polish-gates-unreal"
+        },
+        "default": "polish-gates-web"
+      }
+    },
+    "polish-gates-web": {
+      "type": "gate",
+      "title": "Polish (web)",
+      "gates": [
+        "web-game",
+        "game-starts",
+        "no-softlock",
+        "playtest-pass"
+      ],
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "build",
+          "fail": "polish-fix",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "polish-gates-godot": {
+      "type": "gate",
+      "title": "Polish (godot)",
+      "gates": [
+        "godot-project",
+        "godot-selftest",
+        "no-softlock",
+        "playtest-pass"
+      ],
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "build",
+          "fail": "polish-fix",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "polish-gates-unreal": {
+      "type": "gate",
+      "title": "Polish (unreal)",
+      "gates": [
+        "unreal-project",
+        "unreal-automation",
+        "playtest-pass"
+      ],
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "build",
+          "fail": "polish-fix",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "polish-fix": {
+      "type": "agent",
+      "title": "Fix: Polish",
+      "agent": "game-engineer",
+      "maxSteps": 150,
+      "prompt": "Stage: polish-fix. The polish checks failed. Fix them; run game_playtest again with the goal at the end.\n\nThe checks that failed, with their evidence:\n{{feedback}}",
+      "next": "polish-check"
+    },
+    "build": {
+      "type": "agent",
+      "title": "Build and package",
+      "agent": "build-engineer",
+      "prompt": "Stage: build. Build and package the game, and record it in .studio/project.json builds: web: studio_template build (build/web and a zip); godot: godot build for windows (and web), then package; unreal: unreal package for Win64 (it takes minutes: wait for the job). Read the build log for warnings and errors.",
+      "next": "build-check"
+    },
+    "build-check": {
+      "type": "branch",
+      "title": "Build and package: which engine's checks",
+      "value": "{{input.engine}}",
+      "next": {
+        "on": {
+          "godot": "build-gates-godot",
+          "unreal": "build-gates-unreal"
+        },
+        "default": "build-gates-web"
+      }
+    },
+    "build-gates-web": {
+      "type": "gate",
+      "title": "Build and package (web)",
+      "gates": [
+        "web-build"
+      ],
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "final",
+          "fail": "build-fix",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "build-gates-godot": {
+      "type": "gate",
+      "title": "Build and package (godot)",
+      "gates": [
+        "godot-export"
+      ],
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "final",
+          "fail": "build-fix",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "build-gates-unreal": {
+      "type": "gate",
+      "title": "Build and package (unreal)",
+      "gates": [
+        "unreal-package"
+      ],
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "final",
+          "fail": "build-fix",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "build-fix": {
+      "type": "agent",
+      "title": "Fix: Build and package",
+      "agent": "build-engineer",
+      "prompt": "Stage: build-fix. The build check failed. Read the build log, fix the cause (missing assets, a broken preset, a cook error), and build again.\n\nThe checks that failed, with their evidence:\n{{feedback}}",
+      "next": "build-check"
+    },
+    "final": {
+      "type": "agent",
+      "title": "Full playtest",
+      "agent": "playtester",
+      "decide": [
+        "APPROVE",
+        "REQUEST_CHANGES"
+      ],
+      "prompt": "Stage: full-playtest. The full playtest of the built game: game_playtest with the goal and checks from design/GDD.md, bots goal, explore and monkey, on the build (web: game \"build/web/index.html\"; godot and unreal: the project, played through its driver); then play it yourself as a newcomer with game_play (the AI player: start, reach the goal, record verdicts on what you see, stop) and add that session to a game_playtest run (sessions). Write docs/playtest-report.md (the playtest ids, results, findings with evidence and replays). APPROVE only with the goal reached, no crash, softlock or error, and nothing BLOCKING or MAJOR; else REQUEST_CHANGES.",
+      "next": {
+        "on": {
+          "REQUEST_CHANGES": "final-rounds"
+        },
+        "default": "final-gates"
+      }
+    },
+    "final-rounds": {
+      "type": "branch",
+      "title": "Rounds left?",
+      "when": "state.finalRounds >= 2",
+      "next": {
+        "on": {
+          "true": "failed",
+          "false": "final-fix"
+        }
+      }
+    },
+    "final-fix": {
+      "type": "agent",
+      "title": "Fix the full playtest's findings",
+      "agent": "game-engineer",
+      "maxSteps": 120,
+      "writes": {
+        "finalRounds": "1"
+      },
+      "prompt": "Stage: final-fix. Fix every BLOCKING and MAJOR finding in docs/playtest-report.md: replay it, save it as a regression (game_bot saveAs with expect), fix it, and add a \"Resolution\" line under the finding. The game is rebuilt next.\n\n{{state.final}}",
+      "next": "build"
+    },
+    "final-gates": {
+      "type": "gate",
+      "title": "Playtest and regressions",
+      "gates": [
+        "playtest-pass",
+        "playtest-regressions"
+      ],
+      "maxFailures": 2,
+      "next": {
+        "on": {
+          "pass": "approve-ship-mode",
+          "fail": "final-rounds",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "approve-ship-mode": {
+      "type": "branch",
+      "title": "Approve the release: ask the person?",
+      "value": "{{input.approval}}",
+      "next": {
+        "on": {
+          "auto": "report"
+        },
+        "default": "approve-ship"
+      }
+    },
+    "approve-ship": {
+      "type": "approval",
+      "title": "Approve the release",
+      "message": "The game is built, packaged and playtested. Approve to write the report and close the production, or send it back with what to change.\n\n{{state.final}}",
+      "files": [
+        "docs/playtest-report.md",
+        ".studio/project.json"
+      ],
+      "next": {
+        "on": {
+          "approve": "report",
+          "reject": "final-fix"
+        }
+      }
+    },
+    "report": {
+      "type": "agent",
+      "title": "Production report",
+      "agent": "producer",
+      "effort": "low",
+      "prompt": "Stage: report. Write docs/studio-report.md: what was made (the game in one paragraph, engine, dimension), how to run and play it (the build path from .studio/project.json builds, controls), the stages with their results and the person's approvals, the assets (ids, sources, licences), the playtests (ids, results, metrics against the budgets), known issues, and the spend. Mark every stage \"done\" in .studio/project.json. Report the first paragraph and the build path.",
+      "next": "done"
+    },
+    "done": {
+      "type": "end",
+      "title": "Shipped",
+      "status": "success"
+    },
+    "failed": {
+      "type": "end",
+      "title": "Stopped: checks still failing after the attempts allowed",
+      "status": "failed"
+    },
+    "not-yet": {
+      "type": "end",
+      "title": "Unity is not covered by make-game yet (web, Godot and Unreal are)",
+      "status": "failed"
+    }
+  }
+}

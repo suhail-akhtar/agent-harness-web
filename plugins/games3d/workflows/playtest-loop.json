@@ -1,0 +1,108 @@
+{
+  "name": "playtest-loop",
+  "description": "Play, file, fix, replay: a full playtest (bots and the AI player), QA reproduces every issue from its recorded inputs and turns it into a regression, the engineer fixes them, the regressions replay and a fresh playtest runs, until it passes or three fix rounds are spent.",
+  "inputs": {
+    "goal": {
+      "description": "What a player must achieve (the game's won state says it is reached).",
+      "required": true
+    }
+  },
+  "state": {
+    "rounds": {
+      "type": "number",
+      "reducer": "sum",
+      "description": "Fix rounds done"
+    }
+  },
+  "start": "play",
+  "maxAgentRuns": 16,
+  "nodes": {
+    "play": {
+      "type": "agent",
+      "title": "Playtest",
+      "agent": "playtester",
+      "prompt": "Stage: loop-play. Playtest the game: game_playtest with the goal ({{input.goal}}) and the checks it implies (bots goal, explore, monkey), then play it yourself with game_play and add your session (sessions). Write docs/playtest-report.md with findings, each with its replay file and evidence frame.",
+      "next": "triage"
+    },
+    "triage": {
+      "type": "agent",
+      "title": "Reproduce and file",
+      "agent": "qa-lead",
+      "decide": [
+        "CLEAN",
+        "ISSUES"
+      ],
+      "prompt": "Stage: loop-triage. Reproduce every issue in docs/playtest-report.md and the latest playtest report by replaying its recording (game_bot scripted); turn each confirmed bug into a regression (saveAs + expect, failing now). Write docs/qa.md (issue, severity, reproduced, regression file, status). Answer CLEAN when there is nothing BLOCKING or MAJOR, else ISSUES.",
+      "next": {
+        "on": {
+          "CLEAN": "gates"
+        },
+        "default": "rounds-left"
+      }
+    },
+    "rounds-left": {
+      "type": "branch",
+      "title": "Rounds left?",
+      "when": "state.rounds >= 3",
+      "next": {
+        "on": {
+          "true": "failed",
+          "false": "fix"
+        }
+      }
+    },
+    "fix": {
+      "type": "agent",
+      "title": "Fix",
+      "agent": "game-engineer",
+      "maxSteps": 120,
+      "writes": {
+        "rounds": "1"
+      },
+      "prompt": "Stage: loop-fix. Fix every open BLOCKING and MAJOR issue in docs/qa.md (fix round {{state.rounds}}; three at most). game_playtest action regress must pass afterwards; then run game_playtest with the goal ({{input.goal}}) so the latest report is the fixed game.",
+      "next": "gates"
+    },
+    "gates": {
+      "type": "gate",
+      "title": "Playtest and regressions",
+      "gates": [
+        "playtest-pass",
+        "playtest-regressions"
+      ],
+      "maxFailures": 3,
+      "next": {
+        "on": {
+          "pass": "done",
+          "fail": "replay",
+          "exhausted": "failed"
+        }
+      }
+    },
+    "replay": {
+      "type": "agent",
+      "title": "Replay and re-file",
+      "agent": "qa-lead",
+      "decide": [
+        "CLEAN",
+        "ISSUES"
+      ],
+      "prompt": "Stage: loop-replay. The checks failed after the fixes:\n{{feedback}}\nReplay the regressions (game_playtest action regress), run a fresh game_playtest with the goal ({{input.goal}}), update docs/qa.md (fixed, still open, new). CLEAN or ISSUES.",
+      "next": {
+        "on": {
+          "CLEAN": "gates"
+        },
+        "default": "rounds-left"
+      }
+    },
+    "done": {
+      "type": "end",
+      "title": "The playtest passes",
+      "status": "success"
+    },
+    "failed": {
+      "type": "end",
+      "title": "Stopped: issues remain after the rounds allowed",
+      "status": "failed"
+    }
+  }
+}

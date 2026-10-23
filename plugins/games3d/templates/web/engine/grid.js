@@ -81,5 +81,17 @@ export function moveCircle(grid, b, dx, dy, r = 0.35, blocked = (x, y) => grid.w
     return false;
   };
   if (!hits(b.x + dx, b.y)) b.x += dx;
+  else if (dx && !dy) slide('y', Math.sign(dx), Math.abs(dx));
   if (!hits(b.x, b.y + dy)) b.y += dy;
+  else if (dy && !dx) slide('x', Math.sign(dy), Math.abs(dy));
+  // Corner help: blocked going one way with a free cell that way beside, ease toward that lane.
+  function slide(axis, dir, step) {
+    const cx = Math.floor(b.x), cy = Math.floor(b.y);
+    const lane = axis === 'y' ? cy + 0.5 : cx + 0.5;
+    const ahead = axis === 'y' ? !blocked(cx + dir, cy) : !blocked(cx, cy + dir);
+    if (!ahead) return;
+    const cur = axis === 'y' ? b.y : b.x;
+    const d = Math.max(-step, Math.min(step, lane - cur));
+    if (axis === 'y' ? !hits(b.x, b.y + d) : !hits(b.x + d, b.y)) { if (axis === 'y') b.y += d; else b.x += d; }
+  }
 }

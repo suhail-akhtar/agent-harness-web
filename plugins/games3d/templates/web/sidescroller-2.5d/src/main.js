@@ -8,7 +8,7 @@ import { Game, loadConfig, pauseCheck, standardScenes } from './engine/core.js';
 import { InputMap } from './engine/input.js';
 import { loadLevel, missing } from './engine/assets.js';
 import { Sound } from './engine/audio.js';
-import { Body, hazard, PlatformWorld, SOLID, stepBody, stepWalker } from './engine/platformer.js';
+import { Body, hazard, PlatformWorld, Route, SOLID, stepBody, stepWalker } from './engine/platformer.js';
 import { capsule, coinMesh, createRenderer, exitMesh, lights, model, overlay, THREE, tileTexture } from './engine/three-kit.js';
 
 const W = 640, H = 360;
@@ -67,7 +67,7 @@ function backdrop() {
 }
 
 const S = game.data;
-let world, player, playerObj, coins, enemies, exit, exitObj, root, levelIndex, total, checkpoint, invuln, groundTime;
+let route, world, player, playerObj, coins, enemies, exit, exitObj, root, levelIndex, total, checkpoint, invuln, groundTime;
 const wy = (y) => world.H - y; // tile rows (y down) to world y (up)
 
 function startLevel(i) {
@@ -77,6 +77,7 @@ function startLevel(i) {
   scene.add(root);
   const lv = art.levels[i];
   world = new PlatformWorld(lv.rows, { ...(lv.physics ?? {}), ...(config.physics ?? {}) });
+  route = new Route(lv.proof?.moves);
   const [start] = world.take('S');
   const [ex] = world.take('E');
   exit = ex ?? { x: world.W - 2, y: world.H - 3 };
@@ -143,6 +144,8 @@ const play = {
     const dir = g.input.axis('left', 'right');
     const r = stepBody(world, player, { dir, jump: g.input.pressed('jump') || g.input.pressed('up'), jumpHeld: g.input.held('jump'), dt });
     if (r.jumped) { sound.play('jump'); g.emit('jump', ''); }
+    const safe = route.update(player);
+    if (safe && !hazard(world, player)) checkpoint = { x: player.x, y: player.y };
     groundTime = player.ground ? groundTime + dt : 0;
     if (groundTime > 0.25 && !hazard(world, player)) checkpoint = { x: player.x, y: player.y };
     const h = hazard(world, player);
@@ -195,7 +198,7 @@ game.expose(() => {
   return {
     player: { x: Math.round(player.x * 1000) / 1000, y: Math.round(player.y * 1000) / 1000, ground: player.ground }, score: S.score ?? 0, lives: T.lives > 0 ? S.lives : null, deaths: S.deaths ?? 0,
     coins: total - coins.length, total, exitOpen: !coins.length, level: levelIndex + 1, levels: art.levels.length,
-    targets: left.length ? [left[0]] : [{ x: exit.x + 0.5, y: exit.y + 1 }], remaining: left, enemies: enemies.length, missingAssets: missing.length,
+    targets: [route.next(player, left[0] ?? { x: exit.x + 0.5, y: exit.y + 1 })], remaining: left, enemies: enemies.length, missingAssets: missing.length,
   };
 });
 game.start('loading');

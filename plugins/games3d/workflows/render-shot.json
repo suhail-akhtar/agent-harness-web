@@ -1,0 +1,47 @@
+{
+  "name": "render-shot",
+  "description": "A rendered shot of a model or a scene: a shot plan (camera, lens, light, look-dev preset, frames), the render in Blender (Cycles or EEVEE), Godot or Unreal (Movie Render Queue), checked previews, an art director's look at the frames, revisions.",
+  "inputs": {
+    "subject": { "description": "What to show and how (e.g. \"the barrel asset, a slow turntable at dusk\").", "required": true },
+    "engine": { "description": "\"blender\", \"godot\" or \"unreal\"", "default": "blender" },
+    "frames": { "description": "1 for a still, more for a turntable or a camera move", "default": "1" }
+  },
+  "start": "plan",
+  "maxAgentRuns": 8,
+  "nodes": {
+    "plan": {
+      "type": "agent",
+      "title": "Shot plan",
+      "agent": "technical-artist",
+      "effort": "low",
+      "prompt": "Stage: shot-plan. Write docs/shot.md: the subject (an asset id or a scene), the camera (position, target, focal length), the light and look-dev preset (studio, outdoor, night), the resolution, the frames ({{input.frames}}) and where the renders go (renders/).\n\n<subject>\n{{input.subject}}\n</subject>\nEngine: {{input.engine}}\nFeedback, if any: {{feedback}}",
+      "next": "render"
+    },
+    "render": {
+      "type": "agent",
+      "title": "Render",
+      "agent": "technical-artist",
+      "maxSteps": 80,
+      "prompt": "Stage: shot-render. Render the shot in docs/shot.md into renders/: blender: the blender tool (a bpy script with the camera and light, or studio_model's preview renders for an asset); godot: godot render; unreal: unreal render (Movie Render Queue, a heavy job). Look at every frame you made and fix framing, exposure and noise before you finish. Also save one frame as previews/shot.png.",
+      "next": "gates"
+    },
+    "gates": { "type": "gate", "title": "Renders exist and show something", "gates": ["model-preview"], "maxFailures": 2, "next": { "on": { "pass": "review", "fail": "render", "exhausted": "failed" } } },
+    "review": {
+      "type": "agent",
+      "title": "Look at the frames",
+      "agent": "art-director",
+      "decide": ["APPROVE", "REQUEST_CHANGES"],
+      "prompt": "Stage: shot-review. Read the frames in renders/ (images are shown). Judge composition, the subject reading at a glance, light and exposure, noise and artefacts, against docs/shot.md. Write docs/shot-review.md with [BLOCKING|MAJOR|MINOR] findings.",
+      "next": { "on": { "REQUEST_CHANGES": "revise" }, "default": "done" }
+    },
+    "revise": {
+      "type": "agent",
+      "title": "Revise",
+      "agent": "technical-artist",
+      "prompt": "Stage: shot-revise. Address every BLOCKING and MAJOR finding in docs/shot-review.md, render again, look at the frames.\n\n{{state.review}}",
+      "next": "gates"
+    },
+    "done": { "type": "end", "title": "Shot rendered", "status": "success" },
+    "failed": { "type": "end", "title": "Stopped: no usable renders", "status": "failed" }
+  }
+}

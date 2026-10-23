@@ -97,3 +97,37 @@ export function stepWalker(world, e, dt, speed = 1.6) {
   if (world.solid(ahead, row) || !world.solid(ahead, Math.floor(e.y + 0.05))) e.dir = -e.dir;
   stepBody(world, e, { dir: e.dir, dt, speed });
 }
+
+/**
+ * The solver's route through a level (level.json proof.moves: where the player stands after
+ * each walk, jump or fall), for "where to head next": the next standing place along it, until
+ * the objective (a coin, the exit) is the nearer thing to head for.
+ */
+export class Route {
+  constructor(moves) {
+    // A move's y is the row the player stands in: its feet are on the row below.
+    this.points = (Array.isArray(moves) ? moves : []).filter((m) => Number.isFinite(m?.x) && Number.isFinite(m?.y)).map((m) => ({ x: m.x, y: m.y + 1 }));
+    this.at = 0;
+  }
+
+  /**
+   * Where along the route the player stands (forward or, after a respawn, back): the furthest
+   * route point it is standing on. Returns that point when it is a new one (a safe checkpoint).
+   */
+  update(body) {
+    if (!body.ground) return null;
+    let hit = -1;
+    this.points.forEach((p, i) => { if (Math.abs(body.x - p.x) < 0.7 && Math.abs(body.y - p.y) < 0.6) hit = i; });
+    if (hit < 0 || hit === this.at) return null;
+    this.at = hit;
+    return this.points[hit];
+  }
+
+  /** The next standing place on the way to the objective, or the objective once it is the nearer. */
+  next(body, objective) {
+    const p = this.points[this.at + 1];
+    if (!p || !objective) return objective;
+    const ahead = Math.sign(objective.x - body.x) === Math.sign(p.x - body.x) && Math.abs(p.x - body.x) < Math.abs(objective.x - body.x);
+    return ahead ? p : objective;
+  }
+}

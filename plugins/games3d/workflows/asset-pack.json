@@ -1,0 +1,79 @@
+{
+  "name": "asset-pack",
+  "description": "A consistent set of N assets from one style guide: style guide and plan (approval), the assets built with the Studio builders (2D sprites, tiles, icons, sounds; 3D models in Blender), the asset gates, an art director's consistency review from the previews (palette, scale, outline, silhouette), revisions, and a pack manifest; optionally imported into an engine.",
+  "inputs": {
+    "brief": { "description": "What the pack is for and what is in it (e.g. \"5 dungeon props: barrel, crate, chest, torch, rock\").", "required": true },
+    "count": { "description": "How many assets", "default": "5" },
+    "dimension": { "description": "\"2d\" (sprites, tiles, icons) or \"3d\" (models in Blender)", "default": "2d" },
+    "style": { "description": "The look in a few words (empty: the art director proposes one)", "default": "" },
+    "engine": { "description": "Import into this engine after: \"none\", \"web\", \"godot\" or \"unreal\"", "default": "none" },
+    "approval": { "description": "\"manual\" to approve the style guide first, \"auto\" to go straight on", "default": "auto" }
+  },
+  "start": "guide",
+  "maxAgentRuns": 14,
+  "nodes": {
+    "guide": {
+      "type": "agent",
+      "title": "Style guide and pack plan",
+      "agent": "art-director",
+      "effort": "medium",
+      "prompt": "Stage: pack-guide. Load asset-pipeline (and game-art-2d for 2D). Write design/style-guide.md (palette of 6-16 hex colours, the size: px per frame or tile for 2D, metres and a triangle budget for 3D, outline and shading rules, the silhouette language) and design/asset-plan.json with exactly {{input.count}} assets: {\"style\": \"...\", \"palette\": [...], \"assets\": [{\"id\", \"kind\", \"tool\", \"input\", \"purpose\"}]} - studio_sprite (sprite, sheet, tileset, icon, ui), studio_audio, or for 3D studio_model build (generators: barrel, crate, chest, coin, gem, lamp, table, chair, fence, rock, bush, tree, kit, building, character...), each input with the same palette and size and its own seed.\n\n<brief>\n{{input.brief}}\n</brief>\nDimension: {{input.dimension}}. Style: {{input.style}}\nFeedback, if any: {{feedback}}",
+      "next": "approval-mode"
+    },
+    "approval-mode": { "type": "branch", "title": "Approval needed?", "value": "{{input.approval}}", "next": { "on": { "auto": "make" }, "default": "approve" } },
+    "approve": {
+      "type": "approval",
+      "title": "Approve the style guide",
+      "message": "The style guide and the pack plan are ready. Approve to build the pack, or send them back.\n\n{{state.guide}}",
+      "files": ["design/style-guide.md", "design/asset-plan.json"],
+      "next": { "on": { "approve": "make", "reject": "guide" } }
+    },
+    "make": {
+      "type": "agent",
+      "title": "Build the pack",
+      "agent": "technical-artist",
+      "maxSteps": 120,
+      "prompt": "Stage: pack-make. Build every asset in design/asset-plan.json with its tool and input, under its id. Look at each preview as it comes: off-palette colours, a wrong size or a different outline get rebuilt now. Report the ids with one line each on what you saw.",
+      "next": "gates"
+    },
+    "gates": {
+      "type": "gate",
+      "title": "Asset checks",
+      "gates": ["asset-plan", "asset-manifest", "asset-budget", "asset-2d", "asset-3d", "audio-valid"],
+      "maxFailures": 3,
+      "next": { "on": { "pass": "review", "fail": "fix", "exhausted": "failed" } }
+    },
+    "fix": {
+      "type": "agent",
+      "title": "Fix",
+      "agent": "technical-artist",
+      "prompt": "Stage: pack-fix. The asset checks failed. Fix exactly what they name, keeping the ids and the style guide.\n\n{{feedback}}",
+      "next": "gates"
+    },
+    "review": {
+      "type": "agent",
+      "title": "Consistency review",
+      "agent": "art-director",
+      "decide": ["APPROVE", "REQUEST_CHANGES"],
+      "prompt": "Stage: pack-review. Review the pack as a set, against design/style-guide.md: read every asset's preview (studio_library show, then read the preview file; images are shown) side by side. Judge palette (studio_image info: colours), scale and size (frame sizes; 3D: sizeM and triangles), outline and shading, silhouettes that read and differ, and that each asset does its purpose. Write docs/pack-review.md with findings as `- [BLOCKING|MAJOR|MINOR] asset - problem. Fix: ...`. REQUEST_CHANGES only for BLOCKING or MAJOR.",
+      "next": { "on": { "REQUEST_CHANGES": "revise" }, "default": "pack" }
+    },
+    "revise": {
+      "type": "agent",
+      "title": "Revise",
+      "agent": "technical-artist",
+      "prompt": "Stage: pack-revise. Address every BLOCKING and MAJOR finding in docs/pack-review.md: rebuild those assets (same ids, changed inputs), look at the new previews, and add a \"Resolution\" line under each finding.\n\n{{state.review}}",
+      "next": "gates"
+    },
+    "pack": {
+      "type": "agent",
+      "title": "Pack manifest and import",
+      "agent": "technical-artist",
+      "effort": "low",
+      "prompt": "Stage: pack-deliver. Write design/pack.json ({\"name\", \"style\", \"palette\", \"assets\": [ids]}) and docs/pack.md (a table: id, kind, purpose, size, licence). Target engine: {{input.engine}} - godot: copy the files into the project (the builders' export) and record engines.godot in each asset.json; unreal: unreal asset.import each .glb (or .fbx) into /Game/Pack; web: nothing to import (game.json names them as \"asset:<id>\"); none: nothing. Report the ids.",
+      "next": "done"
+    },
+    "done": { "type": "end", "title": "Pack delivered", "status": "success" },
+    "failed": { "type": "end", "title": "Stopped: asset checks still failing", "status": "failed" }
+  }
+}

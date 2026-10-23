@@ -1,0 +1,42 @@
+{
+  "name": "level-blockout",
+  "description": "A graybox level from a brief: the level designer's beat sheet, a generated or hand-made layout proven finishable (the platformer solver, start-to-exit paths), the level wired into the game (web template, Godot or Unreal), the engine's checks, and bots that finish it.",
+  "inputs": {
+    "brief": { "description": "The level: what it teaches, its beats (intro, challenge, twist, finale), its size, its difficulty.", "required": true },
+    "engine": { "description": "\"web\", \"godot\" or \"unreal\" (the game already in the workspace)", "default": "web" },
+    "kind": { "description": "platformer, dungeon, cave, maze, topdown or wfc (the studio_procgen generator), or \"hand\" for rows written by hand", "default": "platformer" }
+  },
+  "start": "beats",
+  "maxAgentRuns": 10,
+  "nodes": {
+    "beats": {
+      "type": "agent",
+      "title": "Beat sheet",
+      "agent": "level-designer",
+      "effort": "medium",
+      "prompt": "Stage: blockout-beats. Load procedural-generation. Write design/levels/<name>.md: the level's purpose, its beats in order, the critical path and the optional paths, where each pickup, hazard and checkpoint goes and why, the difficulty numbers (gaps in tiles against the jump, enemy counts), and the generator settings you will use ({{input.kind}}: seed, size, difficulty) or the rows.\n\n<brief>\n{{input.brief}}\n</brief>\nFeedback, if any: {{feedback}}",
+      "next": "make"
+    },
+    "make": {
+      "type": "agent",
+      "title": "Block it out",
+      "agent": "level-designer",
+      "maxSteps": 100,
+      "prompt": "Stage: blockout-make. Make the level as a Studio level asset: studio_procgen {{input.kind}} (try seeds until the layout matches the beats; platformers come out proven by the solver) or, for hand-made rows, studio_procgen solve on them and save them as a level asset. Wire it into the game ({{input.engine}}: web game.json levels; godot: build the level from its rows in scripts/main.gd; unreal: harness_ue build_level from the rows), then game_bot {\"mode\": \"goal\"} until a bot finishes it.",
+      "next": "check"
+    },
+    "check": { "type": "branch", "title": "Which engine?", "value": "{{input.engine}}", "next": { "on": { "godot": "gates-godot", "unreal": "gates-unreal" }, "default": "gates-web" } },
+    "gates-web": { "type": "gate", "title": "Level checks (web)", "gates": ["level-playable", "web-game", "no-softlock"], "maxFailures": 3, "next": { "on": { "pass": "done", "fail": "fix", "exhausted": "failed" } } },
+    "gates-godot": { "type": "gate", "title": "Level checks (Godot)", "gates": ["level-playable", "godot-project", "no-softlock"], "maxFailures": 3, "next": { "on": { "pass": "done", "fail": "fix", "exhausted": "failed" } } },
+    "gates-unreal": { "type": "gate", "title": "Level checks (Unreal)", "gates": ["level-playable", "unreal-project"], "maxFailures": 3, "next": { "on": { "pass": "done", "fail": "fix", "exhausted": "failed" } } },
+    "fix": {
+      "type": "agent",
+      "title": "Fix",
+      "agent": "level-designer",
+      "prompt": "Stage: blockout-fix. The level checks failed. Fix the layout (another seed, a gap the jump clears, a path to the exit) or its wiring, and prove it again with game_bot goal.\n\n{{feedback}}",
+      "next": "check"
+    },
+    "done": { "type": "end", "title": "Level blocked out", "status": "success" },
+    "failed": { "type": "end", "title": "Stopped: the level checks still fail", "status": "failed" }
+  }
+}

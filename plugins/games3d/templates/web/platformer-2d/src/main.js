@@ -9,7 +9,7 @@ import { InputMap } from './engine/input.js';
 import { Animator, loadLevel, loadParallax, loadSheet, missing } from './engine/assets.js';
 import { Sound } from './engine/audio.js';
 import { card, drawParallax, drawTile, hud, Particles, Shake, text } from './engine/draw.js';
-import { Body, hazard, PlatformWorld, stepBody, stepWalker } from './engine/platformer.js';
+import { Body, hazard, PlatformWorld, Route, stepBody, stepWalker } from './engine/platformer.js';
 
 const W = 640, H = 360;
 const BUILT_IN = [
@@ -51,12 +51,13 @@ async function load() {
 // ---------- the play scene ----------
 
 const S = game.data; // score, lives... (the won and gameover cards read it)
-let world, player, anim, coins, enemies, exit, checkpoint, invuln, total, levelIndex, groundTime;
+let route, world, player, anim, coins, enemies, exit, checkpoint, invuln, total, levelIndex, groundTime;
 
 function startLevel(i) {
   levelIndex = i;
   const lv = art.levels[i];
   world = new PlatformWorld(lv.rows, { ...(lv.physics ?? {}), ...(config.physics ?? {}) });
+  route = new Route(lv.proof?.moves);
   const [start] = world.take('S');
   const [ex] = world.take('E');
   coins = world.take('o').map((c) => ({ ...c, t: game.random() * 6 }));
@@ -100,6 +101,8 @@ const play = {
     if (r.jumped) { sound.play('jump'); g.emit('jump', ''); }
     if (r.landed) fx.burst(player.x * TS, player.y * TS, { n: 4, color: '#d8c8a8', speed: 40, life: 0.25 });
     // A checkpoint where the player stood still a moment on solid ground, away from spikes.
+    const safe = route.update(player);
+    if (safe && !hazard(world, player)) checkpoint = { x: player.x, y: player.y };
     groundTime = player.ground ? groundTime + dt : 0;
     if (groundTime > 0.25 && !hazard(world, player) && world.solid(Math.floor(player.x), Math.floor(player.y + 0.1))) checkpoint = { x: player.x, y: player.y };
     const h = hazard(world, player);
@@ -210,7 +213,7 @@ game.expose(() => {
     coins: inPlay ? total - coins.length : 0, collected: inPlay ? total - coins.length : 0, total: inPlay ? total : 0,
     score: S.score ?? 0, lives: T.lives > 0 ? S.lives ?? T.lives : null, level: inPlay ? levelIndex + 1 : 0, levels: art.levels?.length ?? 0,
     exitOpen: inPlay && !coins.length,
-    targets: inPlay ? (left.length ? [left[0]] : [{ x: exit.x + 0.5, y: exit.y + 1 }]) : [], remaining: left, deaths: S.deaths ?? 0,
+    targets: inPlay ? [route.next(player, left[0] ?? { x: exit.x + 0.5, y: exit.y + 1 })] : [], remaining: left, deaths: S.deaths ?? 0,
     enemies: inPlay ? enemies.length : 0, missingAssets: missing.length,
   };
 });
