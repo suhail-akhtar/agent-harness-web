@@ -5,10 +5,12 @@
 // elsewhere with a probe run through host.exec.
 
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { findBinary, installPlaces, missingMessage, pathNames } from '../visual/lib/binaries.mjs';
 import { PathError, resolveIn } from '../../src/tools/paths.ts';
+import { resolveHome } from '../../src/util/home.ts';
 
 export const SKIP_DIRS = new Set(['node_modules', '.git', 'vendor', '.harness', 'dist', 'build', 'coverage', '.venv', 'venv', '__pycache__', 'target']);
 
@@ -38,6 +40,8 @@ export function probeScript(name, shell) {
   const lines = [`for c in "\${${env}:-}" ${[...names, ...places].map((p) => quote(p, 'bash')).join(' ')}; do [ -n "$c" ] && command -v "$c" 2>/dev/null && exit 0; done`];
   // Godot is often only on the PATH under its download name (Godot_v4.x-stable_linux.x86_64).
   if (name === 'godot') lines.push(`c=$(compgen -c | grep -i '^godot_v4' | grep -viE '\\.(zip|tpz)$' | sort -r | head -n 1); [ -n "$c" ] && command -v "$c" && exit 0`);
+  // A Linux build the godot install action put into the workspace (a sandbox without Godot in its image).
+  if (name === 'godot') lines.push(`for c in $(ls -1d "$PWD"/${WORKSPACE_ENGINES}/godot/*/linux/Godot_v4*_linux.x86_64 2>/dev/null | sort -r); do [ -x "$c" ] && echo "$c" && exit 0; done`);
   // A companion on Windows with Git Bash: the installer's folder is rarely on the PATH.
   if (name === 'blender') lines.push(`for c in "/c/Program Files/Blender Foundation/"Blender*/blender.exe; do [ -x "$c" ] && echo "$c" && exit 0; done`);
   return [...lines, 'exit 1'].join('\n');
@@ -68,7 +72,8 @@ export async function locate(host, name, signal, find = findBinary) {
   if (!m) found.set(host, (m = new Map()));
   if (m.has(name)) return m.get(name);
   let bin = null;
-  if (host.kind === 'local') bin = find(name);
+  // An explicit HARNESS_<NAME> wins; then what the harness installed; then the PATH and the usual places.
+  if (host.kind === 'local') bin = process.env[`HARNESS_${name.toUpperCase()}`] ? find(name) : installedBinary(name) ?? find(name);
   else {
     const r = await execIn(host, probeScript(name, host.shell), { timeoutMs: 30_000, signal });
     bin = r.code === 0 ? r.stdout.trim().split(/\r?\n/).pop()?.trim() || null : null;
@@ -82,6 +87,48 @@ export function missingIn(host, name) {
   const what = name === 'blender' ? 'Blender' : 'Godot 4';
   if (host.kind === 'docker') return `${what} is not installed in this sandbox. Use the 3D sandbox image: the operator builds it (npm run sandbox:image:3d), allows it with HARNESS_SANDBOX_IMAGES=harness-sandbox-3d:latest, and a new session picks it.`;
   return missingMessage(name, host.platform) + (host.kind === 'companion' ? ' (on the computer the companion runs on)' : '');
+}
+
+// ---------- engines the harness installed ----------
+
+/** Where the harness keeps engines it downloads: <home>/engines (HARNESS_HOME), or HARNESS_ENGINES_DIR. */
+export function enginesDir(env = process.env) {
+  return env.HARNESS_ENGINES_DIR?.trim() ? path.resolve(env.HARNESS_ENGINES_DIR.trim()) : path.join(resolveHome({ env }), 'engines');
+}
+
+/** The same folder inside a workspace, for a sandbox (a Linux build pushed there). */
+export const WORKSPACE_ENGINES = '.harness/engines';
+
+/** This machine as an install key: win32-x64, linux-x64, darwin-arm64. */
+export const platformKey = (platform = process.platform, arch = process.arch) => `${platform}-${arch}`;
+
+const versionKey = (v) => String(v).split(/[.-]/).map((x) => (/^\d+$/.test(x) ? x.padStart(6, '0') : x)).join('.');
+
+/**
+ * Engines the harness installed: <engines>/<name>/<version>/engine.json, newest first.
+ * engine.json: { name, version, installedAt, binaries: { "win32-x64": "windows/Godot...exe" }, templates?: {...} }.
+ */
+export function installedEngines(name, dir = enginesDir()) {
+  const base = path.join(dir, name);
+  let versions = [];
+  try { versions = fs.readdirSync(base); } catch { return []; }
+  const out = [];
+  for (const v of versions) {
+    try {
+      const m = JSON.parse(fs.readFileSync(path.join(base, v, 'engine.json'), 'utf8'));
+      if (m && m.name === name && m.binaries && typeof m.binaries === 'object') out.push({ ...m, dir: path.join(base, v) });
+    } catch { /* not an install (a partial download) */ }
+  }
+  return out.sort((a, b) => versionKey(b.version).localeCompare(versionKey(a.version)));
+}
+
+/** The newest harness-installed binary of an engine for this machine, or null. */
+export function installedBinary(name, key = platformKey(), dir = enginesDir()) {
+  for (const e of installedEngines(name, dir)) {
+    const rel = e.binaries[key];
+    if (rel && fs.existsSync(path.join(e.dir, rel))) return path.join(e.dir, rel);
+  }
+  return null;
 }
 
 // ---------- paths ----------
@@ -230,7 +277,7 @@ export const GODOT_CHECK = `extends SceneTree
 # Written by the harness: loads every script and scene in the project so that
 # parse errors and missing resources are printed. Safe to delete.
 
-func _init() -> void:
+func _initialize() -> void:
 	var files: Array[String] = []
 	_walk("res://", files)
 	for f in files:

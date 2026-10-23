@@ -242,7 +242,7 @@ const GODOT_SCRIPT = 'extends Node2D\n\nfunc _process(_delta: float) -> void:\n\
 
 /** A companion session whose model asks for one godot screenshot; returns what the model was sent back. */
 async function companionScreenshot(dir: string, handler: Parameters<typeof createCompanionHandler>[1], info: Record<string, unknown> = {}) {
-  const h = await createHarness({ dataDir: await tempDir(), plugins: [path.join(here, '..', 'plugins', 'games3d')], search: null, memory: 'off' });
+  const h = await createHarness({ dataDir: await tempDir(), plugins: ['games3d', 'engine-blender', 'engine-godot'].map((p) => path.join(here, '..', 'plugins', p)), search: null, memory: 'off' });
   const { id } = await h.companions.create('laptop');
   const stop = runCompanionWith(h.companions, id, dir, handler, info);
   const fake = new FakeProvider([{ calls: [{ name: 'godot', input: { action: 'screenshot', project: 'game', frames: 3, out: 'shots/start.png' } }] }, { text: 'looks fine' }]);
