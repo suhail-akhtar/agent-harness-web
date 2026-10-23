@@ -437,19 +437,29 @@ export function setupPlayer(api) {
       try { s = await startSession(site.host, { root: site.root, clock: 'real', bootMs: 0 }); } catch (err) { return { pass: false, summary: `the game did not start: ${err.message}` }; }
       const seen = [];
       const errors = [];
+      let state, crashed = false;
       try {
         for (let t = 0; t < seconds * 1000; t += 1000) {
           const o = await s.step([], 1000, { frame: true, width: 256 });
           errors.push(...(o.errors ?? []));
+          state = o.state ?? state;
+          crashed ||= !!o.crashed;
+          // An engine run without a display (headless Godot) has no frames: its state says it runs.
+          if (!o.frame) { if (crashed || t >= 1000) break; continue; }
           seen.push(o.frame.stats);
           if (!o.frame.stats.blank && t >= 1000) break;
         }
       } finally { errors.push(...((await s.stop())?.errors ?? [])); }
       const drawn = seen.findIndex((x) => !x.blank);
-      const problems = [...(drawn < 0 ? [`every frame for ${seconds}s is blank (one colour)`] : []), ...[...new Set(errors)].map((e) => `uncaught: ${e.split('\n')[0]}`)];
+      const frameless = !seen.length;
+      const problems = [
+        ...(crashed ? ['the game crashed while starting'] : []),
+        ...(frameless ? (state === undefined ? ['no frames (no display here) and no state from the game'] : []) : drawn < 0 ? [`every frame for ${seconds}s is blank (one colour)`] : []),
+        ...[...new Set(errors)].map((e) => `uncaught: ${e.split('\n')[0]}`),
+      ];
       return problems.length
         ? { pass: false, summary: `the game does not start cleanly: ${problems[0]}`, details: problems.join('\n') }
-        : { pass: true, summary: `the game draws within ${drawn + 1}s (${seen[drawn].colours} colours, contrast ${seen[drawn].stddev}), no errors` };
+        : { pass: true, summary: frameless ? `the game runs (no display here, so no frames: its state ${JSON.stringify(state).slice(0, 120)}), no errors` : `the game draws within ${drawn + 1}s (${seen[drawn].colours} colours, contrast ${seen[drawn].stddev}), no errors` };
     },
   });
 

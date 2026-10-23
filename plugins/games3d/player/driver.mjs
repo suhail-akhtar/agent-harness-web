@@ -90,10 +90,65 @@ export async function startSession(host, opts = {}, ctx) {
   if (mod) {
     const driver = await mod.createDriver(host, opts);
     if (driver?.unavailable) throw new Unavailable(engine, String(driver.unavailable));
-    return normalize(await driver.start(opts.game, opts), engine);
+    const started = await driver.start(opts.game, opts);
+    return normalize(isSession(started) ? started : stepperSession(driver, started, engine, opts), engine);
   }
   if (ctx?.callTool && ctx.toolNames?.().includes(engine)) return startToolSession(engine, host, opts, ctx);
   throw new Unavailable(engine, `${engine} games cannot be played yet: the engine-${engine} plugin is not on, or it has no play driver (plugins/engine-${engine}/driver.mjs or a "play" step mode in its ${engine} tool).`);
+}
+
+const isSession = (s) => !!s && typeof s.step === 'function' && typeof s.observe === 'function';
+
+// Key names for a stepper driver (Unity's KeyCode names) from the web codes bots and agents use, and back.
+const toStepperKey = (k) => { const s = String(k); const m = /^Key([A-Z])$/.exec(s) ?? /^Digit(\d)$/.exec(s); return m ? m[1] : s === 'Enter' ? 'Return' : s; };
+const fromStepperKey = (k) => { const s = String(k); const a = /^(Up|Down|Left|Right)Arrow$/.exec(s); return a ? `Arrow${a[1]}` : /^[A-Z]$/.test(s) ? `Key${s}` : /^Alpha(\d)$/.test(s) ? `Digit${s.slice(5)}` : s === 'Return' ? 'Enter' : s; };
+
+/**
+ * A driver whose start() answers with the first observation and which steps itself
+ * (engine-unity's shape: step({keys, press, frames}) -> {frame: PNG bytes, state, events, t, done}),
+ * as a session: held keys for the step, taps as presses, ms as frames at 60 per second.
+ */
+export function stepperSession(driver, first, engine, opts = {}) {
+  const FRAME_MS = 1000 / 60;
+  let frames = 0;
+  let last = first ?? {};
+  let pending = [...(first?.events ?? [])];
+  const width = opts.frameWidth ?? 512;
+  const timeline = [];
+  const split = (inputs) => {
+    const keys = [], press = [];
+    for (const i of Array.isArray(inputs) ? inputs : inputs ? [inputs] : []) {
+      const k = i?.key ?? i?.action;
+      if (!k || i.up) continue;
+      (i.ms || i.down ? keys : press).push(toStepperKey(k));
+    }
+    return { keys, press };
+  };
+  const obs = (raw, frame) => {
+    last = raw ?? last;
+    const events = [...pending, ...(raw?.events ?? [])].map((e) => ({ t: Math.round(frames * FRAME_MS) / 1000, type: String(e?.type ?? 'game'), detail: typeof e?.detail === 'string' ? e.detail : JSON.stringify(e?.detail ?? '') }));
+    pending = [];
+    const out = { t: frames * FRAME_MS, state: last?.state, events, errors: [], crashed: false };
+    if (frame && raw?.frame) out.frame = { png: Buffer.from(raw.frame), width };
+    return out;
+  };
+  const keys = (driver.info?.keys ?? []).map(fromStepperKey);
+  const arrows = keys.some((k) => k.startsWith('Arrow'));
+  return {
+    get info() { return { engine, clock: 'engine', game: opts.game ?? opts.project, inputs: keys.length ? keys.filter((k) => !(arrows && ['KeyW', 'KeyA', 'KeyS', 'KeyD'].includes(k)) && !/^Mouse|Shift|Escape/.test(k)) : null, ...(driver.info ?? {}) }; },
+    get t() { return frames * FRAME_MS; },
+    async observe({ frame = true } = {}) { return frame ? obs(await driver.observe(), true) : obs(null); },
+    async act(inputs) { timeline.push({ t: frames * FRAME_MS, inputs }); const r = await driver.act({ ...split(inputs), frames: 1 }); frames += 1; pending.push(...(r?.events ?? [])); last = { ...last, state: r?.state ?? last.state }; },
+    async step(inputs, ms, { frame = true } = {}) {
+      const n = Math.max(1, Math.round((Number(ms) || FRAME_MS) / FRAME_MS));
+      timeline.push({ t: Math.round(frames * FRAME_MS), inputs, ms: Math.round(n * FRAME_MS) });
+      const r = frame ? await driver.step({ ...split(inputs), frames: n }) : await driver.act({ ...split(inputs), frames: n });
+      frames += n;
+      return obs(r, frame);
+    },
+    recording() { return { version: 1, engine, game: opts.game ?? opts.project, seed: opts.seed, clock: 'engine', durationMs: Math.round(frames * FRAME_MS), steps: timeline.slice() }; },
+    async stop() { await driver.stop?.(); return { metrics: {}, errors: [], console: [], recording: this.recording() }; },
+  };
 }
 
 /** Fills what an engine session leaves out, so bots and tools see one shape. */

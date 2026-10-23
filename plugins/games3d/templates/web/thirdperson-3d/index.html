@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Courtyard Run</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0e1117; display: grid; place-items: center; }
+  #stage { position: relative; width: min(100vw, calc(100vh * 16 / 9)); aspect-ratio: 16 / 9; }
+  canvas { display: block; width: 100%; height: 100%; outline: none; }
+</style>
+<!-- Three.js from vendor/three (studio_template vendors it; nothing loads from the network). -->
+<script type="importmap">{"imports":{"three":"./vendor/three/build/three.module.js","three/addons/":"./vendor/three/examples/jsm/"}}</script>
+</head>
+<body>
+<!-- Studio web template thirdperson-3d: the gameplay is src/main.js, its settings and assets game.json. -->
+<div id="stage"><canvas id="game" data-webgl="1" tabindex="0"></canvas></div>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>

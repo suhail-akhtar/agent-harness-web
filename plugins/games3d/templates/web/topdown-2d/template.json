@@ -1,0 +1,22 @@
+{
+  "id": "topdown-2d",
+  "name": "2D top-down action",
+  "dimension": "2d",
+  "genre": "top-down action",
+  "description": "Explore a dungeon from above: studio_procgen dungeon, cave or maze levels (start-to-exit paths proven), treasure chests to open, monsters that wander and chase, a sword, health and respawns, stairs that open after the last chest, sounds and music.",
+  "three": false,
+  "goal": "open every chest and take the stairs",
+  "checks": [{ "path": "won", "op": "==", "value": true, "when": "ever" }],
+  "assets": [
+    { "id": "hero-topdown", "tool": "studio_sprite", "input": { "action": "sheet", "kind": "character", "view": "front", "seed": 2, "options": { "weapon": "sword" } } },
+    { "id": "monster-sheet", "tool": "studio_sprite", "input": { "action": "sheet", "kind": "slime", "seed": 4 } },
+    { "id": "chest-sheet", "tool": "studio_sprite", "input": { "action": "sheet", "kind": "chest", "seed": 1 } },
+    { "id": "dungeon-1", "tool": "studio_procgen", "input": { "action": "dungeon", "seed": 2, "width": 36, "height": 22, "maxRoom": 8 } },
+    { "id": "sfx-swing", "tool": "studio_audio", "input": { "action": "sfx", "preset": "laser", "seed": 3 } },
+    { "id": "sfx-chest", "tool": "studio_audio", "input": { "action": "sfx", "preset": "pickup", "seed": 2 } },
+    { "id": "sfx-hit", "tool": "studio_audio", "input": { "action": "sfx", "preset": "hit", "seed": 2 } },
+    { "id": "sfx-kill", "tool": "studio_audio", "input": { "action": "sfx", "preset": "explosion", "seed": 1 } },
+    { "id": "sfx-win", "tool": "studio_audio", "input": { "action": "sfx", "preset": "powerup", "seed": 2 } },
+    { "id": "music-loop", "tool": "studio_audio", "input": { "action": "music", "style": "chiptune", "seed": 2, "bpm": 110, "progression": "i VI III VII", "repeats": 1 } }
+  ]
+}

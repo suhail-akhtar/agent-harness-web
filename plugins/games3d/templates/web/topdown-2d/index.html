@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dungeon</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0e1117; display: grid; place-items: center; }
+  canvas { display: block; width: min(100vw, calc(100vh * 16 / 9)); image-rendering: pixelated; outline: none; }
+</style>
+</head>
+<body>
+<!-- Studio web template topdown-2d: the gameplay is src/main.js, its settings and assets game.json. -->
+<canvas id="game" tabindex="0"></canvas>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>

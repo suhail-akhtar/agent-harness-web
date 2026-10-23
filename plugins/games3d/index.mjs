@@ -1,7 +1,8 @@
 // Games and 3D (Studio's core): agents, skills and workflows live in their folders; this adds
 // the gltf-valid and model-preview gates (and a model_info tool) for exported models, and
-// Studio's assets and player parts. The engines are plugins of their own (engine-blender,
-// engine-godot, engine-unreal...), each with its tool, gates, skills and agent: the
+// Studio's assets, player and templates parts (studio_template and the production gates). The
+// engines are plugins of their own (engine-blender, engine-godot, engine-unreal, engine-unity),
+// each with its tool, gates, skills and agent: the
 // workflows here name their tools and gates (blender, godot, blender-file, godot-project,
 // godot-selftest), which are there when those plugins are on.
 
@@ -14,6 +15,8 @@ import { describeGltf, inspectGltf } from './lib-gltf.mjs';
 import { pngStats } from './lib-png.mjs';
 import { setupAssets } from './assets/index.mjs';
 import { setupPlayer } from './player/index.mjs';
+import { templateTool } from './templates/index.mjs';
+import { registerProductionGates } from './templates/gates.mjs';
 import { setupUiRoutes } from './ui/routes.mjs';
 
 const isPng = (n) => /\.png$/i.test(n);
@@ -36,6 +39,8 @@ export default {
   setup(api) {
     setupAssets(api);
     setupPlayer(api);
+    api.registerTool(defineTool(templateTool));
+    registerProductionGates(api);
     setupUiRoutes(api);
     api.registerTool(defineTool({
       name: 'model_info',

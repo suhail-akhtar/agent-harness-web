@@ -1,0 +1,23 @@
+{
+  "id": "platformer-2d",
+  "name": "2D platformer",
+  "dimension": "2d",
+  "genre": "platformer",
+  "description": "Side-on run and jump: tile levels from studio_procgen platformer (proven finishable with the same physics), coins, walkers to stomp, spikes and pits, an exit that opens after the last coin, lives and checkpoints, a parallax sky, sounds and music.",
+  "three": false,
+  "goal": "take every coin and reach the exit",
+  "checks": [{ "path": "won", "op": "==", "value": true, "when": "ever" }],
+  "assets": [
+    { "id": "hero-sheet", "tool": "studio_sprite", "input": { "action": "sheet", "kind": "character", "view": "side", "seed": 1 } },
+    { "id": "coin-sheet", "tool": "studio_sprite", "input": { "action": "sheet", "kind": "coin", "seed": 1 } },
+    { "id": "walker-sheet", "tool": "studio_sprite", "input": { "action": "sheet", "kind": "slime", "seed": 1 } },
+    { "id": "sky-parallax", "tool": "studio_sprite", "input": { "action": "parallax", "theme": "day", "seed": 1, "width": 384, "height": 216 } },
+    { "id": "level-1", "tool": "studio_procgen", "input": { "action": "platformer", "seed": 3, "length": 48, "height": 14, "difficulty": 0.15 } },
+    { "id": "sfx-jump", "tool": "studio_audio", "input": { "action": "sfx", "preset": "jump", "seed": 1 } },
+    { "id": "sfx-coin", "tool": "studio_audio", "input": { "action": "sfx", "preset": "pickup", "seed": 1 } },
+    { "id": "sfx-hit", "tool": "studio_audio", "input": { "action": "sfx", "preset": "hit", "seed": 1 } },
+    { "id": "sfx-stomp", "tool": "studio_audio", "input": { "action": "sfx", "preset": "blip", "seed": 2 } },
+    { "id": "sfx-win", "tool": "studio_audio", "input": { "action": "sfx", "preset": "powerup", "seed": 1 } },
+    { "id": "music-loop", "tool": "studio_audio", "input": { "action": "music", "style": "chiptune", "seed": 1, "bpm": 132, "repeats": 1 } }
+  ]
+}

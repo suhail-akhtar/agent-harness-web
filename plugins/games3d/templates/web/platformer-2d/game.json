@@ -1,0 +1,19 @@
+{
+  "title": "Coin Hop",
+  "template": "platformer-2d",
+  "dimension": "2d",
+  "genre": "platformer",
+  "help": "Arrows/WASD move - Space jumps - P pauses - M mutes",
+  "controls": {},
+  "assets": {
+    "player": "asset:hero-sheet",
+    "coin": "asset:coin-sheet",
+    "enemy": "asset:walker-sheet",
+    "background": "asset:sky-parallax",
+    "sounds": { "jump": "asset:sfx-jump", "coin": "asset:sfx-coin", "hit": "asset:sfx-hit", "stomp": "asset:sfx-stomp", "win": "asset:sfx-win" },
+    "music": "asset:music-loop"
+  },
+  "levels": ["asset:level-1"],
+  "physics": {},
+  "tuning": { "lives": 0, "coinScore": 10, "stompScore": 50, "scale": 2 }
+}

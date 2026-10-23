@@ -1,0 +1,20 @@
+{
+  "title": "Coin Halls",
+  "template": "firstperson-3d",
+  "dimension": "3d",
+  "genre": "first-person explorer",
+  "help": "WASD walk - mouse (click) or Q/E and arrows turn - Space jumps - X zaps - P pauses - M mutes",
+  "controls": {},
+  "assets": {
+    "floor": "asset:floor-texture",
+    "wall": "asset:wall-texture",
+    "platform": "asset:platform-texture",
+    "sounds": { "jump": "asset:sfx-jump", "coin": "asset:sfx-coin", "hit": "asset:sfx-hit", "zap": "asset:sfx-zap", "win": "asset:sfx-win" },
+    "music": "asset:music-loop"
+  },
+  "levels": [
+    { "rows": ["#############", "#C....#....C#", "#.###.#.###.#", "#.#.......#.#", "#.#.##H##.#.#", "#...#.C.#...#", "###.#...#.###", "#C..##.##..E#", "#.....S.....#", "#############"] },
+    "asset:halls-2"
+  ],
+  "tuning": { "lives": 0, "coins": 3, "health": 5, "speed": 5, "turn": 2.6, "mouse": 0.0025, "jump": 7, "gravity": 22, "cell": 2, "eye": 1.6, "coinScore": 10, "droneScore": 25, "hazardSpeed": 2, "patrol": 3 }
+}

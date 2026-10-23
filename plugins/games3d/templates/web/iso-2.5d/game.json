@@ -1,0 +1,19 @@
+{
+  "title": "Iso Isles",
+  "template": "iso-2.5d",
+  "dimension": "2.5d",
+  "genre": "isometric adventure",
+  "help": "Arrows/WASD move (up is up the screen) - P pauses - M mutes",
+  "controls": {},
+  "assets": {
+    "player": "asset:hero-iso",
+    "monster": "asset:slime-iso",
+    "chest": "asset:chest-iso",
+    "tree": "asset:tree-iso",
+    "tiles": "asset:iso-tiles",
+    "sounds": { "chest": "asset:sfx-chest", "hit": "asset:sfx-hit", "win": "asset:sfx-win" },
+    "music": "asset:music-loop"
+  },
+  "levels": ["asset:world-1"],
+  "tuning": { "lives": 0, "health": 5, "speed": 4, "chests": 3, "monsters": 3, "monsterSpeed": 1.8, "chase": 4, "chestScore": 50, "scale": 2 }
+}
