@@ -73,7 +73,9 @@ a card (where Studio is off, the JSON shows as it is):
 ~~~
 
 - `studio-model` `{"path", "project"}`: a thumbnail, triangles and size, "Open in 3D viewer".
-  The results of `model_info` get this card on their own.
+  The results of `model_info` get this card on their own, and so do the asset builders' results
+  (`studio_sprite`, `studio_image`, `studio_audio`, `studio_procgen`: an asset card of its kind,
+  a sprite sheet playing) and `game_playtest`'s (a playtest card).
 - `studio-sprite` `{"path", "project", "frameWidth", "frameHeight", "frames", "fps"}`: the
   animation playing, "Open in 2D viewer".
 - `studio-playtest` `{"project", "id"}`: result, metrics, an event strip, the top issues.

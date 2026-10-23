@@ -111,69 +111,71 @@ Kit.start(async (harness) => {
 
   async function sprite() {
     const img = await loadImage(args);
-    canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+    const W = img.naturalWidth; const H = img.naturalHeight;
+    canvas.width = W; canvas.height = H;
     ctx.imageSmoothingEnabled = false; ctx.drawImage(img, 0, 0);
-    const fs = Array.isArray(meta.frameSize) ? meta.frameSize : [];
-    let fw = n(params.frameWidth) || n(fs[0]); let fh = n(params.frameHeight) || n(fs[1]) || fw;
-    if (mode === 'tileset') { fw = n(params.tile) || n(meta.tile) || n(meta.tileSize) || fw || 16; fh = fw; }
-    if (mode === 'sheet' && !fw) {
-      // No frame size: a strip of square frames, or meta.frames across.
-      const frames = n(params.frames) || n(meta.frames);
-      fw = frames ? Math.floor(img.naturalWidth / Math.min(frames, Math.max(1, Math.round(img.naturalWidth / img.naturalHeight)))) : img.naturalHeight; fh = fw === img.naturalHeight ? img.naturalHeight : fw;
-    }
-    const cols = fw ? Math.max(1, Math.floor(img.naturalWidth / fw)) : 1; const rows = fh ? Math.max(1, Math.floor(img.naturalHeight / fh)) : 1;
-    const total = mode === 'sheet' ? Math.min(cols * rows, n(params.frames) || n(meta.frames) || cols * rows) : cols * rows;
+    // A frames JSON next to the sheet (Aseprite-style rects per animation) is the most exact description.
+    let json;
+    const jf = asset?.files?.find((f) => /\.frames\.json$/i.test(f.path) && f.exists);
+    if (jf && mode === 'sheet') { try { json = JSON.parse((await Kit.studio(harness, 'file', { ...args, path: jf.path, text: true })).text); } catch { json = undefined; } }
+    const tileMode = mode === 'tileset';
+    const sheet = tileMode
+      ? (() => { const t = n(params.tile) || n(meta.tile) || n(meta.tileSize) || 16; return { fw: t, fh: t, cols: Math.max(1, Math.floor(W / t)), rows: Math.max(1, Math.floor(H / t)), pad: 0, anims: [] }; })()
+      : Kit.sheetFrames(meta, W, H, { frameWidth: params.frameWidth, frameHeight: params.frameHeight, frames: params.frames, fps: params.fps || (n(meta.fps) ? undefined : settings.spriteFps), json });
+    const { fw, fh } = sheet;
+    const total = sheet.anims.reduce((a, x) => a + x.frames.length, 0);
     $('bg').value = 'checker';
     fitZoom();
     const side = $('side');
-    const info = h('dl', { class: 'stat' }, [['Image', `${img.naturalWidth} × ${img.naturalHeight}`], ...(fw ? [[mode === 'tileset' ? 'Tile' : 'Frame', `${fw} × ${fh}`], ['Grid', `${cols} × ${rows}`], [mode === 'tileset' ? 'Tiles' : 'Frames', String(total)]] : [])].flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]));
-    mount($('chips'), chip(`${img.naturalWidth}×${img.naturalHeight}`), mode !== 'image' && fw ? chip(`${fw}×${fh}`) : null, chip(mode === 'sheet' ? 'sprite sheet' : mode));
-    let current = 0;
-    if (mode === 'sheet' || (mode === 'sprite' && total > 1)) {
-      // Animations: meta.animations {name: [first, last] | [i, j, k...]}, else every frame in order.
-      const anims = Object.entries(meta.animations && typeof meta.animations === 'object' && !Array.isArray(meta.animations) ? meta.animations : {}).map(([k, v]) => [k, Array.isArray(v) ? (v.length === 2 && v[1] > v[0] + 1 ? Array.from({ length: v[1] - v[0] + 1 }, (_, i) => v[0] + i) : v.map(Number)) : []]).filter(([, v]) => v.length);
-      let seq = anims[0]?.[1] ?? Array.from({ length: total }, (_, i) => i);
-      let fps = n(params.fps) || n(meta.fps) || n(settings.spriteFps) || 8;
-      let playing = true; let at = 0; let last = performance.now(); let acc = 0;
+    const info = h('dl', { class: 'stat' }, [['Image', `${W} × ${H}`],
+      ...(mode !== 'image' ? [[tileMode ? 'Tile' : 'Frame', `${fw} × ${fh}`], ...(sheet.cols ? [['Grid', `${sheet.cols} × ${sheet.rows}`]] : []), [tileMode ? 'Tiles' : 'Frames', String(tileMode ? sheet.cols * sheet.rows : total)], ...(sheet.pad ? [['Padding', `${sheet.pad} px`]] : [])] : [])].flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]));
+    mount($('chips'), chip(`${W}×${H}`), mode !== 'image' ? chip(`${fw}×${fh}`) : null, chip(mode === 'sheet' ? 'sprite sheet' : mode));
+    if (!tileMode && mode !== 'image' && (mode === 'sheet' || total > 1)) {
+      let anim = sheet.anims[0];
+      let fps = anim.fps;
+      let playing = true; let at = 0; let last = performance.now(); let acc = 0; let current = anim.frames[0];
       const preview = h('canvas', { width: fw, height: fh, 'data-preview': '' });
       const scale = Math.max(1, Math.min(8, Math.floor(220 / Math.max(fw, fh))));
       preview.style.width = `${fw * scale}px`; preview.style.height = `${fh * scale}px`;
       const pctx = preview.getContext('2d'); pctx.imageSmoothingEnabled = false;
       const label = h('div', { class: 'muted small', 'data-frame-label': '' });
       const showFrame = (i) => {
-        current = i;
-        const x = (i % cols) * fw; const y = Math.floor(i / cols) * fh;
-        pctx.clearRect(0, 0, fw, fh); pctx.drawImage(img, x, y, fw, fh, 0, 0, fw, fh);
-        label.textContent = `Frame ${i + 1} of ${total}`;
-        document.body.dataset.frame = String(i);
-        gridOver(fw, fh, { x, y, w: fw, h: fh });
+        at = i; current = anim.frames[i];
+        pctx.clearRect(0, 0, fw, fh); pctx.drawImage(img, current.x, current.y, fw, fh, 0, 0, fw, fh);
+        label.textContent = `${sheet.anims.length > 1 ? `${anim.name}: ` : ''}frame ${i + 1} of ${anim.frames.length}`;
+        document.body.dataset.frame = `${anim.name}:${i}`;
+        gridOver(sheet.cols ? fw + sheet.pad : 0, sheet.cols ? fh + sheet.pad : 0, { x: current.x, y: current.y, w: fw, h: fh });
       };
-      draw = () => showFrame(current);
+      draw = () => showFrame(at);
       const playBtn = h('button', { type: 'button', class: 'btn sm', 'data-play': '' }, 'Pause');
-      playBtn.onclick = () => { playing = !playing; playBtn.textContent = playing ? 'Pause' : 'Play'; document.body.dataset.playing = playing ? '1' : '0'; };
-      const step = (d) => { playing = false; playBtn.textContent = 'Play'; document.body.dataset.playing = '0'; at = (at + d + seq.length) % seq.length; showFrame(seq[at]); };
+      const setPlaying = (v) => { playing = v; playBtn.textContent = v ? 'Pause' : 'Play'; document.body.dataset.playing = v ? '1' : '0'; };
+      playBtn.onclick = () => setPlaying(!playing);
+      const step = (d) => { setPlaying(false); showFrame((at + d + anim.frames.length) % anim.frames.length); };
       const fpsIn = h('input', { type: 'range', min: '1', max: '30', value: String(fps), 'aria-label': 'Frames per second' });
       const fpsV = h('span', { class: 'small', style: { minWidth: '44px' } }, `${fps} fps`);
       fpsIn.oninput = () => { fps = Number(fpsIn.value); fpsV.textContent = `${fps} fps`; };
-      const animSel = anims.length > 1 ? h('select', { 'aria-label': 'Animation', onchange: (e) => { seq = anims.find(([k]) => k === e.target.value)[1]; at = 0; } }, anims.map(([k, v]) => h('option', { value: k }, `${k} (${v.length})`))) : null;
-      mount(side, h('h2', {}, mode === 'sheet' ? 'Animation' : 'Frames'), h('div', { class: 'anim checker', style: { padding: '14px', borderRadius: '10px' } }, preview), label,
+      const animSel = sheet.anims.length > 1 ? h('select', { 'aria-label': 'Animation', 'data-anims': '', onchange: (e) => { anim = sheet.anims.find((a) => a.name === e.target.value); fps = anim.fps; fpsIn.value = String(fps); fpsV.textContent = `${fps} fps`; showFrame(0); } }, sheet.anims.map((a) => h('option', { value: a.name }, `${a.name} (${a.frames.length})`))) : null;
+      mount(side, h('h2', {}, 'Animation'), h('div', { class: 'anim checker', style: { padding: '14px', borderRadius: '10px' } }, preview), label,
         h('div', { class: 'ctl' }, h('button', { type: 'button', class: 'btn sm', onclick: () => step(-1), 'aria-label': 'Previous frame' }, '‹'), playBtn, h('button', { type: 'button', class: 'btn sm', onclick: () => step(1), 'aria-label': 'Next frame' }, '›'), animSel),
         h('div', { class: 'ctl' }, fpsIn, fpsV), h('h2', {}, 'Sheet'), info,
-        h('p', { class: 'muted small' }, 'Click a frame on the sheet to show it.'));
-      canvas.addEventListener('click', (ev) => { const r = canvas.getBoundingClientRect(); const x = Math.floor(((ev.clientX - r.left) / r.width) * canvas.width / fw); const y = Math.floor(((ev.clientY - r.top) / r.height) * canvas.height / fh); const i = y * cols + x; if (i < total) { playing = false; playBtn.textContent = 'Play'; showFrame(i); } });
-      document.body.dataset.playing = '1';
-      showFrame(seq[0]);
+        h('p', { class: 'muted small' }, `Frames from ${sheet.from === 'frames JSON' ? 'the frames JSON' : sheet.from === 'rows' ? 'one row per animation' : sheet.from === 'animations' ? 'the asset\'s animations' : 'the grid, in order'}. Click a frame on the sheet to show it.`));
+      canvas.addEventListener('click', (ev) => {
+        const r = canvas.getBoundingClientRect(); const px = ((ev.clientX - r.left) / r.width) * W; const py = ((ev.clientY - r.top) / r.height) * H;
+        for (const a of sheet.anims) { const i = a.frames.findIndex((f) => px >= f.x && px < f.x + fw && py >= f.y && py < f.y + fh); if (i >= 0) { anim = a; if (animSel) animSel.value = a.name; setPlaying(false); showFrame(i); return; } }
+      });
+      setPlaying(true);
+      showFrame(0);
       const tick = (now) => {
         const dt = now - last; last = now;
-        if (playing) { acc += dt; const every = 1000 / fps; while (acc >= every) { acc -= every; at = (at + 1) % seq.length; showFrame(seq[at]); } }
+        if (playing) { acc += dt; const every = 1000 / fps; while (acc >= every) { acc -= every; showFrame((at + 1) % anim.frames.length); } }
         requestAnimationFrame(tick);
       };
       requestAnimationFrame(tick);
-      window.__sprite = { frame: () => current, total, fps: () => fps, playing: () => playing, frameSize: [fw, fh] };
+      window.__sprite = { frame: () => at, animation: () => anim.name, total, fps: () => fps, playing: () => playing, frameSize: [fw, fh] };
     } else {
-      draw = () => gridOver(mode === 'tileset' ? fw : 0, mode === 'tileset' ? fh : 0);
-      mount(side, h('h2', {}, mode === 'tileset' ? 'Tileset' : 'Image'), info, mode === 'tileset' ? h('p', { class: 'muted small' }, 'Point at a tile to see its index.') : null);
-      if (mode === 'tileset') canvas.addEventListener('mousemove', (ev) => { const r = canvas.getBoundingClientRect(); const x = Math.floor(((ev.clientX - r.left) / r.width) * canvas.width / fw); const y = Math.floor(((ev.clientY - r.top) / r.height) * canvas.height / fh); $('hover').textContent = `tile ${y * cols + x} (column ${x}, row ${y})`; });
+      draw = () => gridOver(tileMode ? fw : 0, tileMode ? fh : 0);
+      mount(side, h('h2', {}, tileMode ? 'Tileset' : 'Image'), info, tileMode ? h('p', { class: 'muted small' }, 'Point at a tile to see its index.') : null);
+      if (tileMode) canvas.addEventListener('mousemove', (ev) => { const r = canvas.getBoundingClientRect(); const x = Math.floor(((ev.clientX - r.left) / r.width) * W / fw); const y = Math.floor(((ev.clientY - r.top) / r.height) * H / fh); $('hover').textContent = `tile ${y * sheet.cols + x} (column ${x}, row ${y})`; });
       draw();
     }
   }
@@ -192,6 +194,8 @@ Kit.start(async (harness) => {
     // Level JSON: tile (or tileSize), width/height, layers [{name, data: flat or rows}], tileset (an image path), objects/entities, or grid: ["####", "#.@#"].
     const tw = n(L.tilewidth) || n(L.tileSize) || n(L.tile) || 16; const th = n(L.tileheight) || n(L.tileSize) || n(L.tile) || tw;
     let layers = []; let objects = [];
+    if (!Array.isArray(L.grid) && Array.isArray(L.rows) && typeof L.rows[0] === 'string') L.grid = L.rows;
+    if (Array.isArray(L.grid) && Array.isArray(L.grid[0])) { layers.push({ name: 'grid', width: L.grid[0].length, data: L.grid.flat().map((v) => Number(v) || 0), visible: true }); L.grid = null; }
     if (Array.isArray(L.grid)) {
       const legend = L.legend && typeof L.legend === 'object' ? L.legend : {};
       const chars = [...new Set(L.grid.join(''))].filter((c) => c !== '.' && c !== ' ');
@@ -207,6 +211,11 @@ Kit.start(async (harness) => {
     const W = n(L.width) || layers[0].width || 1; const H = n(L.height) || Math.ceil(layers[0].data.length / W);
     // The tileset image: Tiled's (first one with an image) or the level's own.
     const sets = [];
+    // An external tileset (.tsj): its image is named relative to it.
+    for (const ts of Array.isArray(L.tilesets) ? L.tilesets : []) {
+      if (ts.image || typeof ts.source !== 'string' || !/\.(tsj|json)$/i.test(ts.source)) continue;
+      try { const t = JSON.parse((await Kit.studio(harness, 'file', { ...baseArgs, path: rel(ts.source), text: true })).text); Object.assign(ts, { ...t, firstgid: ts.firstgid, image: t.image ? `${ts.source.replace(/[^/]*$/, '')}${t.image}` : undefined }); } catch { /* drawn as colours */ }
+    }
     for (const ts of Array.isArray(L.tilesets) ? L.tilesets : []) if (ts.image) sets.push({ firstgid: n(ts.firstgid) || 1, image: ts.image, columns: n(ts.columns), tw: n(ts.tilewidth) || tw, th: n(ts.tileheight) || th, margin: Number(ts.margin) || 0, spacing: Number(ts.spacing) || 0 });
     if (!sets.length && typeof L.tileset === 'string') sets.push({ firstgid: n(L.firstgid) || 1, image: L.tileset, tw, th, margin: 0, spacing: 0 });
     if (!sets.length && L.tileset && typeof L.tileset === 'object' && L.tileset.image) sets.push({ firstgid: n(L.tileset.firstgid) || 1, image: L.tileset.image, columns: n(L.tileset.columns), tw, th, margin: 0, spacing: 0 });
@@ -235,8 +244,13 @@ Kit.start(async (harness) => {
       }
       ctx.globalAlpha = 1;
       if (showObjects) for (const o of objects) {
-        const w = Number(o.width) || tw; const hh = Number(o.height) || th;
         const label = String(o.name || o.type || o.class || o.kind || '').slice(0, 24);
+        if (o.point || (o.width === 0 && o.height === 0)) {
+          ctx.fillStyle = '#d97757'; ctx.beginPath(); ctx.arc(o.x, o.y, Math.max(2, tw / 3), 0, Math.PI * 2); ctx.fill();
+          if (label) { ctx.fillStyle = '#fff'; ctx.font = `${Math.max(8, Math.floor(th * 0.55))}px sans-serif`; ctx.textAlign = 'center'; ctx.fillText(label, o.x, o.y - tw / 2); }
+          continue;
+        }
+        const w = Number(o.width) || tw; const hh = Number(o.height) || th;
         ctx.strokeStyle = '#d97757'; ctx.lineWidth = Math.max(1, tw / 16); ctx.strokeRect(o.x + 0.5, o.y + 0.5, w - 1, hh - 1);
         ctx.fillStyle = 'rgba(217,119,87,.18)'; ctx.fillRect(o.x, o.y, w, hh);
         if (label) { ctx.fillStyle = '#fff'; ctx.font = `${Math.max(8, Math.floor(th * 0.55))}px sans-serif`; ctx.textAlign = 'left'; ctx.fillText(label, o.x + 2, o.y - 3 < 8 ? o.y + th * 0.6 : o.y - 3); }

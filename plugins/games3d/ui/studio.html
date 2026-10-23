@@ -207,7 +207,7 @@ Kit.start(async (harness) => {
     const args = Kit.assetArgs(a);
     const openers = [];
     if (a.model) openers.push(h('button', { type: 'button', class: 'btn primary', 'data-open-viewer': '3d', onclick: () => harness.view.open('viewer', Kit.assetParams(a, a.model)) }, 'Open in 3D viewer'));
-    if (a.kind === 'level' && a.main) openers.push(h('button', { type: 'button', class: 'btn primary', 'data-open-viewer': 'level', onclick: () => harness.view.open('sprites', { ...Kit.assetParams(a, a.main), mode: 'level' }) }, 'Open the level'));
+    if (a.kind === 'level' && (a.level || a.main)) openers.push(h('button', { type: 'button', class: 'btn primary', 'data-open-viewer': 'level', onclick: () => harness.view.open('sprites', { ...Kit.assetParams(a, a.level || a.main), mode: 'level' }) }, 'Open the level'));
     else if (a.viewer === '2d') openers.push(h('button', { type: 'button', class: 'btn primary', 'data-open-viewer': '2d', onclick: () => harness.view.open('sprites', Kit.assetParams(a, a.main && /\.(png|jpe?g|webp|gif)$/i.test(a.main) ? a.main : a.preview)) }, a.kind === 'spritesheet' ? 'Play the sprite sheet' : 'Open in 2D viewer'));
     if (a.audio) openers.push(h('button', { type: 'button', class: 'btn primary', 'data-open-viewer': 'audio', onclick: () => harness.view.open('audio', Kit.assetParams(a, a.audio)) }, 'Play'));
     setActions(...openers);

@@ -252,6 +252,45 @@
     return engine === 'blender' || engine === 'godot';
   };
 
+  /**
+   * The frames of a sprite sheet: its animations, each a list of {x, y} cells of fw x fh. From a
+   * frames JSON ({animations: {name: {fps, frames: [{x, y, w, h}]}}}), the asset's meta (anims
+   * {name: count} one row each, with padding; or animations {name: [first, last] | [i, j...]}),
+   * else every cell of the grid in order (up to meta.frames).
+   */
+  Kit.sheetFrames = function (meta, imgW, imgH, o) {
+    const m = meta || {}; const opt = o || {};
+    const pos = (v) => { const x = Number(v); return Number.isFinite(x) && x > 0 ? Math.round(x) : undefined; };
+    const fsz = Array.isArray(m.frameSize) ? m.frameSize : [];
+    const fps = pos(opt.fps) || pos(m.fps) || 8;
+    if (opt.json && opt.json.animations && typeof opt.json.animations === 'object') {
+      const anims = Object.entries(opt.json.animations).map(([name, a]) => ({ name, fps: pos(a && a.fps) || fps, frames: (Array.isArray(a && a.frames) ? a.frames : []).map((f) => ({ x: Number(f.x) || 0, y: Number(f.y) || 0 })) })).filter((a) => a.frames.length);
+      const f0 = Object.values(opt.json.animations)[0]?.frames?.[0];
+      if (anims.length) return { fw: pos(opt.json.frameWidth) || pos(f0 && f0.w) || 16, fh: pos(opt.json.frameHeight) || pos(f0 && f0.h) || 16, anims, from: 'frames JSON' };
+    }
+    let fw = pos(opt.frameWidth) || pos(fsz[0]); let fh = pos(opt.frameHeight) || pos(fsz[1]) || fw;
+    const pad = Number(m.padding) > 0 ? Math.round(Number(m.padding)) : 0;
+    if (!fw) {
+      const n = pos(opt.frames) || pos(m.frames);
+      fh = imgH; fw = n ? Math.floor(imgW / n) : imgH;
+    }
+    const cols = Math.max(1, Math.floor((imgW + pad) / (fw + pad))); const rows = Math.max(1, Math.floor((imgH + pad) / (fh + pad)));
+    const cell = (i) => ({ x: (i % cols) * (fw + pad), y: Math.floor(i / cols) * (fh + pad) });
+    if (m.anims && typeof m.anims === 'object' && !Array.isArray(m.anims) && Object.values(m.anims).every((v) => typeof v === 'number')) {
+      const anims = Object.entries(m.anims).slice(0, rows).map(([name, n], row) => ({ name, fps, frames: Array.from({ length: Math.min(cols, Math.max(1, Math.round(n))) }, (_, i) => ({ x: i * (fw + pad), y: row * (fh + pad) })) }));
+      if (anims.length) return { fw, fh, cols, rows, pad, anims, from: 'rows' };
+    }
+    const total = Math.min(cols * rows, pos(opt.frames) || pos(m.frames) || cols * rows);
+    if (m.animations && typeof m.animations === 'object' && !Array.isArray(m.animations)) {
+      const anims = Object.entries(m.animations).map(([name, v]) => {
+        const idx = Array.isArray(v) ? (v.length === 2 && v[1] > v[0] + 1 ? Array.from({ length: v[1] - v[0] + 1 }, (_, i) => v[0] + i) : v.map(Number)) : [];
+        return { name, fps, frames: idx.filter((i) => i >= 0 && i < cols * rows).map(cell) };
+      }).filter((a) => a.frames.length);
+      if (anims.length) return { fw, fh, cols, rows, pad, anims, from: 'animations' };
+    }
+    return { fw, fh, cols, rows, pad, anims: [{ name: 'all frames', fps, frames: Array.from({ length: total }, (_, i) => cell(i)) }], from: 'grid' };
+  };
+
   /** A small confirm dialog in the page (the buttons that start something ask first). */
   Kit.confirm = function (title, body, ok) {
     return new Promise((resolve) => {

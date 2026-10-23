@@ -39,7 +39,7 @@ test('studio manifest: a frame module named Studio with the menu, home, guide, b
   for (const e of uiEntries(u)) assert.ok(fs.existsSync(path.join(plugin, e)), `${e} exists`);
   for (const v of ['viewer', 'sprites', 'audio']) assert.ok(views.has(v), `the ${v} view`);
   // The renderers: the model card for model_info, and the four cards as fences.
-  assert.deepEqual(u.contributes.renderers.map((r) => Object.values(r.for)[0]), ['model_info', 'studio-model', 'studio-sprite', 'studio-playtest', 'studio-build']);
+  assert.deepEqual(u.contributes.renderers.map((r) => Object.values(r.for)[0]), ['model_info', 'studio_sprite', 'studio_image', 'studio_audio', 'studio_procgen', 'game_playtest', 'studio-model', 'studio-sprite', 'studio-playtest', 'studio-build']);
   // Every button an operation an agent can call too: the views' openers, the stage decisions, cancel, detect, the quick starts.
   const agent = u.contributes.commands.filter((c) => c.agent).map((c) => c.id);
   for (const c of ['open-studio', 'open-project', 'open-asset', 'open-model', 'open-sprite', 'open-level', 'open-audio', 'open-build', 'open-playtest', 'open-jobs', 'open-engines', 'cancel-job', 'approve-stage', 'request-changes', 'comment-stage', 'detect-engines', 'new-2d-platformer', 'new-3d-game', 'new-model', 'new-sprite-sheet', 'new-level']) assert.ok(agent.includes(c), `${c} is agent-callable`);
@@ -165,6 +165,7 @@ test('studio routes: projects, a project, assets with facets, an asset, files, s
   assert.equal(all.total, 6);
   assert.deepEqual(all.facets.kind.map((f: { value: string }) => f.value).sort(), ['audio', 'level', 'model', 'sprite', 'spritesheet', 'tileset']);
   assert.ok(all.facets.license.some((f: { value: string; count: number }) => f.value === 'CC0-1.0' && f.count === 5));
+  assert.equal(all.assets.find((x: { id: string }) => x.id === 'level-1').level, 'level_1.json', 'a level opens in the level viewer');
   const models = await s.ok('assets', { kind: 'model' });
   assert.equal(models.assets.length, 1);
   const barrel = models.assets[0];
@@ -245,8 +246,11 @@ test('studio routes refuse every path outside their folders: "..", absolute path
   await refused('project', { project: s.outside }, 403, /outside the folders/);
   await refused('source', { project: pid, path: path.join(s.outside, 'secret.txt'), line: 1 }, 403, /outside the project/);
   // A link (a junction on Windows) inside the project that leads out is not followed out.
-  fs.symlinkSync(s.outside, path.join(s.seed.projectDir, 'escape'), process.platform === 'win32' ? 'junction' : 'dir');
-  await refused('file', { project: pid, path: 'escape/secret.txt' }, 403, /leads outside/);
+  // (Removed right after, as a link only: the folders' cleanup never meets it.)
+  const link = path.join(s.seed.projectDir, 'escape');
+  fs.symlinkSync(s.outside, link, process.platform === 'win32' ? 'junction' : 'dir');
+  try { await refused('file', { project: pid, path: 'escape/secret.txt' }, 403, /leads outside/); } finally { fs.unlinkSync(link); }
+  assert.ok(fs.existsSync(path.join(s.outside, 'secret.txt')), 'removing the link left its target alone');
   // The library is its own folder: an asset id cannot climb out of it either.
   await refused('file', { asset: 'library:..', path: 'x' }, 400, /asset id/);
   // Members: the server's folders are an administrator's.

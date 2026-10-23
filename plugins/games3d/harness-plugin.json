@@ -121,6 +121,11 @@
       ],
       "renderers": [
         { "id": "model-card", "for": { "tool": "model_info" }, "kind": "frame", "entry": "ui/card.html", "height": 150 },
+        { "id": "sprite-card", "for": { "tool": "studio_sprite" }, "kind": "frame", "entry": "ui/card.html", "height": 150 },
+        { "id": "image-card", "for": { "tool": "studio_image" }, "kind": "frame", "entry": "ui/card.html", "height": 150 },
+        { "id": "sound-card", "for": { "tool": "studio_audio" }, "kind": "frame", "entry": "ui/card.html", "height": 150 },
+        { "id": "procgen-card", "for": { "tool": "studio_procgen" }, "kind": "frame", "entry": "ui/card.html", "height": 150 },
+        { "id": "playtest-card", "for": { "tool": "game_playtest" }, "kind": "frame", "entry": "ui/card.html", "height": 150 },
         { "id": "model-fence", "for": { "fence": "studio-model" }, "kind": "frame", "entry": "ui/card.html", "height": 150 },
         { "id": "sprite-fence", "for": { "fence": "studio-sprite" }, "kind": "frame", "entry": "ui/card.html", "height": 150 },
         { "id": "playtest-fence", "for": { "fence": "studio-playtest" }, "kind": "frame", "entry": "ui/card.html", "height": 150 },

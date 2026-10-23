@@ -220,8 +220,10 @@ function assetViews(a) {
   const model = MODEL.test(main ?? '') ? main : pick(a.files, ['main', 'lod0'], MODEL);
   const lods = a.files.filter((f) => /^lod\d+$/.test(f.role) && MODEL.test(f.path)).sort((x, y) => x.role.localeCompare(y.role, 'en', { numeric: true }));
   const audio = AUDIO.test(main ?? '') ? main : pick(a.files, ['main', 'preview'], AUDIO);
+  // A level: its Tiled map when it has one (it names its tileset), else its level JSON.
+  const level = a.kind === 'level' ? (pick(a.files, ['tiled', 'main', 'level'], /\.tmj$/i) ?? pick(a.files, ['level', 'main'], /\.json$/i) ?? main) : undefined;
   const viewer = model ? '3d' : audio ? 'audio' : a.kind === 'level' ? 'level' : IMAGE.test(main ?? '') || preview ? '2d' : null;
-  return { main, preview, model, audio, lods: lods.map((f) => ({ role: f.role, path: f.path })), viewer };
+  return { main, preview, model, audio, level, lods: lods.map((f) => ({ role: f.role, path: f.path })), viewer };
 }
 
 async function readAssetsIn(dir, where) {
@@ -848,7 +850,7 @@ function assetCard(a) {
   return {
     ref: a.ref, id: a.id, folder: a.folderName, name: a.name, kind: a.kind, dimension: a.dimension, style: a.style, tags: a.tags, license: a.license, source: a.source,
     project: a.project, projectName: a.projectName, library: !!a.library, meta: a.meta, checks: a.checks, checksPassed: a.checksPassed, checksFailed: a.checksFailed,
-    files: a.files, hashes: a.hashes, engines: a.engines, created: a.created, updated: a.updated, mtime: a.mtime, main: a.main, preview: a.preview, model: a.model, audio: a.audio, lods: a.lods, viewer: a.viewer,
+    files: a.files, hashes: a.hashes, engines: a.engines, created: a.created, updated: a.updated, mtime: a.mtime, main: a.main, preview: a.preview, model: a.model, audio: a.audio, level: a.level, lods: a.lods, viewer: a.viewer,
     ...(a.error ? { error: a.error } : {}),
   };
 }
