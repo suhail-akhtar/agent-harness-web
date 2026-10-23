@@ -273,9 +273,11 @@ test('engines: detection by project files; Godot, Unreal and Unity answer unavai
   await fs.writeFile(path.join(g, '.studio', 'project.json'), JSON.stringify({ engine: 'unity' }));
   assert.equal(await driver.detectEngine(g), 'unity');
   const host = new LocalHost(root);
-  for (const engine of ['godot', 'unreal', 'unity']) {
+  // engine-unity ships a driver; with no editor open and no build it says why it cannot start.
+  for (const engine of ['godot', 'unreal']) {
     await assert.rejects(driver.startSession(host, { engine }), (e: Error & { unavailable?: boolean }) => e.unavailable === true && new RegExp(`engine-${engine}`).test(e.message));
   }
+  await assert.rejects(driver.startSession(host, { engine: 'unity' }), /harness bridge|build/);
   // An engine plugin's driver module (HARNESS_<ENGINE>_DRIVER points at one for the test).
   const mod = path.join(await tempDir(), 'driver.mjs');
   await fs.writeFile(mod, `export function createDriver(host, opts) { return { async start(game) { let t = 0; return {
