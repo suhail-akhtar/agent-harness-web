@@ -226,7 +226,7 @@ test('make-game, Unreal 3D: the route through the Unreal gates, Blender assets i
   h.registry.setProviderInstance('deepseek', fake);
   // The Unreal gates and the player's gates need Unreal and a packaged game: recording fakes here.
   for (const name of ['unreal-project', 'unreal-automation', 'unreal-package', 'playtest-pass', 'playtest-regressions']) {
-    h.registry.gates.set(name, { name, description: 'fake', async run() { ran.push(name); return { pass: true, summary: `${name} (fake) passes` }; } });
+    h.registry.gates.set(name, { name, plugin: 'test', description: 'fake', async run() { ran.push(name); return { pass: true, summary: `${name} (fake) passes` }; } });
   }
   try {
     const s = await h.sessions.create({ model: 'deepseek-flash', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: ws } });

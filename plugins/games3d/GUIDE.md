@@ -133,6 +133,21 @@ with a timeout and a cancel. Tell the person it is queued, and point at Jobs.
 
 ## Typical flows
 
+**A whole game, produced** (brief to a packaged, playtested build): the `make-game` workflow
+{brief, engine web | godot | unreal, dimension 2d | 2.5d | 3d, genre, budget, sources, approval}.
+Its stages are plan, concept (design/GDD.md), art (style guide, asset plan), assets, prototype,
+bot playtest, vertical slice, content (levels, UI, sound), polish, build, full playtest and report.
+Each stage is gated: studio-project, the asset gates, web-game or godot-project/godot-selftest or
+unreal-project, game-starts, no-softlock, playtest-pass, and web-build, godot-export or
+unreal-package. A failed gate loops back with its evidence. The person approves the concept, the
+art, the slice and the release. Unity is not covered by make-game yet. The other production
+workflows are asset-pack, level-blockout, render-shot, port-game and playtest-loop.
+
+**A web game from a template**: `studio_template` (list, info, create, build). There are seven
+templates (platformer-2d, topdown-2d, puzzle-2d, iso-2.5d, sidescroller-2.5d, thirdperson-3d,
+firstperson-3d), each with a state machine, an input map, Studio assets from .studio/assets
+named in game.json, and the window.__game hook the bots read. The goal bot wins every one.
+
 **A 2D game** (platformer, top-down, puzzle): pick web (Canvas) or Godot. Write
 `.studio/project.json` (dimension 2d, budgets, stages brief, design, prototype, vertical-slice,
 content, polish, package, playtest), the design document, then build. Make the sprites, sprite

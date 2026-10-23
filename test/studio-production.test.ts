@@ -137,7 +137,7 @@ test('the production gates: studio-project wants a sound project.json and a GDD 
     const gdd = ['# X', '## Pitch', 'A fox thief hops rooftops.', '## Core loop', 'Run, jump, grab coins; clear a level; three levels.', '## Controls', 'Arrows move, Space jumps.', '## Rules (win and lose)', 'Every coin then the exit wins; unlimited retries.', '## Levels', 'Three platformer levels.', '## Balancing', 'jumpHeight 3.2 tiles.', '## Scope', 'One level type now; bosses later.'].join('\n\n');
     await fs.writeFile(path.join(root, 'design', 'GDD.md'), `${gdd}\n${'Detail. '.repeat(30)}\n`);
     g = await gate('studio-project');
-    assert.equal(g.pass, true, g.details);
+    assert.equal(g.pass, true, g.details ?? g.summary);
     assert.match(g.summary, /advised, missing: Mechanics, Art direction, Audio, UI/);
     assert.deepEqual(headings('# A\n## B ##\ntext\n### C'), ['A', 'B', 'C']);
 
@@ -152,7 +152,7 @@ test('the production gates: studio-project wants a sound project.json and a GDD 
     assert.match(g.details!, /lvl: planned as level, made as sprite/);
     await h.registry.tools.get('studio_procgen')!.run({ action: 'maze', id: 'lvl', cols: 4, rows: 3 }, ctxOf(root));
     g = await gate('asset-plan');
-    assert.equal(g.pass, true, g.details);
+    assert.equal(g.pass, true, g.details ?? g.summary);
 
     await fs.writeFile(path.join(root, 'index.html'), '<canvas id="game"></canvas><script type="module" src="src/main.js"></script>');
     await fs.writeFile(path.join(root, 'game.json'), JSON.stringify({ assets: { coin: 'asset:coin', hero: 'asset:nope' }, levels: ['asset:lvl'] }));
@@ -164,7 +164,7 @@ test('the production gates: studio-project wants a sound project.json and a GDD 
     await fs.writeFile(path.join(root, 'src', 'main.js'), '');
     await fs.writeFile(path.join(root, 'game.json'), JSON.stringify({ assets: { coin: 'asset:coin' }, levels: ['asset:lvl'] }));
     g = await gate('web-game');
-    assert.equal(g.pass, true, g.details);
+    assert.equal(g.pass, true, g.details ?? g.summary);
     assert.match(g.summary, /asset:lvl: start to exit in \d+ steps/);
     // A level the solver cannot finish fails it.
     assert.equal(levelFinishable({ type: 'platformer', rows: ['......', 'S....E', '##..##'] }).ok, true);
