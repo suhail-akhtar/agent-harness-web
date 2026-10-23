@@ -24,21 +24,24 @@ export function sortTools(tools: Tool[]): Tool[] {
 
 /** Minimal JSON-schema check: required keys and primitive types. Returns a repair hint or undefined. */
 export function validateInput(spec: ToolSpec, input: Record<string, unknown>): string | undefined {
-  const props = spec.input_schema.properties as Record<string, { type?: string; enum?: unknown[] }>;
+  const props = spec.input_schema.properties as Record<string, { type?: string | string[]; enum?: unknown[] }>;
   for (const key of spec.input_schema.required ?? []) {
     if (input[key] === undefined || input[key] === null) return `missing required parameter "${key}"`;
   }
+  const fits = (t: string, value: unknown) => (t === 'string' && typeof value === 'string')
+    || (t === 'number' && (typeof value === 'number' || (typeof value === 'string' && value.trim() !== '' && !Number.isNaN(Number(value)))))
+    || (t === 'boolean' && (typeof value === 'boolean' || value === 'true' || value === 'false'))
+    || (t === 'array' && Array.isArray(value))
+    || (t === 'object' && typeof value === 'object')
+    || (t === 'integer' && Number.isInteger(Number(value)))
+    || t === 'null';
   for (const [key, value] of Object.entries(input)) {
     const p = props[key];
     if (!p) continue;
     const t = p.type;
-    const ok = t === undefined
-      || (t === 'string' && typeof value === 'string')
-      || (t === 'number' && (typeof value === 'number' || (typeof value === 'string' && value.trim() !== '' && !Number.isNaN(Number(value)))))
-      || (t === 'boolean' && (typeof value === 'boolean' || value === 'true' || value === 'false'))
-      || (t === 'array' && Array.isArray(value))
-      || (t === 'object' && typeof value === 'object');
-    if (!ok) return `parameter "${key}" must be a ${t}`;
+    // A union ("type": ["number", "string"]) fits when any of its types does.
+    const ok = t === undefined || (Array.isArray(t) ? t.some((x) => fits(x, value)) : fits(t, value));
+    if (!ok) return `parameter "${key}" must be a ${Array.isArray(t) ? t.join(' or ') : t}`;
     if (p.enum && !p.enum.includes(value)) return `parameter "${key}" must be one of ${p.enum.map((e) => JSON.stringify(e)).join(', ')}`;
   }
   return undefined;

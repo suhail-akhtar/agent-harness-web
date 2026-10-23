@@ -173,6 +173,15 @@ test('the production gates: studio-project wants a sound project.json and a GDD 
   } finally { await h.close(); }
 });
 
+test('tool inputs with union types (Studio\'s seed: number or string, license: string or object) pass the input check', async () => {
+  const { validateInput } = await import('../src/tools/index.ts');
+  const spec = { name: 't', description: '', input_schema: { type: 'object' as const, properties: { seed: { type: ['number', 'string'] }, license: { type: ['string', 'object'] }, n: { type: 'number' } }, required: [] } };
+  assert.equal(validateInput(spec as never, { seed: 7, license: { id: 'CC0-1.0' } }), undefined);
+  assert.equal(validateInput(spec as never, { seed: 'abc', license: 'CC0-1.0' }), undefined);
+  assert.equal(validateInput(spec as never, { license: true }), 'parameter "license" must be a string or object');
+  assert.equal(validateInput(spec as never, { n: 'x' }), 'parameter "n" must be a number');
+});
+
 test('the template list and the zip writer', async () => {
   const list = await listTemplates();
   assert.deepEqual(list.map((t: { id: string }) => t.id), ['platformer-2d', 'topdown-2d', 'puzzle-2d', 'iso-2.5d', 'sidescroller-2.5d', 'thirdperson-3d', 'firstperson-3d']);
