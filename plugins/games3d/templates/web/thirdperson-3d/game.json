@@ -1,0 +1,21 @@
+{
+  "title": "Courtyard Run",
+  "template": "thirdperson-3d",
+  "dimension": "3d",
+  "genre": "third-person collect-and-escape",
+  "help": "WASD/arrows move - Space jumps - P pauses - M mutes",
+  "controls": {},
+  "assets": {
+    "player": null,
+    "floor": "asset:floor-texture",
+    "wall": "asset:wall-texture",
+    "platform": "asset:platform-texture",
+    "sounds": { "jump": "asset:sfx-jump", "coin": "asset:sfx-coin", "hit": "asset:sfx-hit", "win": "asset:sfx-win" },
+    "music": "asset:music-loop"
+  },
+  "levels": [
+    { "rows": ["###############", "#S....C....#..#", "#..===...C.#.C#", "#..===........#", "#....H.....#..#", "#.C....#####..#", "#......#..C.E.#", "###############"] },
+    "asset:courtyard-2"
+  ],
+  "tuning": { "lives": 0, "coins": 3, "health": 5, "speed": 6, "jump": 8, "gravity": 22, "cell": 2, "coinScore": 10, "hazardSpeed": 2.2, "patrol": 3 }
+}

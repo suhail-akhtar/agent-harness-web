@@ -1,0 +1,22 @@
+{
+  "id": "iso-2.5d",
+  "name": "2.5D isometric adventure",
+  "dimension": "2.5d",
+  "genre": "isometric adventure",
+  "description": "A 2:1 isometric overworld in Canvas 2D from Studio's iso tiles: hills, mountains and snow with height, forests, water, roads, slimes that chase, treasure chests and a portal that opens after the last one; the world is a studio_procgen topdown map (start-to-exit proven) or the built-in one.",
+  "three": false,
+  "goal": "open every chest and step into the portal",
+  "checks": [{ "path": "won", "op": "==", "value": true, "when": "ever" }],
+  "assets": [
+    { "id": "hero-iso", "tool": "studio_sprite", "input": { "action": "sheet", "kind": "character", "view": "front", "seed": 5, "options": { "hat": "cap" } } },
+    { "id": "slime-iso", "tool": "studio_sprite", "input": { "action": "sheet", "kind": "slime", "seed": 6 } },
+    { "id": "chest-iso", "tool": "studio_sprite", "input": { "action": "sheet", "kind": "chest", "seed": 2 } },
+    { "id": "tree-iso", "tool": "studio_sprite", "input": { "action": "sprite", "kind": "tree", "seed": 2 } },
+    { "id": "iso-tiles", "tool": "studio_sprite", "input": { "action": "iso", "seed": 1, "types": ["grass", "dirt", "stone", "sand", "water", "snow"] } },
+    { "id": "world-1", "tool": "studio_procgen", "input": { "action": "topdown", "seed": 4, "width": 28, "height": 20, "towns": 5 } },
+    { "id": "sfx-chest", "tool": "studio_audio", "input": { "action": "sfx", "preset": "pickup", "seed": 5 } },
+    { "id": "sfx-hit", "tool": "studio_audio", "input": { "action": "sfx", "preset": "hit", "seed": 5 } },
+    { "id": "sfx-win", "tool": "studio_audio", "input": { "action": "sfx", "preset": "powerup", "seed": 5 } },
+    { "id": "music-loop", "tool": "studio_audio", "input": { "action": "music", "style": "chiptune", "seed": 5, "bpm": 100, "repeats": 1 } }
+  ]
+}

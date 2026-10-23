@@ -1,0 +1,26 @@
+{
+  "id": "puzzle-2d",
+  "name": "2D grid puzzle",
+  "dimension": "2d",
+  "genre": "grid puzzle",
+  "description": "Step-by-step grid puzzles: gems to collect, keys and locked doors, boulders to push into holes, an exit that opens after the last gem, undo and restart; levels written as rows in game.json or made by studio_procgen (mazes, dungeons).",
+  "three": false,
+  "goal": "solve every level: take every gem and leave by the exit",
+  "checks": [{ "path": "won", "op": "==", "value": true, "when": "ever" }],
+  "assets": [
+    { "id": "hero-puzzle", "tool": "studio_sprite", "input": { "action": "sheet", "kind": "character", "view": "front", "seed": 3 } },
+    { "id": "gem-sheet", "tool": "studio_sprite", "input": { "action": "sheet", "kind": "gem", "seed": 1 } },
+    { "id": "key-sprite", "tool": "studio_sprite", "input": { "action": "sprite", "kind": "key", "seed": 1 } },
+    { "id": "boulder-sprite", "tool": "studio_sprite", "input": { "action": "sprite", "kind": "rock", "seed": 1 } },
+    { "id": "floor-tile", "tool": "studio_sprite", "input": { "action": "tileset", "mode": "texture", "terrain": "stone", "seed": 1 } },
+    { "id": "wall-tile", "tool": "studio_sprite", "input": { "action": "tileset", "mode": "texture", "terrain": "brick", "seed": 1 } },
+    { "id": "maze-1", "tool": "studio_procgen", "input": { "action": "maze", "seed": 1, "cols": 8, "rows": 5 } },
+    { "id": "sfx-gem", "tool": "studio_audio", "input": { "action": "sfx", "preset": "pickup", "seed": 3 } },
+    { "id": "sfx-key", "tool": "studio_audio", "input": { "action": "sfx", "preset": "blip", "seed": 3 } },
+    { "id": "sfx-door", "tool": "studio_audio", "input": { "action": "sfx", "preset": "powerup", "seed": 3 } },
+    { "id": "sfx-push", "tool": "studio_audio", "input": { "action": "sfx", "preset": "hit", "seed": 3 } },
+    { "id": "sfx-fill", "tool": "studio_audio", "input": { "action": "sfx", "preset": "explosion", "seed": 3 } },
+    { "id": "sfx-win", "tool": "studio_audio", "input": { "action": "sfx", "preset": "powerup", "seed": 4 } },
+    { "id": "music-loop", "tool": "studio_audio", "input": { "action": "music", "style": "ambient", "seed": 3, "repeats": 1 } }
+  ]
+}

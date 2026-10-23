@@ -1,0 +1,36 @@
+{
+  "name": "fix-softlock",
+  "description": "A web game that softlocks after the third coin (the player freezes while the game still says playing): playtest-loop must find it with the bots, file it as a regression, fix it, and prove the fix. Judged by an explorer that must find no softlock, the goal bot reaching the exit with every coin, and a regression on file.",
+  "workflow": "playtest-loop",
+  "fixtures": "fixtures",
+  "timeoutMin": 90,
+  "input": {
+    "goal": "collect all five coins and reach the exit"
+  },
+  "checks": [
+    {
+      "name": "its own gates",
+      "gates": [
+        "no-softlock",
+        "playtest-pass",
+        "playtest-regressions"
+      ]
+    },
+    {
+      "name": "no softlock and the goal reached",
+      "run": "node {{case}}/../lib/check-game.mjs --engine web --explore 40 --seconds 180 --expect coins:ge:5",
+      "timeoutSec": 900
+    },
+    {
+      "name": "a regression was filed",
+      "run": "node {{case}}/check-regression.mjs"
+    },
+    {
+      "name": "deliverables",
+      "files": [
+        "docs/playtest-report.md",
+        "docs/qa.md"
+      ]
+    }
+  ]
+}

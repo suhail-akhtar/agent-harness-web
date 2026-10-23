@@ -173,6 +173,8 @@ func _physics_process(delta: float) -> void:
 	StudioHook.set_state("score", score)
 	StudioHook.set_state("coinsLeft", coins.size())
 	StudioHook.set_state("won", won)
+	# Where the AI player's bots should head: the coins still there, then the exit.
+	StudioHook.set_state("targets", coins.map(func(c): return [c.position.x, c.position.y, c.position.z]) if coins.size() else [[exit_door.position.x, exit_door.position.y, exit_door.position.z]])
 	peak = maxf(peak, player.position.y)
 
 func _selftest() -> void:

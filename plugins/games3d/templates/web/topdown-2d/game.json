@@ -1,0 +1,17 @@
+{
+  "title": "Dungeon Delve",
+  "template": "topdown-2d",
+  "dimension": "2d",
+  "genre": "top-down action",
+  "help": "Arrows/WASD move - X or Space swings the sword - P pauses - M mutes",
+  "controls": {},
+  "assets": {
+    "player": "asset:hero-topdown",
+    "monster": "asset:monster-sheet",
+    "chest": "asset:chest-sheet",
+    "sounds": { "swing": "asset:sfx-swing", "chest": "asset:sfx-chest", "hit": "asset:sfx-hit", "kill": "asset:sfx-kill", "win": "asset:sfx-win" },
+    "music": "asset:music-loop"
+  },
+  "levels": ["asset:dungeon-1"],
+  "tuning": { "lives": 0, "health": 5, "speed": 5, "monsterSpeed": 2.2, "chase": 5, "chestScore": 50, "monsterScore": 25, "scale": 2 }
+}

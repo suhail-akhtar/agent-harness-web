@@ -93,6 +93,15 @@ class WebSession {
       }).catch(reject);
     }).catch(async (e) => { this.release?.(); await this.srv.close(); throw e; });
     this.signal?.addEventListener('abort', () => { this.stop().catch(() => {}); }, { once: true });
+    // A game still loading its files (window.__game.state "loading", or ready === false) gets real
+    // time for it, a frame at a time: its clock does not run ahead while the files arrive.
+    // A module game sets window.__game only once its scripts (Three.js...) are in: up to 2 s for that.
+    for (let i = 0; i < 400; i++) {
+      const loading = await this.page.evaluate(() => { try { const g = window.__game; return g === undefined ? 'none' : g.ready === false || g.state === 'loading'; } catch { return false; } }).catch(() => false);
+      if (!loading || (loading === 'none' && i >= 80)) break;
+      await this.page.waitForTimeout(25);
+      if (this.clock === 'fixed') await this.advance(FRAME_MS);
+    }
     if (this.bootMs) await this.advance(this.bootMs);
     // The state only (info.inputs): errors and events stay for the first observation.
     this.lastState = await this.page.evaluate(() => window.__studio?.state()).catch(() => undefined);

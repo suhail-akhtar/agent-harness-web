@@ -1,0 +1,21 @@
+{
+  "id": "sidescroller-2.5d",
+  "name": "2.5D side-scroller with 3D layers",
+  "dimension": "2.5d",
+  "genre": "side-scrolling platformer",
+  "description": "Platformer rules on a 2D plane (the platformer-2d physics and studio_procgen levels) drawn in Three.js: textured blocks, planks, spikes, spinning coins, walkers, an exit door, and mountains, hills and trees at several depths that scroll past at their own speeds behind a perspective camera; an optional glTF player model.",
+  "three": true,
+  "goal": "take every coin and reach the exit door",
+  "checks": [{ "path": "won", "op": "==", "value": true, "when": "ever" }],
+  "assets": [
+    { "id": "ground-texture", "tool": "studio_sprite", "input": { "action": "tileset", "mode": "texture", "terrain": "dirt", "seed": 4 } },
+    { "id": "block-texture", "tool": "studio_sprite", "input": { "action": "tileset", "mode": "texture", "terrain": "brick", "seed": 4 } },
+    { "id": "level-1", "tool": "studio_procgen", "input": { "action": "platformer", "seed": 5, "length": 44, "height": 14, "difficulty": 0.15 } },
+    { "id": "sfx-jump", "tool": "studio_audio", "input": { "action": "sfx", "preset": "jump", "seed": 8 } },
+    { "id": "sfx-coin", "tool": "studio_audio", "input": { "action": "sfx", "preset": "pickup", "seed": 8 } },
+    { "id": "sfx-hit", "tool": "studio_audio", "input": { "action": "sfx", "preset": "hit", "seed": 8 } },
+    { "id": "sfx-stomp", "tool": "studio_audio", "input": { "action": "sfx", "preset": "blip", "seed": 8 } },
+    { "id": "sfx-win", "tool": "studio_audio", "input": { "action": "sfx", "preset": "powerup", "seed": 8 } },
+    { "id": "music-loop", "tool": "studio_audio", "input": { "action": "music", "style": "chiptune", "seed": 8, "bpm": 140, "repeats": 1 } }
+  ]
+}

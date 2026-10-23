@@ -1,0 +1,66 @@
+{
+  "name": "port-game",
+  "description": "Port a Studio game to another engine, reusing its design and assets: a port plan (what maps to what), the target project from the engine's template, the assets imported (sprites, tiles, models, sounds and levels as they are), the rules rebuilt in the target, the same state hook so the same bots and checks prove it, the target's gates, a playtest against the original's, and a build.",
+  "inputs": {
+    "target": { "description": "\"web\", \"godot\" or \"unreal\"", "required": true },
+    "notes": { "description": "Anything about the port (what may change, platforms to build)", "default": "" }
+  },
+  "start": "plan",
+  "maxAgentRuns": 16,
+  "nodes": {
+    "plan": {
+      "type": "agent",
+      "title": "Port plan",
+      "agent": "producer",
+      "effort": "medium",
+      "prompt": "Stage: port-plan. Read .studio/project.json, design/GDD.md and the game's code. Write design/port-{{input.target}}.md: the source engine and the target ({{input.target}}), each system and how it maps (input map, scenes and states, physics numbers, levels, UI, sounds), the assets to import and how (2D sheets and tiles as they are; 3D .glb through the target's asset.import; levels from their level.json rows), what the target does differently, the state the bots read (the same names: player, score, won, targets), and the playtest goal and checks that must pass in both. Record the original's latest playtest id.\nNotes: {{input.notes}}\nFeedback, if any: {{feedback}}",
+      "next": "port"
+    },
+    "port": {
+      "type": "agent",
+      "title": "Port",
+      "agent": "game-engineer",
+      "maxSteps": 150,
+      "prompt": "Stage: port. Build the game in {{input.target}} from design/port-{{input.target}}.md, in its own folder (web: port-web/ with studio_template create, project \"port-web\"; godot: game/ with godot project.create; unreal: unreal project.create), reusing the assets in .studio/assets (never redraw what exists), with the same rules and the same state hook. Prove it as you go: game_bot goal on the port.",
+      "next": "check"
+    },
+    "check": { "type": "branch", "title": "Which target?", "value": "{{input.target}}", "next": { "on": { "godot": "gates-godot", "unreal": "gates-unreal" }, "default": "gates-web" } },
+    "gates-web": { "type": "gate", "title": "Port checks (web)", "gates": ["web-game", "game-starts", "no-softlock"], "maxFailures": 3, "next": { "on": { "pass": "playtest", "fail": "fix", "exhausted": "failed" } } },
+    "gates-godot": { "type": "gate", "title": "Port checks (Godot)", "gates": ["godot-project", "godot-selftest", "game-starts", "no-softlock"], "maxFailures": 3, "next": { "on": { "pass": "playtest", "fail": "fix", "exhausted": "failed" } } },
+    "gates-unreal": { "type": "gate", "title": "Port checks (Unreal)", "gates": ["unreal-project", "unreal-automation"], "maxFailures": 3, "next": { "on": { "pass": "playtest", "fail": "fix", "exhausted": "failed" } } },
+    "fix": {
+      "type": "agent",
+      "title": "Fix",
+      "agent": "game-engineer",
+      "prompt": "Stage: port-fix. The port's checks failed. Fix them and prove it again with game_bot goal.\n\n{{feedback}}",
+      "next": "check"
+    },
+    "playtest": {
+      "type": "agent",
+      "title": "Playtest against the original",
+      "agent": "playtester",
+      "decide": ["APPROVE", "REQUEST_CHANGES"],
+      "prompt": "Stage: port-playtest. game_playtest on the port (game: its entry or project) with the goal and checks from design/port-{{input.target}}.md, then compare with the original's playtest (game_playtest report with its id): goal reached in both, similar time to the goal, no new issues. Write docs/port-playtest.md.",
+      "next": { "on": { "REQUEST_CHANGES": "fix-playtest" }, "default": "build" }
+    },
+    "fix-playtest": {
+      "type": "agent",
+      "title": "Fix what differs",
+      "agent": "game-engineer",
+      "prompt": "Stage: port-playtest-fix. Fix every BLOCKING and MAJOR difference in docs/port-playtest.md, then game_playtest again.\n\n{{state.playtest}}",
+      "next": "check"
+    },
+    "build": {
+      "type": "agent",
+      "title": "Build the port",
+      "agent": "build-engineer",
+      "prompt": "Stage: port-build. Build the port (web: studio_template build with project the port's folder; godot: godot build windows; unreal: unreal package) and record it in .studio/project.json builds.",
+      "next": "build-check"
+    },
+    "build-check": { "type": "branch", "title": "Which target?", "value": "{{input.target}}", "next": { "on": { "godot": "build-godot", "unreal": "build-unreal" }, "default": "done" } },
+    "build-godot": { "type": "gate", "title": "Godot export", "gates": ["godot-export"], "maxFailures": 2, "next": { "on": { "pass": "done", "fail": "build", "exhausted": "failed" } } },
+    "build-unreal": { "type": "gate", "title": "Unreal package", "gates": ["unreal-package"], "maxFailures": 2, "next": { "on": { "pass": "done", "fail": "build", "exhausted": "failed" } } },
+    "done": { "type": "end", "title": "Ported", "status": "success" },
+    "failed": { "type": "end", "title": "Stopped: the port's checks still fail", "status": "failed" }
+  }
+}

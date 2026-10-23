@@ -1,0 +1,21 @@
+{
+  "id": "thirdperson-3d",
+  "name": "3D third-person collect-and-escape",
+  "dimension": "3d",
+  "genre": "third-person collect-and-escape",
+  "description": "Three.js courtyards from grid rows: walls, low platforms, spinning coins, patrolling spike balls, an exit door that turns green after the last coin, a follow camera at a fixed heading, jumps, health and respawns; textures from Studio tiles and an optional glTF player model; levels in game.json or from studio_procgen (dungeons, caves, mazes).",
+  "three": true,
+  "goal": "take every coin and leave by the exit door",
+  "checks": [{ "path": "won", "op": "==", "value": true, "when": "ever" }],
+  "assets": [
+    { "id": "floor-texture", "tool": "studio_sprite", "input": { "action": "tileset", "mode": "texture", "terrain": "grass", "seed": 2 } },
+    { "id": "wall-texture", "tool": "studio_sprite", "input": { "action": "tileset", "mode": "texture", "terrain": "brick", "seed": 2 } },
+    { "id": "platform-texture", "tool": "studio_sprite", "input": { "action": "tileset", "mode": "texture", "terrain": "wood", "seed": 2 } },
+    { "id": "courtyard-2", "tool": "studio_procgen", "input": { "action": "dungeon", "seed": 7, "width": 24, "height": 16, "maxRoom": 7 } },
+    { "id": "sfx-jump", "tool": "studio_audio", "input": { "action": "sfx", "preset": "jump", "seed": 6 } },
+    { "id": "sfx-coin", "tool": "studio_audio", "input": { "action": "sfx", "preset": "pickup", "seed": 6 } },
+    { "id": "sfx-hit", "tool": "studio_audio", "input": { "action": "sfx", "preset": "hit", "seed": 6 } },
+    { "id": "sfx-win", "tool": "studio_audio", "input": { "action": "sfx", "preset": "powerup", "seed": 6 } },
+    { "id": "music-loop", "tool": "studio_audio", "input": { "action": "music", "style": "ambient", "seed": 6, "repeats": 1 } }
+  ]
+}

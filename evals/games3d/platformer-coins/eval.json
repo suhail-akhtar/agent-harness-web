@@ -1,0 +1,46 @@
+{
+  "name": "platformer-coins",
+  "description": "A 2D web platformer from a one-line brief through make-game: five coins and an exit, judged by the Studio player's bots (an explorer finds no softlock, the goal bot takes at least five coins and reaches the exit), the production and web gates, and a web build that boots.",
+  "workflow": "make-game",
+  "timeoutMin": 150,
+  "input": {
+    "brief": "A 2D platformer: a small robot runs and jumps across rooftops, takes all 5 coins in the level and leaves through the exit door, which opens once every coin is taken.",
+    "engine": "web",
+    "dimension": "2d",
+    "genre": "platformer"
+  },
+  "checks": [
+    {
+      "name": "its own gates",
+      "gates": [
+        "studio-project",
+        "web-game",
+        "game-starts",
+        "no-softlock",
+        "playtest-pass",
+        "web-build"
+      ]
+    },
+    {
+      "name": "bots win it with five coins",
+      "run": "node {{case}}/../lib/check-game.mjs --seconds 300 --expect total:ge:5 --expect won:eq:true",
+      "timeoutSec": 900
+    },
+    {
+      "name": "bots win the build",
+      "run": "node {{case}}/../lib/check-game.mjs --game build/web/index.html --seconds 300",
+      "timeoutSec": 900
+    },
+    {
+      "name": "deliverables",
+      "files": [
+        "design/GDD.md",
+        "design/asset-plan.json",
+        "game.json",
+        "build/web/index.html",
+        "docs/playtest-report.md",
+        "docs/studio-report.md"
+      ]
+    }
+  ]
+}

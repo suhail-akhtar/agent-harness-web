@@ -1,0 +1,25 @@
+{
+  "title": "Gem Vault",
+  "template": "puzzle-2d",
+  "dimension": "2d",
+  "genre": "grid puzzle",
+  "help": "Arrows/WASD step - Z undoes - R restarts the level - P pauses - M mutes",
+  "controls": {},
+  "assets": {
+    "player": "asset:hero-puzzle",
+    "gem": "asset:gem-sheet",
+    "key": "asset:key-sprite",
+    "boulder": "asset:boulder-sprite",
+    "floor": "asset:floor-tile",
+    "wall": "asset:wall-tile",
+    "sounds": { "gem": "asset:sfx-gem", "key": "asset:sfx-key", "door": "asset:sfx-door", "push": "asset:sfx-push", "fill": "asset:sfx-fill", "win": "asset:sfx-win" },
+    "music": "asset:music-loop"
+  },
+  "levels": [
+    { "name": "First steps", "rows": ["#########", "#@..*...#", "#.###.#.#", "#...*.#E#", "#########"] },
+    { "name": "Locked", "rows": ["###########", "#@..#..*..#", "#.k.D.###.#", "#...#..*.E#", "###########"] },
+    { "name": "Fill the hole", "rows": ["###########", "#@.B.O..*E#", "#.#########", "#....*....#", "###########"] },
+    "asset:maze-1"
+  ],
+  "tuning": { "repeat": 0.16, "delay": 0.2, "gemScore": 20, "levelScore": 100 }
+}

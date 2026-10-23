@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Coin Hop</title>
+<style>html,body{margin:0;height:100%;background:#10131a;display:grid;place-items:center}canvas{display:block}</style></head>
+<body><canvas id="c" width="640" height="360"></canvas>
+<script>
+// A one-screen platformer: five coins, three platforms, an exit that opens once every coin is
+// taken. ?autostart=1 skips the title.
+const W = 640, H = 360, DT = 1 / 60, GROUND = 320;
+const q = new URLSearchParams(location.search);
+const ctx = document.getElementById('c').getContext('2d');
+const KEYS = { ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right', Space: 'jump', ArrowUp: 'jump', KeyW: 'jump', Enter: 'start', KeyR: 'restart' };
+const held = new Set(), pressed = new Set();
+addEventListener('keydown', (e) => { const a = KEYS[e.code]; if (!a) return; e.preventDefault(); if (!held.has(a)) pressed.add(a); held.add(a); });
+addEventListener('keyup', (e) => { const a = KEYS[e.code]; if (a) held.delete(a); });
+
+const platforms = [{ x: 170, y: 262, w: 110 }, { x: 330, y: 204, w: 110 }, { x: 500, y: 262, w: 100 }];
+const g = { state: 'title', time: 0, frozen: false, events: [] };
+function reset() {
+  g.player = { x: 40, y: GROUND, vx: 0, vy: 0, w: 20, h: 28, ground: true };
+  g.coins = [{ x: 100, y: 300 }, { x: 225, y: 240 }, { x: 385, y: 182 }, { x: 550, y: 240 }, { x: 300, y: 300 }].map((c, i) => ({ ...c, id: i + 1, taken: false }));
+  g.collected = 0; g.time = 0; g.frozen = false; g.won = false;
+  g.exit = { x: 615, y: GROUND - 20 };
+}
+reset();
+
+function update(dt) {
+  if (pressed.has('restart')) { reset(); g.state = 'playing'; }
+  if (g.state === 'title' || g.state === 'won') { if (pressed.has('start') || pressed.has('jump')) { reset(); g.state = 'playing'; } pressed.clear(); return; }
+  g.time += dt;
+  const p = g.player;
+  if (g.frozen) { pressed.clear(); return; }
+  const dir = (held.has('right') ? 1 : 0) - (held.has('left') ? 1 : 0);
+  p.vx = dir * 180;
+  if (pressed.has('jump') && p.ground) { p.vy = -470; p.ground = false; }
+  p.vy += 1300 * dt;
+  const oldY = p.y;
+  p.x = Math.max(p.w / 2, Math.min(W - p.w / 2, p.x + p.vx * dt));
+  p.y += p.vy * dt;
+  p.ground = false;
+  if (p.y >= GROUND) { p.y = GROUND; p.vy = 0; p.ground = true; }
+  for (const s of platforms) {
+    if (p.vy >= 0 && oldY <= s.y && p.y >= s.y && p.x > s.x - 4 && p.x < s.x + s.w + 4) { p.y = s.y; p.vy = 0; p.ground = true; }
+  }
+  for (const c of g.coins) {
+    if (!c.taken && Math.abs(c.x - p.x) < 18 && Math.abs(c.y - (p.y - p.h / 2)) < 24) {
+      c.taken = true; g.collected++;
+      g.events.push({ type: 'pickup', detail: `coin ${g.collected}/5` });
+      if (g.collected === 3) { g.frozen = true; g.cutscene = 1.5; } // a short pause on the third coin
+    }
+  }
+  if (g.collected === 5 && Math.abs(p.x - g.exit.x) < 20 && p.y > GROUND - 40) { g.state = 'won'; g.won = true; g.events.push({ type: 'goal', detail: 'reached the exit' }); }
+  pressed.clear();
+}
+
+function draw() {
+  ctx.fillStyle = '#10131a'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#2d3748'; ctx.fillRect(0, GROUND, W, H - GROUND);
+  ctx.fillStyle = '#4a5568'; for (const s of platforms) ctx.fillRect(s.x, s.y, s.w, 10);
+  const open = g.collected === 5;
+  ctx.fillStyle = open ? '#48bb78' : '#742a2a'; ctx.fillRect(g.exit.x - 12, GROUND - 40, 24, 40);
+  ctx.fillStyle = '#f6e05e';
+  for (const c of g.coins) if (!c.taken) { ctx.beginPath(); ctx.arc(c.x, c.y + Math.sin(g.time * 4 + c.id) * 2, 7, 0, Math.PI * 2); ctx.fill(); }
+  const p = g.player;
+  ctx.fillStyle = '#63b3ed'; ctx.fillRect(p.x - p.w / 2, p.y - p.h, p.w, p.h);
+  ctx.fillStyle = '#e2e8f0'; ctx.font = '600 16px system-ui'; ctx.textAlign = 'left';
+  ctx.fillText(`Coins ${g.collected}/5`, 12, 24);
+  ctx.textAlign = 'center';
+  if (g.state === 'title') { ctx.font = '700 40px system-ui'; ctx.fillText('COIN HOP', W / 2, 130); ctx.font = '600 18px system-ui'; ctx.fillText('Arrows to move, Space to jump - press Enter', W / 2, 170); }
+  if (g.state === 'won') { ctx.font = '700 36px system-ui'; ctx.fillStyle = '#9ae6b4'; ctx.fillText('You escaped!', W / 2, 140); }
+}
+
+let last = performance.now(), acc = 0;
+function frame(now) {
+  acc += Math.min(0.25, (now - last) / 1000); last = now;
+  while (acc >= DT) { update(DT); acc -= DT; }
+  draw();
+  requestAnimationFrame(frame);
+}
+if (q.get('autostart') === '1') g.state = 'playing';
+requestAnimationFrame(frame);
+
+window.__game = {
+  get state() { return g.state; },
+  get player() { return { x: g.player.x, y: g.player.y, ground: g.player.ground }; },
+  get coins() { return g.collected; },
+  total: 5,
+  get won() { return g.won; },
+  get targets() { const left = g.coins.filter((c) => !c.taken).map((c) => ({ x: c.x, y: c.y + 14 })); return left.length ? left : [{ x: g.exit.x, y: GROUND }]; },
+  get exitOpen() { return g.collected === 5; },
+  inputs: ['ArrowLeft', 'ArrowRight', 'Space', 'Enter'],
+  controls: { left: 'ArrowLeft', right: 'ArrowRight', jump: 'Space', start: 'Enter' },
+  get events() { return g.events; },
+};
+</script>
+</body>
+</html>

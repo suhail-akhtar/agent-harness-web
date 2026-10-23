@@ -1,0 +1,18 @@
+{
+  "title": "Layer Run",
+  "template": "sidescroller-2.5d",
+  "dimension": "2.5d",
+  "genre": "side-scrolling platformer",
+  "help": "Arrows/WASD move - Space jumps - P pauses - M mutes",
+  "controls": {},
+  "assets": {
+    "player": null,
+    "ground": "asset:ground-texture",
+    "block": "asset:block-texture",
+    "sounds": { "jump": "asset:sfx-jump", "coin": "asset:sfx-coin", "hit": "asset:sfx-hit", "stomp": "asset:sfx-stomp", "win": "asset:sfx-win" },
+    "music": "asset:music-loop"
+  },
+  "levels": ["asset:level-1"],
+  "physics": {},
+  "tuning": { "lives": 0, "coinScore": 10, "stompScore": 50, "layers": true }
+}

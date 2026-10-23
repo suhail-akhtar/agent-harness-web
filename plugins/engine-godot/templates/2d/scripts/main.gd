@@ -131,6 +131,8 @@ func _physics_process(_delta: float) -> void:
 	StudioHook.set_state("score", score)
 	StudioHook.set_state("coinsLeft", coins.size())
 	StudioHook.set_state("won", won)
+	# Where the AI player's bots should head: the coins still there (positions in pixels).
+	StudioHook.set_state("targets", coins.map(func(c): return [c.position.x, c.position.y]))
 	ticks += 1
 	if StudioHook.selftest:
 		_selftest()

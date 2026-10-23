@@ -53,13 +53,15 @@ export function timeline(inputs, fps = 60) {
 }
 
 /** The display a run needs: headless for state only, a window (on Linux: Xvfb) for frames. */
-export function displayArgs(host, { windowed, size, uncapped, renderer }) {
+export function displayArgs(host, { windowed, size, uncapped, renderer, position }) {
   if (!windowed) return ['--headless'];
   const args = [];
   // A container or a Linux server without a GPU draws with OpenGL on the CPU (llvmpipe).
   const compat = renderer === 'compatibility' || (renderer !== 'project' && (host.kind === 'docker' || host.platform === 'linux'));
   if (compat) args.push('--rendering-driver', 'opengl3', '--rendering-method', 'gl_compatibility');
   if (size) args.push('--resolution', `${size[0]}x${size[1]}`);
+  // A window the person need not see (the AI player's bots): placed off the screen, still drawing.
+  if (position) args.push('--position', `${Math.round(position[0])},${Math.round(position[1])}`);
   if (uncapped) args.push('--disable-vsync');
   args.push('--audio-driver', 'Dummy');
   return args;

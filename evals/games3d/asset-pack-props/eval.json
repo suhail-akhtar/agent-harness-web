@@ -1,0 +1,35 @@
+{
+  "name": "asset-pack-props",
+  "description": "A consistent pack of 5 props from one style guide through asset-pack, judged on the asset gates and a hidden consistency check: one frame size, a shared palette, licences.",
+  "workflow": "asset-pack",
+  "timeoutMin": 60,
+  "input": {
+    "brief": "5 consistent dungeon props for a 2D pixel-art game: a chest, a key, a potion, a sword and a shield, 16-px, one palette.",
+    "count": "5",
+    "dimension": "2d"
+  },
+  "checks": [
+    {
+      "name": "asset gates",
+      "gates": [
+        "asset-plan",
+        "asset-manifest",
+        "asset-budget",
+        "asset-2d"
+      ]
+    },
+    {
+      "name": "one consistent pack",
+      "run": "node {{case}}/../lib/check-pack.mjs --count 5"
+    },
+    {
+      "name": "deliverables",
+      "files": [
+        "design/style-guide.md",
+        "design/asset-plan.json",
+        "docs/pack-review.md",
+        "design/pack.json"
+      ]
+    }
+  ]
+}

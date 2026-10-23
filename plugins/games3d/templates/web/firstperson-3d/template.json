@@ -1,0 +1,22 @@
+{
+  "id": "firstperson-3d",
+  "name": "3D first-person explorer",
+  "dimension": "3d",
+  "genre": "first-person explorer",
+  "description": "Three.js halls from grid rows, seen through the player's eyes: WASD to walk and strafe, mouse look (pointer lock) or Q/E and arrows to turn, jumps, coins, patrolling drones to dodge or zap, an exit door, health and respawns, fog, textures from Studio tiles; levels in game.json or from studio_procgen (dungeons, caves, mazes).",
+  "three": true,
+  "goal": "take every coin and leave by the exit door",
+  "checks": [{ "path": "won", "op": "==", "value": true, "when": "ever" }],
+  "assets": [
+    { "id": "floor-texture", "tool": "studio_sprite", "input": { "action": "tileset", "mode": "texture", "terrain": "stone", "seed": 3 } },
+    { "id": "wall-texture", "tool": "studio_sprite", "input": { "action": "tileset", "mode": "texture", "terrain": "wall", "seed": 3 } },
+    { "id": "platform-texture", "tool": "studio_sprite", "input": { "action": "tileset", "mode": "texture", "terrain": "wood", "seed": 3 } },
+    { "id": "halls-2", "tool": "studio_procgen", "input": { "action": "maze", "seed": 4, "cols": 6, "rows": 5, "braid": 0.3 } },
+    { "id": "sfx-jump", "tool": "studio_audio", "input": { "action": "sfx", "preset": "jump", "seed": 7 } },
+    { "id": "sfx-coin", "tool": "studio_audio", "input": { "action": "sfx", "preset": "pickup", "seed": 7 } },
+    { "id": "sfx-hit", "tool": "studio_audio", "input": { "action": "sfx", "preset": "hit", "seed": 7 } },
+    { "id": "sfx-zap", "tool": "studio_audio", "input": { "action": "sfx", "preset": "laser", "seed": 7 } },
+    { "id": "sfx-win", "tool": "studio_audio", "input": { "action": "sfx", "preset": "powerup", "seed": 7 } },
+    { "id": "music-loop", "tool": "studio_audio", "input": { "action": "music", "style": "ambient", "seed": 7, "repeats": 1 } }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "name": "threejs-collect",
+  "description": "A 3D collect game in Three.js through make-game, judged on vendored Three.js (offline), the bots winning it in the headless browser, and the gates.",
+  "workflow": "make-game",
+  "timeoutMin": 150,
+  "input": {
+    "brief": "A 3D third-person game in Three.js: a fox collects 8 glowing coins around a walled courtyard with platforms, dodges rolling spike balls, and escapes through a door that opens after the last coin.",
+    "engine": "web",
+    "dimension": "3d",
+    "genre": "third-person collect-and-escape"
+  },
+  "checks": [
+    {
+      "name": "its own gates",
+      "gates": [
+        "studio-project",
+        "web-game",
+        "game-starts",
+        "no-softlock",
+        "playtest-pass",
+        "web-build"
+      ]
+    },
+    {
+      "name": "bots win it in 3D",
+      "run": "node {{case}}/../lib/check-game.mjs --dimension 3d --three --seconds 300 --expect total:ge:8",
+      "timeoutSec": 900
+    },
+    {
+      "name": "deliverables",
+      "files": [
+        "design/GDD.md",
+        "vendor/three/build/three.module.js",
+        "build/web/index.html"
+      ]
+    }
+  ]
+}

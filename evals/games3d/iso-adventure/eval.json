@@ -1,0 +1,38 @@
+{
+  "name": "iso-adventure",
+  "description": "A 2.5D isometric web game through make-game, judged on its dimension, the bots and the gates.",
+  "workflow": "make-game",
+  "timeoutMin": 150,
+  "input": {
+    "brief": "A 2.5D isometric adventure: an explorer crosses a small island with hills and forests, opens 4 treasure chests and leaves through a portal that opens after the last chest.",
+    "engine": "web",
+    "dimension": "2.5d",
+    "genre": "isometric adventure"
+  },
+  "checks": [
+    {
+      "name": "its own gates",
+      "gates": [
+        "studio-project",
+        "web-game",
+        "game-starts",
+        "no-softlock",
+        "playtest-pass",
+        "web-build"
+      ]
+    },
+    {
+      "name": "bots win it",
+      "run": "node {{case}}/../lib/check-game.mjs --dimension 2.5d --seconds 300 --expect total:ge:4",
+      "timeoutSec": 900
+    },
+    {
+      "name": "deliverables",
+      "files": [
+        "design/GDD.md",
+        "design/style-guide.md",
+        "build/web/index.html"
+      ]
+    }
+  ]
+}
