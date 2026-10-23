@@ -25,6 +25,7 @@ export function printEvent(e: HarnessEvent, quiet = false): void {
     case 'usage': console.log(`\n${tag}  [${e.model}] in=${e.usage.input} cache_read=${e.usage.cacheRead} cache_write=${e.usage.cacheWrite} out=${e.usage.output} ctx=${e.contextTokens} $${e.cost.toFixed(5)}`); break;
     case 'notice': console.log(`\n${tag}[${e.level}] ${e.text}`); break;
     case 'retry': console.log(`\n[retry ${e.attempt} in ${e.delayMs}ms] ${e.reason}`); break;
+    case 'progress': console.log(`\n${tag}[progress ${e.phase}] ${e.text}`); break;
     case 'compaction': console.log(`\n[compaction] ${e.before} -> ${e.after} tokens`); break;
     case 'turn_end': if (!tag) console.log(`\n[turn end: ${e.reason}]`); break;
     case 'workflow':

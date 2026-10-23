@@ -102,6 +102,8 @@ export type HarnessEvent =
   | { kind: 'mode'; mode: Mode }
   | { kind: 'compaction'; before: number; after: number; summaryTokens: number }
   | { kind: 'notice'; level: 'info' | 'warn' | 'error'; text: string; agent?: string }
+  /** A progress review at a step checkpoint: started, extended, refreshed (a fresh start), stopped, a flagged "done", a test-discipline nudge. */
+  | { kind: 'progress'; phase: 'checkpoint' | 'extended' | 'refreshed' | 'stopped' | 'flagged' | 'nudge'; step: number; budget: number; by: 'signals' | 'review'; text: string; reasons: string[]; verdict?: string; advice?: string; agent?: string }
   | { kind: 'retry'; attempt: number; delayMs: number; reason: string }
   | { kind: 'turn_end'; reason: string; agent?: string }
   | { kind: 'status'; status: SessionStatus }

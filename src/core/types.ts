@@ -92,12 +92,19 @@ export type HarnessEvent =
   | { kind: 'mode'; mode: PermissionMode }
   | { kind: 'compaction'; before: number; after: number; summaryTokens: number }
   | { kind: 'notice'; level: 'info' | 'warn' | 'error'; text: string; agent?: string }
+  /**
+   * Progress review at a step checkpoint: a review started (checkpoint), the budget grew (extended),
+   * a fresh start from a handoff (refreshed), the turn stopped with why (stopped), a "done" the
+   * evidence contradicts (flagged), or a test-discipline reminder the agent got (nudge).
+   */
+  | { kind: 'progress'; phase: ProgressPhase; step: number; budget: number; by: 'signals' | 'review'; text: string; reasons: string[]; verdict?: 'continue' | 'refresh' | 'stop'; advice?: string; agent?: string }
   | { kind: 'retry'; attempt: number; delayMs: number; reason: string }
   | { kind: 'turn_end'; reason: TurnEndReason; agent?: string }
   | { kind: 'status'; status: SessionStatus };
 
 /** time: the turn ran past settings.maxTurnMinutes (HARNESS_MAX_TURN_MINUTES). */
 export type TurnEndReason = 'done' | 'aborted' | 'max_steps' | 'budget' | 'time' | 'refusal' | 'error' | 'max_tokens';
+export type ProgressPhase = 'checkpoint' | 'extended' | 'refreshed' | 'stopped' | 'flagged' | 'nudge';
 export type SessionStatus = 'idle' | 'running' | 'waiting';
 
 /** Background work in a session (a shell, a sub-agent, a workflow run, a monitor) as task_list and the UI see it. */

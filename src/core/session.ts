@@ -1487,6 +1487,7 @@ export class Session {
       hookRunners: this.hookRunners(),
       autoCheck: this.autoCheck(settings),
       injectionCheck: this.injectionCheck(settings),
+      progressReviewer: this.progressReviewer(settings),
       runSubagent: (a: SubagentArgs) => this.runSubagent(a, 1, this.agent),
       askUser: (q: string, o: string[], form?: Record<string, unknown>) => this.ask(q, o, form),
       proposePlan: (p: string) => this.proposePlan(p),
@@ -1587,6 +1588,24 @@ export class Session {
     return async (text, signal) => {
       const v = await judge(INJECTION_POLICY, { event: 'InjectionScan', content: text.slice(0, 30_000) }, settings.autoModel, signal);
       return { flagged: !v.ok, reason: v.reason };
+    };
+  }
+
+  /**
+   * Progress reviews on the operator's reviewModel (HARNESS_REVIEW_MODEL), charged to the session.
+   * Without one (or when it is not available) each agent asks its own model.
+   */
+  private progressReviewer(settings: Settings): import('./agent.ts').AgentConfig['progressReviewer'] {
+    const m = settings.reviewModel ? this.deps.registry.listModels().find((x) => x.id === settings.reviewModel && x.available) : undefined;
+    if (!m) return undefined;
+    return async ({ system, text }, signal) => {
+      const model = { ...m, maxOutput: Math.min(m.maxOutput, 1200) };
+      const resp = await this.deps.registry.provider(m).send({
+        model, system, tools: [], messages: [{ role: 'user', content: [{ type: 'text', text }] }],
+        effort: m.efforts.includes('low') ? 'low' : m.effort, cacheKey: `hw-${this.meta.id}-review`, signal,
+      });
+      (await this.services(false)).charge?.(`review:${m.id}`, costOf(m, resp.usage));
+      return resp.message.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('');
     };
   }
 
@@ -1915,6 +1934,7 @@ export class Session {
       ...(a.noHooks ? {} : { hookRunners: this.hookRunners() }),
       autoCheck: this.autoCheck(settings),
       injectionCheck: this.injectionCheck(settings),
+      progressReviewer: this.progressReviewer(settings),
       // Files in a worktree are on its branch: rewinding the session's checkpoints does not cover them.
       beforeWrite: this.checkpoints && host === sessionHost ? (p: string) => this.checkpoints!.before(p) : undefined,
       services: await this.services(false, name),

@@ -149,7 +149,7 @@ test('ablation: the same model under several harness configurations; each is a r
   const before = process.env.HARNESS_SETTINGS;
   const runs = await runEvals({
     cases, models: ['deepseek-flash'], repeats: 2, out, concurrency: 2, plugins: [],
-    configs: [{ name: 'baseline' }, { name: 'tight', settings: { maxSteps: 1 }, codeMode: false }],
+    configs: [{ name: 'baseline' }, { name: 'tight', settings: { maxSteps: 1, progressReview: false }, codeMode: false }],
     setup: (h, config) => {
       tools[config!.name] = h.registry.tools.has('run_script');
       h.registry.setProviderInstance('deepseek', new FakeProvider([
@@ -164,7 +164,7 @@ test('ablation: the same model under several harness configurations; each is a r
   assert.equal(process.env.HARNESS_SETTINGS, before, 'the environment is put back');
   const report = await fs.readFile(path.join(out, 'report.md'), 'utf8');
   assert.match(report, /- config baseline: \(baseline\) harness defaults/);
-  assert.match(report, /- config tight: maxSteps 1, code mode off/);
+  assert.match(report, /- config tight: maxSteps 1, progressReview false, code mode off/);
   assert.match(report, /\| Case \| Model \| Config \| Pass \| 95% CI \|.*\| Δ pass \| Δ cost \|/);
   assert.match(report, /\| demo\/two \| deepseek-flash \| baseline \| 2\/2 \| 34%-100% \|.*\| baseline \| baseline \|/);
   assert.match(report, /\| demo\/two \| deepseek-flash \| tight \| 0\/2 \| 0%-66% \|.*\| -100 pp \| -\$0\.\d{3} \|/);
@@ -246,7 +246,7 @@ test('an eval run cannot fetch its own hidden checks: the repository\'s GitHub U
     ];
     const p = new FakeProvider([{ calls: urls.map((url) => ({ name: 'web_fetch', input: { url } })) }, { text: 'Done.' }]);
     await runEvals({ cases, models: ['deepseek-flash'], repeats: 1, out, concurrency: 1, plugins: [], setup: (h) => h.registry.setProviderInstance('deepseek', p) });
-    const blocks = (JSON.parse(p.snapshots.at(-1)!) as { content: unknown }[]).flatMap((m) => (Array.isArray(m.content) ? m.content as { type: string; content: unknown }[] : []));
+    const blocks = (JSON.parse(p.snapshots[p.requests.findLastIndex((r) => r.tools.length > 0)]!) as { content: unknown }[]).flatMap((m) => (Array.isArray(m.content) ? m.content as { type: string; content: unknown }[] : []));
     const results = blocks.filter((b) => b.type === 'tool_result');
     assert.equal(results.length, urls.length);
     for (const x of results) assert.match(JSON.stringify(x.content), /is blocked in this session \((github\.com|raw\.githubusercontent\.com|codeload\.github\.com|api\.github\.com\/repos)\/suhail-akhtar\/agent-harness-web\)/);

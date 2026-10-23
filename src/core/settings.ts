@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { Rules } from './permissions.ts';
 import { writeFileAtomic } from '../util/shared-file.ts';
+import { cleanProgressReview, defaultProgressReview, type ProgressReviewSettings } from './progress.ts';
 
 /**
  * Lifecycle points a hook can run at (the matcher, where there is one, is a tool or
@@ -48,8 +49,12 @@ export interface HookSpec {
 export interface Settings {
   permissions: Rules;
   hooks: Partial<Record<HookEvent, HookSpec[]>>;
-  /** Model calls per user turn before the harness stops and reports. */
+  /** Model calls per user turn before the progress checkpoint (with progressReview off: before the harness stops and reports). */
   maxSteps: number;
+  /** What happens at maxSteps: on track extends, stuck stops or restarts fresh (see progress.ts). */
+  progressReview: ProgressReviewSettings;
+  /** Model for progress reviews; defaults to the agent's own model. */
+  reviewModel?: string;
   /** Spend cap per session in USD; the loop stops when it is reached. */
   maxCostUsd: number;
   /** Wall-clock minutes one turn may run before the loop stops and reports (0: no limit). */
@@ -104,6 +109,8 @@ export const defaultSettings = (): Settings => ({
   permissions: { allow: [], deny: [], ask: [] },
   hooks: {},
   maxSteps: Number(process.env.HARNESS_MAX_STEPS ?? 150),
+  progressReview: defaultProgressReview(),
+  ...(process.env.HARNESS_REVIEW_MODEL ? { reviewModel: process.env.HARNESS_REVIEW_MODEL } : {}),
   maxCostUsd: Number(process.env.HARNESS_MAX_COST_USD ?? 5),
   maxTurnMinutes: Math.max(0, Number(process.env.HARNESS_MAX_TURN_MINUTES ?? 0) || 0),
   maxSubagentDepth: Math.min(3, Math.max(1, Number(process.env.HARNESS_SUBAGENT_DEPTH ?? 1) || 1)),
@@ -136,6 +143,9 @@ export async function operatorSettings(env: NodeJS.ProcessEnv = process.env): Pr
   }
   if (typeof j.maxSteps === 'number') base.maxSteps = j.maxSteps;
   if (typeof j.maxCostUsd === 'number') base.maxCostUsd = j.maxCostUsd;
+  const pr = cleanProgressReview((j as { progressReview?: unknown }).progressReview, base.progressReview);
+  if (pr) base.progressReview = pr;
+  if (typeof j.reviewModel === 'string') base.reviewModel = j.reviewModel;
   if (typeof j.maxTurnMinutes === 'number') base.maxTurnMinutes = Math.max(0, j.maxTurnMinutes);
   if (typeof j.maxSubagentDepth === 'number') base.maxSubagentDepth = Math.min(3, Math.max(1, Math.floor(j.maxSubagentDepth)));
   if (typeof j.maxParallelSubagents === 'number') base.maxParallelSubagents = Math.min(20, Math.max(1, Math.floor(j.maxParallelSubagents)));
