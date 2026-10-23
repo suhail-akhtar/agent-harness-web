@@ -263,7 +263,8 @@ export class HarnessClient {
       async () => ((await this.config()).plugins ?? []).map((p) => ({ ...p, enabled: true, source: 'bundled' }))),
     enable: (name: string) => this.post<PluginInfo>(`/api/plugins/${encodeURIComponent(name)}/enable`),
     disable: (name: string) => this.post<PluginInfo>(`/api/plugins/${encodeURIComponent(name)}/disable`),
-    uninstall: (name: string) => this.del<{ ok: boolean }>(`/api/plugins/${encodeURIComponent(name)}`),
+    /** Removes a catalogue-installed plugin; its data folder is kept unless `deleteData`. */
+    uninstall: (name: string, o: { deleteData?: boolean } = {}) => this.request<{ ok: boolean; dataKept?: boolean }>('DELETE', `/api/plugins/${encodeURIComponent(name)}`, { deleteData: o.deleteData === true }),
     catalogue: () => this.get<CatalogueEntry[] | { plugins: CatalogueEntry[] }>('/api/plugins/catalogue').then((r) => (Array.isArray(r) ? r : r.plugins ?? [])),
     install: (name: string) => this.post<{ name: string; version: string }>('/api/plugins/install', { name }),
     /** The URL of a plugin's UI file on the engine (main proxies harness://app/plugins/<name>/<path> to it). */

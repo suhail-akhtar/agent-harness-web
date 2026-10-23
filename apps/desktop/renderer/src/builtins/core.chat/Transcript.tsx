@@ -10,9 +10,9 @@ import { duration, summarize, toRows, workedLabel, type ArtifactFile, type Artif
 import { Badge, Button, CodeBlock, DiffView, EmptyState, FencedBlock, Icon, IconButton, ImageStrip, ImageView, JsonView, Markdown, Popover, Reasoning, RenderBoundary, Spinner, Tabs, VirtualList, copyRich, copyText, cx, toast, type FenceRenderer, type VirtualListHandle, type Source } from '@harness/ui';
 import { useData, client } from '../../state/data';
 import { useApp } from '../../state/app';
-import { rendererFor } from '../../registry/registry';
+import { offRendererFor, rendererFor } from '../../registry/registry';
 import { PluginFrame } from '../../registry/Frame';
-import { useArtifactRenderer, useEventComponent, useFenceRenderer } from '../../registry/renderers';
+import { OffPluginNote, useArtifactRenderer, useEventComponent, useFenceRenderer } from '../../registry/renderers';
 import { FilePreview } from '../../components/FilePreview';
 import { WorkflowGraph } from '../../components/WorkflowGraph';
 
@@ -102,7 +102,15 @@ function ItemView({ item, sessionId, fence, sources, running, isLastAnswer, onRe
   const custom = rendererFor(registry, 'event', item.kind);
   if (custom && custom.kind === 'frame' && custom.entry) return <PluginFrame plugin={custom.plugin} contribution={custom.qid} entry={custom.entry} height={custom.height ?? 120} context={{ event: item }} />;
   const Native = custom?.component ? registry.active.find((p) => p.name === custom.plugin)?.native?.components[custom.component] as React.ComponentType<{ item: Item; sessionId: string }> | undefined : undefined;
-  if (Native) return <Native item={item} sessionId={sessionId} />;
+  const plain = <DefaultItem item={item} sessionId={sessionId} fence={fence} sources={sources} running={running} isLastAnswer={isLastAnswer} onRetry={onRetry} inSteps={inSteps} />;
+  // A plugin's renderer that throws leaves the default view, never a broken transcript.
+  if (Native) return <RenderBoundary fallback={() => plain}><Native item={item} sessionId={sessionId} /></RenderBoundary>;
+  // Drawn by a plugin that is off now: the default view, and a note saying so.
+  const off = custom ? undefined : offRendererFor(registry, 'event', item.kind);
+  return off ? <div data-off-event={item.kind}>{plain}<OffPluginNote off={off} /></div> : plain;
+}
+
+function DefaultItem({ item, sessionId, fence, sources, running, isLastAnswer, onRetry, inSteps }: { item: Item; sessionId: string; fence: FenceRenderer; sources?: Source[]; running?: boolean; isLastAnswer?: boolean; onRetry?: () => void; inSteps?: boolean }): React.ReactElement | null {
   switch (item.kind) {
     case 'user': return <UserMessage item={item} />;
     case 'assistant': return <AssistantMessage item={item} fence={fence} sources={sources} canRetry={!!isLastAnswer && !running} onRetry={onRetry} compact={inSteps} />;
@@ -207,6 +215,7 @@ export function ToolCard({ item, sessionId }: { item: ToolItem; sessionId: strin
   const registry = useData((s) => s.registry);
   const [open, setOpen] = useState(false);
   const custom = rendererFor(registry, 'tool', item.name);
+  const off = custom ? undefined : offRendererFor(registry, 'tool', item.name);
   const s = (k: string) => (typeof item.input[k] === 'string' ? (item.input[k] as string) : '');
   const status = item.running ? 'running' : item.isError ? 'error' : 'ok';
   const diff = item.display?.type === 'diff' ? item.display : item.name === 'edit' && !item.isError && s('path') ? { path: s('path'), before: s('old_string'), after: s('new_string') } : undefined;
@@ -222,6 +231,7 @@ export function ToolCard({ item, sessionId }: { item: ToolItem; sessionId: strin
         <Icon name={open ? 'chevron-up' : 'chevron-down'} size={12} className="shrink-0 text-hx-muted opacity-0 group-hover:opacity-100" />
       </button>
       {!(custom && custom.kind === 'frame') && <div className="ml-6"><NativeToolOutput item={item} sessionId={sessionId} /></div>}
+      {off && !item.running && <div className="ml-6"><OffPluginNote off={off} /></div>}
       {item.name === 'agent' && item.activity.length > 0 && (
         <div className="ml-7 space-y-0.5 py-0.5 text-[12px] text-hx-muted">{item.activity.slice(open ? 0 : -3).map((a, i) => <div key={i} className={a.isError ? 'text-hx-danger' : ''}>{a.done ? (a.isError ? '✕' : '✓') : '…'} <b className="font-medium">{a.name}</b> {a.summary}</div>)}</div>
       )}

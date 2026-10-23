@@ -19,7 +19,13 @@ export async function runGates(reg: Registry, host: ToolHost, names: string[] | 
   }
   const all = [...reg.gates.values()];
   const chosen = names === 'applicable' ? all : all.filter((g) => names.includes(g.name));
-  if (names !== 'applicable') for (const n of names) if (!reg.gates.has(n)) out.push({ name: n, pass: false, summary: 'no such gate', ms: 0 });
+  if (names !== 'applicable') {
+    for (const n of names) {
+      if (reg.gates.has(n)) continue;
+      const p = reg.offOwner?.(reg.gates, n);
+      out.push({ name: n, pass: false, summary: (p && reg.offReason(p, `the ${n} gate`)) || 'no such gate', ms: 0 });
+    }
+  }
   for (const g of chosen) {
     if (signal.aborted) break;
     try {
@@ -55,6 +61,9 @@ export function makeGatesTool(reg: Registry): Tool {
     },
     summarize: (i) => `quality gates${Array.isArray(i.gates) && i.gates.length ? `: ${i.gates.join(', ')}` : ''}`,
     async run(input, ctx) {
+      // Every gate came from plugins that are switched off now: say so rather than "none apply".
+      const off = !reg.gates.size ? [...(reg.off?.keys() ?? [])].find((n) => reg.off.get(n)!.parts.maps.some((e) => e.map === reg.gates)) : undefined;
+      if (off) return { content: reg.offReason(off, 'quality_gates')!, is_error: true };
       const chosen = Array.isArray(input.gates) && input.gates.length ? input.gates.map(String) : 'applicable';
       const results = await runGates(reg, ctx.host, chosen, ctx.signal, ctx.services);
       return { content: formatGates(results), is_error: results.some((r) => !r.pass && r.severity !== 'advisory') };

@@ -8,7 +8,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import type { CatalogueEntry } from '@harness/client';
 import { isMissing } from '@harness/client';
 import { CONTRIBUTION_POINTS, type Capability } from '@harness/plugin-ui';
-import { Badge, Button, EmptyState, Icon, InfoNote, Input, Spinner, Switch, Tabs, toast } from '@harness/ui';
+import { Badge, Button, Checkbox, EmptyState, Icon, InfoNote, Input, Modal, Spinner, Switch, Tabs, toast } from '@harness/ui';
 import type { BuiltinPlugin } from '../../state/data';
 import { useData, client } from '../../state/data';
 import { useApp } from '../../state/app';
@@ -64,9 +64,16 @@ function PluginCard({ p }: { p: PluginEntry }) {
       toast(`${p.ui?.displayName ?? p.name} ${on ? 'on' : 'off'}`);
     } catch (e) { toast(isMissing(e) ? 'This server cannot switch plugins on and off.' : (e as Error).message, { kind: 'error' }); } finally { setBusy(false); }
   };
+  // Uninstalling asks what becomes of the plugin's data folder on the server: kept unless the person ticks the box.
+  const [removing, setRemoving] = useState(false);
+  const [deleteData, setDeleteData] = useState(false);
   const uninstall = async () => {
-    if (!(await useApp.getState().ask({ title: `Uninstall ${p.name}?`, body: 'Its folder is removed from the server. Conversations keep what it already did.', confirmLabel: 'Uninstall', danger: true }))) return;
-    try { await client.plugins.uninstall(p.name); await useData.getState().refreshPlugins(); toast('Uninstalled'); } catch (e) { toast((e as Error).message, { kind: 'error' }); }
+    setRemoving(false);
+    try {
+      await client.plugins.uninstall(p.name, { deleteData });
+      await useData.getState().refreshPlugins();
+      toast(deleteData ? 'Uninstalled, its data deleted' : 'Uninstalled, its data kept');
+    } catch (e) { toast((e as Error).message, { kind: 'error' }); }
   };
   return (
     <div data-plugin={p.name} data-enabled={p.enabled ? '1' : '0'} className="rounded-xl border border-hx-border-subtle bg-hx-elevated p-4">
@@ -99,8 +106,16 @@ function PluginCard({ p }: { p: PluginEntry }) {
         <button type="button" className="text-[12px] text-hx-muted hover:text-hx-primary" onClick={() => setOpen(!open)}>{open ? 'Less' : 'Details'}</button>
         <div className="flex-1" />
         {decision?.state === 'granted' && <Button size="sm" variant="ghost" onClick={() => void desktop.revokeGrant(p.name).then(() => useData.getState().refreshPlugins())}>Revoke access</Button>}
-        {p.source === 'installed' && me?.role === 'admin' && <Button size="sm" variant="ghost" icon="trash" onClick={() => void uninstall()}>Uninstall</Button>}
+        {p.source === 'installed' && me?.role === 'admin' && <Button size="sm" variant="ghost" icon="trash" data-uninstall={p.name} onClick={() => { setDeleteData(false); setRemoving(true); }}>Uninstall</Button>}
       </div>
+      <Modal open={removing} onClose={() => setRemoving(false)} title={`Uninstall ${p.ui?.displayName ?? p.name}?`} size="sm" label="Uninstall plugin"
+        footer={<><Button variant="ghost" onClick={() => setRemoving(false)}>Cancel</Button><Button variant="danger" data-confirm-uninstall onClick={() => void uninstall()}>Uninstall</Button></>}>
+        <div className="space-y-3 text-[13px] text-hx-secondary" data-uninstall-dialog={p.name}>
+          <p>Its folder is removed from the server. Conversations keep what it already did.</p>
+          <p>Its data folder (what it stored for itself) is kept, so installing it again picks up where it left off.</p>
+          <div data-delete-data><Checkbox checked={deleteData} onChange={setDeleteData} label="Also delete its data folder" /></div>
+        </div>
+      </Modal>
       {open && (
         <div className="mt-2 rounded-lg bg-hx-bg p-3 text-[12px] text-hx-secondary">
           <div><b>Contributes:</b> {points.join(', ') || 'no UI (server half only)'}</div>

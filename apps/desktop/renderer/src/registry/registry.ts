@@ -64,6 +64,8 @@ export type SlashCommand = SlashCommandContribution & { plugin: string };
 export type ComposerChip = Q<ComposerChipContribution>;
 export type SettingsSection = Q<SettingsContribution>;
 export type Renderer = Q<RendererContribution> & { trust: UiTrust };
+/** A renderer of a plugin that is switched off: who made it, to say so. */
+export interface OffRenderer { plugin: string; title: string }
 export type HomeCard = Q<HomeCardContribution> & { trust: UiTrust };
 export type StatusItem = Q<StatusItemContribution>;
 export type Theme = Q<ThemeContribution>;
@@ -86,6 +88,11 @@ export interface Registry {
   composerChips: ComposerChip[];
   settings: SettingsSection[];
   renderers: { tool: Map<string, Renderer>; event: Map<string, Renderer>; fence: Map<string, Renderer>; artifact: Map<string, Renderer> };
+  /**
+   * What switched-off plugins would draw (and no plugin that is on does): an old conversation's tool
+   * card or event, or an artifact, is drawn plainly with a note naming the plugin that is off.
+   */
+  offRenderers: { tool: Map<string, OffRenderer>; event: Map<string, OffRenderer>; fence: Map<string, OffRenderer>; artifact: Map<string, OffRenderer> };
   homeCards: HomeCard[];
   statusItems: StatusItem[];
   themes: Theme[];
@@ -126,7 +133,7 @@ const isBuiltin = (p: PluginEntry) => p.source === 'builtin';
 export function buildRegistry(entries: PluginEntry[], o: RegistryOptions = {}): Registry {
   const r: Registry = {
     plugins: entries, active: [], navItems: [], views: new Map(), panels: new Map(), commands: [], slashCommands: [], composerChips: [], settings: [],
-    renderers: { tool: new Map(), event: new Map(), fence: new Map(), artifact: new Map() }, homeCards: [], statusItems: [], themes: [], prompts: [], onboarding: [], dataSources: [], widgets: [], blockActions: [], dashboardTemplates: [], groups: [], homes: new Map(), errors: [], conflicts: [],
+    renderers: { tool: new Map(), event: new Map(), fence: new Map(), artifact: new Map() }, offRenderers: { tool: new Map(), event: new Map(), fence: new Map(), artifact: new Map() }, homeCards: [], statusItems: [], themes: [], prompts: [], onboarding: [], dataSources: [], widgets: [], blockActions: [], dashboardTemplates: [], groups: [], homes: new Map(), errors: [], conflicts: [],
   };
   const required = new Set(o.required ?? []);
   // Built-ins first, so a third-party plugin's renderer (later) replaces a built-in default.
@@ -134,6 +141,13 @@ export function buildRegistry(entries: PluginEntry[], o: RegistryOptions = {}): 
   for (const p of ordered) {
     if (p.uiError) r.errors.push({ plugin: p.name, error: p.uiError });
     const on = p.enabled || p.required || required.has(p.name);
+    if (!on && p.ui && !(p.ui.trust === 'native' && !isBuiltin(p))) {
+      for (const rd of p.ui.contributes.renderers) {
+        const f = rd.for as { tool?: string; event?: string; fence?: string; artifact?: string };
+        const kind = f.tool ? 'tool' : f.event ? 'event' : f.artifact ? 'artifact' : 'fence';
+        r.offRenderers[kind].set((f.tool ?? f.event ?? f.artifact ?? f.fence)!, { plugin: p.name, title: p.ui.displayName ?? p.name });
+      }
+    }
     if (!on || !p.ui) continue;
     // Native UI only for the app's own plugins; anything else claiming it contributes nothing.
     if (p.ui.trust === 'native' && !isBuiltin(p)) { r.errors.push({ plugin: p.name, error: 'Native UI is only for plugins signed by a key this app trusts.' }); continue; }
@@ -171,6 +185,8 @@ export function buildRegistry(entries: PluginEntry[], o: RegistryOptions = {}): 
     for (const b of c.blockActions ?? []) r.blockActions.push({ ...q(b), command: qualify(p.name, b.command) });
     for (const t of c.dashboardTemplates ?? []) r.dashboardTemplates.push(q(t));
   }
+  // A kind a plugin that is on draws is drawn by it: no note.
+  for (const k of ['tool', 'event', 'fence', 'artifact'] as const) for (const key of r.renderers[k].keys()) r.offRenderers[k].delete(key);
   const navOrder = o.navOrder ?? [];
   const rank = (qid: string, list: string[]) => { const i = list.indexOf(qid); return i < 0 ? 1e6 : i; };
   r.navItems.sort((a, b) => rank(a.qid, navOrder) - rank(b.qid, navOrder) || byOrder(a, b));
@@ -274,6 +290,8 @@ export function interpolate(text: string, values: Record<string, unknown>): stri
 
 /** The renderer for a tool's results, an event kind or a fence language, if a plugin brings one. */
 export function rendererFor(r: Registry, kind: 'tool' | 'event' | 'fence' | 'artifact', key: string): Renderer | undefined { return r.renderers[kind].get(key); }
+/** The switched-off plugin that would draw this (when none that is on does). */
+export function offRendererFor(r: Registry, kind: 'tool' | 'event' | 'fence' | 'artifact', key: string): OffRenderer | undefined { return r.offRenderers?.[kind].get(key); }
 
 /** Fuzzy match for the command palette: every character of the query in order; better when contiguous and early. */
 export function fuzzyScore(query: string, text: string): number {

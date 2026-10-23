@@ -39,6 +39,24 @@ export interface PluginParts {
 
 export interface InProcessHook { event: HookEvent; matcher?: string; handler: HookHandler; plugin: string }
 
+/**
+ * Which plugin contributed a part (a tool, agent, gate, workflow, hook, skill folder ...) and the
+ * registry that knows whether it is on. An open session keeps the parts it was built with (its tool
+ * list is part of the cached prefix), so whether one may run is asked when it is used.
+ */
+const owned = new WeakMap<object, { registry: Registry; plugin: string }>();
+const isObj = (x: unknown): x is object => (typeof x === 'object' && x !== null) || typeof x === 'function';
+
+/**
+ * Why a part may not run now (its plugin is switched off on the server, or was uninstalled), or
+ * undefined when it may. `what` names it in the message ("query_db", "the reviewer agent").
+ */
+export function switchedOff(part: unknown, what: string): string | undefined {
+  if (!isObj(part)) return undefined;
+  const o = owned.get(part);
+  return o ? o.registry.offReason(o.plugin, what) : undefined;
+}
+
 export class Registry {
   readonly models = new Map<string, ModelSpec>();
   readonly providers = new Map<string, ProviderDef>();
@@ -179,6 +197,41 @@ export class Registry {
       const i = l?.indexOf(e.spec) ?? -1;
       if (i >= 0) l!.splice(i, 1);
     }
+  }
+
+  /**
+   * Plugins switched off (or uninstalled) while the server runs, with what they had added: what an
+   * open session still holds of theirs answers with the reason instead of running.
+   */
+  readonly off = new Map<string, { parts: PluginParts; title: string; uninstalled?: boolean }>();
+
+  /** Marks every part a plugin's load added as that plugin's (see switchedOff). */
+  claim(plugin: string, parts: PluginParts): void {
+    for (const e of parts.maps) if (isObj(e.value)) owned.set(e.value, { registry: this, plugin });
+    for (const e of parts.lists) if (isObj(e.item)) owned.set(e.item, { registry: this, plugin });
+    for (const e of parts.shell) if (isObj(e.spec)) owned.set(e.spec, { registry: this, plugin });
+  }
+
+  /** Marks `part` as made from `from` (a skill read from a plugin's skill folder). */
+  claimLike(part: object, from: unknown): void {
+    const o = isObj(from) ? owned.get(from) : undefined;
+    if (o) owned.set(part, o);
+  }
+
+  /** The plugin a part came from, if a plugin's. */
+  ownerOf(part: unknown): string | undefined { return isObj(part) ? owned.get(part)?.plugin : undefined; }
+
+  /** The reason a plugin's part does not run, when the plugin is off; undefined while it is on. */
+  offReason(plugin: string, what: string): string | undefined {
+    const o = this.off.get(plugin);
+    if (!o) return undefined;
+    return o.uninstalled ? `${o.title} was uninstalled from this server; install it again to use ${what}.` : `${o.title} is switched off on this server; switch it on to use ${what}.`;
+  }
+
+  /** The switched-off plugin that had `key` in `map` (a workflow, agent, gate or tool no longer registered). */
+  offOwner(map: Map<string, unknown>, key: string): string | undefined {
+    for (const [name, o] of this.off) if (o.parts.maps.some((e) => e.map === map && e.key === key)) return name;
+    return undefined;
   }
 
   /** Puts a detached plugin's contributions back. */

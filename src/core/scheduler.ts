@@ -30,6 +30,8 @@ export interface Schedule {
   lastRun?: number;
   lastResult?: string;
   runs: number;
+  /** The plugin it was made for (by a session the plugin started): skipped while that plugin is switched off. */
+  plugin?: string;
 }
 
 export class ScheduleError extends Error {}
@@ -107,6 +109,11 @@ export class Scheduler {
    * (it holds the scheduler lease). Absent: it always does.
    */
   leader?: () => Promise<boolean>;
+  /**
+   * Why a schedule does not run now because a plugin it belongs to is switched off (set by the
+   * server): it is skipped, with the reason as its last result, and kept.
+   */
+  pluginOff?: (s: Schedule) => string | undefined;
   /** Told of every change and run here (the server's global event stream). */
   onEvent?: (type: 'fired' | 'changed', s: Schedule, run?: { sessionId?: string; result: string }) => void;
   private tell(type: 'fired' | 'changed', s: Schedule | undefined, run?: { sessionId?: string; result: string }): void {
@@ -119,6 +126,8 @@ export class Scheduler {
     if (s.owner && this.ownerActive && !this.ownerActive(s.owner)) return { result: 'not run: its owner\'s account is disabled' };
     const busy = s.owner ? this.mayRun?.(s.owner, s) : undefined;
     if (busy) return { result: `not run: ${busy}` };
+    const off = this.pluginOff?.(s);
+    if (off) return { result: `skipped: ${off}` };
     try { return await this.runner.run(s, outside); } catch (e) { return { result: `failed: ${(e as Error).message}` }; }
   }
 
@@ -174,7 +183,7 @@ export class Scheduler {
 
   get(id: string): Schedule | undefined { return this.items.get(id); }
 
-  async create(spec: { owner?: string; title?: string; prompt: string; cron?: string; at?: number; inMinutes?: number; sessionId?: string; newSession?: Schedule['newSession'] }, now = Date.now()): Promise<Schedule> {
+  async create(spec: { owner?: string; title?: string; prompt: string; cron?: string; at?: number; inMinutes?: number; sessionId?: string; newSession?: Schedule['newSession']; plugin?: string }, now = Date.now()): Promise<Schedule> {
     const prompt = spec.prompt?.trim();
     if (!prompt) throw new ScheduleError('a schedule needs a prompt');
     if (prompt.length > 20_000) throw new ScheduleError('the prompt is limited to 20,000 characters');
@@ -187,7 +196,7 @@ export class Scheduler {
     const s: Schedule = {
       id: crypto.randomBytes(6).toString('hex'), owner: spec.owner, title: (spec.title?.trim() || prompt.split('\n')[0]!).slice(0, 80), prompt,
       ...(spec.cron ? { cron: spec.cron.trim() } : { at }), ...(spec.sessionId ? { sessionId: spec.sessionId } : { newSession: spec.newSession }),
-      enabled: true, createdAt: now, nextRun, runs: 0,
+      enabled: true, createdAt: now, nextRun, runs: 0, ...(spec.plugin ? { plugin: spec.plugin } : {}),
     };
     const made = await this.mutate(() => {
       if (this.list(spec.owner).length >= MAX_PER_OWNER) throw new ScheduleError(`at most ${MAX_PER_OWNER} schedules per person; delete some first`);
@@ -269,6 +278,23 @@ export class Scheduler {
       await this.sync(true);
       for (const due of [...this.items.values()]) {
         if (!due.enabled || due.nextRun === undefined || due.nextRun > now) continue;
+        // Its plugin is switched off: skipped with a note, kept. A one-time schedule stays due (it runs when the plugin is back).
+        const off = this.pluginOff?.(due);
+        if (off) {
+          const note = `skipped: ${off}`;
+          if (due.cron || due.lastResult !== note) {
+            const skipped = await this.mutate(() => {
+              const s = this.items.get(due.id);
+              if (!s) return undefined;
+              if (s.cron) s.nextRun = nextCron(s.cron, now);
+              s.lastRun = now;
+              s.lastResult = note;
+              return s;
+            });
+            this.tell('fired', skipped, { result: note });
+          }
+          continue;
+        }
         const claimed = await this.mutate(() => {
           const s = this.items.get(due.id);
           if (!s || !s.enabled || s.nextRun === undefined || s.nextRun > now) return undefined;

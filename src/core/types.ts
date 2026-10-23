@@ -127,6 +127,8 @@ export interface WorkflowRunView {
   current?: string;
   cost: number;
   error?: string;
+  /** Waiting at a node whose plugin is switched off (it carries on when the plugin is switched on). */
+  paused?: { node: string; plugin: string; reason: string };
   /** agent/model: an agent node's (or a map node's agent step's); next: where it can go (parallel branches first). */
   nodes: { id: string; type: string; title?: string; agent?: string; model?: string; next?: string[] }[];
   start?: string;
