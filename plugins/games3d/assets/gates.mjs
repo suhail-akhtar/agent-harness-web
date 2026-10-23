@@ -54,11 +54,26 @@ async function over(host, signal, pick, check, what) {
 
 const anyAssets = async (host, signal, pick = () => true) => { try { return (await assetsForGate(host, signal)).some((a) => !a.manifest || pick(a.manifest)); } catch { return false; } };
 
-/** A temporary copy of bytes as a file (lib-gltf reads files). */
-async function withTemp(name, data, fn) {
+/**
+ * A model file as a real file (lib-gltf reads files): a .glb alone, a .gltf with the asset's
+ * other files beside it at their paths (its buffers and textures), in a temporary folder.
+ */
+async function withTemp(name, data, fn, asset) {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'studio-gate-'));
-  const f = path.join(dir, path.basename(name));
-  try { await fsp.writeFile(f, data); return await fn(f); } finally { await fsp.rm(dir, { recursive: true, force: true }); }
+  const f = path.join(dir, ...name.split('/'));
+  try {
+    await fsp.mkdir(path.dirname(f), { recursive: true });
+    await fsp.writeFile(f, data);
+    if (asset && ext(name) === '.gltf') {
+      for (const o of asset.manifest.files) {
+        if (o.path === name) continue;
+        const to = path.join(dir, ...o.path.split('/'));
+        await fsp.mkdir(path.dirname(to), { recursive: true });
+        await fsp.writeFile(to, await asset.read(o.path).catch(() => Buffer.alloc(0)));
+      }
+    }
+    return await fn(f);
+  } finally { await fsp.rm(dir, { recursive: true, force: true }); }
 }
 
 export function registerGates(api) {
@@ -100,10 +115,11 @@ export function registerGates(api) {
           const data = await a.read(f.path);
           bytes += data.length;
           if (ext(f.path) === '.glb' || ext(f.path) === '.gltf') {
-            const g = await withTemp(f.path, data, (file) => inspectGltf(file)).catch((e) => { problems.push(`${f.path}: ${e.message}`); return null; });
+            const g = await withTemp(f.path, data, (file) => inspectGltf(file), a).catch((e) => { problems.push(`${f.path}: ${e.message}`); return null; });
             if (!g) continue;
-            const limit = f.role === 'main' ? B.trianglesPerAsset : mainTris ?? B.trianglesPerAsset;
-            if (g.triangles > limit) problems.push(`${f.path}: ${g.triangles} triangles > ${limit}${f.role === 'main' ? ' (trianglesPerAsset)' : ' (an LOD must not have more than the main mesh)'}`);
+            const lod = /^lod/.test(f.role ?? '');
+            const limit = lod ? mainTris ?? B.trianglesPerAsset : B.trianglesPerAsset;
+            if (g.triangles > limit) problems.push(`${f.path}: ${g.triangles} triangles > ${limit}${lod ? ' (an LOD must not have more than the main mesh)' : ' (trianglesPerAsset)'}`);
             if (f.role === 'main') mainTris = g.triangles;
             notes.push(`${g.triangles} tris`);
           }
@@ -130,7 +146,7 @@ export function registerGates(api) {
       let note = '';
       for (const f of glbs) {
         const data = await a.read(f.path);
-        const g = await withTemp(f.path, data, (file) => inspectGltf(file));
+        const [g, c] = await withTemp(f.path, data, async (file) => [await inspectGltf(file), await checkGltf(data, file)], a);
         if (!g.meshes || !g.triangles) { problems.push(`${f.path}: no geometry`); continue; }
         const big = Math.max(...(g.size ?? [0]));
         if (g.size && (big > 500 || big < 0.01)) problems.push(`${f.path}: implausible size ${g.size.join(' x ')} m (glTF units are metres)`);
@@ -140,7 +156,6 @@ export function registerGates(api) {
           const s1 = [...g.size].sort((x, y) => x - y), s2 = [...want].sort((x, y) => x - y);
           if (s1.some((v, i) => Math.abs(v - s2[i]) > Math.max(0.05, s2[i] * 0.15))) problems.push(`${f.path}: size ${g.size.join(' x ')} m differs from the recorded ${want.join(' x ')} m`);
         }
-        const c = await checkGltf(data, f.path);
         problems.push(...c.problems.map((p) => `${f.path}: ${p}`));
         if (f.role === 'main') note = `${g.triangles} tris, ${g.size?.join('x')} m${c.animations.length ? `, animations: ${c.animations.join(', ')}` : ''}`;
       }

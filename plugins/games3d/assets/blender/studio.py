@@ -24,7 +24,7 @@ import gen_character  # noqa: E402
 import gen_material  # noqa: E402
 import gen_props  # noqa: E402
 import gen_world  # noqa: E402
-from util import apply_transforms, bounds, ensure_uvs, join, origin_to_base, reset_scene, select_only, smart_uv, triangles  # noqa: E402
+from util import apply_transforms, bounds, clean_mesh, ensure_uvs, join, origin_to_base, reset_scene, select_only, smart_uv, triangles  # noqa: E402
 
 GENERATORS = {**gen_props.GENERATORS, **gen_world.GENERATORS, **gen_character.GENERATORS}
 # Kinds whose parts stay separate objects (pieces of a kit export one file each; a car keeps its wheels).
@@ -135,7 +135,8 @@ def render_preview(path, objs, size=512):
     target = (mn + mx) / 2
     radius = max(0.05, (mx - mn).length / 2)
     setup_render(size, 24, False)
-    g = ground(mn.z, radius)
+    # A little under the model: a flat base on the same plane would z-fight.
+    g = ground(mn.z - radius * 0.004, radius)
     lights(target, radius)
     cam = camera(target, radius)
     bpy.context.scene.render.filepath = path
@@ -336,6 +337,8 @@ def main():
             objs = [one]
     mesh_objs = [o for o in objs if o.type == 'MESH']
     for o in mesh_objs:
+        if not rig:
+            clean_mesh(o)
         ensure_uvs(o)
     animated = rig is not None
     export_roots = ([rig] if rig else []) + [o for o in mesh_objs if o.parent is None]

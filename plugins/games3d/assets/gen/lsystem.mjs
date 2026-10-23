@@ -9,7 +9,7 @@ import { Image } from '../raster/image.mjs';
 import { rng } from '../util/rng.mjs';
 
 export const PRESETS = {
-  tree: { axiom: 'FFA', rules: { A: [{ to: '!F[&FL!A]/////[&FL!A]///////[&FL!A]', weight: 1 }, { to: '!F[&FL!A]//////[&FL!A]', weight: 0.4 }], F: [{ to: 'F', weight: 0.6 }, { to: 'FF', weight: 0.15 }] }, iterations: 5, angle: 24, step: 0.55, width: 0.18, shrink: 0.82, taper: 0.72 },
+  tree: { axiom: 'FA', rules: { A: [{ to: '!F[&FLA]/////[&FLA]///////[&FLA]', weight: 1 }, { to: '!F[&FLA]//////[&FLA]', weight: 0.5 }], F: [{ to: 'F', weight: 0.7 }, { to: 'FF', weight: 0.3 }] }, iterations: 5, angle: 32, step: 0.7, width: 0.2, shrink: 0.8, taper: 0.74, leafSize: 0.4 },
   bush: { axiom: 'A', rules: { A: '[&FLA]/////[&FLA]///////[&FLA]', F: 'S/////F', S: 'FL' }, iterations: 4, angle: 28, step: 0.18, width: 0.05, shrink: 0.85, taper: 0.7 },
   pine: { axiom: 'FFFA', rules: { A: 'F[&&B]////[&&B]////[&&B]////[&&B]A', B: 'F[-FL][+FL]B' }, iterations: 5, angle: 30, step: 0.4, width: 0.16, shrink: 0.86, taper: 0.8 },
   fern: { axiom: 'X', rules: { X: 'F+[[X]-X]-F[-FX]+X', F: 'FF' }, iterations: 5, angle: 25, step: 0.05, width: 0.012, shrink: 0.9, taper: 0.85, flat: true },

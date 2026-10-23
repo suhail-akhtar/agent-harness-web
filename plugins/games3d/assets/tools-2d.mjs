@@ -45,15 +45,25 @@ export function applyOps(img, ops = []) {
       case 'rotate': for (let i = 0; i < ((int(o.degrees, 90) / 90) & 3); i++) img = img.rotate90(); break;
       case 'normalMap': img = normalMap(img.heights(o.channel ?? 'luma'), img.width, img.height, { strength: num(o.strength, 2, 0, 50), convention: o.convention ?? 'opengl', wrap: o.wrap !== false }); break;
       case 'tileable': {
-        // Seamless by blending the image with itself shifted half way (edges cross-faded).
-        const w = img.width, h = img.height, out = new Image(w, h);
-        for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-          const a = img.get(x, y), b = img.get((x + w / 2) % w, (y + h / 2) % h);
-          const t = Math.max(Math.abs(x / (w - 1) - 0.5), Math.abs(y / (h - 1) - 0.5)) * 2;
-          const k = Math.max(0, Math.min(1, (t - 0.6) / 0.4));
-          out.set(x, y, a.map((v, i) => v * (1 - k) + b[i] * k));
+        // Seamless: the last `band` pixels are cross-faded into the first ones, so the (smaller)
+        // image continues from its right edge into its left (and bottom into top); then it is
+        // scaled back to its size. Only the band is blended: no ghosting over the whole image.
+        const w = img.width, h = img.height, b = Math.max(2, Math.round(Math.min(w, h) * num(o.band, 0.12, 0.02, 0.4)));
+        const horiz = new Image(w - b, h);
+        for (let y = 0; y < h; y++) for (let x = 0; x < w - b; x++) {
+          const c = img.get(x, y);
+          if (x >= b) { horiz.set(x, y, c); continue; }
+          const t = x / b, d = img.get(x + w - b, y);
+          horiz.set(x, y, c.map((v, i) => d[i] * (1 - t) + v * t));
         }
-        img = out;
+        const both = new Image(w - b, h - b);
+        for (let y = 0; y < h - b; y++) for (let x = 0; x < w - b; x++) {
+          const c = horiz.get(x, y);
+          if (y >= b) { both.set(x, y, c); continue; }
+          const t = y / b, d = horiz.get(x, y + h - b);
+          both.set(x, y, c.map((v, i) => d[i] * (1 - t) + v * t));
+        }
+        img = both.scale(w, h, 'bilinear');
         break;
       }
       case 'slice': {

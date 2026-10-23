@@ -496,6 +496,53 @@ test('gates fail what is wrong: a changed file, a missing licence, an opaque spr
   assert.match(r.details!, /textureMax 64/);
 });
 
+/** A one-quad glTF (two triangles, 1 m): normals and UVs optional, one degenerate triangle optional. */
+function quadGltf({ normals = true, uvs = true, degenerate = false } = {}) {
+  const pos = new Float32Array([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0]);
+  const nor = new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]);
+  const uv = new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]);
+  const idx = new Uint16Array(degenerate ? [0, 1, 2, 0, 2, 3, 1, 1, 2] : [0, 1, 2, 0, 2, 3]);
+  const parts = [Buffer.from(pos.buffer), ...(normals ? [Buffer.from(nor.buffer)] : []), ...(uvs ? [Buffer.from(uv.buffer)] : []), Buffer.from(idx.buffer)];
+  const views: { buffer: number; byteOffset: number; byteLength: number }[] = [];
+  let off = 0;
+  for (const p of parts) { views.push({ buffer: 0, byteOffset: off, byteLength: p.length }); off += p.length; }
+  const acc: Record<string, unknown>[] = [{ bufferView: 0, componentType: 5126, count: 4, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 0] }];
+  const attributes: Record<string, number> = { POSITION: 0 };
+  if (normals) { attributes.NORMAL = acc.length; acc.push({ bufferView: acc.length, componentType: 5126, count: 4, type: 'VEC3' }); }
+  if (uvs) { attributes.TEXCOORD_0 = acc.length; acc.push({ bufferView: acc.length, componentType: 5126, count: 4, type: 'VEC2' }); }
+  const indices = acc.length;
+  acc.push({ bufferView: acc.length, componentType: 5123, count: idx.length, type: 'SCALAR' });
+  const bin = Buffer.concat(parts);
+  const json = { asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }], meshes: [{ primitives: [{ attributes, indices }] }], accessors: acc, bufferViews: views, buffers: [{ byteLength: bin.length, uri: 'quad.bin' }] };
+  return { json, bin };
+}
+
+test('asset-3d: a .gltf with its buffer beside it passes; missing normals, UVs or degenerate triangles fail', async () => {
+  const { tools, gates } = await fakeApi();
+  const root = await tempDir();
+  const host = new LocalHost(root);
+  const signal = new AbortController().signal;
+  const add = async (id: string, o: Parameters<typeof quadGltf>[0]) => {
+    const q = quadGltf(o);
+    await fs.writeFile(path.join(root, `${id}.gltf`), JSON.stringify(q.json));
+    await fs.writeFile(path.join(root, 'quad.bin'), q.bin);
+    const r = await out(tools.get('studio_library')!.run({ action: 'import', id, kind: 'model', files: [`${id}.gltf`, 'quad.bin'], license: { id: 'CC0-1.0' } }, ctxOf(root)));
+    assert.ok(!r.is_error, r.content);
+  };
+  await add('good', {});
+  let r = await gates.get('asset-3d')!.run({ host, signal });
+  assert.ok(r.pass, `${r.summary}\n${r.details}`);
+  await add('nonormals', { normals: false });
+  await add('nouvs', { uvs: false });
+  await add('degen', { degenerate: true });
+  r = await gates.get('asset-3d')!.run({ host, signal });
+  assert.equal(r.pass, false);
+  assert.match(r.details!, /nonormals: .*no normals/);
+  assert.match(r.details!, /nouvs: .*no UVs/);
+  assert.match(r.details!, /degen: .*1 of 3 triangles are degenerate/);
+  assert.doesNotMatch(r.details!, /good:/);
+});
+
 test('library: publish to the shared library, search by kind and tags, copy into another project with hashes checked', async () => {
   const home = await tempDir('studio-home-');
   const prev = process.env.HARNESS_HOME;

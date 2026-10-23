@@ -218,3 +218,18 @@ def bounds(objs):
     mn = Vector((min(p.x for p in pts), min(p.y for p in pts), min(p.z for p in pts)))
     mx = Vector((max(p.x for p in pts), max(p.y for p in pts), max(p.z for p in pts)))
     return mn, mx
+
+
+def clean_mesh(obj):
+    """Merges coincident vertices and removes zero-area faces and zero-length edges (the gates count them)."""
+    if obj.type != 'MESH':
+        return
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-5)
+    bmesh.ops.dissolve_degenerate(bm, edges=bm.edges, dist=1e-6)
+    # Faces that are still slivers (area ~ 0) go.
+    bmesh.ops.delete(bm, geom=[f for f in bm.faces if f.calc_area() < 1e-10], context='FACES')
+    bm.to_mesh(obj.data)
+    bm.free()
+    obj.data.update()

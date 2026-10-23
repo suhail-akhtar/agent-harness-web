@@ -15,7 +15,10 @@ import { guarded, int, num, preview, save, seedIn, unknownAction } from './commo
 import { expand, PRESETS as LPRESETS, turtle3d } from './gen/lsystem.mjs';
 import { checkGltf } from './gltf-check.mjs';
 import { assetsDir, projectOf } from './library.mjs';
-import { decodePNG } from './raster/png.mjs';
+import { decodePNG, encodePNG } from './raster/png.mjs';
+import { ramp } from './raster/color.mjs';
+import { Image } from './raster/image.mjs';
+import { rng } from './util/rng.mjs';
 import { asepriteJson, framesJson, packSheet } from './sprites/sheet.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -94,11 +97,25 @@ const relOut = (host, work, p) => `${work}/out/${String(p).replace(/\\/g, '/').s
 /** Packs rendered sprite frames (rows: directions x actions, columns: frames) into a sheet. */
 async function spriteSheet(host, work, s, signal) {
   const anims = {};
-  for (const f of s.files) {
+  // Rows: every direction of the first action, then of the next (walk_0 ... walk_7, idle_0 ...).
+  const order = [...s.files].sort((a, b) => s.actions.indexOf(a.action) - s.actions.indexOf(b.action) || a.direction - b.direction || a.frame - b.frame);
+  for (const f of order) {
     const key = `${f.action}_${f.direction}`;
     (anims[key] ??= [])[f.frame] = decodePNG(await readIn(host, relOut(host, work, f.file), signal));
   }
   return packSheet(anims, { fps: 10 });
+}
+
+/** A grass-card texture: tapered blades in a green ramp on transparency, 128 px. */
+export function grassTexture(seed = 1) {
+  const r = rng(`${seed}:grass`);
+  const R = ramp('#5fae4a', 5);
+  const img = new Image(128, 128);
+  for (let i = 0; i < 46; i++) {
+    const x = r.range(6, 122), h = r.range(50, 124), lean = r.range(-18, 18), w = r.range(2.5, 5);
+    img.polygon([[x - w, 128], [x + w, 128], [x + lean * 0.6 + w * 0.4, 128 - h * 0.6], [x + lean, 128 - h]], R[r.int(1, 3)], { aa: true });
+  }
+  return img;
 }
 
 const ACTIONS = ['status', 'generators', 'build', 'sprites', 'cleanup'];
@@ -151,6 +168,13 @@ export const modelTool = {
         const p = { ...(LPRESETS[params.preset ?? 'tree'] ?? LPRESETS.tree), ...(params.iterations ? { iterations: params.iterations } : {}), ...(params.angle ? { angle: params.angle } : {}) };
         const t3 = turtle3d(expand({ ...p, seed }), { ...p, seed });
         Object.assign(params, { segments: t3.segments, leaves: t3.leaves });
+      }
+      if (gen === 'grass' && !params.texture) {
+        // Blades on a transparent card, made here so the glb carries its own texture.
+        const tex = grassTexture(typeof seed === 'number' ? seed : 1);
+        const rel = `.harness/studio/grass-${newId()}.png`;
+        await writeIn(host, rel, encodePNG(tex), signal);
+        params.texture = runtimePath(host, rel);
       }
       if (gen === 'terrain' && params.heightmap) {
         const hm = String(params.heightmap);
@@ -207,7 +231,7 @@ export const modelTool = {
       const kind = job.generator === 'material' ? 'material' : 'model';
       const saved = await save(ctx, input, {
         ...asset, kind, dimension: '3d', files,
-        meta: { triangles: report.triangles, sizeM: report.size, materials: report.materials, ...(report.bones ? { bones: report.bones, actions: report.actions } : {}), ...(report.pieces ? { pieces: report.pieces.map((p) => ({ piece: p.piece, file: base(p.file), triangles: p.triangles, sizeM: p.size })) } : {}), ...(report.lods ? { lods: report.lods.map((l) => ({ ratio: l.ratio, triangles: l.triangles })) } : {}), ...(sheet ? { frameSize: [sheet.frameWidth, sheet.frameHeight], spriteFrames: sheet.frames.length, directions: report.sprites.directions } : {}), ...(report.material ? { material: report.material } : {}), units: 'metres', up: 'Y (glTF)' },
+        meta: { triangles: report.triangles, ...(report.pieces ? {} : { sizeM: report.size }), materials: report.materials, ...(report.bones ? { bones: report.bones, actions: report.actions } : {}), ...(report.pieces ? { pieces: report.pieces.map((p) => ({ piece: p.piece, file: base(p.file), triangles: p.triangles, sizeM: p.size })) } : {}), ...(report.lods ? { lods: report.lods.map((l) => ({ ratio: l.ratio, triangles: l.triangles })) } : {}), ...(sheet ? { frameSize: [sheet.frameWidth, sheet.frameHeight], spriteFrames: sheet.frames.length, directions: report.sprites.directions } : {}), ...(report.material ? { material: report.material } : {}), units: 'metres', up: 'Y (glTF)' },
         checks,
       });
       const lines = [...saved.lines, `Blender ${res.took}: ${report.triangles} triangles, ${report.size.join(' x ')} m (Blender x y z), materials ${report.materials.join(', ')}${report.bones ? `, ${report.bones} bones, actions ${report.actions.join(', ')}` : ''}${report.lods ? `, LODs ${report.lods.map((l) => l.triangles).join('/')} tris` : ''}${report.pieces ? `, pieces ${report.pieces.map((p) => p.piece).join(', ')}` : ''}${report.sprites ? `, sprites ${report.sprites.directions} directions x ${report.sprites.frames} frames (rows: action_direction)` : ''}.`, ...notes, ...(report.warnings?.length ? [`Warnings: ${report.warnings.join('; ')}`] : [])];
