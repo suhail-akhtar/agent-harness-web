@@ -37,6 +37,13 @@ static func load_frames(dir: String) -> SpriteFrames:
 	var total := int(meta.get("frames", columns * int(tex.get_height() / h)))
 	var fps := float(meta.get("fps", 8))
 	var anims: Dictionary = meta.get("animations", {})
+	# studio_sprite sheets: meta.anims {name: frames}, one row per animation in order.
+	var rows = meta.get("anims", {})
+	if anims.is_empty() and rows is Dictionary and not rows.is_empty():
+		var row := 0
+		for name in rows:
+			anims[name] = {"row": row, "from": 0, "count": int(rows[name])}
+			row += 1
 	if anims.is_empty():
 		anims = {"default": {"row": 0, "from": 0, "count": total}}
 	frames.remove_animation("default")
