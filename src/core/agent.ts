@@ -13,8 +13,9 @@ import { decide, type Rules, suggestRule } from './permissions.ts';
 import { dirsToward, nestedInstructions } from './instructions.ts';
 import { COMPACT_PROMPT, todosText } from './prompt.ts';
 import { sanitizeUntrusted } from './untrusted.ts';
+import { assess, claimsDone, HANDOFF_PROMPT, parseVerdict, ProgressTracker, progressLine, REVIEW_SYSTEM, reviewInput, type ProgressReviewSettings, type Signals, type Verdict } from './progress.ts';
 import type { HookEvent, Settings } from './settings.ts';
-import type { Block, HarnessEvent, Message, PermissionMode, Todo, ToolDisplay, ToolResultBlock, ToolUseBlock, TurnEndReason, Usage } from './types.ts';
+import type { Block, HarnessEvent, Message, PermissionMode, ProgressPhase, Todo, ToolDisplay, ToolResultBlock, ToolUseBlock, TurnEndReason, Usage } from './types.ts';
 import { promptTokens } from './types.ts';
 
 // One model-driven loop, the same shape Claude Code and Codex document:
@@ -93,7 +94,19 @@ export interface AgentConfig {
    * history, the UI and the provider) passes through it, as do hook payloads.
    */
   redactor?: Redactor;
+  /**
+   * Answers a progress review (the reviewer's input text in, its reply out) on another model
+   * (settings.reviewModel); without it the agent asks its own model, outside the transcript.
+   */
+  progressReviewer?: (input: { system: string; text: string }, signal: AbortSignal) => Promise<string>;
 }
+
+/** The reviewer's answer is short: its output is capped (the model's own cap when lower). */
+const REVIEW_MAX_OUTPUT = 1200;
+
+/** One turn's progress-review state: the budget and the ceilings used so far. */
+interface TurnBudget { budget: number; extensions: number; refreshes: number; softReviews: number; lastReview: number; refreshMarkers: number }
+type Checkpoint = { action: 'continue'; budget: number; reminder?: string } | { action: 'refresh'; budget: number; note: string } | { action: 'stop' };
 
 const MAX_RETRIES = 6;
 const RESULT_PREVIEW = 8000;
@@ -137,6 +150,8 @@ export class Agent {
   /** A provider that compacts on its side: whether PreCompact hooks were asked this cycle, and what they want kept. */
   private serverPreCompact = false;
   private compactKeep?: string;
+  /** This turn's progress signals (progress review on). */
+  private progress?: ProgressTracker;
 
   constructor(cfg: AgentConfig, hooks: AgentHooks, messages: Message[] = []) {
     this.cfg = cfg;
@@ -185,8 +200,28 @@ export class Agent {
     let continuations = 0;
     const started = Date.now();
     const limitMin = this.cfg.settings.maxTurnMinutes ?? 0;
-    for (let step = 0; step < this.cfg.maxSteps; step++) {
+    // Progress review: maxSteps is a checkpoint, not a wall (off: the old hard stop).
+    const pr = this.cfg.settings.progressReview?.enabled ? this.cfg.settings.progressReview : undefined;
+    const tracker = pr ? new ProgressTracker(this.hooks.todos()) : undefined;
+    this.progress = tracker;
+    const turn: TurnBudget = { budget: this.cfg.maxSteps, extensions: 0, refreshes: 0, softReviews: 0, lastReview: -Infinity, refreshMarkers: -1 };
+    for (let step = 0; step < turn.budget || (pr && tracker); step++) {
       if (signal.aborted) return 'aborted';
+      // The budget reached on a step without tool calls (a continuation, a Stop hook's reminder):
+      // the checkpoint runs here, and its advice goes with the next results.
+      if (pr && tracker && step >= turn.budget) {
+        const c = await this.checkpoint(step, turn, pr, tracker, 'budget', signal);
+        if (signal.aborted) return 'aborted';
+        if (c.action === 'stop') return 'max_steps';
+        turn.budget = c.budget;
+        if (c.action === 'continue' && c.reminder) this.notes.push(c.reminder);
+        if (c.action === 'refresh') {
+          await this.compact(signal, { note: c.note });
+          if (signal.aborted) return 'aborted';
+          tracker.refreshed();
+          turn.refreshMarkers = tracker.markers;
+        }
+      }
       const over = this.hooks.overBudget();
       if (over) {
         this.hooks.emit({ kind: 'notice', level: 'warn', text: over, agent });
@@ -242,6 +277,7 @@ export class Agent {
           this.append({ role: 'user', content: [{ type: 'text', text: `<system-reminder>A Stop hook did not let the task end yet:\n${stopHook.feedback}\nAddress this, then finish.</system-reminder>` }] });
           continue;
         }
+        if (pr?.falseDone && tracker) await this.checkDone(tracker, pr, step, turn.budget, signal);
         return resp.stop === 'max_tokens' ? 'max_tokens' : 'done';
       }
 
@@ -256,6 +292,10 @@ export class Agent {
       // Tool results first (providers require it), then any images they
       // produced, then harness notes - all appended, never inserted earlier.
       const content: Block[] = results.map((r) => (r.images?.length && this.cfg.model.vision ? { ...r.block, images: r.images } : r.block));
+      tracker?.record(step + 1, calls.map((c, i) => ({
+        name: results[i]?.label ?? c.name, input: c.input, writes: this.findTool(c.name)?.writesPath?.(c.input),
+        content: results[i]?.block.content ?? '', isError: !!results[i]?.block.is_error,
+      })), this.hooks.todos());
       for (const r of results) {
         if (r.images?.length && !this.cfg.model.vision) content.push({ type: 'text', text: `<system-reminder>${r.label} produced ${r.images.length} image(s), but this model cannot view images.</system-reminder>` });
       }
@@ -263,11 +303,149 @@ export class Agent {
       for (const t of this.hooks.takeQueuedUserText()) {
         content.push({ type: 'text', text: t.startsWith('<system-reminder>') ? t : `The user added while you were working:\n${t}` });
       }
+      // The checkpoint comes before the step's results are appended, so its reminder rides in
+      // the same message (the history stays append-only and alternating).
+      let after: Checkpoint | undefined;
+      if (pr && tracker && !signal.aborted) {
+        const n = step + 1;
+        if (n >= turn.budget) after = await this.checkpoint(n, turn, pr, tracker, 'budget', signal);
+        else if (pr.softEvery > 0 && n % pr.softEvery === 0 && n - turn.lastReview >= pr.softEvery && turn.softReviews < 3 && assess(tracker.signals()).health === 'bad') {
+          turn.softReviews++;
+          after = await this.checkpoint(n, turn, pr, tracker, 'soft', signal);
+        }
+        if (after && after.action !== 'stop') turn.budget = after.budget;
+        if (after?.action === 'continue' && after.reminder) content.push({ type: 'text', text: `<system-reminder>${after.reminder}</system-reminder>` });
+      }
       this.append({ role: 'user', content });
       if (signal.aborted) return 'aborted';
+      if (after?.action === 'stop') return 'max_steps';
+      if (after?.action === 'refresh') {
+        // A fresh mind: the context is replaced by a handoff (the compaction machinery, another prompt).
+        await this.compact(signal, { note: after.note });
+        if (signal.aborted) return 'aborted';
+        tracker!.refreshed();
+        turn.refreshMarkers = tracker!.markers;
+      }
     }
     this.hooks.emit({ kind: 'notice', level: 'warn', text: `Stopped after ${this.cfg.maxSteps} steps. Send a message to continue.`, agent });
     return 'max_steps';
+  }
+
+  private progressEvent(phase: ProgressPhase, step: number, budget: number, by: 'signals' | 'review', text: string, reasons: string[], v?: Verdict): void {
+    this.hooks.emit({ kind: 'progress', phase, step, budget, by, text, reasons, ...(v ? { verdict: v.verdict } : {}), ...(v?.advice ? { advice: v.advice } : {}), agent: this.cfg.name });
+  }
+
+  /**
+   * At the step budget (or a soft checkpoint with bad signals): extend when the signals are
+   * clearly fine, else ask the reviewer; continue with its advice, restart fresh, or stop and say why.
+   */
+  private async checkpoint(n: number, turn: TurnBudget, pr: ProgressReviewSettings, tracker: ProgressTracker, kind: 'budget' | 'soft', signal: AbortSignal): Promise<Checkpoint> {
+    const s = tracker.signals();
+    const { health, reasons } = assess(s);
+    const ceiling = Math.max(this.cfg.maxSteps, pr.ceiling);
+    // A sub-agent's (or a workflow node's) block is at most its own budget.
+    const block = Math.max(1, Math.min(pr.extendBy, this.cfg.maxSteps));
+    const next = (by: number) => Math.min(ceiling, n + Math.max(1, by));
+    const stop = (by: 'signals' | 'review', why: string, v?: Verdict): Checkpoint => {
+      const concerns = v?.issues.length ? v.issues : health === 'good' ? [] : reasons;
+      const text = [
+        `Stopped at ${n} steps: ${why}.`,
+        `Done so far: ${sentence(v?.done ?? progressLine(s))}.`,
+        concerns.length ? `Stuck on: ${sentence(concerns.join('; '))}.` : '',
+        v?.advice ? `Reviewer's advice: ${v.advice}` : '',
+        'You could send a message to continue (say what to change or try), narrow the task, or raise the budget (maxSteps, progressReview.ceiling).',
+      ].filter(Boolean).join('\n');
+      this.progressEvent('stopped', n, turn.budget, by, text, concerns, v);
+      return { action: 'stop' };
+    };
+    if (kind === 'budget') {
+      if (turn.refreshMarkers >= 0 && tracker.markers <= turn.refreshMarkers) return stop('signals', 'a fresh start made no progress');
+      if (n >= ceiling) return stop('signals', `it reached the step ceiling (${ceiling})`);
+      if (turn.extensions >= pr.maxExtensions) return stop('signals', `it used all ${pr.maxExtensions} extension(s) of this turn`);
+      if (health === 'good') {
+        turn.extensions++;
+        const budget = next(block);
+        this.progressEvent('extended', n, budget, 'signals', `Checked progress at ${n} steps: on track, extended to ${budget}.`, reasons);
+        return { action: 'continue', budget };
+      }
+    }
+    turn.lastReview = n;
+    let v: Verdict | undefined;
+    if (pr.reviewer) {
+      this.progressEvent('checkpoint', n, turn.budget, 'review', `Reviewing progress at ${n} steps: ${reasons.join('; ')}.`, reasons);
+      v = await this.review(s, reasons, n, turn.budget, signal).catch((e: Error) => {
+        if (!signal.aborted) this.hooks.emit({ kind: 'notice', level: 'warn', text: `The progress review failed (${e.message.slice(0, 160)}); judging from the signals.`, agent: this.cfg.name });
+        return undefined;
+      });
+      if (signal.aborted) return { action: 'continue', budget: turn.budget };
+    }
+    const by = v ? 'review' : 'signals';
+    const verdict = v?.verdict ?? (health === 'bad' ? 'refresh' : 'continue');
+    const advice = v?.advice || (health === 'good' ? '' : `A progress check found: ${reasons.join('; ')}. If this approach is not working, change it.`);
+    // A soft checkpoint without a reviewer never stops a turn on its own: it reminds.
+    if (verdict === 'continue' || (kind === 'soft' && !v && turn.refreshes >= pr.maxRefreshes)) {
+      if (kind === 'soft') {
+        this.progressEvent('nudge', n, turn.budget, by, `Checked progress at ${n} steps: continuing${advice ? ` with advice: ${advice}` : ''}`, reasons, v);
+        return { action: 'continue', budget: turn.budget, ...(advice ? { reminder: `Progress review at step ${n}: ${advice}` } : {}) };
+      }
+      turn.extensions++;
+      const budget = next(Math.min(block, v?.extendSteps ?? block));
+      this.progressEvent('extended', n, budget, by, `Checked progress at ${n} steps: ${v ? (v.onTrack ? 'on track' : 'continuing with advice') : 'unclear, continuing'}, extended to ${budget}.`, v?.issues.length ? v.issues : reasons, v);
+      return { action: 'continue', budget, ...(advice ? { reminder: `Progress review at step ${n}: ${advice}` } : {}) };
+    }
+    if (verdict === 'refresh' && turn.refreshes < pr.maxRefreshes) {
+      turn.refreshes++;
+      const budget = Math.max(turn.budget, next(block));
+      const issues = v?.issues.length ? v.issues : reasons;
+      this.progressEvent('refreshed', n, budget, by, `Checked progress at ${n} steps: ${issues.join('; ')}. Restarting with a fresh context from a handoff (budget ${budget}).`, issues, v);
+      const note = [`Progress review at step ${n}: the previous approach was not working (${issues.join('; ')}).`, v?.advice ? `Advice: ${v.advice}` : '', 'Start from the handoff above with a different approach; do not repeat what failed.'].filter(Boolean).join('\n');
+      return { action: 'refresh', budget, note };
+    }
+    return stop(by, verdict === 'stop' ? 'the progress review found it stuck' : 'it is stuck again after a fresh start', v);
+  }
+
+  /** The reviewer: a small request outside the transcript (the session's reviewModel, else this agent's model). */
+  private async review(s: Signals, reasons: string[], n: number, budget: number, signal: AbortSignal, final?: { claim: string }): Promise<Verdict> {
+    const tracker = this.progress!;
+    const request = (this.cfg.name === 'main' ? this.hooks.latestUserPrompt() : '') || firstUserText(this.messages);
+    const text = this.redact(reviewInput({ request, todos: todosText(this.hooks.todos()), digest: tracker.digest(), signals: s, reasons, files: tracker.fileStats(), claim: final?.claim ?? lastAssistantText(this.messages), final: !!final, step: n, budget }));
+    let reply: string;
+    if (this.cfg.progressReviewer) reply = await this.cfg.progressReviewer({ system: REVIEW_SYSTEM, text }, signal);
+    else {
+      const model = { ...this.cfg.model, maxOutput: Math.min(this.cfg.model.maxOutput, REVIEW_MAX_OUTPUT) };
+      const t0 = Date.now();
+      const resp = await this.cfg.provider.send({
+        model, system: REVIEW_SYSTEM, tools: [], messages: [{ role: 'user', content: [{ type: 'text', text }] }],
+        effort: model.efforts.includes('low') ? 'low' : model.effort, cacheKey: `${this.cfg.cacheKey}-review`, signal,
+      });
+      const cost = costOf(this.cfg.model, resp.usage);
+      this.hooks.onUsage(this.cfg.model, resp.usage, cost);
+      this.hooks.onTrace?.({ type: 'model', agent: `${this.cfg.name}:review`, model: model.id, ms: Date.now() - t0, usage: resp.usage, cost, stop: resp.stop, retries: 0 });
+      reply = resp.message.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('');
+    }
+    const v = parseVerdict(reply);
+    if (!v) throw new Error(`no verdict in the reply (${reply.slice(0, 120)})`);
+    return v;
+  }
+
+  /** A "done" that the last steps contradict (failing checks, failing calls): checked, and flagged when it does not hold. */
+  private async checkDone(tracker: ProgressTracker, pr: ProgressReviewSettings, step: number, budget: number, signal: AbortSignal): Promise<void> {
+    const claim = lastAssistantText(this.messages);
+    if (!claim || !claimsDone(claim)) return;
+    const why = tracker.contradictsDone();
+    if (!why) return;
+    let claims = [why];
+    let by: 'signals' | 'review' = 'signals';
+    let v: Verdict | undefined;
+    if (pr.reviewer) {
+      v = await this.review(tracker.signals(), [why], step, budget, signal, { claim }).catch(() => undefined);
+      if (v) {
+        if (!v.falseClaims.length) return;
+        by = 'review';
+        claims = v.falseClaims;
+      }
+    }
+    this.progressEvent('flagged', step, budget, by, `The final message claims success that the recent steps do not support (${why}): ${claims.join('; ')}`, claims, v);
   }
 
   /**
@@ -592,6 +770,11 @@ export class Agent {
         break;
       }
     }
+    // Test discipline: each pattern (the same check with no change, a check failing again and again, too many checks) once per turn.
+    for (const n of this.progress?.takeNudges() ?? []) {
+      out.push(n);
+      this.progressEvent('nudge', this.progress!.signals().step, this.cfg.maxSteps, 'signals', n, []);
+    }
     this.stepsSinceTodo++;
     const todos = this.hooks.todos();
     if (todos.some((t) => t.status !== 'completed') && this.stepsSinceTodo >= 12) {
@@ -641,12 +824,14 @@ export class Agent {
    * the loop has been building. The new context replays nothing older - the
    * shape that keeps thinking-block checks valid on every provider.
    */
-  async compact(signal: AbortSignal): Promise<void> {
+  async compact(signal: AbortSignal, handoff?: { note: string }): Promise<void> {
     const before = this.lastPromptTokens;
     // PreCompact hooks can add what the summary must keep (their feedback becomes extra instructions).
-    const pre = await this.hookRun('PreCompact', { trigger: 'auto', contextTokens: before }, undefined, signal);
+    const pre = await this.hookRun('PreCompact', { trigger: handoff ? 'refresh' : 'auto', contextTokens: before }, undefined, signal);
     for (const e of pre.errors) this.hooks.emit({ kind: 'notice', level: 'warn', text: e, agent: this.cfg.name });
-    const instructions = pre.feedback ? `${COMPACT_PROMPT}\n\nAlso keep:\n${pre.feedback}` : COMPACT_PROMPT;
+    // A refresh (progress review) asks for an honest handoff instead of a continuation summary.
+    const base = handoff ? HANDOFF_PROMPT : COMPACT_PROMPT;
+    const instructions = pre.feedback ? `${base}\n\nAlso keep:\n${pre.feedback}` : base;
     const request: Message[] = [...this.messages, { role: 'user', content: [{ type: 'text', text: instructions }] }];
     const resp = await this.callModel(request, signal, true);
     this.recordUsage(resp);
@@ -658,11 +843,14 @@ export class Agent {
     const lastUserText = this.hooks.latestUserPrompt();
     const skills = skillsToKeep(this.messages);
     const parts = [
-      '<system-reminder>This session was compacted to save context. The summary below replaces the earlier conversation. Files you read before are no longer in context: read them again before editing.</system-reminder>',
+      handoff
+        ? '<system-reminder>This work restarts with a fresh context after a progress review. The handoff below replaces the earlier conversation. Files you read before are no longer in context: read them again before editing.</system-reminder>'
+        : '<system-reminder>This session was compacted to save context. The summary below replaces the earlier conversation. Files you read before are no longer in context: read them again before editing.</system-reminder>',
       await this.hooks.preamble(),
       `<summary>\n${summary}\n</summary>`,
       todosText(this.hooks.todos()),
       lastUserText ? `<latest_user_message>\n${lastUserText.slice(0, 8000)}\n</latest_user_message>` : '',
+      handoff ? `<system-reminder>${handoff.note}</system-reminder>` : '',
       'Continue the work from where it stopped.',
     ].filter(Boolean);
     // The kept skills go in a block of their own: only that block is read back at the next
@@ -713,6 +901,21 @@ export function skillsToKeep(messages: Message[]): string {
     kept.unshift(`<skill name="${name}">\n${text}\n</skill>`);
   }
   return kept.join('\n');
+}
+
+/** The text of the last assistant message (what it says it did). */
+function lastAssistantText(messages: Message[]): string {
+  const m = [...messages].reverse().find((x) => x.role === 'assistant' && x.content.some((b) => b.type === 'text'));
+  return m ? m.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n').trim() : '';
+}
+
+/** Text that ends a sentence of ours: its own closing stops dropped. */
+const sentence = (t: string) => t.trim().replace(/[.\s]+$/, '');
+
+/** The first user message's text (a sub-agent's brief). */
+function firstUserText(messages: Message[]): string {
+  const m = messages.find((x) => x.role === 'user');
+  return m ? m.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n') : '';
 }
 
 const toolMaxMs = () => Number(process.env.HARNESS_TOOL_MAX_MINUTES ?? 30) * 60_000;

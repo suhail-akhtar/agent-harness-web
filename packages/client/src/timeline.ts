@@ -11,6 +11,8 @@ export type Item =
   | { kind: 'tool'; key: string; id: string; name: string; input: Record<string, unknown>; result?: string; isError?: boolean; display?: ToolDisplay; ms?: number; running: boolean; activity: Activity[]; images?: ImageData[]; startedAt?: number }
   | { kind: 'notice'; key: string; level: 'info' | 'warn' | 'error'; text: string }
   | { kind: 'compaction'; key: string; before?: number; after?: number }
+  /** A progress review at a step checkpoint (a review in flight is replaced by its outcome). */
+  | { kind: 'progress'; key: string; phase: 'checkpoint' | 'extended' | 'refreshed' | 'stopped' | 'flagged' | 'nudge'; step: number; budget: number; by: 'signals' | 'review'; text: string; reasons: string[]; verdict?: string; advice?: string; agent?: string }
   | { kind: 'workflow'; key: string; run: WorkflowRunView; activity: Record<string, Activity[]> }
   /** A session the agent offered to start (start_session with initiation offer / own_initiative). */
   | { kind: 'proposal'; key: string; id: string; title: string; brief: string; initiation: string; context?: string; model?: string; effort?: string; expiresAt?: number }
@@ -20,7 +22,7 @@ export type Item =
   | { kind: 'chapter'; key: string; index: number; title: string; summary?: string };
 
 /** Items drawn as rows of their own, outside a turn's folded steps. */
-const OWN_ROW = new Set<Item['kind']>(['proposal', 'link', 'chapter']);
+const OWN_ROW = new Set<Item['kind']>(['proposal', 'link', 'chapter', 'progress']);
 
 export type ToolItem = Extract<Item, { kind: 'tool' }>;
 export type AssistantItem = Extract<Item, { kind: 'assistant' }>;
@@ -216,6 +218,18 @@ export function apply(live: Live, e: HarnessEvent, now: number = Date.now()): Li
     case 'notice':
       if (isSub(e.agent) && e.level === 'info') return live;
       return { ...live, items: [...items, { kind: 'notice', key: key(), level: e.level, text: e.text }] };
+    case 'progress': {
+      // A sub-agent's routine ones (extended, nudges) stay in its own card; its stops and flags show.
+      if (isSub(e.agent) && (e.phase === 'nudge' || e.phase === 'extended' || e.phase === 'checkpoint')) return live;
+      const item: Item = { kind: 'progress', key: key(), phase: e.phase, step: e.step, budget: e.budget, by: e.by, text: e.text, reasons: e.reasons ?? [], ...(e.verdict ? { verdict: e.verdict } : {}), ...(e.advice ? { advice: e.advice } : {}), ...(isSub(e.agent) ? { agent: e.agent } : {}) };
+      const at = findLastIndex(items, (i) => i.kind === 'progress' && i.phase === 'checkpoint' && i.step === e.step && i.agent === (isSub(e.agent) ? e.agent : undefined));
+      if (at >= 0 && e.phase !== 'checkpoint') {
+        const copy = items.slice();
+        copy[at] = { ...item, key: items[at]!.key };
+        return { ...live, items: copy };
+      }
+      return { ...live, items: [...items, item] };
+    }
     case 'compaction':
       return { ...live, items: [...items, { kind: 'compaction', key: key(), before: e.before, after: e.after }], contextTokens: e.after };
     case 'usage':

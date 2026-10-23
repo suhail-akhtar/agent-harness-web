@@ -119,11 +119,41 @@ function DefaultItem({ item, sessionId, fence, sources, running, isLastAnswer, o
     case 'notice': return <div data-notice={item.level} className={cx('my-1 flex items-start gap-2 rounded-lg px-3 py-2 text-[12.5px]', item.level === 'error' ? 'bg-hx-danger/8 text-hx-danger' : item.level === 'warn' ? 'bg-hx-warning/8 text-hx-warning' : 'bg-hx-pill text-hx-secondary')}><Icon name={item.level === 'error' ? 'alert' : item.level === 'warn' ? 'warning' : 'info'} size={14} className="mt-0.5 shrink-0" /><span className="whitespace-pre-wrap">{item.text}</span></div>;
     case 'compaction': return <div className="my-2 flex items-center gap-3 text-[11.5px] text-hx-muted"><span className="h-px flex-1 bg-hx-border-subtle" />Context compacted{item.before ? ` · ${fmtTokens(item.before)} → ${fmtTokens(item.after ?? 0)} tokens` : ''}<span className="h-px flex-1 bg-hx-border-subtle" /></div>;
     case 'workflow': return <WorkflowCard item={item} />;
+    case 'progress': return <ProgressCard item={item} />;
     // Without the plugin that draws them (core.agents): a line each.
     case 'chapter': return <div data-chapter={item.index} className="mt-4 text-[14px] font-semibold">{item.index}. {item.title}</div>;
     case 'proposal': return <div data-proposal={item.id} className="rounded-lg bg-hx-pill px-3 py-2 text-[12.5px]">Proposed session: <b>{item.title}</b></div>;
     case 'link': return <div data-link={item.id} className="rounded-lg bg-hx-pill px-3 py-2 text-[12.5px]">Linked session {item.phase}: <b>{item.title}</b></div>;
   }
+}
+
+const PROGRESS_TITLE: Record<Extract<Item, { kind: 'progress' }>['phase'], string> = {
+  checkpoint: 'Reviewing progress', extended: 'Progress checked', refreshed: 'Fresh start', stopped: 'Stopped', flagged: 'Check this result', nudge: 'Progress note',
+};
+
+/** A progress review at a step checkpoint: why it extended, restarted fresh or stopped. */
+function ProgressCard({ item }: { item: Extract<Item, { kind: 'progress' }> }) {
+  const tone = item.phase === 'stopped' || item.phase === 'flagged' ? 'bg-hx-warning/8 text-hx-warning' : item.phase === 'refreshed' ? 'bg-hx-pill text-hx-primary' : 'bg-hx-pill text-hx-secondary';
+  const icon = item.phase === 'stopped' ? 'stop' : item.phase === 'flagged' ? 'warning' : item.phase === 'refreshed' ? 'refresh' : item.phase === 'extended' ? 'check-circle' : 'activity';
+  // The first line of a stop is its headline; the rest (done, stuck on, what to do) follows.
+  const [head, ...rest] = item.text.split('\n');
+  const small = item.phase === 'nudge' || item.phase === 'extended' || item.phase === 'checkpoint';
+  return (
+    <div data-progress={item.phase} className={cx('my-1 rounded-lg px-3 py-2 text-[12.5px]', tone)}>
+      <div className="flex items-start gap-2">
+        {item.phase === 'checkpoint' ? <Spinner size={13} className="mt-0.5 shrink-0" /> : <Icon name={icon} size={14} className="mt-0.5 shrink-0" />}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-baseline gap-x-2">
+            <span className="font-medium">{PROGRESS_TITLE[item.phase]}{item.agent ? ` · ${item.agent}` : ''}</span>
+            <span className="text-[11px] opacity-70">step {item.step}{item.budget && item.phase !== 'nudge' ? ` of ${item.budget}` : ''} · {item.by === 'review' ? 'reviewed' : 'from signals'}</span>
+          </div>
+          <div className="whitespace-pre-wrap break-words">{small ? item.text : head}</div>
+          {!small && rest.length ? <div className="mt-1 whitespace-pre-wrap break-words opacity-90">{rest.join('\n')}</div> : null}
+          {!small && item.advice && !item.text.includes(item.advice) ? <div className="mt-1 opacity-90">Advice: {item.advice}</div> : null}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function UserMessage({ item }: { item: Extract<Item, { kind: 'user' }> }) {

@@ -50,7 +50,7 @@ export interface HarnessConfig {
   name: string;
   description?: string;
   /** Operator settings for this configuration, over HARNESS_SETTINGS if one is set. */
-  settings?: { maxSteps?: number; maxCostUsd?: number; compactAt?: number; subagentModel?: string; autoModel?: string; maxSubagentDepth?: number; maxParallelSubagents?: number; gatesOnStop?: boolean };
+  settings?: { maxSteps?: number; maxCostUsd?: number; compactAt?: number; subagentModel?: string; autoModel?: string; maxSubagentDepth?: number; maxParallelSubagents?: number; gatesOnStop?: boolean; progressReview?: boolean; reviewModel?: string };
   /** false: no run_script tool (code mode off). */
   codeMode?: boolean;
   /** Only these plugins (folder names under the plugin roots); default: all of them. */
@@ -68,7 +68,7 @@ export interface HarnessConfig {
 }
 
 const CONFIG_KEYS = ['name', 'description', 'settings', 'codeMode', 'plugins', 'effort', 'injectionScan', 'memory', 'disableTools', 'env'];
-const SETTING_KEYS: Record<string, 'number' | 'string' | 'boolean'> = { maxSteps: 'number', maxCostUsd: 'number', compactAt: 'number', subagentModel: 'string', autoModel: 'string', maxSubagentDepth: 'number', maxParallelSubagents: 'number', gatesOnStop: 'boolean' };
+const SETTING_KEYS: Record<string, 'number' | 'string' | 'boolean'> = { maxSteps: 'number', maxCostUsd: 'number', compactAt: 'number', subagentModel: 'string', autoModel: 'string', maxSubagentDepth: 'number', maxParallelSubagents: 'number', gatesOnStop: 'boolean', progressReview: 'boolean', reviewModel: 'string' };
 
 /** Checks configurations (a list, or { "configs": [...] }); throws naming the configuration and the field. */
 export function parseConfigs(raw: unknown): HarnessConfig[] {
@@ -172,6 +172,8 @@ export interface EvalRun {
   unscored?: boolean;
   /** What kept the agent from its own checks: the URLs its web tools refused, and how its commands were contained. */
   isolation?: { deniedUrls: string[]; commands: string };
+  /** Progress reviews at step checkpoints (all agents of the run): budgets extended, fresh starts, model reviews, stops, flagged "done"s. */
+  progress?: { extensions: number; refreshes: number; reviews: number; stops: number; flags: number; stopped?: string };
 }
 
 /** Where the eval packs are published: every case's hidden checks can be downloaded from there. */
@@ -397,6 +399,14 @@ export async function runOne(c: EvalCase, model: string, repeat: number, out: st
     const done = new Promise<void>((resolve) => {
       s.subscribe(0, ({ event }) => {
         if (event.kind === 'notice' && event.level === 'error') errors.push(event.text);
+        if (event.kind === 'progress' && event.phase !== 'nudge') {
+          const p = (run.progress ??= { extensions: 0, refreshes: 0, reviews: 0, stops: 0, flags: 0 });
+          if (event.phase === 'extended') p.extensions++;
+          if (event.phase === 'refreshed') p.refreshes++;
+          if (event.phase === 'checkpoint') p.reviews++;
+          if (event.phase === 'stopped') { p.stops++; if (!event.agent || event.agent === 'main') p.stopped = event.text.split('\n')[0]!.slice(0, 300); }
+          if (event.phase === 'flagged') p.flags++;
+        }
         if (event.kind === 'permission_request') s.respond(event.requestId, { decision: 'allow' });
         if (event.kind === 'question') s.respond(event.requestId, { decision: 'answer', answer: 'Use your best judgement.' });
         if (event.kind === 'plan_proposed' || event.kind === 'approval_request') s.respond(event.requestId, { decision: 'approve' });
@@ -526,7 +536,7 @@ export async function harnessDisclosure(plugins: string[] = [], configs?: Harnes
   return {
     harness: `harness-web ${pkg.version ?? '?'}`,
     commit: git.code === 0 ? `${git.stdout.trim()}${dirty.stdout.trim() ? ' (with local changes)' : ''}` : 'unknown',
-    settings: `maxSteps ${s.maxSteps}, maxCostUsd ${s.maxCostUsd}, compactAt ${s.compactAt ?? 'model default'}, subagentModel ${s.subagentModel ?? 'session model'}, gatesOnStop ${s.gatesOnStop ? 'on' : 'off'}, subagent depth ${s.maxSubagentDepth}`,
+    settings: `maxSteps ${s.maxSteps}, maxCostUsd ${s.maxCostUsd}, compactAt ${s.compactAt ?? 'model default'}, subagentModel ${s.subagentModel ?? 'session model'}, gatesOnStop ${s.gatesOnStop ? 'on' : 'off'}, subagent depth ${s.maxSubagentDepth}, progressReview ${s.progressReview.enabled ? `on (+${s.progressReview.extendBy} x${s.progressReview.maxExtensions}, ${s.progressReview.maxRefreshes} refresh, ceiling ${s.progressReview.ceiling}${s.progressReview.reviewer ? `, reviewer ${s.reviewModel ?? 'session model'}` : ', no reviewer'})` : 'off'}`,
     plugins: plugins.map((p) => path.basename(p)).join(', ') || 'none',
     platform: `${process.platform} ${process.arch}, Node ${process.versions.node}`,
     ...Object.fromEntries((configs ?? []).map((c, i) => [`config ${c.name}`, `${i === 0 ? '(baseline) ' : ''}${describeConfig(c)}`])),
@@ -622,6 +632,15 @@ export function report(all: EvalRun[], harness?: Record<string, string>, configO
       const r0 = rs[0]!;
       const [dp, dc] = r0.config === baseline ? ['baseline', 'baseline'] : delta(rs, byModel.get(`${r0.model}|${baseline}`));
       lines.push(`| ${r0.model} | ${r0.config ?? '-'} | ${passes(rs)}/${rs.length} | ${ci(passes(rs), rs.length)} | ${dp} | ${spread(rs.map((r) => r.cost), usd)} | ${dc} | ${spread(rs.map((r) => r.seconds), time)} |`);
+    }
+  }
+  // Where the step budget was reached: extended, restarted fresh or stopped (and why).
+  const reviewed = runs.filter((r) => r.progress);
+  if (reviewed.length) {
+    lines.push('', '## Progress reviews', '');
+    for (const r of reviewed) {
+      const p = r.progress!;
+      lines.push(`- ${r.pack}/${r.case} ${r.model}${r.config ? ` [${r.config}]` : ''} #${r.repeat}: ${p.extensions} extension(s), ${p.refreshes} fresh start(s), ${p.reviews} model review(s)${p.flags ? `, ${p.flags} flagged "done"` : ''}${p.stopped ? `; ${p.stopped}` : ''}`);
     }
   }
   lines.push('', '## Failed checks', '');

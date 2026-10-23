@@ -314,6 +314,14 @@ The same powers as Claude's desktop app, on the harness:
 - **Limits and safety:** linked sessions inherit the account's spend and concurrency caps, a depth limit,
   the parent's permission mode at most, and the untrusted-content guard (a report from a session that read
   outside content is fenced as outside content).
+- **Long tasks carry on while they are on track** (README "The loop", progress review): every agent (main,
+  sub-agent, workflow node) treats its step budget as a checkpoint. Good signals extend it, unclear ones get
+  a small review call (continue with advice, a fresh start from a handoff, or stop with why), within
+  per-turn ceilings. The transcript draws each `progress` event as a card: "Reviewing progress" (a spinner,
+  replaced by its outcome), "Progress checked" (extended), "Fresh start", "Stopped" (why, what is done, what
+  is stuck, what to do), "Check this result" (a "done" the last checks contradict) and small progress notes
+  (test-discipline reminders). A sub-agent's stops and flags show with its name; its routine ones stay in
+  its own card.
 - **In the desktop:** an Agents panel (a live tree: session -> sub-agents -> background tasks -> linked
   sessions, with status, cost and a click-through to each transcript), proposal cards in the chat, report
   cards when a linked session finishes, split view (two sessions side by side), chapters (`mark_chapter`

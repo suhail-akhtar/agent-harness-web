@@ -71,6 +71,7 @@ export function Timeline({ items }: { items: Item[] }): VNode {
           case 'tool': return <ToolCard key={it.key} item={it} />;
           case 'notice': return <div key={it.key} class={`notice notice-${it.level}`}>{it.text}</div>;
           case 'workflow': return <WorkflowCard key={it.key} run={it.run} activity={it.activity} />;
+          case 'progress': return <div key={it.key} data-progress={it.phase} class={`notice notice-${it.phase === 'stopped' || it.phase === 'flagged' ? 'warn' : 'info'}`} style="white-space: pre-wrap">{it.text}</div>;
           case 'compaction': return <div key={it.key} class="compaction"><span>Context compacted{it.before ? ` · ${fmtTokens(it.before)} → ${fmtTokens(it.after ?? 0)} tokens` : ''}</span></div>;
         }
       })}
