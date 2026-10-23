@@ -5,5 +5,9 @@
   "main": "index.mjs",
   "agents": "agents",
   "skills": "skills",
-  "workflows": "workflows"
+  "workflows": "workflows",
+  "permissions": {
+    "network": ["api.polyhaven.com", "dl.polyhaven.org", "ambientcg.com", "acg-download.struffelproductions.com", "acg-media.struffelproductions.com", "kenney.nl", "www.kenney.nl", "api.openai.com", "api.meshy.ai", "assets.meshy.ai", "*.meshy.ai", "api.tripo3d.ai", "*.tripo3d.ai", "*.tripo3d.com"],
+    "secrets": ["OPENAI_API_KEY", "MESHY_API_KEY", "TRIPO_API_KEY"]
+  }
 }
