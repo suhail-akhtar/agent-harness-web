@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Studio card</title>
+<link rel="stylesheet" href="kit.css">
+<style>
+  body { background: transparent; }
+  .box { border: 1px solid var(--hx-border-subtle); border-radius: 12px; background: var(--hx-elevated); padding: 10px; display: grid; grid-template-columns: 148px minmax(0, 1fr); gap: 12px; align-items: center; }
+  .box.wide { grid-template-columns: minmax(0, 1fr); }
+  .pic { width: 148px; height: 111px; border-radius: 9px; overflow: hidden; display: flex; align-items: center; justify-content: center; border: 1px solid var(--hx-border-subtle); }
+  .pic img, .pic canvas { max-width: 100%; max-height: 100%; display: block; }
+  .pic canvas { image-rendering: pixelated; }
+  .nm { font-weight: 600; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ln { font-size: 12px; color: var(--hx-text-muted); margin-top: 2px; overflow-wrap: anywhere; }
+  .acts { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .mini { position: relative; height: 18px; border-radius: 6px; background: var(--hx-pill); margin-top: 8px; }
+  .mini i { position: absolute; top: 4px; width: 10px; height: 10px; margin-left: -5px; border-radius: 50%; background: var(--hx-info); border: 2px solid var(--hx-elevated); }
+  .mini i.bad { background: var(--hx-danger); } .mini i.ok { background: var(--hx-success); } .mini i.warn { background: var(--hx-warning); }
+  .pl { font-size: 12px; padding: 3px 0; display: flex; gap: 6px; align-items: baseline; }
+  .pl .f { font-family: var(--hx-font-mono); color: var(--hx-text-muted); white-space: nowrap; }
+</style>
+<script src="harness://app/sdk/plugin-ui.js"></script>
+<script src="kit.js"></script>
+<script src="model.js"></script>
+</head>
+<body class="inline-frame">
+<div id="out" class="small muted">…</div>
+<script>
+// Studio's cards in a conversation: a model (its thumbnail, numbers, open in the 3D viewer), a
+// sprite sheet (playing), a playtest summary and a build. Drawn for the model_info tool's results
+// and for the studio-model, studio-sprite, studio-playtest and studio-build blocks an agent writes
+// (```studio-model {"path": ..., "project": ...}```). A file named relative to a conversation's
+// workspace is read from that workspace; when anything is missing the card says what it has.
+Kit.start(async (harness) => {
+  const { h, mount, chip } = Kit;
+  const out = document.getElementById('out');
+  const ctx = harness.context || {};
+  Kit.autoHeight(harness);
+  let spec = {};
+  let kind = '';
+  if (ctx.fence) {
+    kind = String(ctx.fence).replace(/^studio-/, '');
+    try { spec = JSON.parse(String(ctx.source || '{}')); } catch { mount(out, h('div', { class: 'error' }, `This ${ctx.fence} block is not JSON: ${String(ctx.source || '').slice(0, 200)}`)); return; }
+    if (!spec || typeof spec !== 'object') spec = {};
+  } else if (ctx.tool) {
+    const input = ctx.input || {};
+    const text = String(ctx.result ?? '');
+    // An engine result ends with "Data: {...}"; its files are workspace paths.
+    let data = {};
+    const dm = /^Data: (\{.*\})$/m.exec(text);
+    if (dm) { try { data = JSON.parse(dm[1]); } catch { data = {}; } }
+    const files = (/^Files: (.*)$/m.exec(text)?.[1] || '').split(', ').filter(Boolean);
+    const path = String(input.path || data.path || files.find((f) => /\.(glb|gltf)$/i.test(f)) || '');
+    if (ctx.tool === 'model_info' || /\.(glb|gltf)$/i.test(path)) { kind = 'model'; spec = { path, summary: text.split('\n')[0] }; }
+    else if (data.report || /\.studio\/playtests\//.test(text)) { kind = 'playtest'; spec = { report: data.report || /(\S*\.studio\/playtests\/[^/\s]+)/.exec(text)?.[1] }; }
+    else if (/\bbuild|package\b/.test(String(input.action || ''))) { kind = 'build'; spec = { status: /: (ok|failed|timed-out|cancelled|unavailable) -/.exec(text)?.[1], summary: text.split('\n')[0], problems: (data.problems || []), artifact: files[0] }; }
+    else if (files.some((f) => /\.png$/i.test(f)) && (data.frames || data.frameSize)) { kind = 'sprite'; spec = { path: files.find((f) => /\.png$/i.test(f)), frames: data.frames, frameWidth: data.frameSize?.[0], frameHeight: data.frameSize?.[1], fps: data.fps }; }
+    if (ctx.isError) { mount(out, h('div', { class: 'small' }, chip('failed', 'bad'), ' ', text.split('\n')[0].slice(0, 300))); return; }
+  }
+  if (!kind) { mount(out, h('div', { class: 'small' }, String(ctx.result ?? '').slice(0, 400))); return; }
+
+  // Where the file is: what the spec names (a project, an asset, an absolute path), else the conversation's workspace.
+  async function base() {
+    const a = {};
+    for (const k of ['project', 'asset', 'root']) if (typeof spec[k] === 'string' && spec[k]) a[k] = spec[k];
+    if (spec.library === true) a.library = true;
+    if (a.project || a.asset || a.root || a.library) return a;
+    if (ctx.sessionId) {
+      try {
+        const s = await harness.sessions.get(ctx.sessionId);
+        const rt = s && s.meta && s.meta.runtime || {};
+        const dir = rt.worktree && rt.worktree.dir || rt.path;
+        return dir ? { root: dir } : { session: ctx.sessionId };
+      } catch { return { session: ctx.sessionId }; }
+    }
+    return {};
+  }
+  const where = await base();
+  const named = (p) => !!p && (Object.keys(where).length > 0 || /^([a-z]:[\\/]|\/)/i.test(p));
+  const params = (p, extra) => ({ ...Object.fromEntries(Object.entries(where).map(([k, v]) => [k, String(v)])), path: p, ...(extra || {}) });
+  const fail = (e) => h('span', { class: 'muted small' }, e && e.message ? e.message.slice(0, 120) : 'not readable');
+
+  if (kind === 'model') {
+    const pic = h('div', { class: 'pic checker' }, Kit.glyph('box', 'drawing…'));
+    const nm = spec.title || Kit.base(spec.path) || 'Model';
+    const sum = String(spec.summary || '');
+    const tris = /([\d,]+) triangles/.exec(sum)?.[1];
+    const size = /about ([\d.]+ x [\d.]+ x [\d.]+) m/.exec(sum)?.[1];
+    const info = h('div', { class: 'ln' }, sum ? sum.replace(/^[^:]*:\s*/, '') : spec.path || '');
+    mount(out, h('div', { class: 'box', 'data-studio-card': 'model', 'data-path': spec.path || '' }, pic,
+      h('div', { style: { minWidth: '0' } }, h('div', { class: 'nm' }, nm), h('div', { class: 'row', style: { gap: '6px', marginTop: '4px' } }, tris ? chip(`${tris} tris`) : null, size ? chip(`${size} m`) : null), info,
+        h('div', { class: 'acts' }, named(spec.path) ? h('button', { type: 'button', class: 'btn sm primary', 'data-open-model': '', onclick: () => harness.view.open('viewer', params(spec.path)) }, 'Open in 3D viewer') : h('span', { class: 'muted small' }, 'Name the project or an absolute path to open it.')))));
+    if (named(spec.path)) {
+      window.Studio3D.thumbnail(harness, { ...where, path: spec.path }, 296, 222).then((t) => {
+        mount(pic, h('img', { src: t.url, alt: nm, 'data-thumb': '' }));
+        if (!tris) info.textContent = `${Kit.num(t.stats.triangles)} triangles · ${t.stats.size.map((v) => v.toFixed(2)).join(' × ')} m · ${t.stats.materials} material${t.stats.materials === 1 ? '' : 's'}`;
+      }, (e) => mount(pic, fail(e)));
+    } else if (ctx.images && ctx.images[0]) mount(pic, h('img', { src: `data:${ctx.images[0].media_type};base64,${ctx.images[0].data}`, alt: nm }));
+    else mount(pic, Kit.glyph('box'));
+    return;
+  }
+
+  if (kind === 'sprite') {
+    const fw = Number(spec.frameWidth) || 0; const fh = Number(spec.frameHeight) || fw;
+    const pic = h('div', { class: 'pic checker' }, Kit.glyph('film', 'loading…'));
+    const label = h('div', { class: 'ln', 'data-frame': '0' });
+    mount(out, h('div', { class: 'box', 'data-studio-card': 'sprite', 'data-path': spec.path || '' }, pic,
+      h('div', { style: { minWidth: '0' } }, h('div', { class: 'nm' }, spec.title || Kit.base(spec.path) || 'Sprite sheet'), label,
+        h('div', { class: 'acts' }, named(spec.path) ? h('button', { type: 'button', class: 'btn sm primary', 'data-open-sprite': '', onclick: () => harness.view.open('sprites', params(spec.path, { ...(fw ? { frameWidth: String(fw), frameHeight: String(fh) } : {}), ...(spec.frames ? { frames: String(spec.frames) } : {}), ...(spec.fps ? { fps: String(spec.fps) } : {}) })) }, 'Open in 2D viewer') : null))));
+    if (!named(spec.path)) { mount(pic, Kit.glyph('film')); label.textContent = 'Name the project or an absolute path to show it.'; return; }
+    try {
+      const url = await Kit.fileUrl(harness, { ...where, path: spec.path });
+      const img = await new Promise((resolve, reject) => { const i = new Image(); i.onload = () => resolve(i); i.onerror = () => reject(new Error('not an image')); i.src = url; });
+      const w = fw || img.naturalHeight; const hh = fh || w;
+      const cols = Math.max(1, Math.floor(img.naturalWidth / w)); const rows = Math.max(1, Math.floor(img.naturalHeight / hh));
+      const total = Math.min(cols * rows, Number(spec.frames) || cols * rows);
+      const fps = Number(spec.fps) || 8;
+      const c = h('canvas', { width: w, height: hh });
+      const scale = Math.max(1, Math.min(8, Math.floor(104 / Math.max(w, hh))));
+      c.style.width = `${w * scale}px`; c.style.height = `${hh * scale}px`;
+      const g = c.getContext('2d'); g.imageSmoothingEnabled = false;
+      mount(pic, c);
+      let i = 0;
+      const show = () => { g.clearRect(0, 0, w, hh); g.drawImage(img, (i % cols) * w, Math.floor(i / cols) * hh, w, hh, 0, 0, w, hh); label.textContent = `${total} frames of ${w}×${hh} at ${fps} fps · frame ${i + 1}`; label.dataset.frame = String(i); };
+      show();
+      setInterval(() => { i = (i + 1) % total; show(); }, 1000 / fps);
+    } catch (e) { mount(pic, fail(e)); }
+    return;
+  }
+
+  if (kind === 'playtest') {
+    // A report: {project, id} of a Studio project, or the report itself inline.
+    let t = spec.result ? spec : null; let p = null;
+    try {
+      if (!t && spec.project && spec.id) ({ playtest: t, project: p } = await Kit.studio(harness, 'playtest', { project: spec.project, id: spec.id }));
+      if (!t && spec.report && where.root) { const f = await Kit.studio(harness, 'file', { ...where, path: spec.report.replace(/\/?$/, '').endsWith('.json') ? spec.report : `${spec.report}/report.json`, text: true }); t = JSON.parse(f.text); }
+    } catch (e) { mount(out, h('div', { class: 'box wide' }, h('div', { class: 'small' }, chip('playtest'), ' ', e.message))); return; }
+    if (!t) { mount(out, h('div', { class: 'box wide' }, h('div', { class: 'small muted' }, 'A playtest card needs {"project": <folder or id>, "id": <playtest id>}.'))); return; }
+    const issues = Array.isArray(t.issues) ? t.issues : [];
+    const events = Array.isArray(t.events) ? t.events : [];
+    const dur = Number(t.durationS) || Math.max(1, ...events.map((e) => Number(e.t) || 0));
+    const m = t.metrics || {};
+    const tone = (x) => (x === 'pass' ? 'ok' : x === 'fail' || x === 'crash' ? 'bad' : 'warn');
+    const evTone = (ty) => (/pickup|collect|win|goal|checkpoint/.test(ty) ? 'ok' : /death|crash|error|fail/.test(ty) ? 'bad' : /stuck|fall|warn/.test(ty) ? 'warn' : '');
+    mount(out, h('div', { class: 'box wide', 'data-studio-card': 'playtest', 'data-result': t.result },
+      h('div', { class: 'row' }, chip(t.result, tone(t.result)), h('b', { style: { flex: '1', minWidth: '0' } }, t.goal || t.id), h('span', { class: 'muted small' }, [t.player, t.durationS ? Kit.secs(t.durationS) : null].filter(Boolean).join(' · '))),
+      h('div', { class: 'row small muted', style: { marginTop: '4px', gap: '12px' } }, m.fpsAvg !== undefined ? h('span', {}, `${Kit.num(m.fpsAvg)} fps avg`) : null, m.frameMsP95 !== undefined ? h('span', {}, `${Kit.num(m.frameMsP95)} ms p95`) : null, m.memoryMb !== undefined ? h('span', {}, `${Kit.num(m.memoryMb)} MB`) : null, h('span', {}, `${events.length} events`), h('span', {}, `${issues.length} issue${issues.length === 1 ? '' : 's'}`)),
+      events.length ? h('div', { class: 'mini', 'aria-hidden': 'true' }, events.slice(0, 200).map((e) => h('i', { class: evTone(String(e.type)), style: { left: `${Math.min(98, Math.max(2, ((Number(e.t) || 0) / dur) * 100))}%` } }))) : null,
+      issues.slice(0, 3).map((i) => h('div', { class: 'pl' }, chip(i.severity, /blocking|critical|major/i.test(i.severity) ? 'bad' : ''), h('span', {}, i.title))),
+      p || (spec.project && spec.id) ? h('div', { class: 'acts' }, h('button', { type: 'button', class: 'btn sm primary', 'data-open-playtest': '', onclick: () => harness.view.open('playtests', { project: p ? p.id : spec.project, id: t.folder || spec.id }) }, 'Open the playtest')) : null));
+    return;
+  }
+
+  if (kind === 'build') {
+    let b = spec.status && !spec.id ? spec : null; let p = null; let problems = Array.isArray(spec.problems) ? spec.problems : [];
+    try { if (!b && spec.project && spec.id) { const r = await Kit.studio(harness, 'build', { project: spec.project, id: spec.id }); b = r.build; p = r.project; problems = r.problems; } } catch (e) { mount(out, h('div', { class: 'box wide' }, h('div', { class: 'small' }, chip('build'), ' ', e.message))); return; }
+    if (!b) b = spec;
+    const errors = problems.filter((x) => x.severity !== 'warning');
+    const st = String(b.status || 'unknown');
+    mount(out, h('div', { class: 'box wide', 'data-studio-card': 'build', 'data-status': st },
+      h('div', { class: 'row' }, chip(st, /^(ok|success|passed)$/.test(st) ? 'ok' : /fail|error/.test(st) ? 'bad' : ''), h('b', { style: { flex: '1', minWidth: '0' } }, b.id ? `Build ${b.id}` : 'Build', b.platform ? h('span', { class: 'muted' }, ` · ${b.platform}`) : null), errors.length ? chip(`${errors.length} error${errors.length === 1 ? '' : 's'}`, 'bad') : null),
+      b.summary ? h('div', { class: 'ln' }, String(b.summary).slice(0, 300)) : null,
+      (b.path || spec.artifact) ? h('div', { class: 'ln mono' }, b.path || spec.artifact) : null,
+      problems.slice(0, 3).map((x) => h('div', { class: 'pl' }, chip(x.severity === 'warning' ? 'warning' : 'error', x.severity === 'warning' ? 'warn' : 'bad'), h('span', { style: { minWidth: '0', overflowWrap: 'anywhere' } }, String(x.message || '').slice(0, 200)), x.file ? h('span', { class: 'f' }, `${Kit.base(x.file)}${x.line ? `:${x.line}` : ''}`) : null)),
+      p || (spec.project && spec.id) ? h('div', { class: 'acts' }, h('button', { type: 'button', class: 'btn sm primary', 'data-open-build': '', onclick: () => harness.view.open('builds', { project: p ? p.id : spec.project, id: b.id || spec.id }) }, 'Open the build')) : null));
+  }
+});
+</script>
+</body>
+</html>

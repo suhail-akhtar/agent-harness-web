@@ -1,0 +1,552 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Studio</title>
+<link rel="stylesheet" href="kit.css">
+<style>
+  .grid2 { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+  .card h2 { margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+  .card h2 .spacer { flex: 1; }
+  .pcard { display: flex; flex-direction: column; gap: 8px; text-align: left; font: inherit; color: inherit; border: 1px solid var(--hx-border-subtle); border-radius: 12px; background: var(--hx-elevated); padding: 13px 14px; cursor: pointer; min-width: 0; }
+  .pcard:hover { border-color: var(--hx-border); box-shadow: 0 4px 14px rgba(0,0,0,.06); }
+  .pcard .top { display: flex; gap: 10px; align-items: center; min-width: 0; }
+  .pcard .nm { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .segs { display: flex; gap: 2px; }
+  .segs i { flex: 1; height: 4px; border-radius: 2px; background: var(--hx-pill); }
+  .segs i.done { background: var(--hx-success); } .segs i.cur { background: var(--hx-accent); } .segs i.warn { background: var(--hx-warning); }
+  .phead { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; margin-bottom: 14px; }
+  .phead .grow { flex: 1; min-width: 240px; }
+  .comment { padding: 6px 0; border-top: 1px solid var(--hx-border-subtle); font-size: 12.5px; }
+  .comment:first-child { border-top: 0; }
+  .doc { max-height: 520px; overflow: auto; }
+  .doc.open { max-height: none; }
+  .bigprev { border: 1px solid var(--hx-border-subtle); border-radius: 12px; overflow: hidden; display: flex; align-items: center; justify-content: center; min-height: 280px; aspect-ratio: 4 / 3; }
+  .bigprev img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  .bigprev.pixel img { image-rendering: pixelated; width: 100%; height: 100%; }
+  .search { max-width: 260px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+  .kpi { border: 1px solid var(--hx-border-subtle); border-radius: 12px; background: var(--hx-elevated); padding: 10px 12px; }
+  .kpi b { display: block; font-size: 22px; font-weight: 600; letter-spacing: -.02em; line-height: 1.15; font-variant-numeric: tabular-nums; }
+  .kpi.ok b { color: var(--hx-success); } .kpi.warn b { color: var(--hx-warning); } .kpi.bad b { color: var(--hx-danger); }
+  .issue { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 8px 0; border-top: 1px solid var(--hx-border-subtle); }
+  .issue:first-child { border-top: 0; }
+  .ev-thumb { width: 88px; height: 54px; border-radius: 7px; overflow: hidden; border: 1px solid var(--hx-border-subtle); background: var(--hx-sidebar); padding: 0; cursor: pointer; }
+  .ev-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .rgrid .tile .thumb { aspect-ratio: 16 / 10; }
+  .rgrid .tile[aria-pressed="true"] { border-color: var(--hx-accent); box-shadow: 0 0 0 1px var(--hx-accent); }
+  .pick { position: absolute; top: 7px; right: 7px; width: 22px; height: 22px; border-radius: 50%; background: var(--hx-elevated); border: 1px solid var(--hx-border); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; }
+  .tile[aria-pressed="true"] .pick { background: var(--hx-accent); color: var(--hx-on-accent); border-color: transparent; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  @media (max-width: 980px) { .grid2 { grid-template-columns: 1fr; } }
+</style>
+<script src="harness://app/sdk/plugin-ui.js"></script>
+<script src="kit.js"></script>
+<script src="model.js"></script>
+</head>
+<body>
+<div class="page">
+  <div class="head">
+    <div class="grow"><h1 id="title">Studio</h1><div class="sub" id="sub"></div></div>
+    <div class="row" id="actions"></div>
+  </div>
+  <nav class="tabs" id="tabs" role="tablist" aria-label="Studio"></nav>
+  <main id="main"><div class="muted">Loading…</div></main>
+</div>
+<script>
+// Studio's pages, one frame for every menu item (the view's id picks the tab): Projects (and a
+// project's page), Assets (and an asset's page), Scenes, Renders, Builds (and a build), Playtests
+// (and a report), Jobs and Engines. Everything comes from Studio's routes; what changes something
+// (approving a stage, cancelling a job, installing an engine) asks first, and agents have the
+// same operations as commands (GUIDE.md).
+Kit.start(async (harness) => {
+  const { h, mount, chip, ago, time } = Kit;
+  const tab = String(harness.contribution || '').split(':')[1] || 'projects';
+  const params = harness.params || {};
+  const main = document.getElementById('main');
+  const $ = (id) => document.getElementById(id);
+  let settings = {};
+  try { settings = (await harness.settings.get()) || {}; } catch { settings = {}; }
+  const refreshMs = Math.max(5, Number(settings.refreshSeconds) || 20) * 1000;
+  const TABS = [['projects', 'Projects'], ['assets', 'Assets'], ['scenes', 'Scenes'], ['renders', 'Renders'], ['builds', 'Builds'], ['playtests', 'Playtests'], ['jobs', 'Jobs'], ['engines', 'Engines']];
+  const route = (p, body) => Kit.studio(harness, p, body ?? {});
+  const toast = (text, kind) => harness.notify.toast(String(text).slice(0, 280), { kind: kind || 'info' }).catch(() => {});
+  const resultTone = (r) => (r === 'pass' ? 'ok' : r === 'fail' || r === 'crash' ? 'bad' : r === 'timeout' ? 'warn' : '');
+  const buildTone = (s) => (s === 'ok' || s === 'success' || s === 'passed' ? 'ok' : s === 'failed' || s === 'error' ? 'bad' : s === 'running' ? 'running' : '');
+  const crumbs = (...items) => h('div', { class: 'crumbs' }, items.flatMap((it, i) => [i ? h('span', {}, '›') : null, it.go ? h('button', { type: 'button', onclick: it.go }, it.label) : h('span', {}, it.label)]));
+  const empty = (title, text, extra) => h('div', { class: 'card empty', 'data-empty': '' }, h('b', {}, title), text, extra ? h('div', { style: { marginTop: '12px' } }, extra) : null);
+  let jobsBusy = false;
+
+  function tabs() {
+    const detail = !!(params.project || params.asset || params.id);
+    mount($('tabs'), TABS.map(([id, label]) => h('button', { type: 'button', role: 'tab', class: 'tab', 'aria-selected': String(id === tab && !detail), 'data-tab': id, onclick: () => harness.view.open(id) }, label,
+      id === 'jobs' && jobsCount ? h('span', { class: 'count hot' }, String(jobsCount)) : null)));
+  }
+  let jobsCount = 0;
+  const setTitle = (t, sub) => { $('title').textContent = t; $('sub').textContent = sub || ''; };
+  const setActions = (...els) => mount($('actions'), els);
+
+  // ---------------- projects ----------------
+  const segs = (p) => h('div', { class: 'segs', 'aria-hidden': 'true' }, p.stages.map((s) => h('i', { class: ['done', 'approved'].includes(s.status) ? 'done' : s.id === p.stage ? 'cur' : ['review', 'changes-requested'].includes(s.status) ? 'warn' : '' })));
+  async function projects() {
+    const r = await route('projects');
+    setTitle('Projects', `${r.projects.length} project${r.projects.length === 1 ? '' : 's'} in ${r.roots.length} folder${r.roots.length === 1 ? '' : 's'}`);
+    setActions(h('button', { type: 'button', class: 'btn primary', onclick: () => harness.view.open('home') }, 'Start a project'));
+    if (!r.projects.length) { mount(main, empty('No Studio projects yet', 'A Studio project is a folder with .studio/project.json. Start one from Studio\'s home (a 2D platformer, a 3D game, a model), or ask an agent to make a game in one of your folders.', h('button', { type: 'button', class: 'btn primary', onclick: () => harness.view.open('home') }, 'Quick starts'))); return; }
+    mount(main, h('div', { class: 'grid-cards wide', 'data-projects': '' }, r.projects.map((p) => h('button', { type: 'button', class: 'pcard', 'data-project': p.id, onclick: () => harness.view.open('projects', { project: p.id }) },
+      h('div', { class: 'top' }, Kit.logo(p.engine), h('div', { style: { minWidth: '0', flex: '1' } }, h('div', { class: 'nm' }, p.name), h('div', { class: 'muted small', style: { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, p.genre || p.folder))),
+      h('div', { class: 'row', style: { gap: '6px' } }, chip(Kit.engineName(p.engine), 'engine'), p.dimension ? chip(p.dimension.toUpperCase()) : null, p.waiting.length ? chip('waits for you', 'review') : null, p.error ? chip('unreadable', 'bad') : null),
+      p.stages.length ? h('div', {}, h('div', { class: 'small', style: { marginBottom: '5px' } }, p.stage ? `Stage ${p.stages.findIndex((s) => s.id === p.stage) + 1} of ${p.stages.length}: ${p.stages.find((s) => s.id === p.stage).title || p.stage}` : `All ${p.stages.length} stages done`), segs(p)) : h('div', { class: 'small muted' }, 'No stages yet'),
+      h('div', { class: 'row small muted', style: { gap: '12px' } }, h('span', {}, `${p.counts.assets} assets`), h('span', {}, `${p.counts.builds} builds`), h('span', {}, `${p.counts.playtests} playtests`), h('span', { class: 'spacer' }), h('span', {}, ago(p.updated)))))));
+  }
+
+  async function projectPage(id) {
+    const r = await route('project', { project: id });
+    const p = r.project;
+    const on = await Kit.engineOn(harness, p.engine);
+    setTitle(p.name, [Kit.engineName(p.engine), p.dimension && p.dimension.toUpperCase(), p.genre].filter(Boolean).join(' · '));
+    setActions(
+      h('button', { type: 'button', class: 'btn', 'data-ask-agent': '', onclick: () => harness.composer.prefill(`Continue the Studio project "${p.name}" in ${p.dir}: read .studio/project.json and its design document, tell me where it stands, then propose the next step.`, { newChat: true }) }, 'Continue with the agent'),
+      h('button', { type: 'button', class: 'btn', onclick: () => harness.view.open('assets', { project: p.id }) }, 'Assets'));
+    let sel = params.stage || p.stages.find((s) => s.status === 'review')?.id || p.stages.find((s) => !['done', 'approved', 'skipped'].includes(s.status))?.id || p.stages[0]?.id;
+    const off = on ? null : h('div', { class: 'note', 'data-engine-off': p.engine, style: { marginBottom: '12px' } }, `Made with ${Kit.engineName(p.engine)}, which is off. This project opens read-only: switch the engine-${p.engine} plugin on to build, run and play it.`);
+    const stageBox = h('div', {});
+    const drawStages = () => {
+      const s = p.stages.find((x) => x.id === sel);
+      const text = h('textarea', { rows: 3, placeholder: 'A comment for the agents: what to keep, what to change…', style: { minHeight: '64px' }, 'data-stage-comment': '' });
+      const act = async (action) => {
+        const comment = text.value.trim();
+        if ((action === 'comment' || action === 'request-changes') && !comment) { text.focus(); return; }
+        try {
+          const res = await route('project/stage', { project: p.id, stage: s.id, action, ...(comment ? { comment } : {}) });
+          Object.assign(s, res.stage);
+          await toast(res.text, 'success');
+          drawStages();
+        } catch (e) { await toast(e.message, 'error'); }
+      };
+      mount(stageBox,
+        h('div', { class: 'stages', role: 'tablist', 'data-stages': '' }, p.stages.map((x, i) => h('button', { type: 'button', class: `stage s-${x.status}`, role: 'tab', 'aria-current': String(x.id === sel), 'data-stage': x.id, 'data-status': x.status, onclick: () => { sel = x.id; drawStages(); } },
+          h('div', { class: 'n' }, `Stage ${i + 1}`), h('div', { class: 't' }, x.title || x.id), chip(x.status.replace('-', ' '), x.status)))),
+        s ? h('div', { class: 'card', style: { marginTop: '10px' }, 'data-stage-detail': s.id },
+          h('div', { class: 'row' }, h('b', {}, s.title || s.id), chip(s.status.replace('-', ' '), s.status), s.approvedAt ? h('span', { class: 'muted small' }, `approved ${ago(s.approvedAt)}${s.approvedBy ? ` by ${s.approvedBy}` : ''}`) : null),
+          s.note ? h('div', { class: 'small', style: { marginTop: '6px', whiteSpace: 'pre-wrap' } }, s.note) : null,
+          s.comments.length ? h('div', { style: { marginTop: '8px' } }, s.comments.map((c) => h('div', { class: 'comment', 'data-comment': '' }, h('b', {}, c.by), h('span', { class: 'muted small' }, ` · ${c.at ? ago(c.at) : ''}`), h('div', { style: { whiteSpace: 'pre-wrap' } }, c.text)))) : null,
+          on ? h('div', { style: { marginTop: '10px' } }, text,
+            h('div', { class: 'row', style: { marginTop: '8px', justifyContent: 'flex-end' } },
+              h('button', { type: 'button', class: 'btn', 'data-stage-action': 'comment', onclick: () => act('comment') }, 'Comment'),
+              ['approved', 'done'].includes(s.status) ? h('button', { type: 'button', class: 'btn', 'data-stage-action': 'reopen', onclick: () => act('reopen') }, 'Reopen')
+                : [h('button', { type: 'button', class: 'btn', 'data-stage-action': 'request-changes', onclick: () => act('request-changes') }, 'Request changes'),
+                  h('button', { type: 'button', class: 'btn primary', 'data-stage-action': 'approve', onclick: () => act('approve') }, 'Approve')])) : null) : null);
+    };
+    if (p.stages.length) drawStages(); else mount(stageBox, h('div', { class: 'muted small' }, 'No stages in .studio/project.json yet: the make-game workflow writes them (brief, design, prototype, vertical slice, content, polish, package, playtest).'));
+    const budgets = Object.entries(p.budgets || {});
+    const designCard = h('section', { class: 'card', 'data-design': '' }, h('h2', {}, 'Design document', h('span', { class: 'spacer' }), r.design ? h('span', { class: 'muted small mono' }, r.design.path) : null),
+      r.design?.text ? (() => { const d = h('div', { class: 'doc' }, Kit.markdown(r.design.text)); return [d, r.design.text.length > 3000 ? h('button', { type: 'button', class: 'btn sm ghost', onclick: (e) => { d.classList.toggle('open'); e.target.textContent = d.classList.contains('open') ? 'Show less' : 'Show all'; } }, 'Show all') : null]; })()
+        : h('div', { class: 'muted small' }, r.design?.error ? `Not readable: ${r.design.error}` : 'No design document yet (design/GDD.md, or "design" in project.json).'));
+    const buildsCard = h('section', { class: 'card', 'data-project-builds': '' }, h('h2', {}, 'Builds', h('span', { class: 'spacer' }), p.builds.length ? h('button', { type: 'button', class: 'btn sm ghost', onclick: () => harness.view.open('builds', { project: p.id }) }, 'All') : null),
+      p.builds.length ? [...p.builds].reverse().slice(0, 6).map((b) => h('button', { type: 'button', class: 'item', style: { display: 'flex', gap: '8px', width: '100%', border: '0', background: 'transparent', padding: '6px 0', cursor: 'pointer', font: 'inherit', color: 'inherit', textAlign: 'left' }, 'data-build': b.id, onclick: () => harness.view.open('builds', { project: p.id, id: b.id }) },
+        chip(b.status, buildTone(b.status)), h('span', { style: { flex: '1' } }, b.id, h('span', { class: 'muted small' }, ` · ${b.platform}`)), h('span', { class: 'muted small' }, b.at ? ago(b.at) : ''))) : h('div', { class: 'muted small' }, 'No builds yet.'));
+    const testsCard = h('section', { class: 'card', 'data-project-playtests': '' }, h('h2', {}, 'Playtests', h('span', { class: 'spacer' }), r.playtests.length ? h('button', { type: 'button', class: 'btn sm ghost', onclick: () => harness.view.open('playtests', { project: p.id }) }, 'All') : null),
+      r.playtests.length ? r.playtests.slice(0, 6).map((t) => h('button', { type: 'button', style: { display: 'flex', gap: '8px', width: '100%', border: '0', background: 'transparent', padding: '6px 0', cursor: 'pointer', font: 'inherit', color: 'inherit', textAlign: 'left' }, 'data-playtest': t.folder, onclick: () => harness.view.open('playtests', { project: p.id, id: t.folder }) },
+        chip(t.result, resultTone(t.result)), h('span', { style: { flex: '1', minWidth: '0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, t.goal || t.id), h('span', { class: 'muted small' }, `${t.issues.length} issue${t.issues.length === 1 ? '' : 's'}`))) : h('div', { class: 'muted small' }, 'No playtests yet.'));
+    const budgetCard = budgets.length ? h('section', { class: 'card' }, h('h2', {}, 'Budgets'), h('dl', { class: 'kv' }, budgets.flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, Kit.num(v))]))) : null;
+    const meta = h('section', { class: 'card' }, h('h2', {}, 'Project'), h('dl', { class: 'kv' },
+      h('dt', {}, 'Folder'), h('dd', { class: 'mono' }, p.dir), h('dt', {}, 'Engine'), h('dd', {}, Kit.engineName(p.engine), p.engineProject ? h('span', { class: 'muted mono' }, ` ${p.engineProject}`) : null),
+      p.created ? [h('dt', {}, 'Created'), h('dd', {}, time(p.created))] : null, h('dt', {}, 'Updated'), h('dd', {}, ago(p.updated))));
+    const assetsCard = h('section', { class: 'card', 'data-project-assets': '' }, h('h2', {}, `Assets (${r.assets.length})`, h('span', { class: 'spacer' }), r.assets.length ? h('button', { type: 'button', class: 'btn sm ghost', onclick: () => harness.view.open('assets', { project: p.id }) }, 'Open in Assets') : null),
+      r.assets.length ? h('div', { class: 'grid-cards' }, r.assets.slice(0, 12).map(assetTile)) : h('div', { class: 'muted small' }, 'No assets in .studio/assets yet.'));
+    mount(main, h('div', { 'data-project-page': p.id },
+      crumbs({ label: 'Projects', go: () => harness.view.open('projects') }, { label: p.name }), off,
+      h('section', { class: 'card', style: { marginBottom: '14px' } }, h('h2', {}, 'Stages'), stageBox),
+      h('div', { class: 'grid2' }, h('div', { class: 'stack' }, designCard), h('div', { class: 'stack' }, meta, buildsCard, testsCard, budgetCard)),
+      h('div', { style: { marginTop: '14px' } }, assetsCard)));
+  }
+
+  // ---------------- assets ----------------
+  function assetThumb(a) {
+    const pixel = a.dimension === '2d' || ['sprite', 'spritesheet', 'tileset', 'texture', 'ui'].includes(a.kind);
+    const box = h('div', { class: `thumb ${pixel ? 'pixel checker' : ''}` });
+    const args = Kit.assetArgs(a);
+    if (a.preview) box.append(Kit.img(harness, { ...args, path: a.preview }));
+    else if (a.model) { box.append(Kit.glyph('box', 'drawing…')); window.Studio3D.thumbnail(harness, { ...args, path: a.model }, 320, 240).then((t) => mount(box, h('img', { src: t.url, alt: '', 'data-model-thumb': '' })), (e) => mount(box, Kit.glyph('box', e.message.slice(0, 60)))); }
+    else box.append(Kit.glyph(Kit.kindIcon(a.kind), a.kind === 'audio' || a.kind === 'music' ? Kit.secs(a.meta.durationS) : ''));
+    if (a.checksFailed) box.append(h('span', { class: 'badge' }, chip(`${a.checksFailed} check${a.checksFailed === 1 ? '' : 's'} fail`, 'bad')));
+    return box;
+  }
+  function assetTile(a) {
+    return h('button', { type: 'button', class: 'tile', 'data-asset': a.ref, 'data-kind': a.kind, onclick: () => harness.view.open('assets', { asset: a.ref }) }, assetThumb(a),
+      h('div', { class: 'body' }, h('div', { class: 'name', title: a.name }, a.name), h('div', { class: 'meta' }, [a.kind, a.dimension, a.license.id, a.library ? 'library' : a.projectName].filter(Boolean).join(' · '))));
+  }
+  const filter = { kind: params.kind, dimension: params.dimension, style: params.style, license: params.license, source: params.source, q: params.q, project: params.project };
+  async function assets() {
+    const want = Object.fromEntries(Object.entries(filter).filter(([, v]) => v));
+    const r = await route('assets', want);
+    setTitle('Assets', `${r.total} asset${r.total === 1 ? '' : 's'}${Object.keys(want).length ? ' match' : ''} · projects and the shared library`);
+    setActions(h('button', { type: 'button', class: 'btn', onclick: () => harness.composer.prefill('Make a game asset with Studio: ', { newChat: true }) }, 'Make an asset'));
+    const facet = (key, label) => {
+      const list = r.facets[key] || [];
+      if (!list.length) return null;
+      return h('div', { class: 'facet', 'data-facet': key }, h('h3', {}, label), h('button', { type: 'button', 'aria-pressed': String(!filter[key]), onclick: () => { filter[key] = undefined; void refresh(); } }, 'Any'),
+        list.map((f) => h('button', { type: 'button', 'aria-pressed': String(filter[key] === f.value), 'data-value': f.value, onclick: () => { filter[key] = filter[key] === f.value ? undefined : f.value; void refresh(); } }, f.value, h('span', { class: 'n' }, String(f.count)))));
+    };
+    const search = h('input', { type: 'text', class: 'search', placeholder: 'Search names, tags, styles', value: filter.q || '', 'aria-label': 'Search assets' });
+    let t;
+    search.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => { filter.q = search.value.trim() || undefined; void refresh().then(() => { const s = document.querySelector('.search'); if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); } }); }, 300); });
+    mount(main, h('div', { class: 'layout' },
+      h('aside', { class: 'facets', 'aria-label': 'Filters' }, facet('kind', 'Kind'), facet('dimension', 'Dimension'), facet('style', 'Style'), facet('license', 'License'), facet('source', 'Source'),
+        filter.project ? h('div', { class: 'facet' }, h('h3', {}, 'Project'), h('button', { type: 'button', 'aria-pressed': 'true', onclick: () => { filter.project = undefined; void refresh(); } }, filter.project === 'library' ? 'Library' : 'This project', h('span', { class: 'n' }, '×'))) : null),
+      h('div', {}, h('div', { class: 'row', style: { marginBottom: '12px' } }, search, h('span', { class: 'spacer' }), h('span', { class: 'muted small' }, `${r.assets.length} shown`)),
+        r.assets.length ? h('div', { class: 'grid-cards', 'data-assets': '' }, r.assets.map(assetTile))
+          : empty(r.all ? 'Nothing matches' : 'No assets yet', r.all ? 'Try another filter.' : 'Assets live in each project\'s .studio/assets/<id>/ (and the shared library in ~/.harness/assets), each with an asset.json: what it is, its files, where it came from and its license.'))));
+  }
+
+  async function assetPage(ref) {
+    const { asset: a } = await route('asset', { asset: ref, ...(params.project ? { project: params.project } : {}) });
+    setTitle(a.name, [a.kind, a.dimension && a.dimension.toUpperCase(), a.style].filter(Boolean).join(' · '));
+    const args = Kit.assetArgs(a);
+    const openers = [];
+    if (a.model) openers.push(h('button', { type: 'button', class: 'btn primary', 'data-open-viewer': '3d', onclick: () => harness.view.open('viewer', Kit.assetParams(a, a.model)) }, 'Open in 3D viewer'));
+    if (a.kind === 'level' && a.main) openers.push(h('button', { type: 'button', class: 'btn primary', 'data-open-viewer': 'level', onclick: () => harness.view.open('sprites', { ...Kit.assetParams(a, a.main), mode: 'level' }) }, 'Open the level'));
+    else if (a.viewer === '2d') openers.push(h('button', { type: 'button', class: 'btn primary', 'data-open-viewer': '2d', onclick: () => harness.view.open('sprites', Kit.assetParams(a, a.main && /\.(png|jpe?g|webp|gif)$/i.test(a.main) ? a.main : a.preview)) }, a.kind === 'spritesheet' ? 'Play the sprite sheet' : 'Open in 2D viewer'));
+    if (a.audio) openers.push(h('button', { type: 'button', class: 'btn primary', 'data-open-viewer': 'audio', onclick: () => harness.view.open('audio', Kit.assetParams(a, a.audio)) }, 'Play'));
+    setActions(...openers);
+    const prev = h('div', { class: `bigprev ${['sprite', 'spritesheet', 'tileset', 'texture'].includes(a.kind) || a.dimension === '2d' ? 'pixel checker' : 'checker'}`, 'data-asset-preview': '' });
+    if (a.preview) prev.append(Kit.img(harness, { ...args, path: a.preview }));
+    else if (a.model) { prev.append(Kit.glyph('box', 'drawing…')); window.Studio3D.thumbnail(harness, { ...args, path: a.model }, 640, 480).then((t) => mount(prev, h('img', { src: t.url, alt: a.name })), (e) => mount(prev, Kit.glyph('box', e.message))); }
+    else prev.append(Kit.glyph(Kit.kindIcon(a.kind), a.kind));
+    const s = a.source;
+    const kvs = (pairs) => h('dl', { class: 'kv' }, pairs.filter(([, v]) => v !== undefined && v !== null && v !== '').flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]));
+    const metaLine = (k, v) => [k, Array.isArray(v) ? v.join(' × ') : typeof v === 'object' ? JSON.stringify(v) : typeof v === 'number' ? Kit.num(v) : String(v)];
+    const provenance = h('section', { class: 'card', 'data-provenance': s.type || '' }, h('h2', {}, 'Provenance'), kvs([
+      ['Source', s.type ? chip(s.type, s.type === 'generated' ? 'info' : '') : 'not recorded'], ['Generator', s.generator], ['Provider', s.provider], ['Model', s.model], ['Seed', s.seed], ['Library id', s.id],
+      ['From', s.url ? h('button', { type: 'button', class: 'link', onclick: () => harness.external.open(s.url).catch((e) => toast(e.message, 'error')) }, s.url) : undefined],
+      ['Created', a.created ? time(a.created) : undefined], ['Updated', a.updated ? time(a.updated) : undefined]]),
+      s.prompt ? h('div', { style: { marginTop: '8px' } }, h('div', { class: 'muted small' }, 'Prompt'), h('div', { class: 'small', style: { whiteSpace: 'pre-wrap' } }, s.prompt)) : null,
+      s.params && Object.keys(s.params).length ? h('details', { style: { marginTop: '8px' } }, h('summary', { class: 'small muted' }, 'Parameters'), h('pre', { class: 'mono small', style: { whiteSpace: 'pre-wrap', margin: '6px 0 0' } }, JSON.stringify(s.params, null, 2))) : null);
+    const license = h('section', { class: 'card', 'data-license': a.license.id || '' }, h('h2', {}, 'License'), a.license.id ? kvs([['License', chip(a.license.id, /^CC0|^MIT|^CC-BY/i.test(a.license.id) ? 'ok' : '')], ['Author', a.license.author], ['Link', a.license.url ? h('button', { type: 'button', class: 'link', onclick: () => harness.external.open(a.license.url).catch((e) => toast(e.message, 'error')) }, a.license.url) : undefined]]) : h('div', { class: 'note' }, 'No license recorded: check where it came from before shipping it.'));
+    const checks = h('section', { class: 'card', 'data-checks': '' }, h('h2', {}, `Checks${a.checks.length ? ` (${a.checksPassed}/${a.checks.length} pass)` : ''}`),
+      a.checks.length ? a.checks.map((c) => h('div', { class: 'issue', 'data-check': c.gate, 'data-pass': c.pass ? '1' : '0' }, chip(c.pass ? 'pass' : 'fail', c.pass ? 'ok' : 'bad'), h('div', {}, h('b', {}, c.gate), c.summary ? h('div', { class: 'small muted' }, c.summary) : null), h('span', { class: 'muted small' }, c.at ? ago(c.at) : ''))) : h('div', { class: 'muted small' }, 'Not checked yet (the asset gates: budgets, UVs, normals, scale, a preview look).'));
+    const meta = Object.entries(a.meta || {});
+    const metaCard = meta.length ? h('section', { class: 'card' }, h('h2', {}, 'Details'), kvs(meta.map(([k, v]) => metaLine(k, v)))) : null;
+    const files = h('section', { class: 'card', 'data-files': '' }, h('h2', {}, `Files (${a.files.length})`), h('table', {}, h('thead', {}, h('tr', {}, ['Path', 'Role', 'Size', ''].map((t, i) => h('th', { class: i === 2 ? 'num' : '' }, t)))),
+      h('tbody', {}, a.files.map((f) => h('tr', { 'data-file': f.path }, h('td', { class: 'mono' }, f.path, a.hashes[f.path] ? h('div', { class: 'muted', style: { fontSize: '10.5px' }, title: a.hashes[f.path] }, a.hashes[f.path].slice(0, 22) + '…') : null), h('td', {}, f.role), h('td', { class: 'num' }, f.exists ? Kit.size(f.size) : h('span', { style: { color: 'var(--hx-danger)' } }, 'missing')),
+        h('td', {}, f.exists && /\.(glb|gltf)$/i.test(f.path) ? h('button', { type: 'button', class: 'btn sm ghost', onclick: () => harness.view.open('viewer', Kit.assetParams(a, f.path)) }, '3D') : f.exists && /\.(png|jpe?g|webp|gif)$/i.test(f.path) ? h('button', { type: 'button', class: 'btn sm ghost', onclick: () => harness.view.open('sprites', { ...Kit.assetParams(a, f.path), mode: 'image' }) }, 'View') : f.exists && /\.(wav|mp3|ogg|flac)$/i.test(f.path) ? h('button', { type: 'button', class: 'btn sm ghost', onclick: () => harness.view.open('audio', Kit.assetParams(a, f.path)) }, 'Play') : null))))));
+    const engines = Object.entries(a.engines || {});
+    const enginesCard = engines.length ? h('section', { class: 'card' }, h('h2', {}, 'Imported into'), engines.map(([e, x]) => h('div', { class: 'row small', style: { padding: '4px 0' } }, Kit.logo(e, true), h('b', {}, Kit.engineName(e)), h('span', { class: 'mono muted' }, x.path || ''), x.importedAt ? h('span', { class: 'muted' }, ago(x.importedAt)) : null))) : null;
+    mount(main, h('div', { 'data-asset-page': a.ref },
+      crumbs({ label: 'Assets', go: () => harness.view.open('assets') }, a.library ? { label: 'Library' } : { label: a.projectName, go: () => harness.view.open('projects', { project: a.project }) }, { label: a.name }),
+      a.error ? h('div', { class: 'error', style: { marginBottom: '12px' } }, `asset.json: ${a.error}`) : null,
+      h('div', { class: 'grid2' }, h('div', { class: 'stack' }, prev, a.tags.length ? h('div', { class: 'row' }, a.tags.map((t) => chip(t))) : null, files, enginesCard), h('div', { class: 'stack' }, provenance, license, checks, metaCard))));
+  }
+
+  // ---------------- scenes ----------------
+  async function scenes() {
+    const r = await route('scenes', params.project ? { project: params.project } : {});
+    setTitle('Scenes', `${r.scenes.length} scene${r.scenes.length === 1 ? '' : 's'} and level${r.scenes.length === 1 ? '' : 's'}`);
+    setActions();
+    if (!r.scenes.length) { mount(main, empty('No scenes yet', 'Godot scenes (.tscn), Unreal levels (.umap), Unity scenes (.unity), .blend files, glTF scenes in scenes/ or levels/, and level JSON appear here.')); return; }
+    const outline = h('div', {});
+    mount(main, h('div', { class: 'grid2' }, h('table', { 'data-scenes': '' }, h('thead', {}, h('tr', {}, ['Scene', 'Kind', 'Project', 'Size', 'Changed', ''].map((t, i) => h('th', { class: i === 3 ? 'num' : '' }, t)))),
+      h('tbody', {}, r.scenes.map((s) => h('tr', { 'data-scene': s.path },
+        h('td', { class: 'mono' }, s.path), h('td', {}, chip(s.kind.kind.replace('-', ' '))), h('td', {}, s.projectName), h('td', { class: 'num' }, Kit.size(s.size)), h('td', { class: 'muted small' }, ago(s.mtime)),
+        h('td', {}, s.kind.viewer === '3d' ? h('button', { type: 'button', class: 'btn sm', onclick: () => harness.view.open('viewer', { project: s.project, path: s.path }) }, 'View')
+          : s.kind.viewer === 'level' ? h('button', { type: 'button', class: 'btn sm', onclick: () => harness.view.open('sprites', { project: s.project, path: s.path, mode: 'level' }) }, 'View')
+            : s.kind.viewer === 'outline' ? h('button', { type: 'button', class: 'btn sm', 'data-outline': s.path, onclick: async () => {
+              try { const o = await route('scene', { project: s.project, path: s.path }); mount(outline, h('section', { class: 'card', 'data-scene-outline': s.path }, h('h2', {}, Kit.base(s.path), h('span', { class: 'spacer' }), h('span', { class: 'muted small' }, `${o.nodes.length} nodes`)), h('ul', { class: 'tree' }, o.nodes.map((n) => h('li', { style: { paddingLeft: `${(n.path === '.' ? 0 : n.path.split('/').length) * 14}px` } }, n.name, h('span', { class: 'ty' }, n.type)))))); }
+              catch (e) { mount(outline, h('div', { class: 'error' }, e.message)); }
+            } }, 'Outline')
+              : h('span', { class: 'muted small', title: `Opened with ${Kit.engineName(s.kind.engine)} (its engine plugin)` }, Kit.engineName(s.kind.engine))))))),
+    h('div', {}, outline)));
+  }
+
+  // ---------------- renders ----------------
+  const picked = [];
+  async function renders() {
+    const r = await route('renders', params.project ? { project: params.project } : {});
+    setTitle('Renders', `${r.renders.length} image${r.renders.length === 1 ? '' : 's'} · pick two to compare`);
+    setActions();
+    if (!r.renders.length) { mount(main, empty('No renders yet', 'Renders, previews, turntables and captures (in renders/, previews/, captures/ or screenshots/ of a project) appear here, newest first.')); return; }
+    const cmp = h('div', { 'data-compare': '' });
+    const drawCompare = () => {
+      if (picked.length < 2) { mount(cmp, picked.length ? h('div', { class: 'muted small', style: { marginBottom: '10px' } }, 'Pick one more to compare side by side.') : null); return; }
+      const fig = (x) => h('figure', {}, h('div', { class: 'bigframe' }, Kit.img(harness, { project: x.project, path: x.path })), h('figcaption', {}, `${x.path} · ${x.projectName} · ${ago(x.mtime)}`));
+      mount(cmp, h('section', { class: 'card', style: { marginBottom: '14px' }, 'data-comparing': '' }, h('h2', {}, 'Side by side', h('span', { class: 'spacer' }),
+        h('button', { type: 'button', class: 'btn sm', onclick: () => { picked.reverse(); drawCompare(); } }, 'Swap'), h('button', { type: 'button', class: 'btn sm ghost', onclick: () => { picked.length = 0; void refresh(); } }, 'Clear')),
+      h('div', { class: 'compare' }, fig(picked[0]), fig(picked[1]))));
+    };
+    const groups = new Map();
+    for (const x of r.renders) { const k = `${x.projectName} · ${x.group}`; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(x); }
+    mount(main, cmp, [...groups.entries()].map(([k, list]) => h('section', { style: { marginBottom: '16px' } }, h('h2', {}, k),
+      h('div', { class: 'grid-cards rgrid', 'data-renders': '' }, list.map((x) => {
+        const key = `${x.project}:${x.path}`;
+        const tile = h('button', { type: 'button', class: 'tile', 'data-render': x.path, 'aria-pressed': String(picked.some((p) => `${p.project}:${p.path}` === key)), onclick: () => {
+          const i = picked.findIndex((p) => `${p.project}:${p.path}` === key);
+          if (i >= 0) picked.splice(i, 1); else { picked.push(x); if (picked.length > 2) picked.shift(); }
+          for (const el of document.querySelectorAll('[data-render]')) { const n = picked.findIndex((p) => p.path === el.getAttribute('data-render')); el.setAttribute('aria-pressed', String(n >= 0)); el.querySelector('.pick').textContent = n >= 0 ? String(n + 1) : ''; }
+          drawCompare();
+        } }, h('div', { class: 'thumb' }, Kit.img(harness, { project: x.project, path: x.path }), h('span', { class: 'pick' }, '')),
+        h('div', { class: 'body' }, h('div', { class: 'name' }, Kit.base(x.path)), h('div', { class: 'meta' }, `${Kit.size(x.size)} · ${ago(x.mtime)}`)));
+        return tile;
+      })))));
+    drawCompare();
+  }
+
+  // ---------------- builds ----------------
+  async function builds() {
+    const r = await route('builds', params.project ? { project: params.project } : {});
+    setTitle('Builds', `${r.builds.length} build${r.builds.length === 1 ? '' : 's'}`);
+    setActions();
+    if (!r.builds.length) { mount(main, empty('No builds yet', 'Engine builds and packages (Godot exports, Unreal BuildCookRun, Unity BuildPipeline, web bundles) are recorded in each project\'s .studio/project.json with their log.')); return; }
+    mount(main, h('table', { 'data-builds': '' }, h('thead', {}, h('tr', {}, ['Status', 'Build', 'Project', 'Platform', 'Problems', 'When'].map((t) => h('th', {}, t)))),
+      h('tbody', {}, r.builds.map((b) => h('tr', { class: 'click', 'data-build': b.id, 'data-status': b.status, onclick: () => harness.view.open('builds', { project: b.project, id: b.id }) },
+        h('td', {}, chip(b.status, buildTone(b.status))), h('td', {}, h('b', {}, b.id), b.path ? h('div', { class: 'muted small mono' }, b.path) : null),
+        h('td', {}, h('span', { class: 'row', style: { gap: '6px' } }, Kit.logo(b.engine, true), b.projectName)), h('td', {}, b.platform, b.config ? h('span', { class: 'muted' }, ` ${b.config}`) : null),
+        h('td', {}, b.errors ? chip(`${b.errors} error${b.errors === 1 ? '' : 's'}`, 'bad') : null, ' ', b.warnings ? chip(`${b.warnings} warning${b.warnings === 1 ? '' : 's'}`, 'warn') : null, !b.errors && !b.warnings ? h('span', { class: 'muted small' }, '—') : null),
+        h('td', { class: 'muted small' }, b.at ? ago(b.at) : ''))))));
+  }
+
+  async function buildPage(project, id) {
+    const r = await route('build', { project, id });
+    const b = r.build;
+    setTitle(`Build ${b.id}`, `${r.project.name} · ${b.platform}${b.config ? ` ${b.config}` : ''} · ${Kit.engineName(b.engine)}`);
+    setActions(h('button', { type: 'button', class: 'btn', onclick: () => harness.composer.prefill(`Fix the problems in build ${b.id} of the Studio project at ${r.project.dir}: read its log${r.logPath ? ` (${r.logPath})` : ''}, fix each error at its file and line, build again and tell me the result.`, { newChat: true }) }, 'Fix with the agent'));
+    const src = h('div', { 'data-source': '' });
+    const logLines = (r.log || '').replace(/\r/g, '').split('\n');
+    const logBox = h('div', { class: 'log', 'data-log': '' });
+    const errLines = new Map(r.problems.filter((p) => p.logLine).map((p) => [p.logLine, p.severity]));
+    // A log of many lines: only the window around what matters is drawn (the whole log is in the file).
+    mount(logBox, logLines.slice(-4000).map((l, i, arr) => { const n = logLines.length - arr.length + i + 1; return h('div', { class: errLines.get(n) === 'error' ? 'e' : errLines.get(n) === 'warning' ? 'w' : '', 'data-line': String(n) }, l || ' '); }));
+    const showSource = async (p) => {
+      if (p.logLine) { const el = logBox.querySelector(`[data-line="${p.logLine}"]`); if (el) { for (const x of logBox.querySelectorAll('.hit')) x.classList.remove('hit'); el.classList.add('hit'); logBox.scrollTop = el.offsetTop - 60; } }
+      if (!p.link) return;
+      try {
+        const s = await route('source', { project, path: p.link, line: p.line || 1 });
+        mount(src, h('section', { class: 'card', 'data-source-file': s.path }, h('h2', {}, h('span', { class: 'mono' }, `${s.path}:${s.line}`), h('span', { class: 'spacer' }), h('span', { class: 'muted small' }, `${s.total} lines`)),
+          h('div', { class: 'src' }, s.lines.map((t, i) => h('div', { class: s.from + i === s.line ? 'at' : '' }, h('span', { class: 'ln' }, String(s.from + i)), t || ' ')))));
+        src.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      } catch (e) { mount(src, h('div', { class: 'error' }, `${p.link}: ${e.message}`)); }
+    };
+    const errors = r.problems.filter((p) => p.severity === 'error').length;
+    mount(main, h('div', { 'data-build-page': b.id },
+      crumbs({ label: 'Builds', go: () => harness.view.open('builds') }, { label: r.project.name, go: () => harness.view.open('projects', { project: r.project.id }) }, { label: b.id }),
+      h('div', { class: 'kpis', style: { marginBottom: '14px' } },
+        h('div', { class: `kpi ${buildTone(b.status) === 'ok' ? 'ok' : buildTone(b.status) === 'bad' ? 'bad' : ''}`, 'data-build-status': b.status }, h('b', {}, b.status), h('span', { class: 'muted small' }, 'status')),
+        h('div', { class: `kpi ${errors ? 'bad' : 'ok'}` }, h('b', {}, String(errors)), h('span', { class: 'muted small' }, 'errors')),
+        h('div', { class: 'kpi' }, h('b', {}, String(r.problems.length - errors)), h('span', { class: 'muted small' }, 'warnings')),
+        h('div', { class: 'kpi' }, h('b', {}, b.took ? Kit.secs(b.took) : '—'), h('span', { class: 'muted small' }, 'took')),
+        h('div', { class: `kpi ${r.artifact && !r.artifact.exists ? 'warn' : ''}` }, h('b', {}, r.artifact?.exists ? Kit.size(r.artifact.size) : r.artifact ? 'missing' : '—'), h('span', { class: 'muted small', title: b.path || '' }, b.path ? Kit.base(b.path) : 'artifact'))),
+      b.summary ? h('p', { class: 'small' }, b.summary) : null,
+      h('div', { class: 'grid2' },
+        h('div', { class: 'stack' }, h('section', { class: 'card', 'data-problems': '' }, h('h2', {}, `Problems (${r.problems.length})`),
+          r.problems.length ? r.problems.slice(0, 200).map((p) => h('div', { class: 'problem', 'data-problem': p.file || '' }, chip(p.severity, p.severity === 'error' ? 'bad' : 'warn'), h('div', { style: { minWidth: '0', overflowWrap: 'anywhere' } }, p.message),
+            p.file ? h('button', { type: 'button', class: 'link mono small', 'data-problem-link': p.link || '', onclick: () => showSource(p) }, `${Kit.base(p.file)}${p.line ? `:${p.line}` : ''}`) : p.logLine ? h('button', { type: 'button', class: 'link small', onclick: () => showSource(p) }, `log ${p.logLine}`) : h('span'))) : h('div', { class: 'muted small' }, 'No problems found in the log.')), src),
+        h('div', { class: 'stack' }, h('section', { class: 'card' }, h('h2', {}, 'Log', h('span', { class: 'spacer' }), r.logPath ? h('span', { class: 'muted small mono' }, r.logPath) : null), r.log ? logBox : h('div', { class: 'muted small' }, 'No log file was found for this build (log in project.json, or .studio/builds/<id>/build.log).'))))));
+  }
+
+  // ---------------- playtests ----------------
+  async function playtests() {
+    const r = await route('playtests', params.project ? { project: params.project } : {});
+    setTitle('Playtests', `${r.playtests.length} report${r.playtests.length === 1 ? '' : 's'}`);
+    setActions(h('button', { type: 'button', class: 'btn', onclick: () => harness.composer.prefill('/playtest ', { newChat: true }) }, 'Run a playtest'));
+    if (!r.playtests.length) { mount(main, empty('No playtests yet', 'The AI player and the bots play the game, capture frames, check the design\'s claims and write a report to .studio/playtests/<id>/report.json.')); return; }
+    mount(main, h('table', { 'data-playtests': '' }, h('thead', {}, h('tr', {}, ['Result', 'Goal', 'Project', 'Player', 'Duration', 'FPS', 'Issues', 'When'].map((t, i) => h('th', { class: [4, 5, 6].includes(i) ? 'num' : '' }, t)))),
+      h('tbody', {}, r.playtests.map((t) => h('tr', { class: 'click', 'data-playtest': t.folder, 'data-result': t.result, onclick: () => harness.view.open('playtests', { project: t.project, id: t.folder }) },
+        h('td', {}, chip(t.result, resultTone(t.result))), h('td', {}, h('b', {}, t.goal || t.id), h('div', { class: 'muted small' }, t.id)), h('td', {}, t.projectName), h('td', {}, t.player),
+        h('td', { class: 'num' }, Kit.secs(t.durationS)), h('td', { class: 'num' }, t.metrics.fpsAvg !== undefined ? Kit.num(t.metrics.fpsAvg) : '—'),
+        h('td', { class: 'num' }, t.majorIssues ? chip(`${t.issues} (${t.majorIssues} major)`, 'bad') : String(t.issues)), h('td', { class: 'muted small' }, ago(t.mtime)))))));
+  }
+
+  const EVENT_TONE = { pickup: 'ok', collect: 'ok', win: 'ok', goal: 'ok', checkpoint: 'ok', level: 'ok', stuck: 'warn', fall: 'warn', warn: 'warn', warning: 'warn', death: 'bad', die: 'bad', crash: 'bad', error: 'bad', fail: 'bad' };
+  /** A line chart of a series, or bars of the metrics against their budgets: SVG in the theme's colours. */
+  function lineChart(name, pts, budget, unit) {
+    const W = 520, H = 150, L = 38, B = 22, T = 10, R = 10;
+    const xs = pts.map((p) => p[0]); const ys = pts.map((p) => p[1]);
+    const x0 = Math.min(...xs), x1 = Math.max(...xs) || 1;
+    const y1 = Math.max(...ys, budget ?? -Infinity) * 1.1 || 1; const y0 = Math.min(0, ...ys);
+    const X = (v) => L + ((v - x0) / (x1 - x0 || 1)) * (W - L - R); const Y = (v) => T + (1 - (v - y0) / (y1 - y0 || 1)) * (H - T - B);
+    const NS = 'http://www.w3.org/2000/svg';
+    const s = (tag, a, ...kids) => { const el = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(a)) el.setAttribute(k, String(v)); for (const c of kids) el.append(c instanceof Node ? c : document.createTextNode(String(c))); return el; };
+    const svg = s('svg', { class: 'chart', viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `${name} over time`, 'data-chart': name });
+    for (let i = 0; i <= 3; i++) { const v = y0 + ((y1 - y0) * i) / 3; svg.append(s('line', { x1: L, x2: W - R, y1: Y(v), y2: Y(v), stroke: 'var(--hx-border-subtle)' }), s('text', { x: L - 6, y: Y(v) + 4, 'text-anchor': 'end', 'font-size': 10, fill: 'var(--hx-text-muted)' }, Kit.num(Math.round(v)))); }
+    if (budget !== undefined) svg.append(s('line', { x1: L, x2: W - R, y1: Y(budget), y2: Y(budget), stroke: 'var(--hx-warning)', 'stroke-dasharray': '4 3' }), s('text', { x: W - R, y: Y(budget) - 4, 'text-anchor': 'end', 'font-size': 10, fill: 'var(--hx-warning)' }, `budget ${budget}${unit || ''}`));
+    svg.append(s('path', { d: pts.map((p, i) => `${i ? 'L' : 'M'}${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(' '), fill: 'none', stroke: 'var(--hx-info)', 'stroke-width': 1.8, 'stroke-linejoin': 'round' }));
+    svg.append(s('text', { x: L, y: H - 6, 'font-size': 10, fill: 'var(--hx-text-muted)' }, `${Kit.num(x0)} s`), s('text', { x: W - R, y: H - 6, 'text-anchor': 'end', 'font-size': 10, fill: 'var(--hx-text-muted)' }, `${Kit.num(x1)} s`));
+    return svg;
+  }
+  function budgetBars(rows) {
+    const W = 520, rowH = 30, L = 120, R = 70;
+    const NS = 'http://www.w3.org/2000/svg';
+    const s = (tag, a, ...kids) => { const el = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(a)) el.setAttribute(k, String(v)); for (const c of kids) el.append(c instanceof Node ? c : document.createTextNode(String(c))); return el; };
+    const svg = s('svg', { class: 'chart', viewBox: `0 0 ${W} ${rows.length * rowH + 8}`, role: 'img', 'aria-label': 'Metrics against the budgets', 'data-chart': 'budgets' });
+    rows.forEach((r, i) => {
+      const y = 4 + i * rowH;
+      const max = Math.max(r.value, r.budget) * 1.15 || 1;
+      const w = (v) => ((W - L - R) * v) / max;
+      const tone = r.ok ? 'var(--hx-success)' : 'var(--hx-danger)';
+      svg.append(s('text', { x: 0, y: y + 17, 'font-size': 11.5, fill: 'var(--hx-text-secondary)' }, r.label));
+      svg.append(s('rect', { x: L, y: y + 6, width: W - L - R, height: 14, rx: 4, fill: 'var(--hx-pill)' }));
+      svg.append(s('rect', { x: L, y: y + 6, width: Math.max(2, w(r.value)), height: 14, rx: 4, fill: tone, opacity: 0.85 }));
+      svg.append(s('line', { x1: L + w(r.budget), x2: L + w(r.budget), y1: y + 2, y2: y + 24, stroke: 'var(--hx-text-primary)', 'stroke-width': 1.5 }));
+      svg.append(s('text', { x: W - R + 8, y: y + 17, 'font-size': 11.5, fill: tone }, `${Kit.num(r.value)}${r.unit}`));
+    });
+    return svg;
+  }
+
+  async function playtestPage(project, id) {
+    const { playtest: t, project: p } = await route('playtest', { project, id });
+    setTitle(t.goal || `Playtest ${t.id}`, `${p.name} · ${t.player || 'player'} · ${Kit.engineName(t.engine)}${t.build ? ` · build ${t.build}` : ''}`);
+    setActions(h('button', { type: 'button', class: 'btn', onclick: () => harness.composer.prefill(`Fix the issues of playtest ${t.id} in the Studio project at ${p.dir} (.studio/playtests/${t.folder}/report.json), most severe first, then playtest again.`, { newChat: true }) }, 'Fix with the agent'));
+    const dur = t.durationS || Math.max(1, ...t.events.map((e) => e.t), ...t.issues.map((i) => i.t || 0));
+    // Frames: an event's own, else spread over the run in order (their times are then about right).
+    const frames = t.frames;
+    const frameAt = (sec) => (frames.length ? frames[Math.min(frames.length - 1, Math.max(0, Math.round((sec / dur) * (frames.length - 1))))] : undefined);
+    const timeOf = (f) => { const e = t.events.find((x) => x.frame === f); if (e) return e.t; const i = frames.indexOf(f); return frames.length > 1 ? (i / (frames.length - 1)) * dur : 0; };
+    const big = h('div', { class: 'bigframe', 'data-big-frame': '' }, h('span', { class: 'muted small' }, frames.length ? 'Pick a moment' : 'No frames were captured'));
+    const caption = h('div', { class: 'muted small', style: { marginTop: '6px', minHeight: '18px' } });
+    const strip = h('div', { class: 'frames', 'data-frames': '' });
+    const marks = [];
+    let cursor;
+    const show = (f, sec, label) => {
+      if (f) mount(big, Kit.img(harness, { project, path: f }, { alt: label || '' }));
+      big.setAttribute('data-frame', f || '');
+      caption.textContent = `${Kit.secs(sec)}${label ? ` · ${label}` : ''}`;
+      if (cursor) cursor.style.left = `${(sec / dur) * 100}%`;
+      for (const b of strip.querySelectorAll('button')) b.setAttribute('aria-current', String(b.getAttribute('data-frame') === f));
+      for (const m of marks) m.setAttribute('aria-current', String(m.dataset.t === String(sec)));
+    };
+    const tl = h('div', { class: 'tl', 'data-timeline': '' });
+    cursor = h('div', { class: 'cursor', style: { left: '0%' } });
+    tl.append(cursor);
+    for (const e of t.events) {
+      const m = h('button', { type: 'button', class: `mark ${EVENT_TONE[e.type] || ''}`, style: { left: `${(e.t / dur) * 100}%` }, title: `${Kit.secs(e.t)} ${e.type}: ${e.detail}`, 'aria-label': `${e.type} at ${Kit.secs(e.t)}`, 'data-event': e.type, 'data-t': String(e.t), onclick: () => show(e.frame || frameAt(e.t), e.t, `${e.type}: ${e.detail}`) });
+      marks.push(m); tl.append(m);
+    }
+    for (const i of t.issues.filter((x) => x.t !== undefined)) {
+      const m = h('button', { type: 'button', class: 'mark bad', style: { left: `${(i.t / dur) * 100}%`, top: '30px' }, title: `${Kit.secs(i.t)} issue: ${i.title}`, 'data-issue-mark': '', 'data-t': String(i.t), onclick: () => show(i.evidence || frameAt(i.t), i.t, `${i.severity}: ${i.title}`) });
+      marks.push(m); tl.append(m);
+    }
+    const axis = h('div', { class: 'axis' });
+    for (let k = 0; k <= 4; k++) axis.append(h('span', { style: { left: `${Math.min(97, Math.max(3, k * 25))}%` } }, Kit.secs((dur * k) / 4)));
+    tl.append(axis);
+    tl.addEventListener('click', (ev) => { if (ev.target !== tl && ev.target !== axis) return; const b = tl.getBoundingClientRect(); const sec = ((ev.clientX - b.left) / b.width) * dur; show(frameAt(sec), sec, ''); });
+    mount(strip, frames.slice(0, 400).map((f) => h('button', { type: 'button', 'data-frame': f, 'aria-label': `Frame at ${Kit.secs(timeOf(f))}`, onclick: () => show(f, timeOf(f), t.events.find((e) => e.frame === f)?.detail) }, Kit.img(harness, { project, path: f }))));
+    // Metrics against the project's budgets.
+    const m = t.metrics; const bud = p.budgets || {};
+    const kpi = (label, value, unit, ok) => h('div', { class: `kpi ${ok === undefined ? '' : ok ? 'ok' : 'bad'}`, 'data-metric': label }, h('b', {}, value === undefined ? '—' : `${Kit.num(value)}${unit}`), h('span', { class: 'muted small' }, label));
+    const rows = [];
+    if (m.fpsAvg !== undefined && bud.fps) rows.push({ label: 'FPS (average)', value: m.fpsAvg, budget: bud.fps, unit: '', ok: m.fpsAvg >= bud.fps * 0.95 });
+    if (m.fpsMin !== undefined && bud.fps) rows.push({ label: 'FPS (lowest)', value: m.fpsMin, budget: bud.fps, unit: '', ok: m.fpsMin >= bud.fps * 0.5 });
+    if (m.frameMsP95 !== undefined && bud.frameMs) rows.push({ label: 'Frame ms (p95)', value: m.frameMsP95, budget: bud.frameMs, unit: ' ms', ok: m.frameMsP95 <= bud.frameMs * 1.2 });
+    if (m.memoryMb !== undefined && bud.memoryMb) rows.push({ label: 'Memory', value: m.memoryMb, budget: bud.memoryMb, unit: ' MB', ok: m.memoryMb <= bud.memoryMb });
+    const charts = h('div', { class: 'stack', 'data-charts': '' });
+    for (const [name, pts] of Object.entries(t.series || {})) if (pts.length > 1) charts.append(h('div', {}, h('div', { class: 'small', style: { fontWeight: '500', marginBottom: '4px' } }, name), lineChart(name, pts, /fps/i.test(name) ? bud.fps : /ms/i.test(name) ? bud.frameMs : /mem/i.test(name) ? bud.memoryMb : undefined, /ms/i.test(name) ? ' ms' : '')));
+    if (rows.length) charts.append(h('div', {}, h('div', { class: 'small', style: { fontWeight: '500', marginBottom: '4px' } }, 'Against the budgets'), budgetBars(rows)));
+    const evThumb = (f, label, sec) => (f ? h('button', { type: 'button', class: 'ev-thumb', 'data-evidence': f, 'aria-label': `Evidence: ${label}`, onclick: () => { show(f, sec ?? timeOf(f), label); big.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } }, Kit.img(harness, { project, path: f })) : h('span'));
+    const sevTone = (s) => (/blocking|critical/i.test(s) ? 'blocking' : /major/i.test(s) ? 'major' : 'minor');
+    mount(main, h('div', { 'data-playtest-page': t.folder },
+      crumbs({ label: 'Playtests', go: () => harness.view.open('playtests') }, { label: p.name, go: () => harness.view.open('projects', { project: p.id }) }, { label: t.id }),
+      t.error ? h('div', { class: 'error', style: { marginBottom: '12px' } }, `report.json: ${t.error}`) : null,
+      h('div', { class: 'kpis', style: { marginBottom: '14px' } },
+        h('div', { class: `kpi ${resultTone(t.result)}`, 'data-result': t.result }, h('b', {}, t.result), h('span', { class: 'muted small' }, 'result')),
+        kpi('duration', t.durationS, ' s'), kpi('steps', t.steps, ''),
+        kpi('FPS (average)', m.fpsAvg, '', bud.fps && m.fpsAvg !== undefined ? m.fpsAvg >= bud.fps * 0.95 : undefined),
+        kpi('frame ms (p95)', m.frameMsP95, ' ms', bud.frameMs && m.frameMsP95 !== undefined ? m.frameMsP95 <= bud.frameMs * 1.2 : undefined),
+        kpi('memory', m.memoryMb, ' MB', bud.memoryMb && m.memoryMb !== undefined ? m.memoryMb <= bud.memoryMb : undefined),
+        kpi('errors', m.errors, '', m.errors === undefined ? undefined : m.errors === 0)),
+      h('section', { class: 'card', style: { marginBottom: '14px' } }, h('h2', {}, 'Timeline', h('span', { class: 'spacer' }), h('span', { class: 'muted small' }, `${t.events.length} events · ${frames.length} frames`)), tl,
+        h('div', { class: 'grid2', style: { marginTop: '12px' } }, h('div', {}, big, caption), h('div', {}, h('div', { class: 'small', style: { fontWeight: '500', marginBottom: '4px' } }, 'Frames'), strip,
+          t.recording ? h('div', { style: { marginTop: '10px' }, 'data-recording': t.recording }, h('div', { class: 'small', style: { fontWeight: '500', marginBottom: '4px' } }, 'Recording'), h('div', { class: 'bigframe' }, Kit.img(harness, { project, path: t.recording }, { alt: 'The recording of the playthrough' }))) : null))),
+      h('div', { class: 'grid2' },
+        h('div', { class: 'stack' },
+          h('section', { class: 'card', 'data-issues': '' }, h('h2', {}, `Issues (${t.issues.length})`), t.issues.length ? t.issues.map((i) => h('div', { class: 'issue', 'data-issue': i.severity }, chip(i.severity, sevTone(i.severity)), h('div', {}, h('b', {}, i.title), i.detail ? h('div', { class: 'small muted', style: { whiteSpace: 'pre-wrap' } }, i.detail) : null, i.t !== undefined ? h('div', { class: 'muted small' }, `at ${Kit.secs(i.t)}`) : null), evThumb(i.evidence, i.title, i.t))) : h('div', { class: 'muted small' }, 'No issues found.')),
+          h('section', { class: 'card', 'data-verdicts': '' }, h('h2', {}, `Verdicts (${t.verdicts.filter((v) => v.pass).length}/${t.verdicts.length} hold)`), t.verdicts.length ? t.verdicts.map((v) => h('div', { class: 'issue', 'data-verdict': v.pass ? 'pass' : 'fail' }, chip(v.pass ? 'holds' : 'fails', v.pass ? 'ok' : 'bad'), h('div', {}, v.claim, h('div', { class: 'muted small' }, [v.by && `by ${v.by}`, v.reason].filter(Boolean).join(' · '))), evThumb(v.evidence, v.claim))) : h('div', { class: 'muted small' }, 'No claims were checked.'))),
+        h('div', { class: 'stack' },
+          h('section', { class: 'card' }, h('h2', {}, 'Metrics'), charts.childNodes.length ? charts : h('div', { class: 'muted small' }, 'No series or budgets to chart (budgets live in project.json).'),
+            Object.keys(m).length ? h('dl', { class: 'kv', style: { marginTop: '10px' } }, Object.entries(m).flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, Kit.num(v))])) : null),
+          h('details', { class: 'card' }, h('summary', { class: 'small', style: { fontWeight: '600', cursor: 'pointer' } }, `Events (${t.events.length})`), h('table', { style: { marginTop: '8px' } }, h('tbody', {}, t.events.map((e) => h('tr', { class: 'click', onclick: () => show(e.frame || frameAt(e.t), e.t, `${e.type}: ${e.detail}`) }, h('td', { class: 'num muted' }, Kit.secs(e.t)), h('td', {}, chip(e.type, EVENT_TONE[e.type] || '')), h('td', {}, e.detail))))))))));
+    if (frames.length) { const f0 = t.events.find((e) => e.frame)?.frame || frames[0]; show(f0, timeOf(f0), t.events.find((e) => e.frame === f0)?.detail); }
+  }
+
+  // ---------------- jobs ----------------
+  async function jobs() {
+    const r = await route('jobs');
+    jobsCount = r.running; jobsBusy = r.running > 0;
+    await harness.badge.set('jobs', r.running || null).catch(() => {});
+    tabs();
+    setTitle('Jobs', r.running ? `${r.running} running or waiting · one per engine at a time` : 'The heavy-job queue: renders, builds, cooks, bakes and long plays');
+    setActions();
+    if (!r.jobs.length) { mount(main, empty('No jobs in the last hour', 'Renders, builds, cooks, bakes and long plays queue here, one per engine at a time (HARNESS_ENGINE_JOBS raises it), each with a timeout and a cancel.')); return; }
+    mount(main, h('table', { 'data-jobs': '' }, h('thead', {}, h('tr', {}, ['', 'Job', 'Engine', 'Queued', 'Took', ''].map((t, i) => h('th', { class: i === 4 ? 'num' : '' }, t)))),
+      h('tbody', {}, r.jobs.map((j) => h('tr', { 'data-job': j.id, 'data-status': j.status },
+        h('td', {}, chip(j.status, j.status === 'running' ? 'running' : j.status === 'waiting' ? 'waiting' : j.status === 'done' ? 'ok' : 'bad')),
+        h('td', {}, h('b', {}, j.title), h('div', { class: 'muted small mono' }, j.id)), h('td', {}, h('span', { class: 'row', style: { gap: '6px' } }, Kit.logo(j.engine, true), Kit.engineName(j.engine))),
+        h('td', { class: 'muted small' }, ago(j.queuedAt)), h('td', { class: 'num' }, j.took !== undefined ? Kit.dur(0, j.took) : '—'),
+        h('td', {}, j.status === 'running' || j.status === 'waiting' ? h('button', { type: 'button', class: 'btn sm', 'data-cancel': j.id, onclick: async () => {
+          if (!(await Kit.confirm('Cancel this job?', `${j.title}\n\nIt stops now; what it wrote so far stays.`, 'Cancel the job'))) return;
+          try { const x = await route('jobs/cancel', { id: j.id }); await toast(x.text, 'success'); await refresh(); } catch (e) { await toast(e.message, 'error'); }
+        } }, 'Cancel') : null))))));
+  }
+
+  // ---------------- engines ----------------
+  const INSTALL = {
+    godot: { how: 'agent', label: 'Install Godot 4', prompt: 'Install Godot 4 for Studio: use the Godot engine tool\'s install action (the official build into ~/.harness/engines, checksums verified). Ask me before downloading anything, then run detect and tell me what it found.', body: 'The agent downloads the official Godot 4 build into ~/.harness/engines (it asks you again before downloading), then checks it.' },
+    blender: { how: 'agent', label: 'Install Blender', prompt: 'Install Blender for Studio: use the Blender engine tool\'s install action if it has one, else tell me the exact command for this system (winget, brew or the official download) and wait for me to run it. Then run detect.', body: 'The agent installs Blender, or tells you the one command to run (it asks before anything is downloaded).' },
+    unreal: { how: 'person', label: 'Get Unreal Engine', url: 'https://www.unrealengine.com/en-US/download', body: 'Unreal Engine is installed by you with the Epic Games Launcher (its EULA is yours to accept). Studio finds it in the usual folders, or set HARNESS_UNREAL to its folder.' },
+    unity: { how: 'person', label: 'Get Unity', url: 'https://unity.com/download', body: 'Unity is installed by you with Unity Hub, and its license is activated by you. Studio finds the Hub\'s editors, or set HARNESS_UNITY.' },
+  };
+  async function engines(refreshNow) {
+    const r = await route('engines', refreshNow ? { refresh: true } : {});
+    setTitle('Engines', `Checked ${ago(r.checkedAt)} on this machine`);
+    setActions(h('button', { type: 'button', class: 'btn', 'data-refresh-engines': '', onclick: async () => { await engines(true); await toast('Checked the engines again', 'success'); } }, 'Check again'));
+    const cards = [];
+    for (const e of r.engines) {
+      const plugin = e.plugin && e.plugin !== 'games3d' ? await harness.registry.has({ plugin: e.plugin }).catch(() => false) : true;
+      const inst = INSTALL[e.engine];
+      const install = async () => {
+        if (!(await Kit.confirm(inst.label, inst.body, inst.how === 'agent' ? 'Ask the agent' : 'Open the download page'))) return;
+        try { if (inst.how === 'agent') await harness.composer.prefill(inst.prompt, { newChat: true }); else await harness.external.open(inst.url); } catch (err) { await toast(err.message, 'error'); }
+      };
+      const f = e.features || {};
+      cards.push(h('section', { class: 'card engine-card', 'data-engine': e.engine, 'data-installed': e.installed ? '1' : '0' },
+        Kit.logo(e.engine),
+        h('div', { style: { minWidth: '0' } },
+          h('div', { class: 'row' }, h('b', { style: { fontSize: '14px' } }, e.title), e.installed ? chip(e.version && e.engine !== 'web' ? e.version : 'installed', 'ok') : chip('not installed'), e.gaps.length && e.installed ? chip('limited', 'warn') : null,
+            e.plugin && e.plugin !== 'games3d' ? chip(plugin ? `${e.plugin} on` : `${e.plugin} off`, plugin ? 'info' : '') : null),
+          h('div', { class: 'small', style: { color: 'var(--hx-text-secondary)', marginTop: '4px' } }, e.uses),
+          e.path ? h('div', { class: 'mono muted', style: { marginTop: '6px', overflowWrap: 'anywhere' } }, e.path) : null,
+          Object.keys(f).length ? h('div', { class: 'row small', style: { marginTop: '6px', gap: '6px' } }, Object.entries(f).map(([k, v]) => chip(`${{ python: 'Python scripting', remoteControl: 'Remote Control', msvc: 'MSVC (C++)' }[k] || k} ${v ? 'yes' : 'no'}`, v ? 'ok' : 'warn'))) : null,
+          e.gaps.map((g) => h('div', { class: 'gap', 'data-gap': '' }, g)),
+          e.engine === 'unreal' && f.msvc === false ? h('div', { style: { marginTop: '8px' } }, h('button', { type: 'button', class: 'btn sm', onclick: () => harness.external.open('https://visualstudio.microsoft.com/vs/').catch((err) => toast(err.message, 'error')) }, 'Get Visual Studio 2022 (C++)')) : null),
+        h('div', { class: 'stack', style: { alignItems: 'flex-end', display: 'flex', flexDirection: 'column', gap: '6px' } },
+          !e.installed && inst ? h('button', { type: 'button', class: 'btn primary sm', 'data-install': e.engine, onclick: install }, inst.label) : null,
+          e.installed && e.engine !== 'web' ? h('button', { type: 'button', class: 'btn sm', 'data-detect': e.engine, onclick: () => harness.composer.prefill(`Run the ${e.engine} engine tool's detect action and tell me what Studio can do with ${e.title} here: version, plugins, toolchain gaps.`, { newChat: true }) }, 'Full report') : null)));
+    }
+    mount(main, h('div', { class: 'stack', 'data-engines': '' }, cards,
+      h('p', { class: 'muted small' }, 'Found from the files on this machine (no engine is started). Each engine plugin\'s detect action gives the full report. How to choose: the web for quick 2D and light 3D games that play anywhere; Godot for 2D, 2.5D and mid-size 3D games with small exports; Unreal for high-end 3D (Blueprints and Python here); Unity for C# teams; Blender for models, materials, animation and renders.')));
+  }
+
+  const views = {
+    projects: () => (params.project ? projectPage(params.project) : projects()),
+    assets: () => (params.asset ? assetPage(params.asset) : assets()),
+    scenes, renders,
+    builds: () => (params.project && params.id ? buildPage(params.project, params.id) : builds()),
+    playtests: () => (params.project && params.id ? playtestPage(params.project, params.id) : playtests()),
+    jobs, engines: () => engines(false),
+  };
+  let drawn = false;
+  async function refresh() {
+    try { await (views[tab] || projects)(); drawn = true; } catch (e) { mount(main, h('div', { class: 'error', 'data-error': '' }, e.message)); }
+    tabs();
+  }
+  tabs();
+  // The lists refresh on their own; a detail page (or a page with a choice in progress) stays as drawn.
+  const live = ['projects', 'builds', 'playtests'].includes(tab) && !params.id && !(tab === 'projects' && params.project);
+  if (tab === 'jobs') await Kit.live(harness, refresh, { topics: ['sessions'], ms: refreshMs, busyMs: 2000, busy: () => jobsBusy });
+  else if (live) await Kit.live(harness, refresh, { topics: ['sessions'], ms: refreshMs });
+  else await refresh();
+  void drawn;
+});
+</script>
+</body>
+</html>
