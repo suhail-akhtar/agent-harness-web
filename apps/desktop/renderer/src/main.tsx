@@ -8,6 +8,8 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { setArtifactHost, toast } from '@harness/ui';
 import { App } from './shell/App';
+// The resizable panes keep their sizes in the prefs (and are known to agents) from the start.
+import './state/layout';
 import { useApp, navigate, openSession, prefill, HOME } from './state/app';
 import { reconcile } from './registry/reconcile';
 import { describeRegistry } from './registry/registry';

@@ -600,3 +600,27 @@ A full plugin is a module of the app: a menu, a home, and a guide agents use.
 Tests: test/desktop-modules.test.ts, test/desktop-modules-server.test.ts, and the Electron run
 test/desktop-modules-e2e.test.ts (screenshots in docs/screenshots/desktop/modules/). Live:
 `node --env-file=<.env> apps/desktop/scripts/live-modules.mjs`.
+
+## 24. Resizable panes
+
+Every pane of the window resizes like VS Code's: the sidebar, the side panel (artifacts, agents,
+details, plugin panels), the view beside (split), and the host-drawn splits inside pages (Dashboards'
+inspector and dataset list, the diagram's details). Plugin frames' own internal splits are theirs.
+
+- **One component**: `useResizable(spec, {edge})` / `ResizablePane` / `ResizeHandle` in
+  packages/ui (components/Resizable.tsx; the pure half, components/panes.ts). A spec names the
+  pane (`id`, `title`), its `default`, `min`, `max` (numbers, or functions of the window), whether it
+  `collapsible` (to `collapsedSize` below `collapseBelow`), its key `step`, and for a pane inside a
+  page `keep` (the px its container keeps for what is beside it).
+- **The handle**: a 6px hit area over the pane's edge, a line on hover, focus and drag; a focusable
+  `role="separator"` with `aria-valuenow/min/max` and `aria-controls`; arrows (Shift: x4), Home (min),
+  End (max), Enter (collapse or expand), double-click (the default), Escape during a drag (cancel).
+- **Dragging**: pointer capture; the size is written straight to the pane once a frame and saved when
+  the drag ends; `html.hx-resizing` turns off text selection and makes iframes ignore the pointer.
+- **Kept**: in the prefs file (`prefs.sidebar` for the sidebar, `prefs.panes[id]` for the others:
+  `{size?, collapsed?}`), through the pane store (`setPaneStore`; state/layout.ts gives the prefs). The
+  shown size is the saved one clamped to the window (the main content keeps 360px), so a window made
+  larger again gets the saved size back.
+- **Agents**: `core.shell:layout` (agent-callable): `list`, `set` (clamped), `reset` (one or all),
+  `collapse`, `expand`. In the palette it is "Reset the layout".
+- The chat column's width stays the Appearance preference (Normal, Wide, Full width).

@@ -36,9 +36,8 @@ export interface AppState {
   confirm: Confirm | null;
   onboardingOpen: boolean;
   focused: boolean;
-  /** A second view beside the first (a linked conversation next to this one), and its width in px. */
+  /** A second view beside the first (a linked conversation next to this one); its width is the 'split' pane's (state/layout.ts). */
   split: Route | null;
-  splitWidth: number;
   /** What the page on screen says about itself (breadcrumbs). */
   crumb: Crumb | null;
   /** The floating sidebar of a narrow window is open. */
@@ -83,7 +82,6 @@ export const useApp = create<AppState>((set, get) => ({
   onboardingOpen: false,
   focused: true,
   split: null,
-  splitWidth: (() => { try { return Number(localStorage.getItem('harness.splitWidth')) || 0; } catch { return 0; } })(),
   crumb: null,
   narrowSidebarOpen: false,
   fullWindow: null,

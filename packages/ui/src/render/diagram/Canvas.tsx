@@ -17,6 +17,8 @@ import {
 } from '@harness/plugin-ui';
 import { Icon } from '../../icons.tsx';
 import { IconButton, Spinner, cx } from '../../components/primitives.tsx';
+import { ResizablePane } from '../../components/Resizable.tsx';
+import { registerPane } from '../../components/panes.ts';
 import { downloadText } from '../download.ts';
 import { DiagramDetails, type DiagramSelection } from './Details.tsx';
 import { Drawing, PAD, type DrawState, type FlowDraw } from './Drawing.tsx';
@@ -63,6 +65,9 @@ function cameraStore() {
   const subs = new Set<() => void>();
   return { get: () => cam, set(c: Camera) { cam = c; for (const f of subs) f(); }, subscribe(f: () => void) { subs.add(f); return () => { subs.delete(f); }; } };
 }
+
+/** The diagram's details pane (beside the canvas): resizable, its width kept like every pane's. */
+export const DIAGRAM_DETAILS_PANE = registerPane({ id: 'diagram.details', title: 'diagram details', default: 300, min: 240, max: 640, keep: 320 });
 
 const MIN_K = 0.08; const MAX_K = 2.5; const LOW_LOD = 0.3;
 
@@ -480,9 +485,11 @@ export function DiagramCanvas(props: DiagramCanvasProps): React.ReactElement {
           )}
         </div>
         {details === 'internal' && detailsOpen && (
-          <aside className="hx-scroll w-[300px] shrink-0 overflow-y-auto border-l border-hx-border-subtle bg-hx-bg" data-diagram-details-panel="">
-            <DiagramDetails spec={shown} selection={selection} changed={changedSet} onSelect={select} onOpenLink={onOpenLink} onNeighbourhood={(id) => toNeighbourhood(id)} onClose={() => setDetailsOpen(false)} />
-          </aside>
+          <ResizablePane spec={DIAGRAM_DETAILS_PANE} edge="start" as="aside" className="flex flex-col border-l border-hx-border-subtle bg-hx-bg" data-diagram-details-panel="">
+            <div className="hx-scroll min-h-0 flex-1 overflow-y-auto">
+              <DiagramDetails spec={shown} selection={selection} changed={changedSet} onSelect={select} onOpenLink={onOpenLink} onNeighbourhood={(id) => toNeighbourhood(id)} onClose={() => setDetailsOpen(false)} />
+            </div>
+          </ResizablePane>
         )}
       </div>
       <Legend summary={summary} view={shown.view} />

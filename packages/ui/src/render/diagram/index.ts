@@ -1,5 +1,5 @@
 /** Interactive architecture and flow diagrams (DESIGN section 16); the spec is in @harness/plugin-ui. */
-export { DiagramCanvas, Legend, type DiagramCanvasProps, type DiagramCanvasApi, type DiagramSelection } from './Canvas.tsx';
+export { DiagramCanvas, Legend, DIAGRAM_DETAILS_PANE, type DiagramCanvasProps, type DiagramCanvasApi, type DiagramSelection } from './Canvas.tsx';
 export { DiagramBlock, DiagramError, DiagramOverlay, useDiagramSpec, viewName, type DiagramBlockProps } from './Static.tsx';
 export { DiagramDetails } from './Details.tsx';
 export { Drawing as DiagramDrawing, DIAGRAM_CSS, TONE_HEX, type DrawState, type FlowDraw } from './Drawing.tsx';
