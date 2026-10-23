@@ -404,7 +404,7 @@ export function setupPlayer(api) {
         action: { type: 'string', enum: ['run', 'report', 'verdict', 'judge', 'regress'] }, id: { type: 'string' }, ...gameInput,
         goal: { type: 'string', description: 'What a player must achieve, in words (the result fails when no player reaches it; the game\'s won/done state says it is reached)' },
         checks: { type: 'array', items: checkSchema }, bots: { type: 'array', items: {}, description: 'Bot modes or {mode, seconds} (default goal, explore, monkey)' },
-        seconds: { type: 'number', description: 'Game seconds per bot (default 60)' }, sessions: { type: 'array', items: { type: 'string' }, description: 'game_play session ids to include' },
+        seconds: { type: 'number', description: 'Game seconds per bot (default 120; give the goal bot enough to finish the whole game, not less than the default)' }, sessions: { type: 'array', items: { type: 'string' }, description: 'game_play session ids to include' },
         fpsBudget: { type: 'number' }, boot: { type: 'boolean', description: 'The real-clock boot segment (default true)' }, bootSeconds: { type: 'number' }, regressions: { type: 'boolean' }, build: { type: 'string' },
         claim: { type: 'string' }, claims: { type: 'array', items: { type: 'string' } }, pass: { type: 'boolean' }, evidence: { type: 'string' }, frames: { type: 'array', items: { type: 'string' } }, note: { type: 'string' },
       },

@@ -131,7 +131,7 @@ export async function runPlaytest({ start, write, read, list, signal }, opts = {
   const rel = path.posix.join(dirProject, '.studio', 'playtests', id);
   const project = opts.project ?? null;
   const fpsBudget = Number(opts.fpsBudget ?? project?.budgets?.fps ?? 30);
-  const seconds = Math.min(Math.max(Number(opts.seconds) || 60, 5), 600);
+  const seconds = Math.min(Math.max(Number(opts.seconds) || 120, 5), 600);
   const bots = (opts.bots ?? ['goal', 'explore', 'monkey']).map((b) => (typeof b === 'string' ? { mode: b } : b)).filter((b) => BOT_MODES.includes(b.mode) && b.mode !== 'scripted');
   const base = { game: opts.game, query: opts.query, seed: opts.seed ?? 1, viewport: opts.viewport, engine: opts.engine };
   const segments = [];

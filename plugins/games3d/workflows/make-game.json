@@ -285,7 +285,7 @@
         "APPROVE",
         "REQUEST_CHANGES"
       ],
-      "prompt": "Stage: playtest. Prove the prototype with game_playtest: the goal from design/GDD.md in words, checks it implies (e.g. {\"path\": \"won\", \"op\": \"==\", \"value\": true, \"when\": \"ever\"}), bots goal, explore and monkey. Read its evidence frames. Write docs/playtest-prototype.md with findings ([BLOCKING|MAJOR|MINOR], replay file, evidence frame). Answer APPROVE when the goal was reached with no crash, softlock or error, else REQUEST_CHANGES.",
+      "prompt": "Stage: playtest. Prove the prototype with game_playtest: the goal from design/GDD.md in words, checks it implies (e.g. {\"path\": \"won\", \"op\": \"==\", \"value\": true, \"when\": \"ever\"}), bots goal, explore and monkey (seconds at least 120, more for long levels, so the goal bot can finish). Read its evidence frames. Write docs/playtest-prototype.md with findings ([BLOCKING|MAJOR|MINOR], replay file, evidence frame). Answer APPROVE when the goal was reached with no crash, softlock or error, else REQUEST_CHANGES.",
       "next": {
         "on": {
           "REQUEST_CHANGES": "playtest-fix"
@@ -667,7 +667,7 @@
         "APPROVE",
         "REQUEST_CHANGES"
       ],
-      "prompt": "Stage: full-playtest. The full playtest of the built game: game_playtest with the goal and checks from design/GDD.md, bots goal, explore and monkey, on the build (web: game \"build/web/index.html\"; godot and unreal: the project, played through its driver); then play it yourself as a newcomer with game_play (the AI player: start, reach the goal, record verdicts on what you see, stop) and add that session to a game_playtest run (sessions). Write docs/playtest-report.md (the playtest ids, results, findings with evidence and replays). APPROVE only with the goal reached, no crash, softlock or error, and nothing BLOCKING or MAJOR; else REQUEST_CHANGES.",
+      "prompt": "Stage: full-playtest. The full playtest of the built game: game_playtest with the goal and checks from design/GDD.md, bots goal, explore and monkey (seconds at least 120, more for long levels, so the goal bot can finish), on the build (web: game \"build/web/index.html\"; godot and unreal: the project, played through its driver); then play it yourself as a newcomer with game_play (the AI player: start, reach the goal, record verdicts on what you see, stop) and add that session to a game_playtest run (sessions). Write docs/playtest-report.md (the playtest ids, results, findings with evidence and replays). APPROVE only with the goal reached, no crash, softlock or error, and nothing BLOCKING or MAJOR; else REQUEST_CHANGES.",
       "next": {
         "on": {
           "REQUEST_CHANGES": "final-rounds"
