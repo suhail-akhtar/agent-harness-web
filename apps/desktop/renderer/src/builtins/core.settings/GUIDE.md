@@ -23,6 +23,11 @@ the person makes the change (keys and secrets are never typed by you).
   (a short id such as `"models"` works when it names one section). Every plugin's sections are
   listed by `desktop_describe` (`settings`) and in each plugin's guide.
 - Switch the theme: `desktop_command {"command":"core.shell:set-theme","args":{"theme":"dark"}}`.
+- Resize the window's panes (sidebar, side-panel, split, dashboards.inspector, dashboards.datasets,
+  diagram.details): `desktop_command {"command":"core.shell:layout","args":{"action":"list"}}` gives each
+  one's size, bounds and default; `{"action":"set","pane":"side-panel","size":640}` (clamped to its
+  bounds), `{"action":"reset","pane":"sidebar"}` (no pane: all), `{"action":"collapse","pane":"sidebar"}`
+  and `"expand"`. The sizes are the person's and are kept across restarts; change them only when asked.
 - Secrets: the person stores them in Vault; you only ever name a vault entry (e.g. a data source's
   `secret`). Never ask for a key in the chat.
 - Delegation (which other models agents may hand work to, a cost cap) is under Models & providers.

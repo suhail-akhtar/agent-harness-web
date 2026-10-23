@@ -3,8 +3,8 @@
  * (pinned first, with pin, rename, archive and delete). Collapses to a rail; resizable.
  */
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { cx, Icon, IconButton, Menu, Tooltip, toast, Input } from '@harness/ui';
+import React, { useEffect, useMemo, useState } from 'react';
+import { cx, Icon, IconButton, Menu, ResizeHandle, Tooltip, toast, Input, useResizable } from '@harness/ui';
 import type { SessionMeta } from '@harness/client';
 import { useApp, navigate, openSession } from '../state/app';
 import { useData, client } from '../state/data';
@@ -13,12 +13,14 @@ import { formatChord } from '../registry/keybindings';
 import { runCommand } from '../registry/actions';
 import { platform } from '../bridge';
 import { ProductMark } from '../components/ProductMark';
+import { SIDEBAR_PANE } from '../state/layout';
 
 /** The sidebar; a narrow window passes its own (unsaved) collapsed state and toggle. */
 export function Sidebar({ collapsed: forced, onToggle }: { collapsed?: boolean; onToggle?: () => void } = {}): React.ReactElement {
   const prefs = useApp((s) => s.prefs);
-  const collapsed = forced ?? prefs.sidebar.collapsed;
-  const width = prefs.sidebar.width;
+  // Its width and collapsing are the 'sidebar' pane's (dragged below the threshold it collapses to the rail; dragged out again it expands).
+  const pane = useResizable(SIDEBAR_PANE, { edge: 'end', ...(forced !== undefined ? { forceCollapsed: forced } : {}) });
+  const collapsed = pane.collapsed;
   const registry = useData((s) => s.registry);
   const info = useApp((s) => s.info);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -27,10 +29,9 @@ export function Sidebar({ collapsed: forced, onToggle }: { collapsed?: boolean; 
   const primary = top.filter((n) => (n.placement ?? 'primary') === 'primary');
   const more = top.filter((n) => n.placement === 'more');
   const footer = top.filter((n) => n.placement === 'footer');
-  const drag = useRef<{ x: number; w: number } | null>(null);
 
   return (
-    <aside data-sidebar data-collapsed={collapsed ? '1' : '0'} className="relative flex h-full shrink-0 flex-col border-r border-hx-border-subtle bg-hx-sidebar" style={{ width: collapsed ? 56 : width }}>
+    <aside ref={pane.paneRef} id={pane.paneId} data-sidebar data-collapsed={collapsed ? '1' : '0'} className="relative flex h-full shrink-0 flex-col border-r border-hx-border-subtle bg-hx-sidebar" style={pane.paneStyle}>
       <div className="app-drag flex h-10 shrink-0 items-center gap-2 px-3">
         {!collapsed && <span className="flex items-center gap-2 text-[14px] font-semibold tracking-tight text-hx-primary"><Logo />{info?.product.brand.wordmark ?? info?.product.name ?? 'Harness'}</span>}
         <div className="flex-1" />
@@ -57,15 +58,7 @@ export function Sidebar({ collapsed: forced, onToggle }: { collapsed?: boolean; 
         </button>}
         <Profile collapsed={collapsed} />
       </div>
-      {!collapsed && (
-        <div role="separator" aria-orientation="vertical" aria-label="Resize the sidebar" tabIndex={0}
-          className="absolute -right-1 top-0 z-10 h-full w-2 cursor-col-resize"
-          onPointerDown={(e) => { drag.current = { x: e.clientX, w: width }; (e.target as Element).setPointerCapture(e.pointerId); }}
-          onPointerMove={(e) => { if (drag.current) useApp.setState({ prefs: { ...useApp.getState().prefs, sidebar: { ...prefs.sidebar, width: Math.min(480, Math.max(200, drag.current.w + e.clientX - drag.current.x)) } } }); }}
-          onPointerUp={() => { if (drag.current) { drag.current = null; useApp.getState().setPrefs({ sidebar: useApp.getState().prefs.sidebar }); } }}
-          onKeyDown={(e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') useApp.getState().setPrefs({ sidebar: { ...prefs.sidebar, width: width + (e.key === 'ArrowLeft' ? -16 : 16) } }); }}
-        />
-      )}
+      {forced === undefined && <ResizeHandle r={pane} edge="end" />}
     </aside>
   );
 }

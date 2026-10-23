@@ -29,6 +29,8 @@ export interface DesktopPrefs {
   preventSleep: boolean;
   window: WindowBounds;
   sidebar: { collapsed: boolean; width: number; showArchived: boolean };
+  /** Resizable panes other than the sidebar: pane id -> its size (px) and whether it is collapsed (absent: the default). */
+  panes: Record<string, { size?: number; collapsed?: boolean }>;
   /** The sidebar's plugin groups: the person's order (plugin names) and which are folded. */
   menus: { order: string[]; collapsed: Record<string, boolean> };
   projects: ProjectRef[];
@@ -67,6 +69,7 @@ export const DEFAULT_PREFS: DesktopPrefs = {
   preventSleep: false,
   window: { width: 1280, height: 820, maximized: false },
   sidebar: { collapsed: false, width: 272, showArchived: false },
+  panes: {},
   menus: { order: [], collapsed: {} },
   projects: [],
   defaultModel: '',
@@ -104,6 +107,13 @@ export function mergePrefs(base: DesktopPrefs, patch: unknown): DesktopPrefs {
   const p = out as unknown as DesktopPrefs;
   p.fontSize = Math.min(20, Math.max(11, Math.round(p.fontSize)));
   p.sidebar.width = Math.min(480, Math.max(200, Math.round(p.sidebar.width)));
+  p.panes = Object.fromEntries(Object.entries(isObj(p.panes) ? p.panes : {}).flatMap(([k, v]) => {
+    if (!/^[a-z0-9][a-z0-9._:-]{0,79}$/i.test(k) || !isObj(v)) return [];
+    const one: { size?: number; collapsed?: boolean } = {};
+    if (typeof v.size === 'number' && Number.isFinite(v.size) && v.size >= 0 && v.size <= 10_000) one.size = Math.round(v.size);
+    if (typeof v.collapsed === 'boolean') one.collapsed = v.collapsed;
+    return Object.keys(one).length ? [[k, one]] : [];
+  }).slice(0, 100));
   const order = Array.isArray(p.menus.order) ? p.menus.order : [];
   const folded = isObj(p.menus.collapsed) ? p.menus.collapsed : {};
   p.menus = { order: [...new Set(order.filter((x): x is string => typeof x === 'string' && /^[a-z0-9][a-z0-9._-]{0,63}$/i.test(x)))].slice(0, 200), collapsed: Object.fromEntries(Object.entries(folded).filter(([k, v]) => typeof v === 'boolean' && /^[a-z0-9][a-z0-9._-]{0,63}$/i.test(k)).slice(0, 200)) };

@@ -6,7 +6,8 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { type DocSpec, type FilterSpec, THEMES, VISUAL_TYPES, type ViewState, type VisualSpec } from '@harness/plugin-ui';
-import { Badge, Button, DocView, EmptyState, FencedBlock, Field, IconButton, Input, Markdown, MenuList, Modal, Popover, Select, Spinner, Switch, Textarea, Tooltip, cx, toast, type MenuItem } from '@harness/ui';
+import { Badge, Button, DocView, EmptyState, FencedBlock, Field, IconButton, Input, Markdown, MenuList, Modal, Popover, Select, Spinner, Switch, Textarea, Tooltip, cx, toast, type MenuItem, ResizablePane } from '@harness/ui';
+import { DASHBOARD_INSPECTOR_PANE } from '../../state/layout';
 import { client, clientInfo, useData } from '../../state/data';
 import { navigate, openPluginPanel, useApp } from '../../state/app';
 import { useFenceRenderer } from '../core.chat/Transcript';
@@ -106,9 +107,11 @@ export function DocPage({ params }: { params: Record<string, string> }): React.R
             } : undefined} />
         </div>
         {edit && (
-          <aside className="hx-scroll w-[320px] shrink-0 overflow-y-auto border-l border-hx-border-subtle bg-hx-bg" data-bi-inspector>
-            {sel ? <Inspector docId={id} detail={d} v={sel} onClose={() => setSelected(null)} /> : <PageInspector docId={id} detail={d} page={cur} />}
-          </aside>
+          <ResizablePane spec={DASHBOARD_INSPECTOR_PANE} edge="start" as="aside" className="flex flex-col border-l border-hx-border-subtle bg-hx-bg" data-bi-inspector="">
+            <div className="hx-scroll min-h-0 flex-1 overflow-y-auto">
+              {sel ? <Inspector docId={id} detail={d} v={sel} onClose={() => setSelected(null)} /> : <PageInspector docId={id} detail={d} page={cur} />}
+            </div>
+          </ResizablePane>
         )}
       </div>
       {dialog === 'publish' && <PublishDialog id={id} detail={d} onClose={() => setDialog(null)} />}

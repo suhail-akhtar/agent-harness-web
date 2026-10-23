@@ -17,6 +17,7 @@ import { desktop } from '../bridge';
 import { PendingCard, respondFor } from '../components/Pending';
 import { fmtCost } from './core.chat/Transcript';
 import { PluginHome } from './plugin-home';
+import { layoutCommand } from '../state/layout';
 
 // ---------------- core.shell ----------------
 
@@ -42,6 +43,13 @@ export const coreShell: BuiltinPlugin = {
         {
           id: 'open-view', title: 'Open a page…', category: 'View', icon: 'arrow-right', handler: 'openView',
           agent: { description: 'Show a page of the app (a view id from desktop_describe, e.g. core.artifacts:library).', inputSchema: { type: 'object', properties: { view: { type: 'string', maxLength: 140 } }, required: ['view'] } },
+        },
+        {
+          id: 'layout', title: 'Reset the layout (every pane size)', category: 'View', icon: 'sidebar', handler: 'layout',
+          agent: {
+            description: 'The resizable panes of the window (sidebar, side-panel, split, dashboards.inspector, dashboards.datasets, diagram.details): action "list" gives each size, its bounds and default; "set" a pane size in px (clamped to its bounds in this window); "reset" one (or, with no pane, all) to the default; "collapse" or "expand" one that collapses (the sidebar).',
+            inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['list', 'set', 'reset', 'collapse', 'expand'] }, pane: { type: 'string', maxLength: 80 }, size: { type: 'number', minimum: 0, maximum: 10000 } }, required: ['action'] },
+          },
         },
         { id: 'shortcuts', title: 'Keyboard shortcuts', category: 'Help', icon: 'keyboard', keybinding: 'Mod+/', handler: 'shortcuts' },
         { id: 'setup', title: 'Set up (welcome wizard)', category: 'Help', icon: 'sparkles', handler: 'setup' },
@@ -77,6 +85,8 @@ export const coreShell: BuiltinPlugin = {
       navigate({ view });
       return `Opened ${view}.`;
     },
+    // From the palette (no args): every pane back to its default; agents pass an action.
+    layout: (args) => { const a = (args ?? {}) as { action?: unknown }; const out = layoutCommand(a.action ? a : { action: 'reset' }); if (!a.action) toast(String(out)); return out; },
     setup: () => useApp.setState({ onboardingOpen: true }),
     reloadPlugins: async () => { await useData.getState().refreshPlugins(); toast('Plugins reloaded'); },
   },
