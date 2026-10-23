@@ -1,0 +1,29 @@
+{
+    "name": "Harness.Bridge.Editor.Recorder",
+    "rootNamespace": "Harness.Bridge.Editor",
+    "references": [
+        "Harness.Bridge",
+        "Harness.Bridge.Editor",
+        "Unity.Recorder",
+        "Unity.Recorder.Editor"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "HARNESS_RECORDER"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.unity.recorder",
+            "expression": "4.0.0",
+            "define": "HARNESS_RECORDER"
+        }
+    ],
+    "noEngineReferences": false
+}

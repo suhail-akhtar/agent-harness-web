@@ -28,10 +28,13 @@ export function OffPluginNote({ off }: { off: OffRenderer }): React.ReactElement
 /** The plugin renderers as a fence hook for Markdown. */
 export function useFenceRenderer(): FenceRenderer {
   const registry = useData((s) => s.registry);
-  return useCallback((lang: string, source: string) => {
+  return useCallback((lang: string, source: string, streaming?: boolean) => {
     const r = rendererFor(registry, 'fence', lang.toLowerCase());
     if (!r) return undefined;
-    if (r.kind === 'frame' && r.entry) return <div className="my-3 overflow-hidden rounded-xl border border-hx-border-subtle" data-plugin-renderer={r.qid}><PluginFrame plugin={r.plugin} contribution={r.qid} entry={r.entry} height={r.height ?? 120} context={{ fence: lang, source }} /></div>;
+    // A frame gets its block once, when it loads: while the block still streams in it is shown as
+    // code, and a frame starts again (key) if the finished block's text changes.
+    if (r.kind === 'frame' && r.entry && streaming) return <CodeBlock code={source} language={lang} />;
+    if (r.kind === 'frame' && r.entry) return <div className="my-3 overflow-hidden rounded-xl border border-hx-border-subtle" data-plugin-renderer={r.qid}><PluginFrame key={source} plugin={r.plugin} contribution={r.qid} entry={r.entry} height={r.height ?? 120} context={{ fence: lang, source }} /></div>;
     const C = r.component ? registry.active.find((p) => p.name === r.plugin)?.native?.components[r.component] as React.ComponentType<{ source: string; lang: string }> | undefined : undefined;
     return C ? <RenderBoundary fallback={() => <CodeBlock code={source} language={lang} />}><C source={source} lang={lang} /></RenderBoundary> : undefined;
   }, [registry]);

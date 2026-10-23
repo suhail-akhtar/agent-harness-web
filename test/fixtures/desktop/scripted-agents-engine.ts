@@ -8,6 +8,8 @@
 //                   desktop_notify, desktop_command (switch the theme: asked first), then a summary
 //   "form"       -> ask_user with a JSON-Schema form, then thanks the person by the name they gave
 //   "delegate"   -> a review sub-agent on claude-sonnet-5-5 (allowed by the delegation setting)
+//   'studio "<folder>"' -> desktop_describe of Studio, model_info (a model card), desktop_command
+//                   games3d:open-model and games3d:open-playtest, then Studio's cards as fences
 //   anything else -> a short reply
 // Sub-agents (a <brief>), linked sessions ("CHILD:") and workflow agent nodes get one-step answers.
 import path from 'node:path';
@@ -26,7 +28,7 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 type Call = { name: string; input: Record<string, unknown> };
 type Step = { text?: string; calls?: Call[]; delay?: number };
-type Script = Array<Step | ((results: string[]) => Step)>;
+type Script = Array<Step | ((results: string[], prompt: string) => Step)>;
 
 const textOf = (b: Block[]) => b.filter((x) => x.type === 'text').map((x) => (x as { text: string }).text).join('\n');
 // Only the person's words choose a script: the context blocks the harness adds (reminders, environment, the skills list) are removed.
@@ -34,7 +36,25 @@ const stripped = (t: string) => t.replace(/<(system-reminder|environment|skills|
 
 export const HTML_V1 = '<!doctype html><html><body style="font-family:system-ui;padding:24px"><h1 id="title">Launch plan v1</h1><ol><li>Write the tests</li><li>Update the docs</li></ol></body></html>';
 
+/** The project folder a Studio prompt names, in quotes: studio "<folder>". */
+const studioDir = (prompt: string) => /"([^"]+)"/.exec(prompt)?.[1] ?? '';
+
 const SCRIPTS: Record<string, Script> = {
+  // Studio (test/studio-e2e.test.ts), in the project's folder: looks at the module, inspects a
+  // model (its card), opens the model in the 3D viewer and a playtest (desktop_command, asked
+  // first), then answers with sprite, playtest and build cards.
+  studio: [
+    { text: 'Let me see what Studio has.', calls: [{ name: 'desktop_describe', input: { plugin: 'games3d' } }] },
+    { calls: [{ name: 'model_info', input: { path: '.studio/assets/barrel-wood-01/barrel.glb' } }] },
+    (_r, prompt) => ({ text: 'Opening the barrel in the 3D viewer.', calls: [{ name: 'desktop_command', input: { command: 'games3d:open-model', args: { path: 'barrel.glb', project: studioDir(prompt), asset: 'barrel-wood-01' } } }] }),
+    (_r, prompt) => ({ calls: [{ name: 'desktop_command', input: { command: 'games3d:open-playtest', args: { project: studioDir(prompt), id: 'pt-20261023-1' } } }] }),
+    (r, prompt) => ({ text: [
+      `The app answered: ${(r.at(-1) ?? '').split('\n')[0]?.slice(0, 120)}`, '',
+      'The hero walks at 10 fps:', '', '```studio-sprite', JSON.stringify({ path: '.studio/assets/hero-walk/hero_walk.png', project: studioDir(prompt), frameWidth: 32, frameHeight: 32, frames: 8, fps: 10 }), '```', '',
+      'The last playtest and the failed build:', '', '```studio-playtest', JSON.stringify({ project: studioDir(prompt), id: 'pt-20261023-1' }), '```', '',
+      '```studio-build', JSON.stringify({ project: studioDir(prompt), id: 'b1' }), '```',
+    ].join('\n') }),
+  ],
   artifact: [
     { text: 'I will make the plan as an artifact.', calls: [{ name: 'artifact', input: { action: 'create', title: 'Launch plan', kind: 'html', content: HTML_V1 } }] },
     (r) => ({ calls: [{ name: 'artifact', input: { action: 'update', id: /artifact (\S+) v1/.exec(r.at(-1) ?? '')?.[1] ?? 'missing', old_string: 'Launch plan v1', new_string: 'Launch plan v2' } }] }),
@@ -101,7 +121,7 @@ class ScriptedProvider implements Provider {
       const s = key ? SCRIPTS[key]![step] : undefined;
       if (!s) await say(key ? 'Done.' : 'Hello! This is the scripted agents engine.');
       else {
-        const st = typeof s === 'function' ? s(results) : s;
+        const st = typeof s === 'function' ? s(results, prompt) : s;
         if (st.delay) await wait(st.delay);
         if (st.text) await say(st.text);
         for (const c of st.calls ?? []) content.push({ type: 'tool_use', id: `call_${this.provider}_${++this.n}`, name: c.name, input: c.input });

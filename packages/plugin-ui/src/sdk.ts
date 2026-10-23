@@ -35,7 +35,7 @@ export interface Harness {
   composer: { prefill(text: string, opts?: { newChat?: boolean }): Promise<void> };
   frame: { resize(height?: number): Promise<void> };
   badge: { set(name: string, value: number | string | null): Promise<void> };
-  /** What else is installed: `has({ renderer: 'diagram' })`, `has({ plugin: 'aiops' })`, `list('renderers')` (ids only). */
+  /** What else is installed and on: `has({ renderer: 'diagram' })`, `has({ plugin: 'aiops' })` (a server plugin without pages too), `list('renderers')` (ids only). */
   registry: { has(q: RegistryQuery): Promise<boolean>; list(kind: RegistryKind): Promise<string[]> };
   /**
    * A block drawn by one of the host's renderers (a fence language, e.g. "diagram") over a rectangle

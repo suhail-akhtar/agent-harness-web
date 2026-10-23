@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Audio player</title>
+<link rel="stylesheet" href="kit.css">
+<style>
+  .wave { position: relative; border: 1px solid var(--hx-border-subtle); border-radius: 12px; background: var(--hx-elevated); overflow: hidden; cursor: pointer; }
+  .wave canvas { display: block; width: 100%; height: 180px; }
+  .wave .head { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--hx-accent); left: 0; pointer-events: none; }
+  .controls { display: flex; gap: 10px; align-items: center; margin: 14px 0; flex-wrap: wrap; }
+  .play { width: 44px; height: 44px; border-radius: 50%; border: 0; background: var(--hx-accent); color: var(--hx-on-accent); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+  .play:hover { filter: brightness(1.05); }
+  .t { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--hx-text-secondary); min-width: 110px; }
+</style>
+<script src="harness://app/sdk/plugin-ui.js"></script>
+<script src="kit.js"></script>
+</head>
+<body>
+<div class="page" data-audio-player style="max-width: 980px">
+  <div class="crumbs" id="crumbs"></div>
+  <div class="head"><div class="grow"><h1 id="title">Audio</h1><div class="sub" id="sub"></div></div><span class="row" id="chips"></span></div>
+  <div class="wave" id="wave" aria-label="Waveform: click to seek"><canvas id="canvas"></canvas><div class="head" id="playhead"></div></div>
+  <div class="controls">
+    <button type="button" class="play" id="play" aria-label="Play" disabled></button>
+    <span class="t" id="time">0:00.0 / 0:00.0</span>
+    <label class="small row" style="gap:6px"><input type="checkbox" id="loop"> Loop</label>
+    <label class="small row" style="gap:6px">Volume <input type="range" id="vol" min="0" max="1" step="0.01" value="0.8" style="width:120px"></label>
+  </div>
+  <div class="grid2" style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+    <section class="card"><h2 style="margin-top:0">Sound</h2><dl class="kv" id="info"><dt>Loading</dt><dd>…</dd></dl></section>
+    <section class="card" id="assetCard" hidden><h2 style="margin-top:0">Asset</h2><dl class="kv" id="assetInfo"></dl></section>
+  </div>
+</div>
+<script>
+// The audio player: a sound effect or music file read through Studio's routes, decoded in the page
+// (Web Audio), its waveform drawn, played with seek, loop and volume.
+Kit.start(async (harness) => {
+  const { h, mount, chip } = Kit;
+  const $ = (id) => document.getElementById(id);
+  const params = harness.params || {};
+  const fail = (text) => { mount($('info'), h('dt', {}, 'Error'), h('dd', {}, text)); document.body.dataset.viewerError = text.slice(0, 200); };
+  if (!params.path) { fail('Open a sound from Studio: nothing was named.'); return; }
+  const args = Kit.fileArgs(params);
+  let asset = null;
+  if (params.asset) { try { asset = (await Kit.studio(harness, 'asset', { asset: params.asset, ...(params.project ? { project: params.project } : {}) })).asset; } catch { asset = null; } }
+  $('title').textContent = asset?.name || Kit.base(params.path);
+  $('sub').textContent = params.path;
+  mount($('crumbs'), asset ? [h('button', { type: 'button', onclick: () => harness.view.open('assets') }, 'Assets'), h('span', {}, '›'), h('button', { type: 'button', onclick: () => harness.view.open('assets', { asset: asset.ref }) }, asset.name)] : params.project ? h('button', { type: 'button', onclick: () => harness.view.open('projects', { project: params.project }) }, 'Project') : null);
+  const PLAY = 'M8 5v14l11-7z'; const PAUSE = 'M7 5h4v14H7zM13 5h4v14h-4z';
+  const icon = (d) => { const NS = 'http://www.w3.org/2000/svg'; const s = document.createElementNS(NS, 'svg'); s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('width', '20'); s.setAttribute('height', '20'); const p = document.createElementNS(NS, 'path'); p.setAttribute('d', d); p.setAttribute('fill', 'currentColor'); s.append(p); return s; };
+  mount($('play'), icon(PLAY));
+
+  let f;
+  try { f = await Kit.readFile(harness, args); } catch (e) { fail(e.message); return; }
+  const actx = new AudioContext();
+  let buf;
+  try { buf = await actx.decodeAudioData(f.bytes.buffer.slice(f.bytes.byteOffset, f.bytes.byteOffset + f.bytes.byteLength)); } catch { fail(`${f.name} could not be decoded (WAV, MP3 and OGG play here)`); return; }
+  const gain = actx.createGain(); gain.gain.value = 0.8; gain.connect(actx.destination);
+  const fmt = (s) => `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`;
+  mount($('info'), [['File', f.name], ['Duration', fmt(buf.duration)], ['Sample rate', `${buf.sampleRate} Hz`], ['Channels', buf.numberOfChannels === 1 ? 'mono' : buf.numberOfChannels === 2 ? 'stereo' : String(buf.numberOfChannels)], ['Size', Kit.size(f.size)]].flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]));
+  mount($('chips'), chip(fmt(buf.duration)), chip(`${Math.round(buf.sampleRate / 1000)} kHz`), asset ? chip(asset.kind) : null);
+  if (asset) { $('assetCard').hidden = false; mount($('assetInfo'), [['Kind', asset.kind], ['License', asset.license.id || 'not recorded'], ['Source', asset.source.type || 'not recorded'], ['Generator', asset.source.generator], ['Prompt', asset.source.prompt]].filter(([, v]) => v).flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)])); }
+  document.body.dataset.duration = buf.duration.toFixed(3);
+
+  // The waveform: the peak and the RMS of each column, every channel mixed.
+  const canvas = $('canvas');
+  const peaks = (w) => {
+    const ch = Array.from({ length: buf.numberOfChannels }, (_, i) => buf.getChannelData(i));
+    const per = Math.max(1, Math.floor(buf.length / w));
+    const out = [];
+    for (let x = 0; x < w; x++) {
+      let mx = 0; let sq = 0;
+      for (let i = x * per; i < Math.min(buf.length, (x + 1) * per); i++) { let v = 0; for (const c of ch) v += c[i]; v /= ch.length; mx = Math.max(mx, Math.abs(v)); sq += v * v; }
+      out.push([mx, Math.sqrt(sq / per)]);
+    }
+    return out;
+  };
+  const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim() || '#888';
+  let drawnW = 0; let cache = [];
+  const drawWave = () => {
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.max(10, Math.round(canvas.clientWidth * dpr)); const hgt = Math.round(180 * dpr);
+    canvas.width = w; canvas.height = hgt;
+    if (w !== drawnW) { cache = peaks(w); drawnW = w; }
+    const g = canvas.getContext('2d');
+    g.clearRect(0, 0, w, hgt);
+    const mid = hgt / 2;
+    const played = playing ? Math.min(1, offsetNow() / buf.duration) : pausedAt / buf.duration;
+    for (let x = 0; x < w; x++) {
+      const [pk, rms] = cache[x];
+      const on = x / w <= played;
+      g.fillStyle = on ? css('--hx-accent') : css('--hx-border');
+      g.fillRect(x, mid - pk * mid * 0.95, 1, Math.max(1, pk * mid * 1.9));
+      g.fillStyle = on ? css('--hx-accent-text') : css('--hx-text-muted');
+      g.fillRect(x, mid - rms * mid * 0.95, 1, Math.max(1, rms * mid * 1.9));
+    }
+    $('playhead').style.left = `${played * 100}%`;
+    $('time').textContent = `${fmt(played * buf.duration)} / ${fmt(buf.duration)}`;
+  };
+  let src = null; let playing = false; let startedAt = 0; let pausedAt = 0;
+  const offsetNow = () => (actx.currentTime - startedAt);
+  const stop = () => { if (src) { src.onended = null; try { src.stop(); } catch { /* stopped */ } src.disconnect(); src = null; } };
+  const play = async (from) => {
+    await actx.resume();
+    stop();
+    src = actx.createBufferSource(); src.buffer = buf; src.loop = $('loop').checked; src.connect(gain);
+    src.start(0, from % buf.duration);
+    startedAt = actx.currentTime - (from % buf.duration);
+    playing = true; document.body.dataset.playing = '1';
+    mount($('play'), icon(PAUSE)); $('play').setAttribute('aria-label', 'Pause');
+    src.onended = () => { if (!src.loop) { playing = false; pausedAt = 0; document.body.dataset.playing = '0'; mount($('play'), icon(PLAY)); $('play').setAttribute('aria-label', 'Play'); drawWave(); } };
+    const loop = () => { if (!playing) return; if (src && src.loop && offsetNow() > buf.duration) startedAt += buf.duration; drawWave(); requestAnimationFrame(loop); };
+    requestAnimationFrame(loop);
+  };
+  const pause = () => { pausedAt = offsetNow() % buf.duration; playing = false; stop(); document.body.dataset.playing = '0'; mount($('play'), icon(PLAY)); $('play').setAttribute('aria-label', 'Play'); drawWave(); };
+  $('play').disabled = false;
+  $('play').onclick = () => (playing ? pause() : play(pausedAt));
+  $('loop').onchange = () => { if (src) src.loop = $('loop').checked; };
+  $('vol').oninput = () => { gain.gain.value = Number($('vol').value); };
+  $('wave').addEventListener('click', (ev) => { const r = $('wave').getBoundingClientRect(); const at = ((ev.clientX - r.left) / r.width) * buf.duration; if (playing) play(at); else { pausedAt = at; drawWave(); } });
+  new ResizeObserver(() => drawWave()).observe($('wave'));
+  harness.theme.onChange(() => drawWave());
+  drawWave();
+  document.body.dataset.waveform = '1';
+});
+</script>
+</body>
+</html>

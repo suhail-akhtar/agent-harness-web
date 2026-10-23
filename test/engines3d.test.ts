@@ -11,9 +11,11 @@ import { skillsIn } from '../src/skills/skills.ts';
 import type { ToolContext } from '../src/tools/types.ts';
 import { fakeGodot, glbBytes, pngBytes, tempDir, testPicture } from './helpers.ts';
 
-// Blender and Godot in the games3d plugin. The unit tests use stub hosts; the
-// integration tests run the real programs: Blender on this machine when it is
-// installed, and both inside the 3D sandbox image when Docker has it.
+// Blender and Godot, now the engine-blender and engine-godot plugins (games3d keeps
+// model_info and the model gates). The unit tests use stub hosts; the integration tests
+// run the real programs: Blender on this machine when it is installed, and both inside
+// the 3D sandbox image when Docker has it. More in engine-godot*.test.ts and
+// engine-blender*.test.ts.
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // @ts-expect-error plain JS module
@@ -49,13 +51,17 @@ async function harness() {
   return createHarness({ dataDir: await tempDir(), plugins: [path.join(here, '..', 'plugins')] });
 }
 
-test('games3d registers the blender and godot tools, their gates and skills; the agents know when to use them', async () => {
+test('the engine plugins register the blender and godot tools, their gates and skills; the agents know when to use them', async () => {
   const h = await harness();
   for (const t of ['blender', 'godot', 'model_info']) assert.ok(h.registry.tools.has(t), t);
-  for (const g of ['blender-file', 'godot-project', 'gltf-valid']) assert.ok(h.registry.gates.has(g), g);
-  const skills = await skillsIn(path.join(here, '..', 'plugins', 'games3d', 'skills'), 'games3d');
-  const names = skills.map((s: { name: string }) => s.name);
-  for (const s of ['blender-scripting', 'godot-essentials', 'threejs-essentials']) assert.ok(names.includes(s), s);
+  for (const g of ['blender-file', 'godot-project', 'godot-selftest', 'godot-export', 'gltf-valid', 'model-preview']) assert.ok(h.registry.gates.has(g), g);
+  const names = [
+    ...await skillsIn(path.join(here, '..', 'plugins', 'games3d', 'skills'), 'games3d'),
+    ...await skillsIn(path.join(here, '..', 'plugins', 'engine-blender', 'skills'), 'engine-blender'),
+    ...await skillsIn(path.join(here, '..', 'plugins', 'engine-godot', 'skills'), 'engine-godot'),
+  ].map((s: { name: string }) => s.name);
+  for (const s of ['blender-scripting', 'blender-sprites', 'godot-essentials', 'godot-2d', 'godot-gdscript-testing', 'threejs-essentials']) assert.ok(names.includes(s), s);
+  for (const a of ['blender-artist', 'godot-engineer']) assert.ok(h.registry.agents.has(a), a);
   assert.match(h.registry.agents.get('3d-artist')!.prompt, /blender-scripting/);
   assert.match(h.registry.agents.get('game-engineer')!.prompt, /godot-essentials/);
   await h.close();
@@ -182,7 +188,7 @@ test('godot-project and blender-file gates apply only to their files, and withou
     assert.match(g.summary, /not checked: (Godot|Blender) is not installed in this runtime/);
     assert.match(g.details ?? '', /3D sandbox image/);
   }
-  assert.match(formatGates(r), /^All blocking gates passed\.\nWARN godot-project/);
+  assert.match(formatGates(r), /^All blocking gates passed\.\nWARN (blender-file|godot-project)/);
   assert.ok((await E.findFiles(root, (n: string) => n.endsWith('.blend'))).every((f: string) => !f.includes('node_modules')));
   await h.close();
 });
@@ -233,7 +239,7 @@ test('godot export with a stand-in Godot: a missing preset is an error naming th
     await fs.writeFile(path.join(root, 'game', 'project.godot'), PROJECT);
     let r = await godot({ action: 'export', project: 'game', preset: 'Linux', output: 'build/g.x86_64' });
     assert.equal(r.is_error, true);
-    assert.match(r.content, /no preset named "Linux"\. game\/export_presets\.cfg does not exist\..*createPreset: "linux" or "web"/);
+    assert.match(r.content, /no preset named "Linux"\. game\/export_presets\.cfg does not exist\..*createPreset: "windows", "linux" or "web"/);
     await assert.rejects(fs.stat(path.join(root, 'game', 'export_presets.cfg')), 'nothing written without being asked');
     assert.deepEqual(await fake.calls(), [], 'Godot did not run');
 
@@ -261,7 +267,7 @@ test('godot export with a stand-in Godot: a missing preset is an error naming th
     r = await godot({ action: 'export', project: 'game', preset: 'Mac', output: 'build/m.zip' });
     assert.match(r.content, /no preset named "Mac"\. The presets there: "Linux" \(Linux\), "Web" \(Web\)\./);
     r = await godot({ action: 'export', project: 'game', createPreset: 'android' });
-    assert.match(r.content, /createPreset must be "linux" or "web"/);
+    assert.match(r.content, /createPreset must be "windows", "linux" or "web"/);
     await assert.rejects(godot({ action: 'export', project: 'game', preset: 'Linux', output: '../outside.x86_64' }), /outside the workspace/);
 
     process.env.FAKE_NO_TEMPLATES = '1';

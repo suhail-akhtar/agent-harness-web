@@ -12,6 +12,7 @@ import { useData, client } from '../../state/data';
 import { useApp } from '../../state/app';
 import { offRendererFor, rendererFor } from '../../registry/registry';
 import { PluginFrame } from '../../registry/Frame';
+import { toolRendererContext } from '../../registry/tool-context';
 import { OffPluginNote, useArtifactRenderer, useEventComponent, useFenceRenderer } from '../../registry/renderers';
 import { FilePreview } from '../../components/FilePreview';
 import { WorkflowGraph } from '../../components/WorkflowGraph';
@@ -236,7 +237,7 @@ export function ToolCard({ item, sessionId }: { item: ToolItem; sessionId: strin
         <div className="ml-7 space-y-0.5 py-0.5 text-[12px] text-hx-muted">{item.activity.slice(open ? 0 : -3).map((a, i) => <div key={i} className={a.isError ? 'text-hx-danger' : ''}>{a.done ? (a.isError ? '✕' : '✓') : '…'} <b className="font-medium">{a.name}</b> {a.summary}</div>)}</div>
       )}
       {custom && !item.running && custom.kind === 'frame' && custom.entry ? (
-        <div className="ml-6 mt-1" data-plugin-renderer={custom.qid}><PluginFrame plugin={custom.plugin} contribution={custom.qid} entry={custom.entry} height={custom.height ?? 140} context={{ tool: item.name, input: item.input, result: item.result, isError: item.isError }} /></div>
+        <div className="ml-6 mt-1" data-plugin-renderer={custom.qid}><PluginFrame plugin={custom.plugin} contribution={custom.qid} entry={custom.entry} height={custom.height ?? 140} context={toolRendererContext(item, sessionId)} /></div>
       ) : (
         <>
           {diff && !open && !item.isError && <div className="ml-6"><DiffView path={diff.path} before={diff.before} after={diff.after} collapsedLines={40} /></div>}

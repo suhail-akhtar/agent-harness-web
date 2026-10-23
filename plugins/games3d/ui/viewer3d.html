@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3D viewer</title>
+<link rel="stylesheet" href="kit.css">
+<style>
+  html, body { height: 100%; overflow: hidden; }
+  #canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none; }
+  .hud { position: absolute; left: 12px; bottom: 10px; font-size: 11.5px; color: var(--hx-text-muted); background: color-mix(in srgb, var(--hx-elevated) 80%, transparent); border-radius: 7px; padding: 3px 8px; pointer-events: none; }
+  .clip { display: flex; gap: 6px; align-items: center; margin: 8px 0 4px; }
+  .clip select { flex: 1; }
+  .tree li button { font: inherit; border: 0; background: none; color: inherit; padding: 0; cursor: pointer; text-align: left; }
+  .tree li button:hover { color: var(--hx-accent-text); }
+  .warnline { font-size: 12px; color: var(--hx-warning); margin-top: 6px; }
+</style>
+<script src="harness://app/sdk/plugin-ui.js"></script>
+<script src="kit.js"></script>
+<script src="model.js"></script>
+</head>
+<body>
+<div class="viewer-shell" data-viewer3d>
+  <div class="viewer-head">
+    <button type="button" class="btn sm ghost" id="back" hidden>Back</button>
+    <div class="grow"><h1 id="title">3D viewer</h1><div class="sub" id="sub"></div></div>
+    <span id="chips" class="row"></span>
+  </div>
+  <div class="toolbar" role="toolbar" aria-label="View">
+    <div class="seg" role="group" aria-label="Shading" id="modes"></div>
+    <span class="sep"></span>
+    <button type="button" class="btn sm" id="t-grid" aria-pressed="true">Grid</button>
+    <button type="button" class="btn sm" id="t-axes" aria-pressed="false">Axes</button>
+    <button type="button" class="btn sm" id="t-normals" aria-pressed="false" title="Vertex normals as lines">Normal lines</button>
+    <button type="button" class="btn sm" id="t-spin" aria-pressed="false">Turntable</button>
+    <span class="sep"></span>
+    <button type="button" class="btn sm" data-cam="front">Front</button>
+    <button type="button" class="btn sm" data-cam="side">Side</button>
+    <button type="button" class="btn sm" data-cam="top">Top</button>
+    <button type="button" class="btn sm" data-cam="reset">Fit</button>
+    <span class="spacer"></span>
+    <label id="lod-wrap" hidden>LOD <select id="lod" aria-label="Level of detail"></select></label>
+    <label>Background <select id="bg" aria-label="Background"><option value="studio">Studio</option><option value="dark">Dark</option><option value="light">Light</option></select></label>
+  </div>
+  <div class="viewer-main">
+    <div class="stage-area" id="stage">
+      <canvas id="canvas" tabindex="0" aria-label="The model: drag to orbit, scroll to zoom, right-drag to pan"></canvas>
+      <div class="overlay-msg" id="msg">Loading the model…</div>
+      <div class="hud" id="hud" hidden>Drag to orbit · scroll to zoom · right-drag to pan</div>
+    </div>
+    <aside class="viewer-side" aria-label="About the model">
+      <h2>Model</h2>
+      <dl class="stat" id="stats"><dt>Triangles</dt><dd>—</dd></dl>
+      <div id="warn"></div>
+      <h2>Animation</h2>
+      <div id="anim" class="muted small">No animations.</div>
+      <h2>Materials</h2>
+      <div id="mats" class="muted small">—</div>
+      <h2>Scene</h2>
+      <ul class="tree" id="tree"></ul>
+    </aside>
+  </div>
+</div>
+<script>
+// The 3D viewer: a .glb or .gltf read through Studio's routes (from a project, an asset, the
+// library or an allowed folder), drawn with the vendored Three.js. Orbit, shading modes
+// (shaded, wireframe, normals, a UV checker), vertex normal lines, grid and axes, fixed views, a
+// turntable, the LODs an asset lists, the animation player, and the model's numbers.
+Kit.start(async (harness) => {
+  const { h, mount, chip } = Kit;
+  const $ = (id) => document.getElementById(id);
+  const params = harness.params || {};
+  let settings = {};
+  try { settings = (await harness.settings.get()) || {}; } catch { settings = {}; }
+  const fail = (text) => { $('msg').hidden = false; $('msg').textContent = text; document.body.dataset.viewerError = text.slice(0, 200); };
+  if (!params.path) { fail('Open a model from Studio (Assets, Scenes or a model card): no model was named.'); return; }
+
+  const T = await window.Studio3D.three();
+  const { THREE, OrbitControls, VertexNormalsHelper } = T;
+  const canvas = $('canvas');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+  renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  const scene = new THREE.Scene();
+  window.Studio3D.light(T, scene);
+  const camera = new THREE.PerspectiveCamera(40, 1, 0.01, 1000);
+  const controls = new OrbitControls(camera, canvas);
+  controls.enableDamping = true;
+  const BG = { studio: 0x3a3d44, dark: 0x16171b, light: 0xeceef1 };
+  const setBg = (k) => { scene.background = new THREE.Color(BG[k] ?? BG.studio); $('bg').value = BG[k] ? k : 'studio'; };
+  setBg(settings.viewerBackground || 'studio');
+  $('bg').onchange = () => setBg($('bg').value);
+
+  let model = null; let grid = null; let axes = null; let mixer = null; let action = null; let fit = null;
+  let helpers = [];
+  const originals = new Map();
+  let mode = 'shaded';
+  const clock = new THREE.Clock();
+  const checker = (() => {
+    const c = document.createElement('canvas'); c.width = c.height = 256;
+    const x = c.getContext('2d');
+    for (let i = 0; i < 8; i++) for (let j = 0; j < 8; j++) { x.fillStyle = (i + j) % 2 ? '#2c2f36' : '#e8eaee'; x.fillRect(i * 32, j * 32, 32, 32); }
+    x.fillStyle = '#d97757'; x.font = 'bold 18px sans-serif';
+    for (let i = 0; i < 8; i++) for (let j = 0; j < 8; j++) if ((i + j) % 4 === 0) x.fillText(String.fromCharCode(65 + i) + (j + 1), i * 32 + 5, j * 32 + 22);
+    const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  })();
+  const materials = {
+    wire: new THREE.MeshBasicMaterial({ color: 0x9fd3ff, wireframe: true }),
+    normals: new THREE.MeshNormalMaterial(),
+    uv: new THREE.MeshBasicMaterial({ map: checker }),
+  };
+
+  const MODES = [['shaded', 'Shaded'], ['wireframe', 'Wireframe'], ['normals', 'Normals'], ['uv', 'UV checker']];
+  mount($('modes'), MODES.map(([id, label]) => h('button', { type: 'button', 'aria-pressed': String(id === mode), 'data-mode': id, onclick: () => setMode(id) }, label)));
+  function setMode(m) {
+    mode = m;
+    for (const b of $('modes').querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.mode === m));
+    if (!model) return;
+    model.traverse((o) => {
+      if (!o.isMesh) return;
+      if (!originals.has(o)) originals.set(o, o.material);
+      const skinned = o.isSkinnedMesh;
+      const pick = (base) => { if (!skinned) return base; const c = base.clone(); return c; };
+      o.material = m === 'shaded' ? originals.get(o) : m === 'wireframe' ? pick(materials.wire) : m === 'normals' ? pick(materials.normals) : (o.geometry.attributes.uv ? pick(materials.uv) : pick(materials.normals));
+    });
+    document.body.dataset.mode = m;
+  }
+  const toggle = (id, fn) => { const b = $(id); b.onclick = () => { const on = b.getAttribute('aria-pressed') !== 'true'; b.setAttribute('aria-pressed', String(on)); fn(on); }; };
+  toggle('t-grid', (on) => { if (grid) grid.visible = on; });
+  toggle('t-axes', (on) => { if (axes) axes.visible = on; });
+  toggle('t-normals', (on) => {
+    for (const x of helpers) { scene.remove(x); x.dispose?.(); }
+    helpers = [];
+    if (!on || !model) return;
+    const len = (fit?.radius || 1) * 0.04;
+    model.traverse((o) => { if (o.isMesh && !o.isSkinnedMesh && o.geometry.attributes.normal && o.geometry.attributes.position.count <= 60000) { const hlp = new VertexNormalsHelper(o, len, 0x7ad7ff); helpers.push(hlp); scene.add(hlp); } });
+  });
+  toggle('t-spin', (on) => { controls.autoRotate = on; controls.autoRotateSpeed = 2.2; });
+  for (const b of document.querySelectorAll('[data-cam]')) b.addEventListener('click', () => {
+    if (!model) return;
+    const dirs = { front: new THREE.Vector3(0, 0.0001, 1), side: new THREE.Vector3(1, 0.0001, 0), top: new THREE.Vector3(0.0001, 1, 0.0001), reset: undefined };
+    fit = window.Studio3D.frame(T, camera, model, controls, dirs[b.dataset.cam]);
+  });
+
+  function resize() {
+    const r = $('stage').getBoundingClientRect();
+    renderer.setSize(Math.max(1, r.width), Math.max(1, r.height), false);
+    camera.aspect = Math.max(1, r.width) / Math.max(1, r.height);
+    camera.updateProjectionMatrix();
+  }
+  new ResizeObserver(resize).observe($('stage'));
+  resize();
+
+  let frames = 0;
+  renderer.setAnimationLoop(() => {
+    const dt = clock.getDelta();
+    if (mixer) { mixer.update(dt); if (action && scrub && !scrub.dragging) scrub.value = String(action.time); }
+    for (const x of helpers) x.update?.();
+    controls.update();
+    renderer.render(scene, camera);
+    if (model && ++frames === 3) { document.body.dataset.rendered = '1'; }
+  });
+
+  // ----- loading -----
+  const fileArgs = Kit.fileArgs(params);
+  let asset = null;
+  if (params.asset) { try { asset = (await Kit.studio(harness, 'asset', { asset: params.asset, ...(params.project ? { project: params.project } : {}) })).asset; } catch { asset = null; } }
+  $('title').textContent = asset?.name || Kit.base(params.path);
+  $('sub').textContent = asset ? `${params.path} · ${asset.library ? 'library' : asset.projectName}` : params.path;
+  if (asset) { $('back').hidden = false; $('back').onclick = () => harness.view.open('assets', { asset: asset.ref }); }
+  else if (params.project) { $('back').hidden = false; $('back').onclick = () => harness.view.open('projects', { project: params.project }); }
+  const lods = asset?.lods?.length ? [{ role: 'main', path: asset.model || params.path }, ...asset.lods.filter((l) => l.path !== (asset.model || params.path))] : [];
+  if (lods.length > 1) {
+    $('lod-wrap').hidden = false;
+    mount($('lod'), lods.map((l) => h('option', { value: l.path, selected: l.path === params.path || undefined }, l.role === 'main' ? 'LOD 0 (main)' : l.role.replace(/^lod/, 'LOD '))));
+    $('lod').onchange = () => load($('lod').value, true);
+  }
+
+  let scrub = null;
+  async function load(path, keepCamera) {
+    $('msg').hidden = false; $('msg').textContent = 'Loading the model…';
+    document.body.dataset.rendered = '';
+    frames = 0;
+    let gltf; let size;
+    try { ({ gltf, size } = await window.Studio3D.load(harness, { ...fileArgs, path })); }
+    catch (e) { fail(e.message); return; }
+    if (model) { scene.remove(model); originals.clear(); }
+    if (grid) scene.remove(grid);
+    if (axes) scene.remove(axes);
+    model = gltf.scene || gltf.scenes[0];
+    scene.add(model);
+    const s = window.Studio3D.stats(T, model);
+    const prev = { pos: camera.position.clone(), target: controls.target.clone() };
+    fit = window.Studio3D.frame(T, camera, model, controls);
+    if (keepCamera && prev) { camera.position.copy(prev.pos); controls.target.copy(prev.target); controls.update(); }
+    const span = Math.max(...s.size, 0.01);
+    const step = 10 ** Math.floor(Math.log10(span));
+    const gsize = Math.ceil((span * 2) / step) * step;
+    grid = new THREE.GridHelper(gsize, Math.min(40, Math.round(gsize / step) * 2), 0x8a8f99, 0x5a5e66);
+    grid.position.y = s.box.isEmpty() ? 0 : s.box.min.y;
+    grid.material.transparent = true; grid.material.opacity = 0.5;
+    grid.visible = $('t-grid').getAttribute('aria-pressed') === 'true';
+    scene.add(grid);
+    axes = new THREE.AxesHelper(span * 0.6); axes.visible = $('t-axes').getAttribute('aria-pressed') === 'true'; scene.add(axes);
+    setMode(mode);
+    if ($('t-normals').getAttribute('aria-pressed') === 'true') { $('t-normals').click(); $('t-normals').click(); }
+    $('msg').hidden = true; $('hud').hidden = false;
+    const m = (v) => (v >= 1 ? `${v.toFixed(2)} m` : `${(v * 100).toFixed(1)} cm`);
+    mount($('stats'), [['Triangles', Kit.num(s.triangles)], ['Vertices', Kit.num(s.vertices)], ['Meshes', `${s.meshes}${s.skinned ? ` (${s.skinned} skinned)` : ''}`], ['Materials', String(s.materials)], ['Textures', String(s.textures)],
+      ['Width (X)', m(s.size[0])], ['Height (Y)', m(s.size[1])], ['Depth (Z)', m(s.size[2])], ['File', Kit.size(size)], ['Animations', String(gltf.animations.length)]].flatMap(([k, v]) => [h('dt', {}, k), h('dd', { 'data-stat': k.split(' ')[0].toLowerCase() }, v)]));
+    const budget = asset?.meta?.triangles;
+    mount($('warn'), [
+      s.withoutUv ? h('div', { class: 'warnline' }, `${s.withoutUv} mesh${s.withoutUv === 1 ? ' has' : 'es have'} no UVs (the UV checker shows normals there).`) : null,
+      span > 200 || span < 0.005 ? h('div', { class: 'warnline' }, `Size ${m(span)}: glTF units are metres; check the scale.`) : null,
+      budget && budget !== s.triangles ? h('div', { class: 'muted small', style: { marginTop: '6px' } }, `asset.json says ${Kit.num(budget)} triangles.`) : null]);
+    mount($('chips'), chip(`${Kit.num(s.triangles)} tris`), chip(m(span)), gltf.animations.length ? chip(`${gltf.animations.length} anim`, 'info') : null);
+    document.body.dataset.triangles = String(s.triangles);
+    document.body.dataset.meshes = String(s.meshes);
+    // Materials and the scene tree.
+    const mats = new Map();
+    model.traverse((o) => { if (o.isMesh) for (const mt of Array.isArray(originals.get(o) || o.material) ? (originals.get(o) || o.material) : [originals.get(o) || o.material]) if (mt) mats.set(mt.uuid, mt); });
+    mount($('mats'), mats.size ? [...mats.values()].slice(0, 40).map((mt) => h('div', { class: 'row small', style: { padding: '3px 0' } },
+      h('span', { style: { width: '14px', height: '14px', borderRadius: '4px', border: '1px solid var(--hx-border)', background: mt.color ? `#${mt.color.getHexString()}` : 'transparent' } }),
+      h('span', { style: { flex: '1' } }, mt.name || mt.type), mt.map ? chip('map') : null, mt.normalMap ? chip('normal') : null, typeof mt.metalness === 'number' ? h('span', { class: 'muted' }, `m ${mt.metalness.toFixed(1)} r ${mt.roughness.toFixed(1)}`) : null)) : 'None');
+    const lines = [];
+    const walk = (o, d) => { if (lines.length > 400) return; lines.push(h('li', { style: { paddingLeft: `${d * 12}px` } }, h('button', { type: 'button', onclick: () => { fit = window.Studio3D.frame(T, camera, o, controls); } }, o.name || o.type), h('span', { class: 'ty' }, o.isSkinnedMesh ? 'SkinnedMesh' : o.isMesh ? 'Mesh' : o.isBone ? 'Bone' : o.type))); for (const c of o.children) walk(c, d + 1); };
+    walk(model, 0);
+    mount($('tree'), lines);
+    // Animations.
+    mixer = null; action = null; scrub = null;
+    if (gltf.animations.length) {
+      mixer = new THREE.AnimationMixer(model);
+      const sel = h('select', { 'aria-label': 'Animation', 'data-clips': '' }, gltf.animations.map((c, i) => h('option', { value: String(i) }, `${c.name || `clip ${i + 1}`} (${c.duration.toFixed(2)} s)`)));
+      const play = h('button', { type: 'button', class: 'btn sm', 'data-play': '' }, 'Pause');
+      const speed = h('select', { 'aria-label': 'Speed' }, ['0.25', '0.5', '1', '1.5', '2'].map((v) => h('option', { value: v, selected: v === '1' || undefined }, `${v}x`)));
+      scrub = h('input', { type: 'range', min: '0', max: '1', step: '0.001', value: '0', style: { width: '100%' }, 'aria-label': 'Time' });
+      const loop = h('input', { type: 'checkbox', checked: true });
+      const start = (i) => {
+        if (action) action.stop();
+        const clip = gltf.animations[i];
+        action = mixer.clipAction(clip); action.reset(); action.setLoop(loop.checked ? THREE.LoopRepeat : THREE.LoopOnce); action.clampWhenFinished = true; action.play();
+        scrub.max = String(clip.duration); play.textContent = 'Pause'; document.body.dataset.animation = clip.name || String(i);
+      };
+      sel.onchange = () => start(Number(sel.value));
+      play.onclick = () => { if (!action) return; action.paused = !action.paused; play.textContent = action.paused ? 'Play' : 'Pause'; };
+      speed.onchange = () => { mixer.timeScale = Number(speed.value); };
+      loop.onchange = () => action && action.setLoop(loop.checked ? THREE.LoopRepeat : THREE.LoopOnce);
+      scrub.addEventListener('pointerdown', () => { scrub.dragging = true; if (action) action.paused = true; play.textContent = 'Play'; });
+      scrub.addEventListener('pointerup', () => { scrub.dragging = false; });
+      scrub.addEventListener('input', () => { if (action) { action.time = Number(scrub.value); mixer.update(0); } });
+      mount($('anim'), h('div', { class: 'clip' }, sel, play), h('div', { class: 'clip' }, scrub), h('div', { class: 'clip small' }, speed, h('label', { class: 'small' }, loop, ' Loop')));
+      start(0);
+    } else mount($('anim'), 'No animations.');
+    window.__viewer = {
+      stats: s,
+      // How varied the pixels drawn are: a blank canvas is one colour.
+      spread() {
+        const gl = renderer.getContext();
+        const w = gl.drawingBufferWidth; const hgt = gl.drawingBufferHeight;
+        const px = new Uint8Array(w * hgt * 4);
+        gl.readPixels(0, 0, w, hgt, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        const colours = new Set(); let n = 0; let sum = 0; let sq = 0;
+        for (let i = 0; i < px.length; i += 4 * 97) { const l = 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]; sum += l; sq += l * l; n++; colours.add((px[i] >> 4) << 8 | (px[i + 1] >> 4) << 4 | (px[i + 2] >> 4)); }
+        const mean = sum / n;
+        return { colours: colours.size, stddev: Math.sqrt(Math.max(0, sq / n - mean * mean)), width: w, height: hgt };
+      },
+      setMode, mode: () => mode, clips: gltf.animations.map((c) => c.name),
+      time: () => (action ? action.time : null),
+    };
+  }
+  await load(params.path, false);
+});
+</script>
+</body>
+</html>
