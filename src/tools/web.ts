@@ -38,6 +38,28 @@ export async function assertPublicUrl(raw: string): Promise<URL> {
 }
 
 /**
+ * The deny-list entry `url` falls under, if any. An entry is a host ("example.com",
+ * its subdomains too) or a host and path prefix ("github.com/owner/repo", which
+ * also covers "/owner/repo.git" and everything under it). Case does not matter
+ * (GitHub's owners and repositories are case-insensitive).
+ */
+export function deniedUrl(url: URL, deny: readonly string[] | undefined): string | undefined {
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  const p = decodeURIComponentSafe(url.pathname).toLowerCase().replace(/\/{2,}/g, '/');
+  return deny?.find((entry) => {
+    const e = entry.toLowerCase().replace(/^[a-z]+:\/\//, '').replace(/\/+$/, '');
+    const slash = e.indexOf('/');
+    const h = slash < 0 ? e : e.slice(0, slash);
+    if (host !== h && !host.endsWith(`.${h}`)) return false;
+    if (slash < 0) return true;
+    const prefix = e.slice(slash);
+    return p === prefix || (p.startsWith(prefix) && /^[/.]/.test(p.slice(prefix.length)));
+  });
+}
+
+function decodeURIComponentSafe(s: string): string { try { return decodeURIComponent(s); } catch { return s; } }
+
+/**
  * The address check again at connection time, on the very addresses the socket
  * connects to: a name that resolved to a public address for assertPublicUrl and
  * to 127.0.0.1 a moment later (DNS rebinding) is refused here.
@@ -232,12 +254,21 @@ export const webFetchTool: Tool = {
   summarize: (i) => `fetch ${str(i.url)}`,
   async run(input, ctx) {
     const asked = str(input.url);
-    let url = await assertPublicUrl(asked);
+    // A denied URL is refused before anything is resolved or sent, at every redirect hop.
+    const deny = ctx.services?.denyUrls;
+    const check = async (raw: string) => {
+      let u: URL | undefined;
+      try { u = new URL(raw); } catch { /* assertPublicUrl says why */ }
+      const hit = u && deniedUrl(u, deny);
+      if (hit) throw new Error(`${raw} is blocked in this session (${hit})`);
+      return assertPublicUrl(raw);
+    };
+    let url = await check(asked);
     let res: Response | undefined;
     for (let hop = 0; hop < 6; hop++) {
       res = await publicFetch(url, { redirect: 'manual', signal: ctx.signal, headers: { 'user-agent': 'harness-web/0.1 (+agent fetch)', accept: 'text/html,text/plain,application/json,application/pdf,*/*;q=0.5' } });
       if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
-        url = await assertPublicUrl(new URL(res.headers.get('location')!, url).toString());
+        url = await check(new URL(res.headers.get('location')!, url).toString());
         continue;
       }
       break;
@@ -303,6 +334,9 @@ export const webSearchTool: Tool = {
     const list = (v: unknown) => (Array.isArray(v) ? v.map(String).map((d) => d.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '')).filter(Boolean) : undefined);
     const max = Math.min(20, Math.max(1, Math.floor(num(input.max_results) ?? 8)));
     const r = await search.search(query, { max, allowedDomains: list(input.allowed_domains), blockedDomains: list(input.blocked_domains) }, ctx.signal);
+    // Denied pages are not shown at all: a snippet can carry what the page holds.
+    const deny = ctx.services?.denyUrls;
+    if (deny?.length) r.hits = r.hits.filter((h) => { try { return !deniedUrl(new URL(h.url), deny); } catch { return false; } });
     if (r.cost) ctx.services?.charge?.(`web_search (${r.backend})`, r.cost);
     ctx.services?.sources?.recordSearch(query, r.hits);
     if (!r.hits.length) return { content: `No results for "${query}". Try other words, or fewer filters.` };

@@ -17,6 +17,11 @@
 //     "setup": "node {{case}}/../stack/stack.mjs reset",   // optional: before the agent starts (a failure skips the run)
 //     "teardown": "node {{case}}/../stack/stack.mjs down"  // optional: after the checks, pass or fail
 //   }
+//
+// The checks are public (this repository is), so an agent must not download them:
+// web_fetch and web_search refuse the repository's GitHub URLs (HARNESS_EVAL_DENY_HOSTS
+// replaces the list). Commands are contained only by a sandbox (HARNESS_LOCAL_SANDBOX);
+// each result records what was refused and how commands were really contained.
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -160,6 +165,41 @@ export interface EvalRun {
   workspace: string; error?: string;
   /** The run stopped on the provider's side (credits, a key, an outage) or the machine slept through it, not the model's or the harness's fault: not counted. */
   unscored?: boolean;
+  /** What kept the agent from its own checks: the URLs its web tools refused, and how its commands were contained. */
+  isolation?: { deniedUrls: string[]; commands: string };
+}
+
+/** Where the eval packs are published: every case's hidden checks can be downloaded from there. */
+const EVAL_REPOS = ['suhail-akhtar/agent-harness-web'];
+
+/**
+ * The URLs an eval run's web tools (web_fetch, web_search) refuse: the repositories
+ * the cases are published in (this checkout's GitHub origin too, for a fork), on
+ * every GitHub host that serves their files. HARNESS_EVAL_DENY_HOSTS replaces the
+ * list (hosts or host/path prefixes, comma-separated; "none" for no list).
+ */
+export async function evalDenyList(env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
+  const set = env.HARNESS_EVAL_DENY_HOSTS?.trim();
+  if (set) return /^(none|off)$/i.test(set) ? [] : [...new Set(set.split(/[\s,]+/).filter(Boolean))];
+  const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const origin = await run('git', ['-C', root, 'remote', 'get-url', 'origin'], { timeoutMs: 10_000 });
+  const m = origin.code === 0 ? /github\.com[/:]([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/i.exec(origin.stdout.trim()) : null;
+  const repos = [...new Set([...EVAL_REPOS, ...(m ? [m[1]!.toLowerCase()] : [])])];
+  return repos.flatMap((r) => [`github.com/${r}`, `raw.githubusercontent.com/${r}`, `codeload.github.com/${r}`, `media.githubusercontent.com/media/${r}`, `api.github.com/repos/${r}`]);
+}
+
+/** How a session's commands were contained, in words, for the results (the case folder is on this machine's disk). */
+export function describeContainment(h: { sandbox: string; network: string }): string {
+  if (h.sandbox === 'none') return `not contained: commands run on this machine with its network (network ${h.network}) and can read the case folder; set HARNESS_LOCAL_SANDBOX to contain them`;
+  if (h.sandbox === 'docker') return `docker, network ${h.network}: only the workspace is mounted`;
+  return `${h.sandbox}, network ${h.network}: the disk is readable (the case folder too)`;
+}
+
+/** The isolation lines of a report: what the web tools refused and how commands were contained, over all runs. */
+function isolationDisclosure(runs: EvalRun[]): Record<string, string> {
+  const denied = [...new Set(runs.flatMap((r) => r.isolation?.deniedUrls ?? []))];
+  const commands = [...new Set(runs.flatMap((r) => (r.isolation ? [r.isolation.commands] : [])))];
+  return { 'web tools refuse': denied.join(', ') || 'nothing', commands: commands.join('; ') || 'not recorded' };
 }
 
 /** A provider's own failure (billing, authentication, an outage), as opposed to the agent failing the task. */
@@ -287,8 +327,10 @@ export async function runOne(c: EvalCase, model: string, repeat: number, out: st
       return failed;
     }
   }
+  // The checks are public: the web tools must not fetch them (research cases still have the rest of the web).
+  const deniedUrls = await evalDenyList();
   // No background work of plugins (an alert watch loop starting investigations) inside an eval run.
-  const h = await createHarness({ dataDir: path.join(base, 'data'), plugins: await configPlugins(opts.plugins, cfg), shippedPlugins: opts.shipped, backgroundWork: false, ...(cfg?.memory ? { memory: cfg.memory } : {}) });
+  const h = await createHarness({ dataDir: path.join(base, 'data'), plugins: await configPlugins(opts.plugins, cfg), shippedPlugins: opts.shipped, backgroundWork: false, denyUrls: deniedUrls, ...(cfg?.memory ? { memory: cfg.memory } : {}) });
   // Code mode is the run_script tool; a configuration can take it (or any tool) out.
   for (const t of [...(cfg?.codeMode === false ? ['run_script'] : []), ...(cfg?.disableTools ?? [])]) h.registry.tools.delete(t);
   opts.setup?.(h, cfg);
@@ -298,6 +340,8 @@ export async function runOne(c: EvalCase, model: string, repeat: number, out: st
   const pauses = pauseWatch();
   try {
     const s = await h.sessions.create({ model, ...(cfg?.effort ? { effort: cfg.effort } : {}), mode: 'bypass', runtime: { kind: 'local', network: 'none', path: ws } });
+    // Recorded as it is, not as asked: without a sandbox, network 'none' is not enforced.
+    run.isolation = { deniedUrls, commands: describeContainment(await s.hostInfo()) };
     const errors: string[] = [];
     // A prompt case ends with its turn: an error there (a provider refusing) is not "done".
     let endReason: string | undefined;
@@ -380,7 +424,7 @@ export async function rejudge(out: string, cases: EvalCase[], opts: { plugins: s
   // The configurations the runs were made under, as the first report recorded them (baseline first).
   const prior = JSON.parse(await fs.readFile(path.join(out, 'results.json'), 'utf8').catch(() => '{}')) as { configs?: HarnessConfig[] };
   const configs = prior.configs?.length ? prior.configs : undefined;
-  const env = await harnessDisclosure(opts.plugins, configs);
+  const env = { ...await harnessDisclosure(opts.plugins, configs), ...isolationDisclosure(runs) };
   await fs.writeFile(path.join(out, 'results.json'), JSON.stringify({ harness: env, ...(configs ? { configs } : {}), rejudged: new Date().toISOString(), runs }, null, 1));
   await fs.writeFile(path.join(out, 'report.md'), report(runs, { ...env, judged: 'checks re-run on the finished workspaces (no agent re-run)' }, configs?.map((x) => x.name)));
   return runs;
@@ -412,7 +456,7 @@ export async function runEvals(opts: { cases: EvalCase[]; models: string[]; repe
       runs.push(...await pool(jobs, opts.concurrency));
     } finally { leave(); }
   }
-  const env = await harnessDisclosure(opts.plugins, configs);
+  const env = { ...await harnessDisclosure(opts.plugins, configs), ...isolationDisclosure(runs) };
   await fs.writeFile(path.join(opts.out, 'results.json'), JSON.stringify({ harness: env, ...(configs ? { configs } : {}), runs }, null, 1));
   await fs.writeFile(path.join(opts.out, 'report.md'), report(runs, env, configs?.map((c) => c.name)));
   return runs;

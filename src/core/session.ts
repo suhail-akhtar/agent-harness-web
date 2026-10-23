@@ -208,6 +208,8 @@ export interface SessionDeps {
   memory?: { root: string; mode: 'on' | 'read' | 'off' };
   /** The web search behind web_search (absent: no search). */
   search?: SearchService;
+  /** URLs web_fetch and web_search refuse (ToolServices.denyUrls). */
+  denyUrls?: readonly string[];
   /** Publishing branches and pull requests (absent: off). */
   publish?: import('../git/publish.ts').PublishConfig;
   /** Spend per account: recorded on every charge, and a cap that stops turns. */
@@ -746,6 +748,13 @@ export class Session {
     return this.host;
   }
 
+  /** Where this session's commands really run: the host, whether it contains them, and the network they have. */
+  async hostInfo(): Promise<{ kind: ToolHost['kind']; sandbox: string; network: ToolHost['networkPolicy'] }> {
+    const h = await this.getHost();
+    const sandbox = h instanceof LocalHost ? h.osSandbox ?? 'none' : h.sandboxed ? h.kind : 'none';
+    return { kind: h.kind, sandbox, network: h.networkPolicy };
+  }
+
   private policyFile(): string { return path.join(this.dir, 'egress', 'allow.json'); }
 
   /** The hosts an allowlist sandbox may reach. */
@@ -996,6 +1005,7 @@ export class Session {
       memory: main ? memory : memory?.reader(),
       sources: this.sources,
       search: this.deps.search,
+      ...(this.deps.denyUrls?.length ? { denyUrls: this.deps.denyUrls } : {}),
       publish: this.canPublish() && cfg ? async (input, signal) => {
         const host = await this.getHost();
         return publish({

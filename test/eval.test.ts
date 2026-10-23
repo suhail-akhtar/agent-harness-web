@@ -225,3 +225,91 @@ test('the web-console gate asked for by name where there is no page fails with a
     assert.match(g!.summary, /no index\.html/);
   } finally { await h.close(); }
 });
+
+test('an eval run cannot fetch its own hidden checks: the repository\'s GitHub URLs are refused by web_fetch, and the results say so', async () => {
+  const saved = process.env.HARNESS_EVAL_DENY_HOSTS;
+  delete process.env.HARNESS_EVAL_DENY_HOSTS;
+  try {
+    const root = await tempDir();
+    const dir = path.join(root, 'evals', 'demo', 'peek');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'eval.json'), JSON.stringify({ name: 'peek', prompt: 'x', checks: [{ name: 'hidden', run: 'exit 0' }] }));
+    const cases = await loadCases(path.join(root, 'evals'));
+    const out = path.join(root, 'out');
+    await fs.mkdir(out);
+    // The repository is public: the case's checks are one download away. Refused before any request is made.
+    const urls = [
+      'https://raw.githubusercontent.com/suhail-akhtar/agent-harness-web/main/evals/demo/peek/eval.json',
+      'https://github.com/Suhail-Akhtar/Agent-Harness-Web/blob/main/evals/demo/peek/eval.json',
+      'https://codeload.github.com/suhail-akhtar/agent-harness-web/zip/refs/heads/main',
+      'https://api.github.com/repos/suhail-akhtar/agent-harness-web/contents/evals',
+    ];
+    const p = new FakeProvider([{ calls: urls.map((url) => ({ name: 'web_fetch', input: { url } })) }, { text: 'Done.' }]);
+    await runEvals({ cases, models: ['deepseek-flash'], repeats: 1, out, concurrency: 1, plugins: [], setup: (h) => h.registry.setProviderInstance('deepseek', p) });
+    const blocks = (JSON.parse(p.snapshots.at(-1)!) as { content: unknown }[]).flatMap((m) => (Array.isArray(m.content) ? m.content as { type: string; content: unknown }[] : []));
+    const results = blocks.filter((b) => b.type === 'tool_result');
+    assert.equal(results.length, urls.length);
+    for (const x of results) assert.match(JSON.stringify(x.content), /is blocked in this session \((github\.com|raw\.githubusercontent\.com|codeload\.github\.com|api\.github\.com\/repos)\/suhail-akhtar\/agent-harness-web\)/);
+    // Recorded in the run's result and the results file: what was refused, and how commands were contained (as they were, not as asked).
+    const one = JSON.parse(await fs.readFile(path.join(out, 'demo-peek-deepseek-flash-1', 'result.json'), 'utf8')) as { isolation?: { deniedUrls: string[]; commands: string } };
+    assert.ok(one.isolation!.deniedUrls.includes('raw.githubusercontent.com/suhail-akhtar/agent-harness-web'));
+    assert.match(one.isolation!.commands, /^(not contained: .*can read the case folder|bwrap|seatbelt|docker)/);
+    const all = JSON.parse(await fs.readFile(path.join(out, 'results.json'), 'utf8')) as { harness: Record<string, string> };
+    assert.match(all.harness['web tools refuse']!, /github\.com\/suhail-akhtar\/agent-harness-web/);
+    assert.equal(all.harness.commands, one.isolation!.commands);
+    assert.match(await fs.readFile(path.join(out, 'report.md'), 'utf8'), /- web tools refuse: github\.com\/suhail-akhtar\/agent-harness-web, raw\.githubusercontent\.com/);
+  } finally { if (saved === undefined) delete process.env.HARNESS_EVAL_DENY_HOSTS; else process.env.HARNESS_EVAL_DENY_HOSTS = saved; }
+});
+
+test('the eval deny list: host and path-prefix entries, every redirect hop, search results, and HARNESS_EVAL_DENY_HOSTS', async () => {
+  const { evalDenyList } = await import('../src/eval/runner.ts');
+  const web = await import('../src/tools/web.ts');
+  const deny = await evalDenyList({});
+  const denied = (u: string) => web.deniedUrl(new URL(u), deny);
+  assert.ok(denied('https://github.com/suhail-akhtar/agent-harness-web.git'), 'a clone URL');
+  assert.ok(denied('https://www.github.com/suhail-akhtar/agent-harness-web'));
+  assert.ok(denied('https://raw.github.com/suhail-akhtar/agent-harness-web/main/x'), 'the old raw host (a subdomain)');
+  assert.ok(denied('https://github.com/suhail-akhtar%2Fagent-harness-web/raw/main/x'), 'an encoded slash');
+  assert.ok(denied('https://github.com//suhail-akhtar/agent-harness-web/'), 'a doubled slash');
+  // The rest of GitHub stays open: research cases cite it.
+  assert.equal(denied('https://github.com/modelcontextprotocol/modelcontextprotocol'), undefined);
+  assert.equal(denied('https://github.com/suhail-akhtar/agent-harness-web2'), undefined);
+  assert.equal(denied('https://raw.githubusercontent.com/suhail-akhtar/other/main/x'), undefined);
+  // The variable replaces the list; "none" empties it.
+  assert.deepEqual(await evalDenyList({ HARNESS_EVAL_DENY_HOSTS: 'example.org, docs.example.com/private' }), ['example.org', 'docs.example.com/private']);
+  assert.deepEqual(await evalDenyList({ HARNESS_EVAL_DENY_HOSTS: 'none' }), []);
+  assert.ok(web.deniedUrl(new URL('https://sub.example.org/a'), ['example.org']));
+  assert.equal(web.deniedUrl(new URL('https://docs.example.com/public'), ['docs.example.com/private']), undefined);
+
+  // A redirect to a denied URL is refused at that hop (here through a local HTTP proxy that answers the first request).
+  const http = await import('node:http');
+  let proxied = 0;
+  const proxy = http.createServer((_q, res) => { proxied++; res.writeHead(302, { location: 'https://raw.githubusercontent.com/suhail-akhtar/agent-harness-web/main/evals/x/eval.json', connection: 'close' }).end(); });
+  // Node's proxy agent tunnels plain http too: answer the tunnel with the same server.
+  proxy.on('connect', (_q, sock) => { sock.write('HTTP/1.1 200 Connection Established\r\n\r\n'); proxy.emit('connection', sock); });
+  await new Promise<void>((r) => proxy.listen(0, '127.0.0.1', r));
+  const keys = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'NO_PROXY', 'no_proxy'];
+  const env = keys.map((k) => [k, process.env[k]] as const);
+  const lookup = web.resolver.lookup;
+  for (const k of keys) delete process.env[k];
+  process.env.HTTP_PROXY = `http://127.0.0.1:${(proxy.address() as { port: number }).port}`;
+  web.resolver.lookup = async () => [{ address: '93.184.215.14', family: 4 }];
+  try {
+    const r = await web.webFetchTool.run({ url: 'http://short.example/x' }, { signal: new AbortController().signal, services: { denyUrls: deny } } as never).then(() => undefined, (e: Error) => e.message);
+    assert.equal(proxied, 1, 'the first hop was fetched');
+    assert.match(r ?? '', /raw\.githubusercontent\.com\/suhail-akhtar\/agent-harness-web\/main\/evals\/x\/eval\.json is blocked in this session/);
+  } finally {
+    web.resolver.lookup = lookup;
+    for (const [k, v] of env) if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    proxy.close();
+  }
+
+  // Search: hits on denied pages are dropped (a snippet carries the page), the rest kept.
+  const search = { backend: 'fake', search: async () => ({ backend: 'fake', cost: 0, hits: [
+    { title: 'eval.json', url: 'https://github.com/suhail-akhtar/agent-harness-web/blob/main/evals/demo/peek/eval.json', snippet: '"checks": [ hidden ]' },
+    { title: 'MCP spec', url: 'https://github.com/modelcontextprotocol/modelcontextprotocol', snippet: 'the spec' },
+  ] }) };
+  const s = await web.webSearchTool.run({ query: 'agent-harness-web eval.json' }, { signal: new AbortController().signal, services: { search, denyUrls: deny } } as never) as { content: string };
+  assert.doesNotMatch(s.content, /agent-harness-web\/blob|hidden/);
+  assert.match(s.content, /modelcontextprotocol/);
+});

@@ -79,6 +79,8 @@ export interface HarnessOptions {
   memoryDir?: string;
   /** The search behind web_search. Default: from HARNESS_SEARCH and the keys the server has; null turns it off. */
   search?: SearchService | null;
+  /** URLs web_fetch and web_search refuse: hosts, or host/path prefixes (an eval run's own checks). */
+  denyUrls?: string[];
   /** Spend per account (a shared server's daily caps). */
   spend?: SessionDeps['spend'];
   /**
@@ -499,7 +501,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   const sessions = new SessionManager({
     dataDir: opts.dataDir, companions, registry, mcp, onSpan: otel ? (sid, span) => otel.record(sid, span) : undefined,
     onEvent: (s, e) => { bridge.dispatch(s, e); events.fromSession(s, e); }, onLifecycle: (type, s) => events.sessionChanged(type, s), changes: bridge.changes,
-    memory: { root: path.resolve(opts.memoryDir ?? path.join(opts.dataDir, 'memory')), mode: memoryMode }, search, spend: opts.spend,
+    memory: { root: path.resolve(opts.memoryDir ?? path.join(opts.dataDir, 'memory')), mode: memoryMode }, search, ...(opts.denyUrls?.length ? { denyUrls: opts.denyUrls } : {}), spend: opts.spend,
     publish: opts.publish === null ? undefined : opts.publish ?? publishFromEnv(),
     sandboxCredentials, scheduler, vault, leases,
     clients, plugins: () => plugins.list(), mayRun: (o) => bridge.mayRun?.(o), data, pausedRuns,
