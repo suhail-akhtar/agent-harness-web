@@ -402,6 +402,8 @@ export default {
         },
       },
       kind: 'exec',
+      // bridge.install writes into the person's Blender folder, outside the workspace: always asked about.
+      kindsFor: (i) => (i.action === 'bridge.install' ? ['exec', 'external'] : ['exec']),
       summarize: (i) => (i.action && i.action !== 'script'
         ? `${i.action}${i.file ? ` ${i.file}` : ''}${i.output ? ` -> ${i.output}` : ''}${i.command ? ` ${i.command}` : ''}`
         : `${i.script ?? 'inline script'}${i.file ? ` on ${i.file}` : ''}${Array.isArray(i.args) && i.args.length ? ` -- ${i.args.join(' ')}` : ''}`),

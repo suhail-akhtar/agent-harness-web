@@ -654,6 +654,8 @@ export default {
         required: ['action'],
       },
       kind: 'exec',
+      // install downloads onto the server: asked about as a network call too, even where commands are free (a sandbox).
+      kindsFor: (i) => (i.action === 'install' ? ['exec', 'network'] : ['exec']),
       summarize: (i) => `${i.action} ${i.project ?? (i.action === 'project.create' ? 'game' : '.')}${i.template ? ` ${i.template}` : ''}${i.scene ? ` ${i.scene}` : ''}${i.preset ? ` preset ${i.preset}` : ''}${i.platform ? ` ${i.platform}` : ''}${i.session ? ` ${i.session}` : ''}`,
       run: async (input, { host, signal }) => {
         try { return await runGodot(input, host, signal, api); } catch (e) {
