@@ -30,6 +30,7 @@ import { type PluginGuideInfo, readPluginGuide } from '../plugins/guides.ts';
 import type { PluginManifest } from '../plugins/api.ts';
 import { readJson, withFileLock, writeFileAtomic } from '../util/shared-file.ts';
 import { within } from '../tools/paths.ts';
+import { PausedRuns } from '../graph/paused.ts';
 import { EventHub } from './events.ts';
 import { ClientPresence } from '../core/client.ts';
 import { ProviderKeys } from './provider-keys.ts';
@@ -198,8 +199,11 @@ export interface PluginManager {
    * come back, or the plugin loads for the first time.
    */
   setEnabled(name: string, enabled: boolean): Promise<PluginEntry>;
-  /** Removes a catalogue-installed plugin: switched off, closed, its folder deleted. */
-  uninstall(name: string): Promise<void>;
+  /**
+   * Removes a catalogue-installed plugin: switched off, closed, its folder deleted. Its data folder
+   * (<data>/plugin-data/<name>) is kept unless `deleteData`.
+   */
+  uninstall(name: string, o?: { deleteData?: boolean }): Promise<void>;
 }
 
 export function builtinRegistry(): Registry {
@@ -265,6 +269,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     p.signature = signature;
     p.source = sourceOf(dir);
     parts.set(p.name, added);
+    registry.claim(p.name, added);
     await describe(dir, (await readManifest(dir))!, signature, true, p);
     return p;
   }
@@ -298,7 +303,9 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       if (m && disabledAtStart.has(m.name) && !required.has(m.name) && !entries.has(m.name)) {
         let signature: string | undefined, error: string | undefined;
         try { signature = await admit(dir); } catch (e) { error = (e as Error).message; }
-        await describe(dir, m, signature, false, undefined, error);
+        const off = await describe(dir, m, signature, false, undefined, error);
+        // Nothing of it was loaded; what names it (a schedule, a paused run) hears that it is off.
+        registry.off.set(m.name, { parts: { maps: [], lists: [], shell: [], closers: [] }, title: off.ui?.displayName ?? m.name });
         log(`plugin switched off: ${dir}`);
         continue;
       }
@@ -307,6 +314,22 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
         log(`plugin loaded: ${dir} (${p.signature})`);
       } catch (err) {
         log(`plugin FAILED (${dir}): ${(err as Error).message}`);
+      }
+    }
+  }
+  // Workflow runs waiting for a plugin to be switched on (src/graph/paused.ts).
+  const pausedRuns = new PausedRuns(path.join(opts.dataDir, 'paused-runs.json'));
+  async function resumePaused(plugin: string): Promise<void> {
+    const mgr = sessionsLate;
+    if (!mgr) return;
+    for (const r of await pausedRuns.take(plugin).catch(() => [])) {
+      const s = mgr.get(r.sessionId);
+      if (!s) continue;
+      try {
+        await s.resumeRun(r.runId);
+        log(`workflow run ${r.runId} (session ${r.sessionId}) carries on: ${plugin} is on`);
+      } catch (e) {
+        s.emit({ kind: 'notice', level: 'warn', text: `Workflow run ${r.runId} can carry on now that ${plugin} is on, but did not start: ${(e as Error).message} Resume it from the runs list.` });
       }
     }
   }
@@ -329,8 +352,11 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
         }
         entries.get(name)!.enabled = true;
         delete entries.get(name)!.error;
+        registry.off.delete(name);
       } else {
         if (got) registry.detach(got);
+        // What open sessions still hold of it (tools, agents, skills, hooks) answers with the reason from now on.
+        if (got) registry.off.set(name, { parts: got, title: e.ui?.displayName ?? name });
         const i = registry.plugins.findIndex((p) => p.name === name);
         if (i >= 0) registry.plugins.splice(i, 1);
         e.enabled = false;
@@ -338,9 +364,11 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       await saveState();
       log(`plugin ${name} switched ${enabled ? 'on' : 'off'}`);
       pluginsChanged(name, enabled ? 'enabled' : 'disabled');
+      // Workflow runs that paused at a step needing it carry on from that step.
+      if (enabled) await resumePaused(name);
       return entries.get(name)!;
     },
-    async uninstall(name) {
+    async uninstall(name, o = {}) {
       const e = entries.get(name);
       if (!e) throw new PluginStateError(404, `No plugin "${name}".`);
       if (e.source !== 'installed') throw new PluginStateError(409, `${name} was not installed from the catalogue (it is ${e.source === 'bundled' ? 'shipped with the harness' : 'listed by the operator in HARNESS_PLUGINS'}): switch it off instead.`);
@@ -359,9 +387,13 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       if (i >= 0) registry.plugins.splice(i, 1);
       entries.delete(name);
       parts.delete(name);
+      registry.off.set(name, { parts: got ?? { maps: [], lists: [], shell: [], closers: [] }, title: e.ui?.displayName ?? name, uninstalled: true });
       await fs.rm(e.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      // Its data (what it stored for itself) stays unless the administrator asked for it to go.
+      const data = path.join(opts.dataDir, 'plugin-data', name);
+      if (o.deleteData && within(path.join(opts.dataDir, 'plugin-data'), data)) await fs.rm(data, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       await saveState();
-      log(`plugin ${name} uninstalled`);
+      log(`plugin ${name} uninstalled${o.deleteData ? ' (its data deleted)' : ' (its data kept)'}`);
       pluginsChanged(name, 'uninstalled');
     },
   };
@@ -438,6 +470,11 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   late.leases = leases;
   late.vault = vault;
   if (scheduler) scheduler.onEvent = (type, s, run) => events.scheduleEvent(type, s, run);
+  // A schedule made for a plugin (by a session the plugin started) is skipped while the plugin is off.
+  if (scheduler) scheduler.pluginOff = (s) => {
+    const p = s.plugin ?? (s.sessionId ? sessionsRef?.get(s.sessionId)?.meta.startedBy : undefined);
+    return p ? registry.offReason(p, `the schedule "${s.title}"`) : undefined;
+  };
   // Keys and base URLs set through the API: the environment's key still wins (Registry.keyInfo).
   const providerKeys = await new ProviderKeys({ dataDir: opts.dataDir, vault, registry, log }).load();
   // Which client apps are listening now (desktop tools reach a session only while one is).
@@ -465,7 +502,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     memory: { root: path.resolve(opts.memoryDir ?? path.join(opts.dataDir, 'memory')), mode: memoryMode }, search, spend: opts.spend,
     publish: opts.publish === null ? undefined : opts.publish ?? publishFromEnv(),
     sandboxCredentials, scheduler, vault, leases,
-    clients, plugins: () => plugins.list(), mayRun: (o) => bridge.mayRun?.(o), data,
+    clients, plugins: () => plugins.list(), mayRun: (o) => bridge.mayRun?.(o), data, pausedRuns,
   });
   sessionsRef = sessions;
   sessionsLate = sessions;

@@ -847,7 +847,12 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     if (pst && ((method === 'POST' && pst[2]) || (method === 'DELETE' && !pst[2])) && pst[1] !== 'install' && pst[1] !== 'catalogue') {
       if (!admin) throw new HttpError(403, 'administrators only: plugins change what every session can do');
       try {
-        if (method === 'DELETE') { await harness.plugins.uninstall(pst[1]!); return send(res, 200, { ok: true }); }
+        if (method === 'DELETE') {
+          // Its data folder is kept unless the administrator chose to delete it ({deleteData: true}).
+          const b = await readJson(req, 4096).catch(() => ({})) as { deleteData?: unknown };
+          await harness.plugins.uninstall(pst[1]!, { deleteData: b?.deleteData === true });
+          return send(res, 200, { ok: true, dataKept: b?.deleteData !== true });
+        }
         return send(res, 200, pluginView(await harness.plugins.setEnabled(pst[1]!, pst[2] === 'enable')));
       } catch (e) { if (e instanceof PluginStateError) throw new HttpError(e.status, e.message); throw e; }
     }
@@ -1522,7 +1527,12 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     const routes = harness.bridge.route(plugin, rel);
     const lim = routeLimiter.take(`route:${routes.length ? `${plugin}/${rel}` : '?'}:${req.socket.remoteAddress ?? ''}`);
     if (!lim.ok) throw new HttpError(429, `Too many requests; try again in ${lim.retryAfterSec}s.`, { 'retry-after': String(lim.retryAfterSec) });
-    if (!routes.length) throw new HttpError(404, 'not found');
+    if (!routes.length) {
+      // A plugin switched off: its webhooks hear that it is (they can retry later), not that nothing is here.
+      const e = harness.plugins.get(plugin);
+      if (e && !e.enabled) throw new HttpError(503, `${e.ui?.displayName ?? plugin} is switched off on this server`, { 'retry-after': '300' });
+      throw new HttpError(404, 'not found');
+    }
     const r = routes.find((x) => x.method === method);
     if (!r) throw new HttpError(405, 'method not allowed', { allow: routes.map((x) => x.method).join(', ') });
     if (r.auth === 'token') {

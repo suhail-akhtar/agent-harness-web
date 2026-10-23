@@ -174,6 +174,11 @@ export interface RunRecord {
   updatedAt: number;
   cost: number;
   error?: string;
+  /**
+   * Waiting (status "waiting") at `node` because what it needs (an agent, gate or tools) belongs to
+   * a plugin that is switched off: it carries on from that node when the plugin is switched on.
+   */
+  paused?: { node: string; plugin: string; reason: string };
 }
 
 /** What the runner needs from its host session. */
@@ -184,6 +189,10 @@ export interface WorkflowHost {
   approve(args: { runId: string; node: string; title: string; message: string; files: string[] }): Promise<{ approved: boolean; feedback?: string }>;
   emit(e: { kind: 'workflow'; run: RunRecord; node?: string; phase: 'started' | 'node_started' | 'node_finished' | 'finished' }): void;
   save(run: RunRecord): Promise<void>;
+  /** Whether a node can run now: a reason (and the plugin) when what it needs is switched off. */
+  blocked?(node: WorkflowNode): { plugin: string; reason: string } | undefined;
+  /** The run paused at a node (see RunRecord.paused). */
+  paused?(run: RunRecord): void | Promise<void>;
 }
 
 export interface WorkflowContext {

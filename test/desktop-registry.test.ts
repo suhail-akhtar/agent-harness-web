@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { validateUiManifest } from '../packages/plugin-ui/src/index.ts';
-import { buildRegistry, fuzzyScore, interpolate, normaliseChordText, rendererFor, type PluginEntry } from '../apps/desktop/renderer/src/registry/registry.ts';
+import { buildRegistry, fuzzyScore, interpolate, normaliseChordText, offRendererFor, rendererFor, type PluginEntry } from '../apps/desktop/renderer/src/registry/registry.ts';
 import { allowedWhileTyping, chordFromEvent, conflicts, formatChord, matches, parseChord } from '../apps/desktop/renderer/src/registry/keybindings.ts';
 import { reconcile } from '../apps/desktop/renderer/src/registry/reconcile.ts';
 
@@ -104,6 +104,23 @@ test('registry: a native plugin contributes a fence renderer, an artifact-kind r
   const off = buildRegistry([{ ...diagrams, enabled: false }]);
   assert.equal(rendererFor(off, 'artifact', 'diagram'), undefined);
   assert.equal(off.views.size + off.panels.size + off.renderers.fence.size, 0);
+});
+
+test('registry: what a switched-off plugin would draw is known (to draw it plainly with a note), unless a plugin that is on draws it', () => {
+  const charts = third('acme-charts', { displayName: 'Acme Charts', trust: 'frame', contributes: { renderers: [
+    { id: 't', for: { tool: 'chart_it' }, kind: 'frame', entry: 'ui/t.html' }, { id: 'e', for: { event: 'chart' }, kind: 'frame', entry: 'ui/e.html' },
+    { id: 'a', for: { artifact: 'diagram' }, kind: 'frame', entry: 'ui/a.html' }, { id: 'shared', for: { tool: 'shared_tool' }, kind: 'frame', entry: 'ui/s.html' },
+  ] } }, { enabled: false });
+  const other = third('other', { trust: 'frame', contributes: { renderers: [{ id: 's', for: { tool: 'shared_tool' }, kind: 'frame', entry: 'ui/o.html' }] } });
+  const r = buildRegistry([charts, other]);
+  assert.equal(rendererFor(r, 'tool', 'chart_it'), undefined);
+  assert.deepEqual(offRendererFor(r, 'tool', 'chart_it'), { plugin: 'acme-charts', title: 'Acme Charts' });
+  assert.deepEqual(offRendererFor(r, 'event', 'chart'), { plugin: 'acme-charts', title: 'Acme Charts' });
+  assert.deepEqual(offRendererFor(r, 'artifact', 'diagram'), { plugin: 'acme-charts', title: 'Acme Charts' });
+  assert.equal(offRendererFor(r, 'tool', 'shared_tool'), undefined, 'a plugin that is on draws it: no note');
+  const on = buildRegistry([{ ...charts, enabled: true }, other]);
+  assert.equal(offRendererFor(on, 'tool', 'chart_it'), undefined);
+  assert.equal(rendererFor(on, 'tool', 'chart_it')?.plugin, 'acme-charts');
 });
 
 test('registry: all thirteen contribution points resolve from one manifest', () => {

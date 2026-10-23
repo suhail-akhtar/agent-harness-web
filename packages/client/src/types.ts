@@ -66,6 +66,8 @@ export type ToolDisplay =
 
 export interface WorkflowRunView {
   id: string; workflow: string; status: string; current?: string; cost: number; error?: string;
+  /** Waiting at a node whose plugin is switched off on the server (it carries on when that is switched on). */
+  paused?: { node: string; plugin: string; reason: string };
   nodes: WorkflowNodeView[];
   /** The first node (newer servers). */
   start?: string;

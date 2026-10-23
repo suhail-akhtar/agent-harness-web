@@ -4,6 +4,7 @@ import type { ToolHost } from '../runtime/host.ts';
 import type { Tool } from '../tools/types.ts';
 import { str } from '../tools/types.ts';
 import { within } from '../tools/paths.ts';
+import { switchedOff } from '../kernel/registry.ts';
 import { parseFrontmatter } from '../util/frontmatter.ts';
 import { fileURLToPath } from 'node:url';
 
@@ -142,6 +143,9 @@ export function makeSkillTool(skills: Skill[]): Tool {
     async run(input) {
       const s = byName.get(str(input.name));
       if (!s) return { content: `No skill named "${str(input.name)}". Available: ${[...byName.keys()].join(', ')}`, is_error: true };
+      // A switched-off plugin's skill stays listed (the cached prefix is unchanged) and is not loaded.
+      const off = switchedOff(s, `the ${s.name} skill`);
+      if (off) return { content: off, is_error: true };
       const text = await s.load(str(input.file) || undefined);
       if (input.file) return { content: text.length > MAX_FILE ? text.slice(0, MAX_FILE) + '\n[truncated]' : text };
       const files = await s.files();

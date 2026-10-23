@@ -412,7 +412,7 @@ test('plugins switched off and on while the server runs: tools, routes and the l
     assert.ok(!caps.tools.some((x) => x.name === 'check_citations'));
     assert.ok(caps.tools.some((x) => x.name === 'quality_gates'), 'other plugins stay');
     assert.equal((await t.call(OPERATOR, 'POST', '/api/plugins/hello-frame/disable')).status, 200);
-    assert.equal((await t.call(undefined, 'GET', '/api/plugins/hello-frame/greeting')).status, 404, 'its route is gone');
+    assert.equal((await t.call(undefined, 'GET', '/api/plugins/hello-frame/greeting')).status, 503, 'its route answers that it is switched off');
     assert.deepEqual(JSON.parse(await fs.readFile(path.join(data, 'plugins-state.json'), 'utf8')).disabled, ['hello-frame', 'research']);
 
     // Back on: everything returns.
@@ -429,7 +429,7 @@ test('plugins switched off and on while the server runs: tools, routes and the l
     assert.equal(hello.enabled, false);
     assert.deepEqual(hello.contributes, []);
     assert.ok(hello.ui, 'its UI is described (switched off)');
-    assert.equal((await t2.call(undefined, 'GET', '/api/plugins/hello-frame/greeting')).status, 404);
+    assert.equal((await t2.call(undefined, 'GET', '/api/plugins/hello-frame/greeting')).status, 503, 'off since the start: switched off, not missing');
     assert.ok(t2.harness.registry.tools.has('check_citations'), 'research was switched back on');
     assert.equal((await t2.call(OPERATOR, 'POST', '/api/plugins/hello-frame/enable')).status, 200);
     assert.equal((await t2.call(undefined, 'GET', '/api/plugins/hello-frame/greeting')).status, 200);

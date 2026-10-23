@@ -1,4 +1,4 @@
-import type { InProcessHook } from '../kernel/registry.ts';
+import { switchedOff, type InProcessHook } from '../kernel/registry.ts';
 import type { Provider, ProviderRequest, ProviderResponse, ToolSpec } from '../providers/types.ts';
 import { ProviderError } from '../providers/types.ts';
 import type { ImageData, ToolHost } from '../runtime/host.ts';
@@ -393,6 +393,9 @@ export class Agent {
       }
       if (!tool) return finish(`There is no tool named "${call.name}". Available tools: ${this.specs.map((s) => s.name).join(', ')}.`, true);
     }
+    // A switched-off plugin's tool stays in the list (the cached prefix is unchanged) and answers with why it does not run.
+    const offNow = switchedOff(tool, call.name);
+    if (offNow) return finish(offNow, true);
     if (call.parseError) return finish(`Your arguments for ${call.name} were not valid JSON (${call.parseError}). Send the call again with a JSON object matching: ${JSON.stringify(tool.spec.input_schema.properties)}`, true);
     const invalid = routed ? undefined : validateInput(tool.spec, call.input);
     if (invalid) return finish(`Invalid arguments for ${call.name}: ${invalid}. Expected parameters: ${JSON.stringify(tool.spec.input_schema.properties)}; required: ${(tool.spec.input_schema.required ?? []).join(', ')}.`, true);
@@ -409,6 +412,8 @@ export class Agent {
       input = r.input;
     }
     const name = tool.spec.name;
+    const offResolved = switchedOff(tool, name);
+    if (offResolved) return finish(offResolved, true, undefined, undefined, name);
 
     // An allowlist sandbox whose proxy holds credentials that can write (a gist, an issue) is,
     // for the untrusted-content guard, a way out like open network; read-only ones are not.

@@ -84,7 +84,7 @@ export function decideFrom(report: string, words: string[] | undefined): string 
 /** No verdict is never approval: the conservative word (REQUEST_CHANGES, REJECT, ...) if the node has one. */
 const conservative = (words: string[] | undefined) => words?.find((w) => NEGATIVE.test(w));
 
-type Result = { outcome?: string; summary?: string; failed?: boolean; cost?: number; output?: unknown; interrupted?: boolean };
+type Result = { outcome?: string; summary?: string; failed?: boolean; cost?: number; output?: unknown; interrupted?: boolean; paused?: { plugin: string; reason: string } };
 
 /** Runs fn for each item, at most n at once. */
 async function pool<T>(items: T[], n: number, fn: (x: T) => Promise<void>): Promise<void> {
@@ -121,6 +121,7 @@ export class WorkflowRunner {
   async execute(signal: AbortSignal): Promise<RunRecord> {
     const run = this.run;
     run.status = 'running';
+    delete run.paused;
     // A run saved before a field was declared gets the field's initial value.
     initState(run, this.w.state);
     // A resumed run re-enters its current node; the record left open by the stop is closed as interrupted.
@@ -140,6 +141,8 @@ export class WorkflowRunner {
         }
         const r = await this.runNode(id, node, signal);
         if (signal.aborted) { run.status = 'aborted'; break; }
+        // What the node needs is switched off: the run waits at it (it runs from its start when resumed).
+        if (r.paused) { run.status = 'waiting'; run.paused = { node: id, ...r.paused }; await this.host.paused?.(run); break; }
         if (r.failed) { run.status = 'failed'; run.error = r.summary; break; }
         run.current = route(node, r.outcome);
         if (!run.current) { run.status = 'failed'; run.error = `${id}: no route for outcome "${r.outcome ?? ''}"`; break; }
@@ -164,10 +167,19 @@ export class WorkflowRunner {
     await this.save();
     this.host.emit({ kind: 'workflow', run, node: id, phase: 'node_started' });
     let out: Result = {};
+    const held = this.host.blocked?.(node);
+    if (held) {
+      rec.status = 'waiting';
+      rec.summary = held.reason;
+      rec.endedAt = Date.now();
+      rec.cost = 0;
+      this.host.emit({ kind: 'workflow', run, node: id, phase: 'node_finished' });
+      return { paused: held, summary: held.reason };
+    }
     try {
       out = await this.exec(id, node, signal);
-      if (!out.failed && !out.interrupted && node.type !== 'end' && node.writes) this.applyWrites(node.writes, { output: out.output });
-      rec.status = out.failed ? 'failed' : out.interrupted ? 'interrupted' : 'done';
+      if (!out.failed && !out.interrupted && !out.paused && node.type !== 'end' && node.writes) this.applyWrites(node.writes, { output: out.output });
+      rec.status = out.failed ? 'failed' : out.interrupted ? 'interrupted' : out.paused ? 'waiting' : 'done';
     } catch (err) {
       out = { failed: true, summary: `${id} failed: ${(err as Error).message}`, cost: out.cost };
       rec.status = 'failed';
@@ -293,6 +305,8 @@ export class WorkflowRunner {
         const results = await Promise.all(node.branches.map((b) => this.runNode(b, this.w.nodes[b]!, signal)));
         const failed = results.filter((r) => r.failed);
         const cost = results.reduce((a, r) => a + (r.cost ?? 0), 0);
+        const held = results.find((r) => r.paused);
+        if (held && !failed.length) return { paused: held.paused, summary: held.summary, cost };
         if (failed.length) return { failed: true, summary: failed.map((f) => f.summary).join('; '), cost };
         // Outcome: "all" when no branch reported a negative decision, else the first negative one.
         // A branch that decides but gave no recognised verdict counts as negative.

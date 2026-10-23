@@ -1,4 +1,4 @@
-import type { InProcessHook } from '../kernel/registry.ts';
+import { switchedOff, type InProcessHook } from '../kernel/registry.ts';
 import type { ToolHost } from '../runtime/host.ts';
 import type { HookEvent, HookSpec, Settings } from './settings.ts';
 
@@ -172,10 +172,13 @@ export async function runHooks(
   const result: HookResult = { blocked: false, feedback: '', errors: [] };
   for (const h of specs) {
     if (!h || typeof h !== 'object' || !matches(h.matcher, matchName, result.errors)) continue;
+    // A switched-off plugin's hooks do not run (a session's settings were read while it was on).
+    if (switchedOff(h, 'its hooks')) continue;
     await runOne(h, event, payload, host, signal, r0, result);
   }
   for (const h of inProcess) {
     if (h.event !== event || !matches(h.matcher, matchName, result.errors)) continue;
+    if (switchedOff(h, 'its hooks')) continue;
     try {
       const r = await h.handler({ event, ...payload }, { host, signal: signal ?? new AbortController().signal });
       if (r?.block) result.blocked = true;

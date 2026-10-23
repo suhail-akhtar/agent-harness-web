@@ -8,9 +8,9 @@ import { stopShellScript } from '../tools/exec.ts';
 import { describeWatch, TASK_TOOLS, type TaskEntry, TaskRegistry, type TaskService, watchTask } from '../tools/tasks.ts';
 import { formatGates, makeGatesTool, runGates } from '../gates/gates.ts';
 import { newRun, WorkflowRunner } from '../graph/runner.ts';
-import type { RunRecord, WorkflowDef, WorkflowHost } from '../graph/types.ts';
+import type { RunRecord, WorkflowDef, WorkflowHost, WorkflowNode } from '../graph/types.ts';
 import { usesNodeType } from '../graph/validate.ts';
-import type { InProcessHook } from '../kernel/registry.ts';
+import { switchedOff, type InProcessHook } from '../kernel/registry.ts';
 import { loadWorkflowDir } from '../plugins/loader.ts';
 import type { Registry } from '../kernel/registry.ts';
 import type { McpManager, McpStatus } from '../mcp/manager.ts';
@@ -236,6 +236,8 @@ export interface SessionDeps {
   mayRun?: (owner: string | undefined) => string | undefined;
   /** Data, dashboards and reports (core.dashboards): the datasource, dataset, model and dashboard tools. */
   data?: import('../data/service.ts').DataService;
+  /** Workflow runs paused at a step whose plugin is switched off (carried on when it is switched on). */
+  pausedRuns?: import('../graph/paused.ts').PausedRuns;
 }
 
 /** The session is being worked on by another server (it holds the session's lease). */
@@ -301,7 +303,8 @@ export function nodeViews(w: WorkflowDef): WorkflowRunView['nodes'] {
 
 export function runView(run: RunRecord, w?: WorkflowDef): WorkflowRunView {
   return {
-    id: run.id, workflow: run.workflow, status: run.status, current: run.current, cost: run.cost, error: run.error,
+    id: run.id, workflow: run.workflow, status: run.status, current: run.current, cost: run.cost, error: run.error ?? run.paused?.reason,
+    ...(run.paused ? { paused: run.paused } : {}),
     nodes: w ? nodeViews(w) : [],
     ...(w ? { start: w.start } : {}),
     history: run.history.map((h) => ({ node: h.node, type: h.type, status: h.status, outcome: h.outcome, summary: h.summary, startedAt: h.startedAt, endedAt: h.endedAt, cost: h.cost })),
@@ -311,7 +314,7 @@ export function runView(run: RunRecord, w?: WorkflowDef): WorkflowRunView {
 /** A run's steps as the agent reads them: each node's outcome and summary, and the error. */
 function runSummary(run: RunRecord): string {
   const steps = run.history.map((h) => `- ${h.node} (${h.type}): ${h.outcome ?? h.status}${h.summary ? ` - ${h.summary.replace(/\s+/g, ' ').slice(0, 300)}` : ''}`);
-  return `${steps.join('\n')}${run.error ? `\nError: ${run.error}` : ''}`;
+  return `${steps.join('\n')}${run.error ? `\nError: ${run.error}` : ''}${run.paused ? `\nPaused at ${run.paused.node}: ${run.paused.reason} It carries on from there when the plugin is switched on.` : ''}`;
 }
 
 /**
@@ -1007,7 +1010,7 @@ export class Session {
         });
       } : undefined,
       ...(main && this.deps.scheduler ? { schedules: {
-        create: (spec: { prompt: string; cron?: string; inMinutes?: number; at?: number }) => this.deps.scheduler!.create({ ...spec, owner: this.meta.owner, sessionId: this.meta.id }),
+        create: (spec: { prompt: string; cron?: string; inMinutes?: number; at?: number }) => this.deps.scheduler!.create({ ...spec, owner: this.meta.owner, sessionId: this.meta.id, ...(this.meta.startedBy ? { plugin: this.meta.startedBy } : {}) }),
         list: async () => this.deps.scheduler!.list().filter((x) => x.sessionId === this.meta.id),
         remove: async (id: string) => this.deps.scheduler!.get(id)?.sessionId === this.meta.id && this.deps.scheduler!.remove(id),
       } } : {}),
@@ -1322,7 +1325,7 @@ export class Session {
     // Skills: operator plugins first, then the workspace's (a name is taken once).
     const skills: Skill[] = [];
     const seen = new Set<string>();
-    for (const sd of [...reg.skillDirs, ...clientSkillDirs(this.meta.client)]) for (const s of await skillsIn(sd.dir, sd.source)) if (!seen.has(s.name)) { seen.add(s.name); skills.push(s); }
+    for (const sd of [...reg.skillDirs, ...clientSkillDirs(this.meta.client)]) for (const s of await skillsIn(sd.dir, sd.source)) if (!seen.has(s.name)) { seen.add(s.name); reg.claimLike(s, sd); skills.push(s); }
     // Skills for what the person's app draws (the diagram spec, for an app that renders `diagram`): listed only there.
     for (const s of await clientSkills(this.meta.client?.renderers ?? [])) if (!seen.has(s.name)) { seen.add(s.name); skills.push(s); }
     for (const s of await workspaceSkills(host).catch(() => [])) if (!seen.has(s.name)) { seen.add(s.name); skills.push(s); }
@@ -1869,6 +1872,9 @@ export class Session {
     let isolated: { w: Worktree; host: LocalHost } | undefined;
     try {
     const def = tb.agents.find((x) => x.name === a.agent) ?? tb.agents.find((x) => x.name === 'general')!;
+    // A switched-off plugin's agent type is still listed (the cached prefix is unchanged) but does not run.
+    const defOff = switchedOff(def, `the ${def.name} agent`);
+    if (defOff) throw new Error(defOff);
     const n = ++this.subagents;
     name = a.label ?? `${def.name}-${n}`;
     // A model the agent named is used as named (it was allowed); a definition's or the operator's falls back to the session's when missing.
@@ -2043,7 +2049,8 @@ export class Session {
     try { names = await fs.readdir(this.runsDir()); } catch { return; }
     for (const n of names.filter((x) => x.endsWith('.json'))) {
       const r = JSON.parse(await fs.readFile(path.join(this.runsDir(), n), 'utf8')) as RunRecord;
-      if (r.status === 'running' || r.status === 'waiting') { r.status = 'interrupted'; await this.saveRun(r); }
+      // A run paused for a switched-off plugin keeps waiting (switching the plugin on carries it on).
+      if (r.status === 'running' || (r.status === 'waiting' && !r.paused)) { r.status = 'interrupted'; await this.saveRun(r); }
     }
   }
 
@@ -2070,7 +2077,51 @@ export class Session {
       },
       emit: (e) => this.emit({ kind: 'workflow', phase: e.phase, node: e.node, run: runView(e.run, w) }),
       save: (run) => this.saveRun(run),
+      blocked: (node) => this.pluginHold(w, node),
+      paused: async (run) => {
+        if (!run.paused) return;
+        this.emit({ kind: 'notice', level: 'warn', text: `Workflow ${w.name} is waiting at "${run.paused.node}": ${run.paused.reason} It carries on from there when it is switched on.` });
+        await this.deps.pausedRuns?.add({ plugin: run.paused.plugin, sessionId: this.meta.id, runId: run.id }).catch(() => {});
+      },
     };
+  }
+
+  /**
+   * Why a workflow's node cannot run now: the workflow, or the agent, tools or gates the node needs,
+   * belong to a plugin that is switched off. The run then waits at that node.
+   */
+  private pluginHold(w: WorkflowDef, node: WorkflowNode): { plugin: string; reason: string } | undefined {
+    const reg = this.deps.registry;
+    const hold = (plugin: string | undefined, what: string) => {
+      const reason = plugin ? reg.offReason(plugin, what) : undefined;
+      return reason ? { plugin: plugin!, reason } : undefined;
+    };
+    const own = hold(reg.ownerOf(w), `the ${w.name} workflow`);
+    if (own) return own;
+    const t = node.type === 'map' ? node.node : node;
+    if (t.type === 'agent') {
+      const name = t.agent ?? 'general';
+      const def = reg.agents.get(name);
+      if (!def) { const h = hold(reg.offOwner(reg.agents, name), `the ${name} agent`); if (h) return h; }
+      for (const tool of def?.tools ?? []) if (!reg.tools.has(tool)) { const h = hold(reg.offOwner(reg.tools, tool), tool); if (h) return h; }
+    }
+    if (t.type === 'gate') {
+      if (Array.isArray(t.gates)) {
+        for (const g of t.gates) if (!reg.gates.has(g)) { const h = hold(reg.offOwner(reg.gates, g), `the ${g} gate`); if (h) return h; }
+      } else if (!reg.gates.size) {
+        // Every gate that applies, and none is on: the ones of a switched-off plugin would have.
+        const p = [...reg.off.keys()].find((n) => reg.off.get(n)!.parts.maps.some((e) => e.map === reg.gates));
+        const h = hold(p, 'its quality gates'); if (h) return h;
+      }
+    }
+    return undefined;
+  }
+
+  /** A workflow that is not here because its plugin is switched off: the reason, to refuse with. */
+  private offWorkflow(name: string): string | undefined {
+    const reg = this.deps.registry;
+    const p = reg.offOwner(reg.workflows, name);
+    return p ? reg.offReason(p, `the ${name} workflow`) : undefined;
   }
 
   /** Starts a workflow run in this session's workspace. */
@@ -2088,7 +2139,7 @@ export class Session {
   async startWorkflow(name: string, input: Record<string, string>): Promise<WorkflowRunView> {
     return this.claimed('The session is busy; wait for it to finish or stop it.', async () => {
       const w = (await this.workflows()).find((x) => x.name === name);
-      if (!w) throw new Error(`No workflow named "${name}".`);
+      if (!w) throw new Error(this.offWorkflow(name) ?? `No workflow named "${name}".`);
       const run = newRun(w, this.meta.id, input);
       if (this.meta.title === 'New session') {
         const first = Object.values(run.input).find((v) => v.trim()) ?? '';
@@ -2103,9 +2154,10 @@ export class Session {
   async resumeRun(runId: string): Promise<WorkflowRunView> {
     return this.claimed('The session is busy.', async () => {
       const run = await this.readRun(runId);
-      if (!['interrupted', 'aborted', 'failed'].includes(run.status) || !run.current) throw new Error(`Run ${runId} cannot be resumed (status ${run.status}).`);
+      const paused = run.status === 'waiting' && !!run.paused;
+      if ((!['interrupted', 'aborted', 'failed'].includes(run.status) && !paused) || !run.current) throw new Error(`Run ${runId} cannot be resumed (status ${run.status}).`);
       const w = (await this.workflows()).find((x) => x.name === run.workflow);
-      if (!w) throw new Error(`Workflow ${run.workflow} is no longer available.`);
+      if (!w) throw new Error(this.offWorkflow(run.workflow) ?? `Workflow ${run.workflow} is no longer available.`);
       run.error = undefined;
       this.executeRun(w, run).catch(() => {});
       return runView(run, w);
@@ -2126,7 +2178,7 @@ export class Session {
   /** A run the workflow tool starts, recorded before it runs like any other. */
   private async newToolRun(name: string, input: Record<string, string>): Promise<{ w: WorkflowDef; run: RunRecord }> {
     const w = (await this.workflows()).find((x) => x.name === name);
-    if (!w) throw new Error(`No workflow named "${name}". Available: ${(await this.workflows()).map((x) => x.name).join(', ') || 'none'}`);
+    if (!w) throw new Error(this.offWorkflow(name) ?? `No workflow named "${name}". Available: ${(await this.workflows()).map((x) => x.name).join(', ') || 'none'}`);
     const run = newRun(w, this.meta.id, input);
     await this.saveRun(run);
     return { w, run };
@@ -2170,7 +2222,7 @@ export class Session {
       this.checkpoints?.begin(this.meta.turns, `workflow ${w.name}`);
       const runner = new WorkflowRunner(w, this.workflowHost(w), run);
       const done = await runner.execute(signal);
-      this.emit({ kind: 'notice', level: done.status === 'succeeded' ? 'info' : 'warn', text: `Workflow ${w.name} ${done.status}${done.error ? `: ${done.error}` : ''} ($${done.cost.toFixed(4)}).` });
+      if (!done.paused) this.emit({ kind: 'notice', level: done.status === 'succeeded' ? 'info' : 'warn', text: `Workflow ${w.name} ${done.status}${done.error ? `: ${done.error}` : ''} ($${done.cost.toFixed(4)}).` });
     } catch (err) {
       this.emit({ kind: 'notice', level: 'error', text: `Workflow ${w.name} could not run: ${(err as Error).message}` });
     } finally {
@@ -2430,7 +2482,11 @@ export class Session {
         else this.emit({ kind: 'notice', level: 'info', text: 'Nothing to compact yet.' });
         return;
       }
-      const skill = slash ? (await this.getToolbox(host)).skills.find((s) => s.name === slash[1]) : undefined;
+      const found = slash ? (await this.getToolbox(host)).skills.find((s) => s.name === slash[1]) : undefined;
+      // A switched-off plugin's skill is not loaded: the message goes as typed, and the person hears why.
+      const skillOff = found ? switchedOff(found, `/${found.name}`) : undefined;
+      if (skillOff) this.emit({ kind: 'notice', level: 'warn', text: skillOff });
+      const skill = skillOff ? undefined : found;
       const task = skill ? `<command-name>/${skill.name}</command-name>\n<skill name="${skill.name}">\n${await skill.load()}\n</skill>\n\n${slash![2]?.trim() || 'Follow this skill.'}` : text;
       const first = agent.messages.length === 0;
       let body = task;

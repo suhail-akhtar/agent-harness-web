@@ -10,9 +10,10 @@
 //      services, topology, changes, badges, the home card and settings; an incident's detail
 //   4. both: no clash, a fixed order, the palette lists both, one conversation uses /incident
 //      and /gates, the incident record's root cause, evidence, refuter, runbook and postmortem
-//   5. Engineering off: all of it goes, Operations untouched
+//   5. Engineering off: all of it goes, Operations untouched; its tool card in the old conversation
+//      is drawn plainly with a note that it is off (and a way to the Plugins page)
 //   6. Operations off: exactly the core again (sidebar, settings, palette, home cards, status)
-//   7. both on again: their settings and grants come back
+//   7. both on again: their settings and grants come back, the old conversation's card is full again
 //
 // HARNESS_DESKTOP_SCREENSHOTS=1 writes a screenshot of every stage to
 // docs/screenshots/desktop/plugins-journey/ (else to a temporary folder).
@@ -465,7 +466,14 @@ test('plugins journey: Engineering and Operations switched on and off live, used
       await page.waitForSelector('[data-side-panel]', { state: 'detached', timeout: 15_000 });
       await page.waitForSelector('[data-nav="sdlc:delivery"]', { state: 'detached', timeout: 15_000 });
       assert.equal(await page.locator('[data-plugin-renderer="sdlc:gate-results"]').count(), 0, 'its renderer falls back to the default tool card');
+      // The old conversation's gates card: the default card, and a note saying what drew it before.
+      await openSteps();
+      const note = page.locator(`[data-session="${featureSession}"] [data-tool="quality_gates"] [data-plugin-off="sdlc"]`).first();
+      await note.waitFor({ timeout: 15_000 });
+      assert.match(await note.innerText(), /Made with Engineering, which is off\. Switch it on to view it fully/);
       await shot('engineering-off-conversation');
+      await note.locator('[data-open-plugins]').click();
+      await page.waitForSelector('[data-plugins-page] [data-plugin="sdlc"][data-enabled="0"]', { timeout: 15_000 });
       const s = await snapshot();
       for (const [k, v] of Object.entries(s)) assert.deepEqual(ofPlugin(v, 'sdlc'), [], `${k}: nothing of Engineering`);
       assert.ok(!s.slash.includes('/feature') && !s.slash.includes('/gates'));
@@ -512,6 +520,12 @@ test('plugins journey: Engineering and Operations switched on and off live, used
       await page.click('[data-settings-section="sdlc:engineering"]');
       assert.match(await page.locator('[data-field="strictness"] [role="radio"][aria-checked="true"]').innerText(), /Everything/, 'its setting was kept');
       await page.keyboard.press('Escape');
+      // The old conversation's gates card is drawn by Engineering again, without the note.
+      await page.click(`[data-session-row="${featureSession}"] button`);
+      await page.waitForSelector(`[data-session="${featureSession}"]`);
+      await openSteps();
+      await page.waitForSelector(`[data-session="${featureSession}"] [data-plugin-renderer="sdlc:gate-results"]`, { timeout: 30_000 });
+      assert.equal(await page.locator(`[data-session="${featureSession}"] [data-plugin-off]`).count(), 0, 'no note once it is on');
       // A stable layout: the home page with both cards loading moves nothing under the reader.
       await home();
       await page.evaluate(() => {
@@ -534,8 +548,8 @@ test('plugins journey: Engineering and Operations switched on and off live, used
     // Adding a project restarts the engine with the new roots: requests cut while it does are expected there.
     const unexpected = errors.filter((e) => !(/^setup/.test(e.phase) && /(502|ERR_FAILED)/.test(e.text)));
     assert.deepEqual(unexpected, [], 'no errors in the window');
-    // A frame's request already on its way when its plugin is switched off finds the route gone (404): only that, only in the phase that switches it off.
-    const racing = (e: { phase: string; text: string }) => /status of 404/.test(e.text) && ((/^5\./.test(e.phase) && /\/plugins\/sdlc\//.test(e.text)) || (/^6\./.test(e.phase) && /\/plugins\/aiops\//.test(e.text)));
+    // A frame's request already on its way when its plugin is switched off finds the route switched off (503) or gone (404): only that, only in the phase that switches it off.
+    const racing = (e: { phase: string; text: string }) => /status of (404|503)/.test(e.text) && ((/^5\./.test(e.phase) && /\/plugins\/sdlc\//.test(e.text)) || (/^6\./.test(e.phase) && /\/plugins\/aiops\//.test(e.text)));
     assert.deepEqual(frameErrors.filter((e) => /\/plugins\/(sdlc|aiops)\//.test(e.text) && !racing(e)), [], 'none in the plugins\' frames');
   } finally {
     await app.close().catch(() => {});

@@ -62,6 +62,20 @@ default. Its grants and settings are kept, so switching it back on restores them
 keybinding or slash command), the core or the first-loaded plugin wins, and the Plugins page shows
 the clash. A `ui` section that does not validate contributes nothing and shows its error there.
 
+### Switching a plugin off
+
+- **Kept:** its settings, grants and data, and what it made: old conversations and artifacts open as before.
+- **Drawn plainly:** a tool card or event its renderer drew shows the default view with a note
+  ("Made with <plugin>, which is off. Switch it on to view it fully") and a button to the Plugins
+  page; an artifact of a kind only it renders opens in a basic view (the JSON spec, or the page) with
+  the same note. Switched back on, the full view returns at once. Renderers sit inside error
+  boundaries, so a missing one never takes the transcript down.
+- **On the server** (a server plugin): open conversations keep its tools listed but a call answers
+  that it is off; its workflow runs wait at the step that needs it and carry on when it is switched
+  on; its schedules are skipped, its routes answer 503 (see the main README).
+- **Uninstall** (catalogue plugins) asks what becomes of its data folder: kept by default, deleted
+  only when "Also delete its data folder" is ticked.
+
 Examples: `examples/plugins/hello-frame` and `notes-frame` (frames with the SDK), `quick-links`
 (declarative only). Two real ones: `plugins/sdlc` ("Engineering": a Delivery board, a Start a feature form, a
 Quality gates panel) and `plugins/aiops` ("Operations": incidents, alerts, services, topology,
