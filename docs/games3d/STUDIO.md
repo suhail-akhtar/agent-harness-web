@@ -1,6 +1,25 @@
 # Studio: games and 3D, end to end (plan)
 
-Status: **planned, not started.** Built in phases, each closing with tests and a live check.
+Status: **in progress (2026-10-23): all phases, end to end.** Each phase closes with tests and a live check.
+
+**Scope, as widened by the person.** A complete, AI-driven game development engine, covering:
+
+- **Games:** 2D, 2.5D and 3D games, from brief to a packaged, tested game, in every engine on the machine (web, Godot, Unreal, Blender for assets, and Unity when it is installed).
+- **Asset builders:** 2D (sprites, sprite sheets and animations, tilesets, pixel art, UI, icons, parallax backgrounds, normal maps) and 3D (props, buildings, terrain, vegetation, characters, materials).
+- **Generation:** procedural generation of assets, levels, sound effects and music, plus the optional generators.
+- **Proof:** full validation and testing.
+- **An AI game player:** an agent that plays the game it sees through frames and inputs, plus scripted and exploring bots, to prove the game works and to judge it.
+
+### Code layout (the shared engine library)
+
+- `plugins/games3d` is Studio's core. It holds:
+  - `sdk/` (the engine contract, `engine.mjs`, and the heavy-job queue, `jobs.mjs`);
+  - `lib-engines.mjs` (running commands where the session runs them);
+  - `assets/` (2D and 3D asset builders, procedural generation, the library, the pipeline and the sources);
+  - `player/` (the AI player, bots, playtests);
+  - `ui/` (the desktop module);
+  - the agents, skills and workflows.
+- Each engine is its own plugin: `plugins/engine-blender`, `engine-godot`, `engine-unreal` and `engine-unity`. Each imports `../games3d/sdk` and `../games3d/lib-engines.mjs`, and registers its own tools.
 
 Studio is the module for 3D and games: modeling, materials, rigging and animation, rendering, levels, gameplay code, builds, playtests and packaging, across Blender, Godot, Unreal Engine, Unity and the web (Three.js). Agents drive every bit of it through typed operations, the same ones the person's UI calls. It grows out of `plugins/games3d`, which already has:
 
