@@ -118,9 +118,12 @@ export async function handleFrameCall(data: unknown, ctx: FrameCallContext): Pro
  * "fence:", "artifact:", "tool:" or "event:" with its key.
  */
 export function registryAnswer(r: Registry, plugin: string, method: string, p: Record<string, unknown>): boolean | string[] {
+  // A plugin is "there" when it is on: active with its pages, or a server plugin with none (an engine
+  // plugin, say: a frame asks whether what it drives is switched on).
+  const on = (x: Registry['plugins'][number]) => r.active.includes(x) || (!x.ui && x.enabled);
   if (method === 'registry.list') {
     switch (String(p.kind)) {
-      case 'plugins': return r.active.map((x) => x.name);
+      case 'plugins': return [...r.active, ...r.plugins.filter((x) => !r.active.includes(x) && on(x))].map((x) => x.name);
       case 'views': return [...r.views.keys()].filter((k) => !/:onboard/.test(k));
       case 'panels': return [...r.panels.keys()];
       case 'commands': return r.commands.map((c) => c.qid);
@@ -129,7 +132,7 @@ export function registryAnswer(r: Registry, plugin: string, method: string, p: R
     }
   }
   const s = (k: string) => (typeof p[k] === 'string' ? p[k] as string : undefined);
-  if (s('plugin')) return r.active.some((x) => x.name === s('plugin'));
+  if (s('plugin')) return r.plugins.some((x) => x.name === s('plugin') && on(x));
   if (s('view')) return r.views.has(qualify(plugin, s('view')!));
   if (s('panel')) return r.panels.has(qualify(plugin, s('panel')!));
   if (s('command')) return r.commands.some((c) => c.qid === qualify(plugin, s('command')!));

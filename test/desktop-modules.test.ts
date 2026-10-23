@@ -263,7 +263,7 @@ test('guides on the server: the plugin\'s authored text plus its tools, workflow
   const devops = await entry('devops', ['tool:iac']);
   assert.match(devops.guide!.purpose, /^DevOps: Terraform/, 'a guide kept as the plugin\'s <name>-guide skill');
   assert.match(await serverGuide(devops, reg), /`iac`: Terraform/);
-  assert.deepEqual(await readPluginGuide(path.join(root, 'plugins', 'games3d'), manifestOf('games3d')), {}, 'no guide, no line');
+  assert.deepEqual(await readPluginGuide(path.join(root, 'plugins', 'visual'), manifestOf('visual')), {}, 'no guide, no line');
 });
 
 // ---------------- desktop_describe ----------------

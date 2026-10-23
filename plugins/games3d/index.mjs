@@ -18,6 +18,7 @@ import { describeGltf, inspectGltf } from './lib-gltf.mjs';
 import { pngStats } from './lib-png.mjs';
 import { setupAssets } from './assets/index.mjs';
 import { setupPlayer } from './player/index.mjs';
+import { setupUiRoutes } from './ui/routes.mjs';
 
 const IMAGE_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' };
 const seconds = (v, def) => Math.min(Math.max(Number(v) || def, 10), 1800) * 1000;
@@ -180,6 +181,7 @@ export default {
   setup(api) {
     setupAssets(api);
     setupPlayer(api);
+    setupUiRoutes(api);
     api.registerTool(defineTool({
       name: 'model_info',
       description: 'Inspect a glTF model (.glb/.gltf) in the workspace: valid or not, meshes, triangles, materials, textures, animations and approximate size in metres (glTF units are metres).',

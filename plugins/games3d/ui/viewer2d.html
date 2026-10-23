@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2D viewer</title>
+<link rel="stylesheet" href="kit.css">
+<style>
+  html, body { height: 100%; overflow: hidden; }
+  .scroller { position: absolute; inset: 0; overflow: auto; display: grid; place-items: center; padding: 24px; }
+  .scroller canvas { image-rendering: pixelated; box-shadow: 0 0 0 1px var(--hx-border-subtle); }
+  .bg-dark { background: #17181c; } .bg-light { background: #f3f4f6; }
+  .anim { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .anim canvas { image-rendering: pixelated; border-radius: 8px; }
+  .layers label { display: flex; gap: 6px; align-items: center; font-size: 12.5px; padding: 2px 0; }
+  .ctl { display: flex; gap: 6px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+  .ctl input[type=range] { flex: 1; min-width: 80px; }
+  .zoomv { min-width: 44px; text-align: center; font-size: 12px; font-variant-numeric: tabular-nums; }
+</style>
+<script src="harness://app/sdk/plugin-ui.js"></script>
+<script src="kit.js"></script>
+</head>
+<body>
+<div class="viewer-shell" data-viewer2d>
+  <div class="viewer-head">
+    <button type="button" class="btn sm ghost" id="back" hidden>Back</button>
+    <div class="grow"><h1 id="title">2D viewer</h1><div class="sub" id="sub"></div></div>
+    <span id="chips" class="row"></span>
+  </div>
+  <div class="toolbar" role="toolbar" aria-label="View">
+    <button type="button" class="btn sm" id="zout" aria-label="Zoom out">−</button>
+    <span class="zoomv" id="zoomv">1x</span>
+    <button type="button" class="btn sm" id="zin" aria-label="Zoom in">+</button>
+    <button type="button" class="btn sm" id="zfit">Fit</button>
+    <span class="sep"></span>
+    <button type="button" class="btn sm" id="t-grid" aria-pressed="true">Grid</button>
+    <label>Background <select id="bg" aria-label="Background"><option value="checker">Checker</option><option value="dark">Dark</option><option value="light">Light</option></select></label>
+    <span class="spacer"></span>
+    <span class="muted small" id="hover"></span>
+  </div>
+  <div class="viewer-main">
+    <div class="stage-area checker" id="stage"><div class="scroller" id="scroller"><canvas id="canvas" aria-label="The image"></canvas></div><div class="overlay-msg" id="msg">Loading…</div></div>
+    <aside class="viewer-side" id="side" aria-label="Details"></aside>
+  </div>
+</div>
+<script>
+// The 2D viewer: sprites and sprite sheets (the sheet with its frame grid, and the animation played
+// at a frame rate), tilesets (the tile grid, the index under the pointer), levels (a Tiled .tmj or a
+// level JSON drawn with its tileset: tile layers, objects, layer switches) and plain images.
+// Pixels stay pixels: every zoom is nearest-neighbour.
+Kit.start(async (harness) => {
+  const { h, mount, chip } = Kit;
+  const $ = (id) => document.getElementById(id);
+  const params = harness.params || {};
+  let settings = {};
+  try { settings = (await harness.settings.get()) || {}; } catch { settings = {}; }
+  const fail = (text) => { $('msg').hidden = false; $('msg').textContent = text; document.body.dataset.viewerError = text.slice(0, 200); };
+  if (!params.path) { fail('Open a sprite, sprite sheet, tileset or level from Studio: nothing was named.'); return; }
+  const args = Kit.fileArgs(params);
+  let asset = null;
+  if (params.asset) { try { asset = (await Kit.studio(harness, 'asset', { asset: params.asset, ...(params.project ? { project: params.project } : {}) })).asset; } catch { asset = null; } }
+  const meta = asset?.meta || {};
+  const n = (v) => { const x = Number(v); return Number.isFinite(x) && x > 0 ? Math.round(x) : undefined; };
+  let mode = params.mode || (asset?.kind === 'level' || /\.(tmj|json)$/i.test(params.path) ? 'level' : asset?.kind === 'tileset' ? 'tileset' : asset?.kind === 'spritesheet' || params.frameWidth || meta.frameSize || meta.frames ? 'sheet' : asset?.kind === 'sprite' ? 'sprite' : 'image');
+  $('title').textContent = asset?.name || Kit.base(params.path);
+  $('sub').textContent = `${params.path}${asset ? ` · ${asset.library ? 'library' : asset.projectName}` : ''}`;
+  if (asset) { $('back').hidden = false; $('back').onclick = () => harness.view.open('assets', { asset: asset.ref }); }
+  else if (params.project) { $('back').hidden = false; $('back').onclick = () => harness.view.open('projects', { project: params.project }); }
+  document.body.dataset.mode = mode;
+
+  const canvas = $('canvas'); const ctx = canvas.getContext('2d');
+  let zoom = 1; let showGrid = true; let draw = () => {};
+  const setBg = (k) => { $('stage').className = `stage-area ${k === 'dark' ? 'bg-dark' : k === 'light' ? 'bg-light' : 'checker'}`; };
+  $('bg').onchange = () => setBg($('bg').value);
+  const applyZoom = () => { canvas.style.width = `${canvas.width * zoom}px`; canvas.style.height = `${canvas.height * zoom}px`; $('zoomv').textContent = `${zoom >= 1 ? zoom : zoom.toFixed(2)}x`; draw(); };
+  const fitZoom = () => { const r = $('stage').getBoundingClientRect(); const z = Math.min((r.width - 48) / canvas.width, (r.height - 48) / canvas.height); zoom = z >= 1 ? Math.max(1, Math.floor(z)) : Math.max(0.1, Math.round(z * 20) / 20); applyZoom(); };
+  const STEPS = [0.1, 0.25, 0.5, 1, 2, 3, 4, 6, 8, 12, 16, 24, 32];
+  $('zin').onclick = () => { zoom = STEPS.find((s) => s > zoom + 1e-6) ?? zoom; applyZoom(); };
+  $('zout').onclick = () => { zoom = [...STEPS].reverse().find((s) => s < zoom - 1e-6) ?? zoom; applyZoom(); };
+  $('zfit').onclick = fitZoom;
+  $('t-grid').onclick = () => { showGrid = !showGrid; $('t-grid').setAttribute('aria-pressed', String(showGrid)); draw(); };
+  const loadImage = async (a) => { const url = await Kit.fileUrl(harness, a); return new Promise((resolve, reject) => { const img = new Image(); img.onload = () => resolve(img); img.onerror = () => reject(new Error(`${Kit.base(a.path)} is not an image this viewer reads`)); img.src = url; }); };
+  // The grid is drawn over the zoomed canvas in screen pixels: a second canvas the same size as the shown one.
+  const overlay = h('canvas', { style: { position: 'absolute', pointerEvents: 'none', imageRendering: 'auto', boxShadow: 'none' } });
+  const gridOver = (cellW, cellH, highlight) => {
+    const r = canvas.getBoundingClientRect(); const pr = $('scroller').getBoundingClientRect();
+    overlay.width = Math.round(r.width); overlay.height = Math.round(r.height);
+    overlay.style.left = `${r.left - pr.left + $('scroller').scrollLeft}px`; overlay.style.top = `${r.top - pr.top + $('scroller').scrollTop}px`;
+    const g = overlay.getContext('2d'); g.clearRect(0, 0, overlay.width, overlay.height);
+    if (!showGrid || !cellW || !cellH) return;
+    const sx = overlay.width / canvas.width; const sy = overlay.height / canvas.height;
+    if (cellW * sx >= 4) {
+      g.strokeStyle = 'rgba(217,119,87,.55)'; g.lineWidth = 1; g.beginPath();
+      for (let x = 0; x <= canvas.width; x += cellW) { const X = Math.round(x * sx) + 0.5; g.moveTo(X, 0); g.lineTo(X, overlay.height); }
+      for (let y = 0; y <= canvas.height; y += cellH) { const Y = Math.round(y * sy) + 0.5; g.moveTo(0, Y); g.lineTo(overlay.width, Y); }
+      g.stroke();
+    }
+    if (highlight) { g.strokeStyle = '#d97757'; g.lineWidth = 2; g.strokeRect(highlight.x * sx + 1, highlight.y * sy + 1, highlight.w * sx - 2, highlight.h * sy - 2); }
+  };
+  $('scroller').style.position = 'absolute';
+  $('scroller').append(overlay);
+  new ResizeObserver(() => draw()).observe($('stage'));
+  $('scroller').addEventListener('scroll', () => draw());
+
+  try {
+    if (mode === 'level') await level();
+    else await sprite();
+    $('msg').hidden = true;
+    document.body.dataset.ready2d = '1';
+  } catch (e) { fail(e.message); }
+
+  async function sprite() {
+    const img = await loadImage(args);
+    const W = img.naturalWidth; const H = img.naturalHeight;
+    canvas.width = W; canvas.height = H;
+    ctx.imageSmoothingEnabled = false; ctx.drawImage(img, 0, 0);
+    // A frames JSON next to the sheet (Aseprite-style rects per animation) is the most exact description.
+    let json;
+    const jf = asset?.files?.find((f) => /\.frames\.json$/i.test(f.path) && f.exists);
+    if (jf && mode === 'sheet') { try { json = JSON.parse((await Kit.studio(harness, 'file', { ...args, path: jf.path, text: true })).text); } catch { json = undefined; } }
+    const tileMode = mode === 'tileset';
+    const sheet = tileMode
+      ? (() => { const t = n(params.tile) || n(meta.tile) || n(meta.tileSize) || 16; return { fw: t, fh: t, cols: Math.max(1, Math.floor(W / t)), rows: Math.max(1, Math.floor(H / t)), pad: 0, anims: [] }; })()
+      : Kit.sheetFrames(meta, W, H, { frameWidth: params.frameWidth, frameHeight: params.frameHeight, frames: params.frames, fps: params.fps || (n(meta.fps) ? undefined : settings.spriteFps), json });
+    const { fw, fh } = sheet;
+    const total = sheet.anims.reduce((a, x) => a + x.frames.length, 0);
+    $('bg').value = 'checker';
+    fitZoom();
+    const side = $('side');
+    const info = h('dl', { class: 'stat' }, [['Image', `${W} × ${H}`],
+      ...(mode !== 'image' ? [[tileMode ? 'Tile' : 'Frame', `${fw} × ${fh}`], ...(sheet.cols ? [['Grid', `${sheet.cols} × ${sheet.rows}`]] : []), [tileMode ? 'Tiles' : 'Frames', String(tileMode ? sheet.cols * sheet.rows : total)], ...(sheet.pad ? [['Padding', `${sheet.pad} px`]] : [])] : [])].flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]));
+    mount($('chips'), chip(`${W}×${H}`), mode !== 'image' ? chip(`${fw}×${fh}`) : null, chip(mode === 'sheet' ? 'sprite sheet' : mode));
+    if (!tileMode && mode !== 'image' && (mode === 'sheet' || total > 1)) {
+      let anim = sheet.anims[0];
+      let fps = anim.fps;
+      let playing = true; let at = 0; let last = performance.now(); let acc = 0; let current = anim.frames[0];
+      const preview = h('canvas', { width: fw, height: fh, 'data-preview': '' });
+      const scale = Math.max(1, Math.min(8, Math.floor(220 / Math.max(fw, fh))));
+      preview.style.width = `${fw * scale}px`; preview.style.height = `${fh * scale}px`;
+      const pctx = preview.getContext('2d'); pctx.imageSmoothingEnabled = false;
+      const label = h('div', { class: 'muted small', 'data-frame-label': '' });
+      const showFrame = (i) => {
+        at = i; current = anim.frames[i];
+        pctx.clearRect(0, 0, fw, fh); pctx.drawImage(img, current.x, current.y, fw, fh, 0, 0, fw, fh);
+        label.textContent = `${sheet.anims.length > 1 ? `${anim.name}: ` : ''}frame ${i + 1} of ${anim.frames.length}`;
+        document.body.dataset.frame = `${anim.name}:${i}`;
+        gridOver(sheet.cols ? fw + sheet.pad : 0, sheet.cols ? fh + sheet.pad : 0, { x: current.x, y: current.y, w: fw, h: fh });
+      };
+      draw = () => showFrame(at);
+      const playBtn = h('button', { type: 'button', class: 'btn sm', 'data-play': '' }, 'Pause');
+      const setPlaying = (v) => { playing = v; playBtn.textContent = v ? 'Pause' : 'Play'; document.body.dataset.playing = v ? '1' : '0'; };
+      playBtn.onclick = () => setPlaying(!playing);
+      const step = (d) => { setPlaying(false); showFrame((at + d + anim.frames.length) % anim.frames.length); };
+      const fpsIn = h('input', { type: 'range', min: '1', max: '30', value: String(fps), 'aria-label': 'Frames per second' });
+      const fpsV = h('span', { class: 'small', style: { minWidth: '44px' } }, `${fps} fps`);
+      fpsIn.oninput = () => { fps = Number(fpsIn.value); fpsV.textContent = `${fps} fps`; };
+      const animSel = sheet.anims.length > 1 ? h('select', { 'aria-label': 'Animation', 'data-anims': '', onchange: (e) => { anim = sheet.anims.find((a) => a.name === e.target.value); fps = anim.fps; fpsIn.value = String(fps); fpsV.textContent = `${fps} fps`; showFrame(0); } }, sheet.anims.map((a) => h('option', { value: a.name }, `${a.name} (${a.frames.length})`))) : null;
+      mount(side, h('h2', {}, 'Animation'), h('div', { class: 'anim checker', style: { padding: '14px', borderRadius: '10px' } }, preview), label,
+        h('div', { class: 'ctl' }, h('button', { type: 'button', class: 'btn sm', onclick: () => step(-1), 'aria-label': 'Previous frame' }, '‹'), playBtn, h('button', { type: 'button', class: 'btn sm', onclick: () => step(1), 'aria-label': 'Next frame' }, '›'), animSel),
+        h('div', { class: 'ctl' }, fpsIn, fpsV), h('h2', {}, 'Sheet'), info,
+        h('p', { class: 'muted small' }, `Frames from ${sheet.from === 'frames JSON' ? 'the frames JSON' : sheet.from === 'rows' ? 'one row per animation' : sheet.from === 'animations' ? 'the asset\'s animations' : 'the grid, in order'}. Click a frame on the sheet to show it.`));
+      canvas.addEventListener('click', (ev) => {
+        const r = canvas.getBoundingClientRect(); const px = ((ev.clientX - r.left) / r.width) * W; const py = ((ev.clientY - r.top) / r.height) * H;
+        for (const a of sheet.anims) { const i = a.frames.findIndex((f) => px >= f.x && px < f.x + fw && py >= f.y && py < f.y + fh); if (i >= 0) { anim = a; if (animSel) animSel.value = a.name; setPlaying(false); showFrame(i); return; } }
+      });
+      setPlaying(true);
+      showFrame(0);
+      const tick = (now) => {
+        const dt = now - last; last = now;
+        if (playing) { acc += dt; const every = 1000 / fps; while (acc >= every) { acc -= every; showFrame((at + 1) % anim.frames.length); } }
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+      window.__sprite = { frame: () => at, animation: () => anim.name, total, fps: () => fps, playing: () => playing, frameSize: [fw, fh] };
+    } else {
+      draw = () => gridOver(tileMode ? fw : 0, tileMode ? fh : 0);
+      mount(side, h('h2', {}, tileMode ? 'Tileset' : 'Image'), info, tileMode ? h('p', { class: 'muted small' }, 'Point at a tile to see its index.') : null);
+      if (tileMode) canvas.addEventListener('mousemove', (ev) => { const r = canvas.getBoundingClientRect(); const x = Math.floor(((ev.clientX - r.left) / r.width) * W / fw); const y = Math.floor(((ev.clientY - r.top) / r.height) * H / fh); $('hover').textContent = `tile ${y * sheet.cols + x} (column ${x}, row ${y})`; });
+      draw();
+    }
+  }
+
+  async function level() {
+    const f = await Kit.studio(harness, 'file', { ...args, text: true });
+    let L;
+    try { L = JSON.parse(f.text); } catch { throw new Error(`${Kit.base(params.path)} is not JSON (a Tiled .tmj or a level JSON is drawn here)`); }
+    // The tileset is named relative to the level file; an asset's level may reach into a sibling
+    // asset (../tiles/tiles.png), so its paths are taken from the project (or the library) instead.
+    const assetDir = asset ? (asset.library ? `${asset.folder}/` : `.studio/assets/${asset.folder}/`) : '';
+    const baseArgs = asset ? (asset.library ? { library: true } : { project: asset.project }) : Object.fromEntries(Object.entries(args).filter(([k]) => k !== 'path'));
+    const dir = `${assetDir}${String(params.path).replace(/\\/g, '/').replace(/[^/]*$/, '')}`;
+    const rel = (p) => { const out = []; for (const s of `${dir}${p}`.split('/')) { if (s === '..') out.pop(); else if (s && s !== '.') out.push(s); } return (/^[a-z]:/i.test(dir) || dir.startsWith('/')) && !/^[a-z]:/i.test(out[0] || '') ? `/${out.join('/')}` : out.join('/'); };
+    // Tiled: width/height in tiles, tilewidth/tileheight, layers (tilelayer data, objectgroup objects), tilesets (firstgid, image, columns).
+    // Level JSON: tile (or tileSize), width/height, layers [{name, data: flat or rows}], tileset (an image path), objects/entities, or grid: ["####", "#.@#"].
+    const tw = n(L.tilewidth) || n(L.tileSize) || n(L.tile) || 16; const th = n(L.tileheight) || n(L.tileSize) || n(L.tile) || tw;
+    let layers = []; let objects = [];
+    if (!Array.isArray(L.grid) && Array.isArray(L.rows) && typeof L.rows[0] === 'string') L.grid = L.rows;
+    if (Array.isArray(L.grid) && Array.isArray(L.grid[0])) { layers.push({ name: 'grid', width: L.grid[0].length, data: L.grid.flat().map((v) => Number(v) || 0), visible: true }); L.grid = null; }
+    if (Array.isArray(L.grid)) {
+      const legend = L.legend && typeof L.legend === 'object' ? L.legend : {};
+      const chars = [...new Set(L.grid.join(''))].filter((c) => c !== '.' && c !== ' ');
+      layers.push({ name: 'grid', width: Math.max(...L.grid.map((r) => r.length)), data: L.grid.flatMap((r) => [...r.padEnd(Math.max(...L.grid.map((x) => x.length)))].map((c) => (c === '.' || c === ' ' ? 0 : n(legend[c]) || chars.indexOf(c) + 1))), visible: true, legend: Object.fromEntries(chars.map((c, i) => [n(legend[c]) || i + 1, c])) });
+    }
+    for (const ly of Array.isArray(L.layers) ? L.layers : []) {
+      if (ly.type === 'objectgroup' || Array.isArray(ly.objects)) { for (const o of ly.objects || []) objects.push({ ...o, layer: ly.name }); continue; }
+      const data = Array.isArray(ly.data) ? (Array.isArray(ly.data[0]) ? ly.data.flat() : ly.data) : [];
+      layers.push({ name: ly.name || `layer ${layers.length + 1}`, width: n(ly.width) || (Array.isArray(ly.data?.[0]) ? ly.data[0].length : n(L.width)), data: data.map((v) => Number(v) || 0), visible: ly.visible !== false, opacity: typeof ly.opacity === 'number' ? ly.opacity : 1 });
+    }
+    for (const o of [...(Array.isArray(L.objects) ? L.objects : []), ...(Array.isArray(L.entities) ? L.entities : [])]) objects.push({ ...o, x: o.x * (o.inTiles || L.objectsInTiles ? tw : 1), y: o.y * (o.inTiles || L.objectsInTiles ? th : 1) });
+    if (!layers.length) throw new Error('No tile layers in the level (Tiled layers, a level JSON\'s layers, or a grid).');
+    const W = n(L.width) || layers[0].width || 1; const H = n(L.height) || Math.ceil(layers[0].data.length / W);
+    // The tileset image: Tiled's (first one with an image) or the level's own.
+    const sets = [];
+    // An external tileset (.tsj): its image is named relative to it.
+    for (const ts of Array.isArray(L.tilesets) ? L.tilesets : []) {
+      if (ts.image || typeof ts.source !== 'string' || !/\.(tsj|json)$/i.test(ts.source)) continue;
+      try { const t = JSON.parse((await Kit.studio(harness, 'file', { ...baseArgs, path: rel(ts.source), text: true })).text); Object.assign(ts, { ...t, firstgid: ts.firstgid, image: t.image ? `${ts.source.replace(/[^/]*$/, '')}${t.image}` : undefined }); } catch { /* drawn as colours */ }
+    }
+    for (const ts of Array.isArray(L.tilesets) ? L.tilesets : []) if (ts.image) sets.push({ firstgid: n(ts.firstgid) || 1, image: ts.image, columns: n(ts.columns), tw: n(ts.tilewidth) || tw, th: n(ts.tileheight) || th, margin: Number(ts.margin) || 0, spacing: Number(ts.spacing) || 0 });
+    if (!sets.length && typeof L.tileset === 'string') sets.push({ firstgid: n(L.firstgid) || 1, image: L.tileset, tw, th, margin: 0, spacing: 0 });
+    if (!sets.length && L.tileset && typeof L.tileset === 'object' && L.tileset.image) sets.push({ firstgid: n(L.tileset.firstgid) || 1, image: L.tileset.image, columns: n(L.tileset.columns), tw, th, margin: 0, spacing: 0 });
+    const notes = [];
+    for (const s of sets) {
+      try { s.img = await loadImage({ ...baseArgs, path: rel(s.image) }); s.columns = s.columns || Math.max(1, Math.floor((s.img.naturalWidth - 2 * s.margin + s.spacing) / (s.tw + s.spacing))); }
+      catch (e) { notes.push(`tileset ${s.image}: ${e.message}`); }
+    }
+    canvas.width = W * tw; canvas.height = H * th;
+    const colour = (id) => `hsl(${(id * 47) % 360} 45% 55%)`;
+    const paint = () => {
+      ctx.imageSmoothingEnabled = false;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      for (const ly of layers) {
+        if (!ly.visible) continue;
+        ctx.globalAlpha = ly.opacity ?? 1;
+        const lw = ly.width || W;
+        ly.data.forEach((raw, i) => {
+          const gid = raw & 0x1fffffff;
+          if (!gid) return;
+          const x = (i % lw) * tw; const y = Math.floor(i / lw) * th;
+          const s = [...sets].reverse().find((t) => t.img && gid >= t.firstgid);
+          if (s) { const idx = gid - s.firstgid; ctx.drawImage(s.img, s.margin + (idx % s.columns) * (s.tw + s.spacing), s.margin + Math.floor(idx / s.columns) * (s.th + s.spacing), s.tw, s.th, x, y + th - s.th, s.tw, s.th); }
+          else { ctx.fillStyle = colour(gid); ctx.fillRect(x, y, tw, th); if (ly.legend?.[gid] && tw >= 10) { ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.font = `${Math.floor(th * 0.7)}px monospace`; ctx.textAlign = 'center'; ctx.fillText(ly.legend[gid], x + tw / 2, y + th * 0.78); } }
+        });
+      }
+      ctx.globalAlpha = 1;
+      if (showObjects) for (const o of objects) {
+        const label = String(o.name || o.type || o.class || o.kind || '').slice(0, 24);
+        if (o.point || (o.width === 0 && o.height === 0)) {
+          ctx.fillStyle = '#d97757'; ctx.beginPath(); ctx.arc(o.x, o.y, Math.max(2, tw / 3), 0, Math.PI * 2); ctx.fill();
+          if (label) { ctx.fillStyle = '#fff'; ctx.font = `${Math.max(8, Math.floor(th * 0.55))}px sans-serif`; ctx.textAlign = 'center'; ctx.fillText(label, o.x, o.y - tw / 2); }
+          continue;
+        }
+        const w = Number(o.width) || tw; const hh = Number(o.height) || th;
+        ctx.strokeStyle = '#d97757'; ctx.lineWidth = Math.max(1, tw / 16); ctx.strokeRect(o.x + 0.5, o.y + 0.5, w - 1, hh - 1);
+        ctx.fillStyle = 'rgba(217,119,87,.18)'; ctx.fillRect(o.x, o.y, w, hh);
+        if (label) { ctx.fillStyle = '#fff'; ctx.font = `${Math.max(8, Math.floor(th * 0.55))}px sans-serif`; ctx.textAlign = 'left'; ctx.fillText(label, o.x + 2, o.y - 3 < 8 ? o.y + th * 0.6 : o.y - 3); }
+      }
+    };
+    let showObjects = true;
+    paint();
+    draw = () => gridOver(tw, th);
+    fitZoom();
+    $('bg').value = 'dark'; setBg('dark');
+    mount($('chips'), chip(`${W}×${H} tiles`), chip(`${tw}px`), chip('level'));
+    canvas.addEventListener('mousemove', (ev) => { const r = canvas.getBoundingClientRect(); const x = Math.floor(((ev.clientX - r.left) / r.width) * W); const y = Math.floor(((ev.clientY - r.top) / r.height) * H); const v = layers.map((ly) => ly.data[y * (ly.width || W) + x] || 0).filter(Boolean); $('hover').textContent = `tile ${x}, ${y}${v.length ? ` · ${v.join(', ')}` : ''}`; });
+    mount($('side'), h('h2', {}, 'Level'), h('dl', { class: 'stat' }, [['Size', `${W} × ${H} tiles`], ['Tile', `${tw} × ${th} px`], ['Pixels', `${W * tw} × ${H * th}`], ['Layers', String(layers.length)], ['Objects', String(objects.length)], ['Tilesets', String(sets.filter((s) => s.img).length)]].flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)])),
+      h('h2', {}, 'Layers'), h('div', { class: 'layers', 'data-layers': '' }, layers.map((ly) => { const c = h('input', { type: 'checkbox', checked: ly.visible }); c.onchange = () => { ly.visible = c.checked; paint(); }; return h('label', {}, c, ly.name, h('span', { class: 'muted small' }, ` ${ly.data.filter(Boolean).length} tiles`)); }),
+        objects.length ? (() => { const c = h('input', { type: 'checkbox', checked: true }); c.onchange = () => { showObjects = c.checked; paint(); }; return h('label', {}, c, 'Objects', h('span', { class: 'muted small' }, ` ${objects.length}`)); })() : null),
+      objects.length ? [h('h2', {}, 'Objects'), h('ul', { class: 'tree' }, objects.slice(0, 200).map((o) => h('li', {}, String(o.name || o.type || o.class || 'object'), h('span', { class: 'ty' }, `${Math.round(o.x / tw)}, ${Math.round(o.y / th)}`))))] : null,
+      notes.length ? h('div', { class: 'note', style: { marginTop: '10px' } }, notes.join('\n')) : sets.length ? null : h('p', { class: 'muted small' }, 'No tileset image: tiles are drawn as colours by their id.'));
+    document.body.dataset.tiles = String(layers.reduce((a, ly) => a + ly.data.filter(Boolean).length, 0));
+  }
+});
+</script>
+</body>
+</html>

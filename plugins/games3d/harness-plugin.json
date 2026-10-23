@@ -5,5 +5,135 @@
   "main": "index.mjs",
   "agents": "agents",
   "skills": "skills",
-  "workflows": "workflows"
+  "workflows": "workflows",
+  "permissions": {
+    "routes": true
+  },
+  "ui": {
+    "apiVersion": 1,
+    "displayName": "Studio",
+    "icon": "box",
+    "category": "Games and 3D",
+    "trust": "frame",
+    "capabilities": [
+      "routes.call",
+      "sessions.read",
+      "events.subscribe",
+      "workflows.start",
+      "settings.read",
+      "external.open"
+    ],
+    "menu": {
+      "title": "Studio",
+      "icon": "box",
+      "order": 45,
+      "items": [
+        { "id": "projects", "title": "Projects", "icon": "folder", "view": "projects" },
+        { "id": "assets", "title": "Assets", "icon": "stack", "view": "assets" },
+        { "id": "scenes", "title": "Scenes", "icon": "layers", "view": "scenes" },
+        { "id": "renders", "title": "Renders", "icon": "image", "view": "renders" },
+        { "id": "builds", "title": "Builds", "icon": "wrench", "view": "builds" },
+        { "id": "playtests", "title": "Playtests", "icon": "play", "view": "playtests" },
+        { "id": "jobs", "title": "Jobs", "icon": "activity", "view": "jobs", "badge": "games3d.jobs" },
+        { "id": "engines", "title": "Engines", "icon": "cpu", "view": "engines" }
+      ]
+    },
+    "home": "home",
+    "guide": "GUIDE.md",
+    "tools": ["model_info", "blender", "godot"],
+    "badges": [
+      { "name": "jobs", "route": "studio/badges", "every": 15, "signal": true }
+    ],
+    "contributes": {
+      "views": [
+        { "id": "home", "title": "Studio", "icon": "box", "description": "Games and 3D at a glance: recent projects, running and recent jobs, the engines on this machine and their gaps, quick starts.", "kind": "frame", "entry": "ui/home.html" },
+        { "id": "projects", "title": "Projects", "icon": "folder", "description": "Every Studio project (.studio/project.json) in your folders; params {\"project\": id or folder} opens one: its stages to approve or comment on, the design document, builds, playtests and assets.", "kind": "frame", "entry": "ui/studio.html" },
+        { "id": "assets", "title": "Assets", "icon": "stack", "description": "The assets of every project and the shared library as a grid with previews, filtered by kind, dimension, style, license and source; params {\"asset\": ref} opens one with its provenance, license, checks and files.", "kind": "frame", "entry": "ui/studio.html" },
+        { "id": "scenes", "title": "Scenes", "icon": "layers", "description": "Engine scenes and levels of the projects (Godot .tscn with their node outline, Unreal .umap, Unity .unity, .blend, glTF scenes, level JSON).", "kind": "frame", "entry": "ui/studio.html" },
+        { "id": "renders", "title": "Renders", "icon": "image", "description": "Renders, previews, turntables and captures, newest first; pick two to compare side by side.", "kind": "frame", "entry": "ui/studio.html" },
+        { "id": "builds", "title": "Builds", "icon": "wrench", "description": "Builds of every project with their status; params {\"project\", \"id\"} opens one with its log and the problems in it, linked to the source lines.", "kind": "frame", "entry": "ui/studio.html" },
+        { "id": "playtests", "title": "Playtests", "icon": "play", "description": "Playtest reports; params {\"project\", \"id\"} opens one: the timeline with frames and events, metrics charts against the budgets, issues with evidence, verdicts and the recording.", "kind": "frame", "entry": "ui/studio.html" },
+        { "id": "jobs", "title": "Jobs", "icon": "activity", "description": "The heavy-job queue (renders, builds, cooks, bakes, long plays): running, waiting and the last hour's, with cancel.", "kind": "frame", "entry": "ui/studio.html" },
+        { "id": "engines", "title": "Engines", "icon": "cpu", "description": "Blender, Godot, Unreal, Unity and the web on this machine: installed or not, versions, toolchain gaps, and how to install what is missing.", "kind": "frame", "entry": "ui/studio.html" },
+        { "id": "viewer", "title": "3D viewer", "icon": "box", "description": "An interactive viewer for a .glb or .gltf: orbit, wireframe, normals, UV checker, LOD switch, the animation player, size and triangle stats.", "kind": "frame", "entry": "ui/viewer3d.html" },
+        { "id": "sprites", "title": "2D viewer", "icon": "image", "description": "Sprites and sprite sheets (frames, playback at a frame rate, nearest-neighbour zoom, grid), tilesets and levels (Tiled .tmj or level JSON drawn with their tileset).", "kind": "frame", "entry": "ui/viewer2d.html" },
+        { "id": "audio", "title": "Audio player", "icon": "play", "description": "Sound effects and music with their waveform: play, loop, seek.", "kind": "frame", "entry": "ui/audio.html" }
+      ],
+      "commands": [
+        { "id": "open-studio", "title": "Open Studio", "category": "Studio", "icon": "box", "action": { "type": "open-view", "view": "home" }, "agent": { "description": "Opens Studio's home: recent projects, running jobs, the engines on this machine and their gaps, the quick starts." } },
+        { "id": "open-projects", "title": "Open projects", "category": "Studio", "icon": "folder", "action": { "type": "open-view", "view": "projects" }, "agent": { "description": "Opens the list of Studio projects (every .studio/project.json in the person's folders)." } },
+        { "id": "open-project", "title": "Open a project", "category": "Studio", "icon": "folder", "action": { "type": "open-view", "view": "projects" }, "agent": { "description": "Opens one project: its stages (with approve and comment), the design document, builds, playtests and assets.", "inputSchema": { "type": "object", "properties": { "project": { "type": "string", "description": "The project's folder (absolute path, the one holding .studio) or its id from Studio" } }, "required": ["project"] } } },
+        { "id": "open-assets", "title": "Open assets", "category": "Studio", "icon": "stack", "action": { "type": "open-view", "view": "assets" }, "agent": { "description": "Opens the asset grid, optionally filtered.", "inputSchema": { "type": "object", "properties": { "kind": { "type": "string", "enum": ["model", "sprite", "spritesheet", "tileset", "texture", "material", "audio", "music", "font", "ui", "level", "heightmap"] }, "dimension": { "type": "string", "enum": ["2d", "3d"] }, "style": { "type": "string", "description": "A style name, e.g. stylized-lowpoly" }, "license": { "type": "string", "description": "A license id, e.g. CC0-1.0" }, "source": { "type": "string", "enum": ["procedural", "import", "library", "generated"] }, "q": { "type": "string", "description": "Words in the name, id, tags or style" }, "project": { "type": "string", "description": "Only this project's (folder or id), or \"library\"" } } } } },
+        { "id": "open-asset", "title": "Open an asset", "category": "Studio", "icon": "stack", "action": { "type": "open-view", "view": "assets" }, "agent": { "description": "Opens one asset's page: preview, provenance (source, generator, prompt, seed), license, checks, files and where it was imported.", "inputSchema": { "type": "object", "properties": { "asset": { "type": "string", "description": "The asset id (its folder under .studio/assets), or library:<id> for the shared library" }, "project": { "type": "string", "description": "The project's folder (absolute) or id; not needed for library:<id>" } }, "required": ["asset"] } } },
+        { "id": "open-model", "title": "Open a model in the 3D viewer", "category": "Studio", "icon": "box", "action": { "type": "open-view", "view": "viewer" }, "agent": { "description": "Shows a .glb or .gltf in the interactive 3D viewer (orbit, wireframe, normals, UV checker, LODs, animations, size and triangle stats).", "inputSchema": { "type": "object", "properties": { "path": { "type": "string", "description": "The model: an absolute path, or relative to project (or asset) when given" }, "project": { "type": "string", "description": "The project's folder (absolute) or id" }, "asset": { "type": "string", "description": "An asset id: path is then relative to the asset's folder, and its LODs are offered" } }, "required": ["path"] } } },
+        { "id": "open-sprite", "title": "Open a sprite or sprite sheet", "category": "Studio", "icon": "image", "action": { "type": "open-view", "view": "sprites" }, "agent": { "description": "Shows a sprite, sprite sheet or tileset in the 2D viewer: frames, playback at a frame rate, nearest-neighbour zoom and a grid.", "inputSchema": { "type": "object", "properties": { "path": { "type": "string", "description": "The PNG: an absolute path, or relative to project (or asset)" }, "project": { "type": "string", "description": "The project's folder (absolute) or id" }, "asset": { "type": "string", "description": "An asset id (its frame size, frames and fps come from asset.json)" }, "frameWidth": { "type": "integer", "minimum": 1, "maximum": 4096 }, "frameHeight": { "type": "integer", "minimum": 1, "maximum": 4096 }, "frames": { "type": "integer", "minimum": 1, "maximum": 4096 }, "fps": { "type": "integer", "minimum": 1, "maximum": 120 } }, "required": ["path"] } } },
+        { "id": "open-level", "title": "Open a level", "category": "Studio", "icon": "map", "action": { "type": "open-view", "view": "sprites", "params": { "mode": "level" } }, "agent": { "description": "Draws a level in the 2D viewer: a Tiled map (.tmj) or a level JSON (tile layers and objects) with its tileset.", "inputSchema": { "type": "object", "properties": { "path": { "type": "string", "description": "The level file: absolute, or relative to project (or asset)" }, "project": { "type": "string", "description": "The project's folder (absolute) or id" }, "asset": { "type": "string", "description": "An asset id of kind level" } }, "required": ["path"] } } },
+        { "id": "open-audio", "title": "Open a sound", "category": "Studio", "icon": "play", "action": { "type": "open-view", "view": "audio" }, "agent": { "description": "Opens a sound effect or music file (.wav, .mp3, .ogg) in the audio player with its waveform.", "inputSchema": { "type": "object", "properties": { "path": { "type": "string", "description": "The sound: absolute, or relative to project (or asset)" }, "project": { "type": "string", "description": "The project's folder (absolute) or id" }, "asset": { "type": "string", "description": "An asset id" } }, "required": ["path"] } } },
+        { "id": "open-scenes", "title": "Open scenes", "category": "Studio", "icon": "layers", "action": { "type": "open-view", "view": "scenes" }, "agent": { "description": "Opens the scenes and levels of the projects (optionally one project's).", "inputSchema": { "type": "object", "properties": { "project": { "type": "string", "description": "The project's folder (absolute) or id" } } } } },
+        { "id": "open-renders", "title": "Open renders", "category": "Studio", "icon": "image", "action": { "type": "open-view", "view": "renders" }, "agent": { "description": "Opens the render gallery (renders, previews, captures; compare two side by side).", "inputSchema": { "type": "object", "properties": { "project": { "type": "string", "description": "The project's folder (absolute) or id" } } } } },
+        { "id": "open-builds", "title": "Open builds", "category": "Studio", "icon": "wrench", "action": { "type": "open-view", "view": "builds" }, "agent": { "description": "Opens the list of builds with their status.", "inputSchema": { "type": "object", "properties": { "project": { "type": "string", "description": "The project's folder (absolute) or id" } } } } },
+        { "id": "open-build", "title": "Open a build", "category": "Studio", "icon": "wrench", "action": { "type": "open-view", "view": "builds" }, "agent": { "description": "Opens one build: status, artifact, its log, and the problems in the log linked to the source lines.", "inputSchema": { "type": "object", "properties": { "project": { "type": "string", "description": "The project's folder (absolute) or id" }, "id": { "type": "string", "description": "The build id in project.json builds" } }, "required": ["project", "id"] } } },
+        { "id": "open-playtests", "title": "Open playtests", "category": "Studio", "icon": "play", "action": { "type": "open-view", "view": "playtests" }, "agent": { "description": "Opens the playtest reports, newest first.", "inputSchema": { "type": "object", "properties": { "project": { "type": "string", "description": "The project's folder (absolute) or id" } } } } },
+        { "id": "open-playtest", "title": "Open a playtest", "category": "Studio", "icon": "play", "action": { "type": "open-view", "view": "playtests" }, "agent": { "description": "Opens one playtest report: the timeline with frames and events, metrics charts against the budgets, issues with their evidence frames, verdicts and the recording.", "inputSchema": { "type": "object", "properties": { "project": { "type": "string", "description": "The project's folder (absolute) or id" }, "id": { "type": "string", "description": "The playtest id (its folder under .studio/playtests)" } }, "required": ["project", "id"] } } },
+        { "id": "open-jobs", "title": "Open jobs", "category": "Studio", "icon": "activity", "action": { "type": "open-view", "view": "jobs" }, "agent": { "description": "Opens the heavy-job queue: running, waiting and the last hour's jobs." } },
+        { "id": "open-engines", "title": "Open engines", "category": "Studio", "icon": "cpu", "action": { "type": "open-view", "view": "engines" }, "agent": { "description": "Opens the Engines page: what is installed, versions and toolchain gaps." } },
+        { "id": "cancel-job", "title": "Cancel a job", "category": "Studio", "icon": "stop", "action": { "type": "route", "path": "studio/jobs/cancel", "method": "POST" }, "agent": { "description": "Cancels a waiting or running heavy job (a render, build, cook, bake or long play) by its id; the person sees it in Jobs.", "inputSchema": { "type": "object", "properties": { "id": { "type": "string", "description": "The job id, job-N" } }, "required": ["id"] } } },
+        { "id": "approve-stage", "title": "Approve a stage", "category": "Studio", "icon": "check", "action": { "type": "route", "path": "studio/project/approve", "method": "POST" }, "agent": { "description": "Marks a project stage approved in .studio/project.json, with an optional comment. Only when the person said to approve it.", "inputSchema": { "type": "object", "properties": { "project": { "type": "string", "description": "The project's folder (absolute) or id" }, "stage": { "type": "string", "description": "The stage id, e.g. prototype" }, "comment": { "type": "string", "maxLength": 2000 } }, "required": ["project", "stage"] } } },
+        { "id": "request-changes", "title": "Request changes to a stage", "category": "Studio", "icon": "edit", "action": { "type": "route", "path": "studio/project/request-changes", "method": "POST" }, "agent": { "description": "Marks a stage as needing changes, with the comment saying what to change.", "inputSchema": { "type": "object", "properties": { "project": { "type": "string", "description": "The project's folder (absolute) or id" }, "stage": { "type": "string" }, "comment": { "type": "string", "maxLength": 2000 } }, "required": ["project", "stage", "comment"] } } },
+        { "id": "comment-stage", "title": "Comment on a stage", "category": "Studio", "icon": "edit", "action": { "type": "route", "path": "studio/project/comment", "method": "POST" }, "agent": { "description": "Adds a comment to a project stage (kept in .studio/project.json).", "inputSchema": { "type": "object", "properties": { "project": { "type": "string", "description": "The project's folder (absolute) or id" }, "stage": { "type": "string" }, "comment": { "type": "string", "maxLength": 2000 } }, "required": ["project", "stage", "comment"] } } },
+        { "id": "reopen-stage", "title": "Reopen a stage", "category": "Studio", "icon": "refresh", "action": { "type": "route", "path": "studio/project/reopen", "method": "POST" }, "agent": { "description": "Sets an approved stage back to active.", "inputSchema": { "type": "object", "properties": { "project": { "type": "string", "description": "The project's folder (absolute) or id" }, "stage": { "type": "string" } }, "required": ["project", "stage"] } } },
+        { "id": "detect-engines", "title": "Check the engines again", "category": "Studio", "icon": "refresh", "action": { "type": "route", "path": "studio/engines", "method": "POST", "body": { "refresh": true } }, "agent": { "description": "Looks again at what is installed (Blender, Godot, Unreal and its MSVC toolchain, Unity, a headless Chromium for web games) and says it; for an engine's full report run its tool's detect action." } },
+        { "id": "new-2d-platformer", "title": "Make a 2D platformer", "category": "Studio", "icon": "play", "action": { "type": "workflow", "workflow": "build-game", "input": { "idea": "A 2D side-scrolling platformer: run, jump and collect coins across three short levels, enemies to stomp, a goal flag; pixel-art style, keyboard controls (arrows/WASD, space to jump).", "engine": "browser", "tech": "Canvas 2D" } }, "agent": { "description": "Opens the build-game workflow dialog for a 2D platformer (the person confirms and picks the folder)." } },
+        { "id": "new-3d-game", "title": "Make a 3D third-person game", "category": "Studio", "icon": "box", "action": { "type": "workflow", "workflow": "build-game", "input": { "idea": "A 3D third-person collect-and-escape game: one level, collectibles, a score UI, a win condition and an exit door that opens after the last collectible; a follow camera, WASD to move, space to jump.", "engine": "browser", "tech": "Three.js (vendored)" } }, "agent": { "description": "Opens the build-game workflow dialog for a 3D third-person game (engine browser; the person can choose godot)." } },
+        { "id": "new-model", "title": "Make a 3D model", "category": "Studio", "icon": "box", "action": { "type": "workflow", "workflow": "model-3d", "input": { "subject": "" } }, "agent": { "description": "Opens the model-3d workflow dialog (the person describes the model and picks three or blender)." } },
+        { "id": "new-sprite-sheet", "title": "Make a sprite sheet", "category": "Studio", "icon": "image", "action": { "type": "prompt", "newChat": true, "prompt": "Make a sprite sheet with Studio: a character walk cycle of 8 frames at 32x32 pixels, pixel-art, transparent background. Save it as a Studio asset (.studio/assets/<id>/ with asset.json: kind spritesheet, frames, frameSize, fps) and show it in the 2D viewer." }, "agent": { "description": "Types a prompt for the person in a new chat: make a sprite sheet as a Studio asset." } },
+        { "id": "new-level", "title": "Generate a level", "category": "Studio", "icon": "map", "action": { "type": "prompt", "newChat": true, "prompt": "Generate a level with Studio: a 2D tile level (40x20 tiles of 16 px) with a start, a goal, platforms, gaps and a few enemies, from a tileset. Save it as a Studio asset of kind level (level JSON or a Tiled .tmj with its tileset) and show it in the 2D viewer." }, "agent": { "description": "Types a prompt for the person in a new chat: generate a level as a Studio asset." } },
+        { "id": "install-godot", "title": "Install Godot 4", "category": "Studio", "icon": "download", "action": { "type": "prompt", "newChat": true, "prompt": "Install Godot 4 for Studio: use the Godot engine tool's install action (the official build into ~/.harness/engines, checksums verified). Ask me before downloading anything, then run detect and tell me what it found." } },
+        { "id": "install-blender", "title": "Install Blender", "category": "Studio", "icon": "download", "action": { "type": "prompt", "newChat": true, "prompt": "Install Blender for Studio: use the Blender engine tool's install action if it has one, else tell me the exact command for this system (winget, brew or the official download) and wait for me to run it. Then run detect." } },
+        { "id": "get-unreal", "title": "Get Unreal Engine (Epic Games Launcher)", "category": "Studio", "icon": "external", "action": { "type": "open-url", "url": "https://www.unrealengine.com/en-US/download" } },
+        { "id": "get-unity", "title": "Get Unity (Unity Hub)", "category": "Studio", "icon": "external", "action": { "type": "open-url", "url": "https://unity.com/download" } },
+        { "id": "get-msvc", "title": "Get Visual Studio 2022 (C++ for Unreal)", "category": "Studio", "icon": "external", "action": { "type": "open-url", "url": "https://visualstudio.microsoft.com/vs/" } }
+      ],
+      "slashCommands": [
+        { "name": "game", "description": "Make a game with Studio", "action": { "type": "prompt", "prompt": "Make a game with Studio: {args}\n\nLoad the games3d-guide skill first. Pick the engine from what is installed (Studio > Engines), keep the project in .studio/project.json with its stages, and playtest it before calling it done." } },
+        { "name": "asset", "description": "Make a game asset with Studio", "action": { "type": "prompt", "prompt": "Make this asset with Studio: {args}\n\nLoad the games3d-guide skill first. Save it under .studio/assets/<id>/ with its asset.json (kind, files, source, license, checks) and show it in the right viewer." } },
+        { "name": "playtest", "description": "Playtest the game in this folder", "action": { "type": "prompt", "prompt": "Playtest the game in this folder with Studio's player: {args}\n\nWrite the report to .studio/playtests/<id>/report.json (events, metrics, frames, issues with evidence, verdicts) and open it in Studio." } }
+      ],
+      "settings": [
+        {
+          "id": "studio",
+          "title": "Studio",
+          "icon": "box",
+          "group": "plugins",
+          "scope": "app",
+          "order": 45,
+          "schema": {
+            "type": "object",
+            "title": "Studio",
+            "description": "How Studio's pages and viewers look on this computer.",
+            "properties": {
+              "refreshSeconds": { "type": "integer", "title": "Refresh (seconds)", "description": "How often the pages read the projects and jobs again.", "minimum": 5, "maximum": 600, "default": 20, "order": 1 },
+              "viewerBackground": { "type": "string", "title": "3D viewer background", "enum": ["studio", "dark", "light"], "enumLabels": ["Studio grey", "Dark", "Light"], "default": "studio", "order": 2 },
+              "spriteFps": { "type": "integer", "title": "Sprite playback (frames per second)", "description": "When the sprite sheet does not say.", "minimum": 1, "maximum": 60, "default": 8, "order": 3 }
+            }
+          }
+        }
+      ],
+      "renderers": [
+        { "id": "model-card", "for": { "tool": "model_info" }, "kind": "frame", "entry": "ui/card.html", "height": 150 },
+        { "id": "sprite-card", "for": { "tool": "studio_sprite" }, "kind": "frame", "entry": "ui/card.html", "height": 150 },
+        { "id": "image-card", "for": { "tool": "studio_image" }, "kind": "frame", "entry": "ui/card.html", "height": 150 },
+        { "id": "sound-card", "for": { "tool": "studio_audio" }, "kind": "frame", "entry": "ui/card.html", "height": 150 },
+        { "id": "procgen-card", "for": { "tool": "studio_procgen" }, "kind": "frame", "entry": "ui/card.html", "height": 150 },
+        { "id": "playtest-card", "for": { "tool": "game_playtest" }, "kind": "frame", "entry": "ui/card.html", "height": 150 },
+        { "id": "model-fence", "for": { "fence": "studio-model" }, "kind": "frame", "entry": "ui/card.html", "height": 150 },
+        { "id": "sprite-fence", "for": { "fence": "studio-sprite" }, "kind": "frame", "entry": "ui/card.html", "height": 150 },
+        { "id": "playtest-fence", "for": { "fence": "studio-playtest" }, "kind": "frame", "entry": "ui/card.html", "height": 150 },
+        { "id": "build-fence", "for": { "fence": "studio-build" }, "kind": "frame", "entry": "ui/card.html", "height": 150 }
+      ],
+      "homeCards": [
+        { "id": "studio", "title": "Studio", "kind": "frame", "entry": "ui/home-card.html", "order": 45 }
+      ]
+    }
+  }
 }
