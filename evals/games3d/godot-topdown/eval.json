@@ -1,0 +1,39 @@
+{
+  "name": "godot-topdown",
+  "description": "A Godot 4 2D top-down game through make-game, judged by the bots playing it through engine-godot's driver, the Godot gates (project, self-test, export) and the playtest.",
+  "workflow": "make-game",
+  "timeoutMin": 180,
+  "input": {
+    "brief": "A Godot 2D top-down game: a knight explores a walled garden, collects 6 gems and avoids two patrolling slimes; the game is won when every gem is collected.",
+    "engine": "godot",
+    "dimension": "2d",
+    "genre": "top-down action"
+  },
+  "checks": [
+    {
+      "name": "its own gates",
+      "gates": [
+        "studio-project",
+        "godot-project",
+        "godot-selftest",
+        "game-starts",
+        "no-softlock",
+        "playtest-pass",
+        "godot-export"
+      ]
+    },
+    {
+      "name": "bots win it",
+      "run": "node {{case}}/../lib/check-game.mjs --engine godot --seconds 240 --expect score:ge:6",
+      "timeoutSec": 1200
+    },
+    {
+      "name": "deliverables",
+      "files": [
+        "design/GDD.md",
+        "game/project.godot",
+        "docs/playtest-report.md"
+      ]
+    }
+  ]
+}

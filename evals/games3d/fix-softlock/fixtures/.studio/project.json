@@ -1,0 +1,13 @@
+{
+  "name": "Coin Hop",
+  "engine": "web",
+  "dimension": "2d",
+  "genre": "platformer",
+  "entry": "index.html",
+  "budgets": {
+    "fps": 30
+  },
+  "stages": [],
+  "builds": [],
+  "playtests": []
+}
