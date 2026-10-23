@@ -83,11 +83,11 @@ test('real Blender: a procedural model to .glb, described, imported and exported
     assert.equal(d.count, 5);
     assert.deepEqual(d.frames, [1, 24]);
     assert.equal(d.actions.length, 2, 'the two legs are animated');
-    assert.ok(Math.abs(d.bounds.size[2] - 1.47) < 0.01, String(d.bounds.size));
+    assert.ok(Math.abs(d.bounds.size[2]! - 1.47) < 0.01, String(d.bounds.size));
 
     r = await blender({ action: 'asset.import', files: ['out/robot.glb'], normalise: true, height: 2, output: 'art/robot-2m.blend', exports: ['out/robot-unreal.fbx'], target: 'unreal' });
     const s = (r.details!.data as { scene: { bounds: { min: number[]; size: number[] } } }).scene;
-    assert.ok(Math.abs(s.bounds.size[2] - 2) < 0.01, `normalised to 2 m: ${s.bounds.size}`);
+    assert.ok(Math.abs(s.bounds.size[2]! - 2) < 0.01, `normalised to 2 m: ${s.bounds.size}`);
     assert.ok(Math.abs(s.bounds.min[2]!) < 0.001, 'standing on the floor');
     assert.ok((await fs.stat(path.join(root, 'out', 'robot-unreal.fbx'))).size > 1000);
     r = await blender({ action: 'asset.export', file: 'art/robot.blend', output: 'out/robot-godot.glb', target: 'godot' });
