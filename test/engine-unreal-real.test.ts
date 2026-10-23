@@ -141,8 +141,11 @@ test('real Unreal: project, level, Blueprints, import, captures, tests, package,
     assert.ok(mesh, imp.content);
     await call('script: place crates', { action: 'script', code: `import harness_ue as h\nh.open_level("/Game/Levels/Lvl_Coins")\nm = h.mesh(${JSON.stringify(mesh)})\nfor i, at in enumerate([(-600, -500, 0), (-500, -620, 0), (300, -900, 0)]):\n    h.spawn("StaticMeshActor", location=at, label="Crate_%d" % i, folder="Level/Props", mesh_path=m.get_path_name())\nb = m.get_bounding_box()\nh.result("size", [b.max.x - b.min.x, b.max.z - b.min.z])\nh.save()\n` });
 
-    const desc = data(await call('describe', { action: 'describe' }));
-    assert.ok(desc.actors.some((a: string) => /^Crate_0 /.test(a)) && desc.actors.filter((a: string) => /^Coin_/.test(a)).length === 10);
+    // The tool's Data line is clipped for the model; the whole description is in the file it names.
+    const dr = await call('describe', { action: 'describe' });
+    const desc = JSON.parse(await fs.readFile(path.join(ws, /(?:^|\n)Files: (\S+)/.exec(dr.content)![1]!), 'utf8'));
+    const labels = desc.actors.map((a: { label: string }) => a.label);
+    assert.ok(labels.includes('Crate_0') && labels.filter((l: string) => /^Coin_/.test(l)).length === 10, labels.join(', '));
 
     const cg = await call('capture: game view', { action: 'capture', at: [-2600, -1700, 1300], target: [0, 0, 0], width: 1280, height: 720 });
     facts.captureGame = look(cg, 'game capture');
@@ -183,6 +186,14 @@ test('real Unreal: project, level, Blueprints, import, captures, tests, package,
     const stopped = await s.stop();
     facts.driver = { score: last.state.vars.Score, ...stopped.metrics };
 
+    // The gates before the render: a render adds a sequence to the content, so the build is then older than it.
+    for (const g of gates) {
+      const t1 = Date.now();
+      const r = await g.run({ host, signal: ctx.signal });
+      times[`gate ${g.name}`] = Math.round((Date.now() - t1) / 100) / 10;
+      console.log(`# gate ${g.name}: ${r.pass ? 'pass' : 'FAIL'} - ${r.summary}`);
+      assert.ok(r.pass, `${g.name}: ${r.summary}\n${r.details ?? ''}`);
+    }
     await call('bridge.connect', { action: 'bridge.connect' });
     const bp = data(await call('bridge.python', { action: 'bridge.python', code: "import harness_ue as h\nh.result('coins', len(h.find_actors(cls='/Game/CoinKit/BP_Coin')))\n" }));
     assert.equal(bp.coins, 10);
@@ -194,13 +205,6 @@ test('real Unreal: project, level, Blueprints, import, captures, tests, package,
     assert.match(rd.content, /Metrics: frames=16\b/);
     look(rd, 'a render');
 
-    for (const g of gates) {
-      const t1 = Date.now();
-      const r = await g.run({ host, signal: ctx.signal });
-      times[`gate ${g.name}`] = Math.round((Date.now() - t1) / 100) / 10;
-      console.log(`# gate ${g.name}: ${r.pass ? 'pass' : 'FAIL'} - ${r.summary}`);
-      assert.ok(r.pass, `${g.name}: ${r.summary}\n${r.details ?? ''}`);
-    }
     facts.projectMb = Math.round((await size(path.join(ws, 'CoinEscape', 'Game'))) / 1048576);
     const summary = { engine: eng.version, times, facts };
     console.log(JSON.stringify(summary, null, 2));
