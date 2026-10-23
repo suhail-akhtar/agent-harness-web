@@ -5,7 +5,7 @@
 // costed and capped), and text-to-3D with Meshy or Tripo3D (cleaned in Blender, gated).
 
 import path from 'node:path';
-import { relIn, writeIn, removeIn } from '../lib-engines.mjs';
+import { writeIn, removeIn } from '../lib-engines.mjs';
 import { guarded, int, num, preview, save, unknownAction } from './common.mjs';
 import { projectOf, publishAsset, slug } from './library.mjs';
 import { decodePNG, encodePNG } from './raster/png.mjs';
@@ -182,11 +182,10 @@ export function sourceTool(api) {
             return { content: `${saved.lines.join('\n')}\nSaved the raw model: Blender is not here to clean it (scale, origin, normals, triangle budget). Run the asset-3d and asset-budget gates before using it.`, is_error: false };
           }
           return out;
-        } finally { await removeIn(host, path.posix.dirname(tmp) + '/' + path.posix.basename(tmp), signal).catch(() => {}); }
+        } finally { await removeIn(host, tmp, signal).catch(() => {}); }
       }
       return unknownAction('studio_source', a, ACTIONS);
     }),
   };
 }
 
-export { relIn };

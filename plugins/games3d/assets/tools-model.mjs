@@ -6,9 +6,10 @@
 
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { listIn, locate, mkdirIn, readIn, readTextIn, relIn, removeIn, runIn, runtimePath, tail, writeIn, newId } from '../lib-engines.mjs';
+import { locate, mkdirIn, readIn, readTextIn, relIn, removeIn, runIn, runtimePath, tail, writeIn, newId } from '../lib-engines.mjs';
 import { inspectGltf } from '../lib-gltf.mjs';
 import { runJob } from '../sdk/jobs.mjs';
 import { guarded, int, num, preview, save, seedIn, unknownAction } from './common.mjs';
@@ -218,7 +219,7 @@ export const modelTool = {
       const checks = [];
       const notes = [];
       for (const f of files.filter((x) => /\.glb$/.test(x.path) && ['main', 'piece', 'lod1'].includes(x.role))) {
-        const tmp = path.join(fs.mkdtempSync(path.join((await import('node:os')).tmpdir(), 'studio-')), f.path);
+        const tmp = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'studio-')), f.path);
         await fsp.writeFile(tmp, f.data);
         try {
           const g = await inspectGltf(tmp);
@@ -243,4 +244,3 @@ export const modelTool = {
   }),
 };
 
-export { listIn };

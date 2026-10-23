@@ -4,11 +4,12 @@
 
 import { relIn, writeIn } from '../lib-engines.mjs';
 import { guarded, int, num, preview, readImage, save, seedIn, unknownAction } from './common.mjs';
-import { parseColor, toHex } from './raster/color.mjs';
+import { toHex } from './raster/color.mjs';
 import { drawText, fontAtlas } from './raster/font.mjs';
 import { gradientAt, Image, normalMap } from './raster/image.mjs';
 import { medianCut, PALETTES, paletteHex, paletteOf, quantize } from './raster/palette.mjs';
 import { encodePNG } from './raster/png.mjs';
+import { pixelSvg } from './raster/svg.mjs';
 import { KINDS, template } from './sprites/kinds.mjs';
 import { isoScene, isoTile, parallax, particle, PARTICLES } from './sprites/scenery.mjs';
 import { asepriteJson, framesJson, godotSpriteFrames, packSheet } from './sprites/sheet.mjs';
@@ -221,6 +222,7 @@ export const spriteTool = {
       color: { type: 'string' }, panelColor: { type: 'string' }, accent: { type: 'string' }, label: { type: 'string' },
       scales: { type: 'array', items: { type: 'number' } }, icons: { type: 'array', items: { type: 'string' } }, name: { type: 'string', description: 'icon: its name' },
       padding: { type: 'number', description: 'sheet: px between frames' },
+      svg: { type: 'boolean', description: 'sprite: also an SVG (one rect per pixel run, crisp at any size)' },
       id: { type: 'string', description: 'Asset id (default from kind and seed)' },
       project: { type: 'string', description: 'Project folder (with .studio/project.json); default found' },
       tags: { type: 'array', items: { type: 'string' } }, style: { type: 'string', description: 'A style label for the library (e.g. "pixel-16")' },
@@ -242,7 +244,7 @@ export const spriteTool = {
       const s = renderSprite({ ...specOf(input), anims: input.anims ?? undefined });
       const anim = input.anims?.[0] ?? Object.keys(s.frames)[0];
       const img = s.frames[anim][0];
-      const r = await save(ctx, input, { id: `sprite-${s.kind}-${seed}`, name: `${s.kind} ${seed}`, kind: 'sprite', files: [{ path: 'sprite.png', role: 'main', image: img }], meta: { frameSize: [img.width, img.height], frames: 1, ...(input.palette ? { palette: paletteHex(paletteOf(input.palette)) } : {}), ...s.info }, source: { type: 'procedural', generator: `studio:sprite:${s.kind}`, seed, params: specOf(input) }, tags: [s.kind, 'pixel-art'], style: `pixel-${img.width}` });
+      const r = await save(ctx, input, { id: `sprite-${s.kind}-${seed}`, name: `${s.kind} ${seed}`, kind: 'sprite', files: [{ path: 'sprite.png', role: 'main', image: img }, ...(input.svg ? [{ path: 'sprite.svg', role: 'svg', data: pixelSvg(img, { scale: 8 }) }] : [])], meta: { frameSize: [img.width, img.height], frames: 1, ...(input.palette ? { palette: paletteHex(paletteOf(input.palette)) } : {}), ...s.info }, source: { type: 'procedural', generator: `studio:sprite:${s.kind}`, seed, params: specOf(input) }, tags: [s.kind, 'pixel-art'], style: `pixel-${img.width}` });
       return { content: `${r.lines.join('\n')}\n${s.kind} ${img.width}x${img.height}; ${JSON.stringify(s.info)}`, images: [preview(img)] };
     }
     if (a === 'sheet') {
@@ -351,4 +353,3 @@ export const spriteTool = {
   }),
 };
 
-export { parseColor };

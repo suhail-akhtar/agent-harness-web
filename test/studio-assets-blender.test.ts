@@ -70,7 +70,7 @@ test('every Blender generator exports a valid glb under budget with a preview', 
   const sizes: Record<string, [number, number]> = { barrel: [0.85, 0.95], crate: [0.75, 0.85], chest: [0.4, 0.6], coin: [0.2, 0.3], gem: [0.15, 0.35], lamp: [2.1, 2.4], table: [0.7, 0.8], chair: [0.9, 1.0], fence: [1.0, 1.2], rock: [0.2, 1.2], bush: [0.4, 1.2], building: [7, 10], vehicle: [1.2, 1.7], grass: [0.45, 0.55] };
   for (const gen of ['barrel', 'crate', 'chest', 'coin', 'gem', 'lamp', 'table', 'chair', 'fence', 'rock', 'bush', 'building', 'vehicle', 'grass']) {
     const t0 = Date.now();
-    const r = await call('studio_model', { action: 'build', generator: gen, seed: 3, ...(gen === 'barrel' ? { fbx: true, lods: [0.5, 0.25] } : {}) });
+    const r = await call('studio_model', { action: 'build', generator: gen, seed: 3, ...(gen === 'barrel' ? { fbx: true, lods: [0.5, 0.25], bake: true, bakeSize: 256 } : {}) });
     assert.ok(!r.is_error, `${gen}: ${r.content}`);
     const { g } = await checkModel(root, `model-${gen}-3`);
     // glTF is Y up: the height is the second size.
@@ -80,8 +80,12 @@ test('every Blender generator exports a valid glb under budget with a preview', 
     await keep(root, `model-${gen}-3`);
   }
   const barrel = path.join(root, '.studio', 'assets', 'model-barrel-3');
-  for (const f of ['barrel.fbx', 'barrel_lod1.glb', 'barrel_lod2.glb']) assert.ok((await fs.stat(path.join(barrel, f))).size > 1000, f);
+  for (const f of ['barrel.fbx', 'barrel_lod1.glb', 'barrel_lod2.glb', 'barrel_normal.png', 'barrel_ao.png', 'barrel_baked.glb']) assert.ok((await fs.stat(path.join(barrel, f))).size > 1000, f);
   const lod1 = await inspectGltf(path.join(barrel, 'barrel_lod1.glb')), main = await inspectGltf(path.join(barrel, 'barrel.glb'));
+  const ao = decodePNG(await fs.readFile(path.join(barrel, 'barrel_ao.png')));
+  assert.ok(ao.colors().size > 20, `the AO bake has shading (${ao.colors().size} levels)`);
+  await keep(root, 'model-barrel-3', 'barrel_ao.png');
+  await keep(root, 'model-barrel-3', 'barrel_normal.png');
   assert.ok(lod1.triangles < main.triangles * 0.6, `LOD1 ${lod1.triangles} < ${main.triangles}`);
   for (const name of ['asset-manifest', 'asset-budget', 'asset-3d']) {
     const r = await gates.get(name)!.run({ host, signal: new AbortController().signal });

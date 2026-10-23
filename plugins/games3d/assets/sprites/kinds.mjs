@@ -461,33 +461,41 @@ function tree(r, o) {
 }
 
 function rock(r, o) {
-  const n = r.int(7, 10);
+  // A boulder: a lumpy dome (jittered radius, a flat base) with a lit top face and a crack.
+  const n = r.int(12, 15);
+  const rx = r.range(12, 14), ry = r.range(14, 18);
   const pts = Array.from({ length: n }, (_, i) => {
     const a = Math.PI + (i / (n - 1)) * Math.PI;
-    const rr = r.range(0.8, 1.05);
-    return [16 + Math.cos(a) * 13 * rr, 29 + Math.sin(a) * 14 * rr];
+    const rr = i === 0 || i === n - 1 ? 1 : r.range(0.88, 1.04);
+    return [16 + Math.cos(a) * rx * rr, 30 + Math.sin(a) * ry * rr * (Math.abs(Math.cos(a)) < 0.5 ? 0.92 : 1)];
   });
+  const top = 30 - ry * 0.9;
   const P = [
-    { shape: 'poly', points: [...pts, [30, 31], [2, 31]], mat: 'stone', shade: 'sphere', contrast: 1.4, z: 0 },
-    { shape: 'poly', points: [[10, 18], [14, 13], [19, 12], [22, 16], [17, 17]], mat: 'stone', shade: 'none', tone: 3.4, z: 1 },
-    { shape: 'poly', points: [[22, 20], [25, 24], [24, 29], [21, 25]], mat: 'stone', shade: 'none', tone: 0.8, z: 1 },
+    { shape: 'poly', points: [...pts, [16 + rx, 32], [16 - rx, 32]], mat: 'stone', shade: 'sphere', contrast: 1.3, z: 0 },
+    { shape: 'poly', points: [[16 - rx * 0.55, top + ry * 0.35], [16 - rx * 0.2, top + 1], [16 + rx * 0.35, top + 1.5], [16 + rx * 0.45, top + ry * 0.3], [16, top + ry * 0.42]], mat: 'stone', shade: 'none', tone: 3.3, z: 1 },
+    { shape: 'poly', points: [[16 + rx * 0.3, top + ry * 0.5], [16 + rx * 0.42, top + ry * 0.62], [16 + rx * 0.28, top + ry * 0.85], [16 + rx * 0.2, top + ry * 0.66]], mat: 'stone', shade: 'none', tone: 0.6, z: 1 },
   ];
-  if (o.moss ?? r.chance(0.4)) P.push({ shape: 'ellipse', cx: 13, cy: 14, rx: 6, ry: 2.5, mat: 'moss', z: 2 });
+  if (o.moss ?? r.chance(0.4)) P.push({ shape: 'ellipse', cx: 16 - rx * 0.25, cy: top + 2, rx: rx * 0.45, ry: 2.2, mat: 'moss', z: 2 });
   return { parts: P, colors: { stone: vary(r, pick(r, ['#8a8a94', '#9a8a7a', '#7a8490', '#a09a8a']), 8) }, anims: { idle: [{}] }, info: {} };
 }
 
 function bushSprite(r) {
   const leaf = vary(r, '#4f9d3a', 10);
   const P = [];
-  for (let i = 0; i < 5; i++) P.push({ shape: 'ellipse', cx: 6 + i * 5 + r.range(-1, 1), cy: 22 + r.range(-2, 2) - (i === 2 ? 3 : 0), rx: r.range(5, 7), ry: r.range(5, 6.5), mat: 'leaf', z: i === 2 ? 2 : 1 });
-  P.push({ shape: 'rect', x: 2, y: 25, w: 28, h: 7, mat: 'leaf', shade: 'cylinder', lift: -0.8, z: 0 });
+  // Clumps along a low dome, the middle ones higher and in front; a dark base where it meets the ground.
+  for (let i = 0; i < 6; i++) {
+    const cx = 5 + i * 4.4 + r.range(-0.8, 0.8), lift = Math.sin((i / 5) * Math.PI) * 6;
+    P.push({ shape: 'ellipse', cx, cy: 25 - lift + r.range(-1, 1), rx: r.range(4.5, 6), ry: r.range(4.5, 5.5), mat: 'leaf', z: 1 + (i % 2) });
+  }
+  P.push({ shape: 'ellipse', cx: 16, cy: 28, rx: 14, ry: 4, mat: 'leaf', lift: -0.9, z: 0 });
+  P.push({ shape: 'rect', x: 2, y: 28, w: 28, h: 4, mat: 'leaf', shade: 'none', tone: 1, z: 0.5 });
   return { parts: P, colors: { leaf }, anims: { idle: [{}] }, info: {} };
 }
 
 /** Every kind with how it is built: (rng, options) -> { parts, colors, anims, size?, frameParts?, info }. */
 export const KINDS = {
   character: (r, o) => { const h = humanoid(r, o); return { ...h, anims: humanoidAnims(h.info.view) }; },
-  goblin: (r, o) => { const h = humanoid(r, { skin: vary(r, '#7ab04a', 10), hair: '#2a2a1a', hairStyle: 'bald', hat: pick(r, ['none', 'hood']), weapon: pick(r, ['axe', 'sword']), shirt: vary(r, '#7a5a3a'), ...o }); return { ...h, anims: humanoidAnims(h.info.view) }; },
+  goblin: (r, o) => { const h = humanoid(r, { skin: vary(r, '#7ab04a', 10), hair: '#2a2a1a', hairStyle: 'bald', hat: pick(r, ['none', 'hood', 'cap']), hatColor: vary(r, '#5a3a4a', 20), weapon: pick(r, ['axe', 'sword']), shirt: vary(r, '#7a5a3a'), ...o }); return { ...h, anims: humanoidAnims(h.info.view) }; },
   skeleton: (r, o) => { const h = humanoid(r, { skin: '#e6dfc8', hairStyle: 'bald', hat: pick(r, ['none', 'helmet']), shirt: '#d8d0b8', pants: '#c8c0a8', boots: '#a8a090', belt: '#6a5a4a', weapon: 'sword', ...o }); return { ...h, anims: humanoidAnims(h.info.view) }; },
   slime, bat, ghost, coin, gem, chest, potion, sword: swordItem, key: keyItem, heart, shield, bomb, tree, rock, bush: bushSprite,
 };

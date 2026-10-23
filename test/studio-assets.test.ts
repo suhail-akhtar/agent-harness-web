@@ -393,7 +393,7 @@ test('builders save assets with manifests, licences and hashes; the gates pass t
   const call = (t: string, i: Record<string, unknown>) => out(tools.get(t)!.run(i, ctx));
   const runs = [
     ['studio_sprite', { action: 'sheet', kind: 'character', seed: 4 }],
-    ['studio_sprite', { action: 'sprite', kind: 'gem', seed: 2, palette: 'db16' }],
+    ['studio_sprite', { action: 'sprite', kind: 'gem', seed: 2, palette: 'db16', svg: true }],
     ['studio_sprite', { action: 'tileset', mode: 'blob', a: 'grass', b: 'dirt' }],
     ['studio_sprite', { action: 'tileset', mode: 'texture', terrain: 'water', frames: 4 }],
     ['studio_sprite', { action: 'ui', icons: ['star', 'heart'], scales: [1, 2] }],
@@ -416,6 +416,7 @@ test('builders save assets with manifests, licences and hashes; the gates pass t
     assert.match(r.content, /Asset [a-z0-9.-]+ \(/);
   }
   const ids = (await fs.readdir(path.join(root, '.studio', 'assets'))).sort();
+  assert.match(await fs.readFile(path.join(root, '.studio', 'assets', 'sprite-gem-2', 'sprite.svg'), 'utf8'), /^<svg [^>]*shape-rendering="crispEdges"><rect /);
   assert.ok(ids.includes('sheet-character-4') && ids.includes('level-platformer-3') && ids.includes('sfx-jump-2'), ids.join(' '));
   const m = JSON.parse(await fs.readFile(path.join(root, '.studio', 'assets', 'sheet-character-4', 'asset.json'), 'utf8'));
   assert.equal(m.license.id, 'CC0-1.0');
@@ -515,6 +516,18 @@ function quadGltf({ normals = true, uvs = true, degenerate = false } = {}) {
   const bin = Buffer.concat(parts);
   const json = { asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }], meshes: [{ primitives: [{ attributes, indices }] }], accessors: acc, bufferViews: views, buffers: [{ byteLength: bin.length, uri: 'quad.bin' }] };
   return { json, bin };
+}
+
+/** The quad as a .glb (JSON and BIN chunks, 4-byte aligned). */
+function glbOf({ json, bin }: ReturnType<typeof quadGltf>) {
+  const j = { ...json, buffers: [{ byteLength: bin.length }] };
+  let js = Buffer.from(JSON.stringify(j));
+  js = Buffer.concat([js, Buffer.alloc((4 - (js.length % 4)) % 4, 0x20)]);
+  const b = Buffer.concat([bin, Buffer.alloc((4 - (bin.length % 4)) % 4)]);
+  const head = Buffer.alloc(12); head.writeUInt32LE(0x46546c67, 0); head.writeUInt32LE(2, 4); head.writeUInt32LE(12 + 8 + js.length + 8 + b.length, 8);
+  const c1 = Buffer.alloc(8); c1.writeUInt32LE(js.length, 0); c1.writeUInt32LE(0x4e4f534a, 4);
+  const c2 = Buffer.alloc(8); c2.writeUInt32LE(b.length, 0); c2.writeUInt32LE(0x004e4942, 4);
+  return Buffer.concat([head, c1, js, c2, b]);
 }
 
 test('asset-3d: a .gltf with its buffer beside it passes; missing normals, UVs or degenerate triangles fail', async () => {
@@ -721,12 +734,12 @@ test('OpenAI images (fake): costed from usage, post-processed into a sprite, ref
 });
 
 test('text to 3D (fake Meshy and Tripo): start, poll, download; resumable; a task cap', async () => {
-  const glb = await fs.readFile(path.join(here, 'fixtures', 'cube.glb')).catch(() => null);
+  const glb = glbOf(quadGltf({}));
   let polls = 0;
   const f = fakeFetch([
     [/api\.meshy\.ai\/openapi\/v2\/text-to-3d$/, () => Response.json({ result: 'task-m1' })],
     [/api\.meshy\.ai\/openapi\/v2\/text-to-3d\/task-m1/, () => Response.json(++polls < 2 ? { status: 'IN_PROGRESS', progress: 40 } : { status: 'SUCCEEDED', progress: 100, model_urls: { glb: 'https://assets.meshy.ai/m1.glb' } })],
-    [/assets\.meshy\.ai\/m1\.glb/, () => new Response(glb ?? Buffer.from('glTF'))],
+    [/assets\.meshy\.ai\/m1\.glb/, () => new Response(glb)],
     [/api\.tripo3d\.ai\/v2\/openapi\/task$/, () => Response.json({ code: 0, data: { task_id: 't-1' } })],
     [/api\.tripo3d\.ai\/v2\/openapi\/task\/t-1/, () => Response.json({ code: 0, data: { status: 'failed' } })],
   ]);
@@ -746,7 +759,10 @@ test('text to 3D (fake Meshy and Tripo): start, poll, download; resumable; a tas
     r = await call({ action: 'text3d', provider: 'meshy', task: 'task-m1', wait: 5 });
     // Blender may or may not be here: either way an asset comes out, with the provider's terms as its licence.
     const dirs = await fs.readdir(path.join(root, '.studio', 'assets')).catch(() => []);
-    assert.ok(dirs.some((d) => d.startsWith('gen3d-')) || /Blender/.test(r.content), r.content);
+    assert.ok(dirs.some((d) => d.startsWith('gen3d-')), r.content);
+    const g3 = JSON.parse(await fs.readFile(path.join(root, '.studio', 'assets', dirs.find((d) => d.startsWith('gen3d-'))!, 'asset.json'), 'utf8'));
+    assert.equal(g3.source.provider, 'meshy');
+    assert.equal(g3.license.id, 'LicenseRef-Meshy-Terms');
     r = await call({ action: 'text3d', provider: 'tripo', prompt: 'a lamp', wait: 5 });
     assert.equal(r.is_error, true);
     assert.match(r.content, /t-1 failed/);

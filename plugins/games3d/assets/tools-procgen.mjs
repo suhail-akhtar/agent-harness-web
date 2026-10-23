@@ -5,7 +5,7 @@
 import { readIn, relIn } from '../lib-engines.mjs';
 import { guarded, int, num, preview, save, seedIn, unknownAction } from './common.mjs';
 import { heightmap, heightPreview, splatMap } from './gen/heightmap.mjs';
-import { caves, checkConnected, dungeon, LEGENDS, maze, shortestPath, PASSABLE, topdown } from './gen/levels.mjs';
+import { caves, checkConnected, dungeon, maze, shortestPath, PASSABLE, topdown } from './gen/levels.mjs';
 import { drawLsystem, expand, PRESETS, turtle3d } from './gen/lsystem.mjs';
 import { names, NAME_STYLES } from './gen/names.mjs';
 import { noiseField } from './gen/noise.mjs';
@@ -14,7 +14,7 @@ import { toTiled, toTilesetJson } from './gen/tiled.mjs';
 import { TILESETS, wfcOverlapping, wfcTiled } from './gen/wfc.mjs';
 import { parseColor } from './raster/color.mjs';
 import { gradientAt, Image } from './raster/image.mjs';
-import { decodePNG, encodeGray16 } from './raster/png.mjs';
+import { encodeGray16 } from './raster/png.mjs';
 import { renderSprite } from './sprites/sprite.mjs';
 import { terrainTexture } from './sprites/tiles.mjs';
 
@@ -235,4 +235,3 @@ function renderWfcTiles(res, size) {
   return img;
 }
 
-export { LEGENDS, decodePNG };
