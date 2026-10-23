@@ -40,7 +40,7 @@ let godotBin = '';
 async function call(t: { diagnostic(s: string): void }, input: Record<string, unknown>, ok = true): Promise<Out> {
   const t0 = Date.now();
   const r = await h!.registry.tools.get('godot')!.run(input, ctxOf(new LocalHost(root))) as Out;
-  t.diagnostic(`${input.action} ${String(input.project ?? '')} ${((Date.now() - t0) / 1000).toFixed(1)}s: ${r.content.split('\n')[0].slice(0, 300)}`);
+  t.diagnostic(`${input.action} ${String(input.project ?? '')} ${((Date.now() - t0) / 1000).toFixed(1)}s: ${(r.content.split('\n')[0] ?? '').slice(0, 300)}`);
   if (ok) assert.ok(!r.is_error, r.content);
   return r;
 }
@@ -78,14 +78,14 @@ for (const [template, moved] of [['2d', 'x'], ['2.5d', 'xz'], ['3d', 'x']] as co
     r = await call(t, { action: 'test', project, selftest: true });
     const m = r.details!.metrics!;
     assert.equal(m.failed, 0, r.content);
-    assert.ok(m.passed >= 4, r.content);
+    assert.ok((m.passed ?? 0) >= 4, r.content);
     r = await call(t, { action: 'describe', project });
     assert.ok((r.details!.data as { nodes: number }).nodes > 5);
     const right = template === '2.5d' ? 'move_up' : 'move_right';
     r = await call(t, { action: 'play', project, seconds: 3, every: 60, inputs: [{ t: 0.5, action: right, hold: 1 }] });
     const pm = r.details!.metrics!;
     assert.equal(pm.frames, 180);
-    assert.ok(pm.fps > 5, `fps ${pm.fps}`);
+    assert.ok((pm.fps ?? 0) > 5, `fps ${pm.fps}`);
     assert.equal(pm.errors, 0);
     assert.equal(pm.captures, 3, r.content);
     assert.equal(r.images?.length, 3);
