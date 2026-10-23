@@ -1,15 +1,29 @@
 ---
 name: blender-scripting
-description: Blender from Python (bpy) with the blender tool, headless - build models procedurally (bmesh, modifiers, materials), export glTF/FBX/OBJ with the right units and axes, open .blend files, and render a PNG preview without a GPU. Use when the user asks for Blender, a .blend file, FBX/OBJ, or a model that needs Blender's modelling tools.
+description: Blender from Python (bpy) with the blender tool, headless - build models procedurally (bmesh, modifiers, materials), describe a .blend as data, import and export glTF/FBX/OBJ/USD with the right units and axes for each engine, quick captures, look-dev renders and turntables (Cycles, EEVEE, Workbench), and the live bridge to the person's open Blender. Use when the user asks for Blender, a .blend file, FBX/OBJ, renders, or a model that needs Blender's modelling tools.
 ---
 # Blender scripting (headless)
 
-The `blender` tool runs `blender -b [file.blend] --factory-startup --python script -- args` where the session's commands run (in a sandbox, the 3D image has Blender 4.2 LTS). If it says Blender is not installed, use the Three.js path (procedural-3d-modeling) instead and say why.
+The `blender` tool runs `blender -b [file.blend] --factory-startup --python script -- args` where the session's commands run (in a sandbox, the 3D image has Blender 4.2 LTS). `{"action": "detect"}` says the version and the gaps. If Blender is not installed, use the Three.js path (procedural-3d-modeling) instead and say why.
 
 - `{"script": "tools/stool.py", "args": ["out/stool.glb", "out/stool.png"], "show": ["out/stool.png"]}` runs a file; `{"code": "..."}` runs Python given inline.
 - `{"file": "art/ship.blend", "script": "tools/convert.py", "args": ["out/ship.glb"]}` opens a .blend first.
 - `show` returns the images the script wrote (look at your preview render). A Python error fails the call with the traceback at the end of the output.
 - The working folder is the workspace root. Make every output path absolute with `os.path.abspath` (a relative render path is not resolved against the working folder; on Windows it lands in `C:\`) and create its folder (`os.makedirs`): exporters do not.
+
+## The actions (no script needed)
+| Action | Use |
+|---|---|
+| `describe` | `{"action": "describe", "file": "art/ship.blend"}`: every object (type, location, rotation, scale, size in metres, triangles, materials, modifiers, animation), the bounds, the frame range, as data. Check a model against its plan with it. |
+| `asset.import` | `{"files": ["in/chair.fbx"], "normalise": true, "height": 0.9, "output": "art/chair.blend", "exports": ["out/chair.glb"]}`: brings models in (glb, gltf, fbx, obj, stl, ply, usd, abc, blend); normalise applies scale, centres it and stands it on z = 0; height scales it to that many metres. |
+| `asset.export` | `{"file": "art/chair.blend", "output": "out/chair.fbx", "target": "unreal"}`: `target` sets the axes (godot and web: glTF Y up; unreal: FBX Z up, -Y forward, metres; unity: FBX Y up, -Z forward); `objects` exports only those. |
+| `capture` | `{"file": "art/chair.blend", "view": "front", "out": "previews/front.png"}`: a quick Workbench view framed on the model (front, back, side, left, top, three-quarter, or the scene's camera). You see it. |
+| `render` | `{"file": ..., "preset": "studio", "engine": "cycles", "samples": 32, "size": [960, 720]}`: look-dev light sets (studio: key, fill and rim on grey; outdoor: sun and sky; night: moonlight and a warm lamp; none: the scene's own), Cycles on the CPU, EEVEE (needs a GPU; the first frame compiles shaders) or Workbench. `"turntable": 24` renders a full turn into a folder. A heavy job: one at a time. |
+| `sprites` | a model to a 2D sprite sheet for 2.5D games (blender-sprites). |
+| `script` with `live: true`, `describe`/`capture` with `live: true`, `bridge.call` | the person's open Blender (below). |
+
+## The live bridge
+`{"action": "bridge.install"}` copies the Harness Bridge add-on into the person's Blender add-ons folder (only when they asked for it); they tick "Harness Bridge" in Edit > Preferences > Add-ons. It listens on 127.0.0.1 with a token. Then `bridge.status`; `{"code": "...", "live": true}` runs Python in their Blender (set `result` to send a value back; `print` output comes back too); `bridge.call` with `scene`, `operator` ({"op": "mesh.primitive_cube_add", "kwargs": {"size": 2}}), `capture` (the viewport they see), `save` ({"path": ...}). Work in their file the way they would: small steps, look after each.
 
 ## Units and axes
 - 1 Blender unit = 1 metre = 1 glTF unit. Keep `scene.unit_settings.scale_length = 1.0`; model at real size.

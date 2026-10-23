@@ -55,7 +55,7 @@ const trail = (run: { history: { node: string; outcome?: string; status: string 
 const writeBytes = (file: string, data: Buffer) => `mkdir -p "$(dirname ${file})" && printf '%s' '${data.toString('base64')}' | base64 -d > ${file}`;
 
 test('model-3d and build-game: valid graphs with an engine choice, the browser path staying the default', async () => {
-  const h = await createHarness({ dataDir: await tempDir(), plugins: [path.join(here, '..', 'plugins', 'games3d')], search: null, memory: 'off' });
+  const h = await createHarness({ dataDir: await tempDir(), plugins: ['games3d', 'engine-blender', 'engine-godot'].map((p) => path.join(here, '..', 'plugins', p)), search: null, memory: 'off' });
   try {
     for (const [name, def, other, branch] of [['model-3d', 'three', 'blender', 'build-blender'], ['build-game', 'browser', 'godot', 'build-godot']] as const) {
       const w = await workflow(name);
@@ -79,7 +79,7 @@ test('model-3d and build-game: valid graphs with an engine choice, the browser p
 
 test('model-3d with engine=blender: build in Blender, the preview gate sends it back once, art review, delivery', async () => {
   const ws = await tempDir();
-  const h = await createHarness({ dataDir: await tempDir(), plugins: [path.join(here, '..', 'plugins', 'games3d')], search: null, memory: 'off' });
+  const h = await createHarness({ dataDir: await tempDir(), plugins: ['games3d', 'engine-blender', 'engine-godot'].map((p) => path.join(here, '..', 'plugins', p)), search: null, memory: 'off' });
   const fake = new FakeProvider([
     { calls: [{ name: 'write', input: { path: 'docs/model-plan.md', content: '# Crate\n1 x 1 x 1 m\n' } }] },
     { text: 'planned' },
@@ -115,7 +115,7 @@ test('build-game with engine=godot: a Godot project, the self-test gate sends it
   const godot = await fakeGodot();
   process.env.HARNESS_GODOT = godot.bin;
   const ws = await tempDir();
-  const h = await createHarness({ dataDir: await tempDir(), plugins: [path.join(here, '..', 'plugins', 'games3d')], search: null, memory: 'off' });
+  const h = await createHarness({ dataDir: await tempDir(), plugins: ['games3d', 'engine-blender', 'engine-godot'].map((p) => path.join(here, '..', 'plugins', p)), search: null, memory: 'off' });
   const project = 'config_version=5\n\n[application]\n\nconfig/name="Dodge"\nrun/main_scene="res://main.tscn"\n';
   const scene = '[gd_scene format=3]\n\n[ext_resource type="Script" path="res://main.gd" id="1"]\n\n[node name="Main" type="Node2D"]\nscript = ExtResource("1")\n';
   const script = (body: string) => `extends Node2D\n\nvar selftest := "--selftest" in OS.get_cmdline_user_args()\n\nfunc _physics_process(_delta: float) -> void:\n${body}\n`;
