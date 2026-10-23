@@ -8,7 +8,8 @@
 import React, { useEffect, useState } from 'react';
 import { COLUMN_TYPES, FILE_FORMATS, LOG_FORMATS, type MeasureSpec, type ModelSpec, type QueryResult, type SourceSpec, STEP_OPS, type StepSpec, TIME_CALCS, UI_ACTIONS } from '@harness/plugin-ui';
 import { useApp } from '../../state/app';
-import { Badge, BiVisual, Button, EmptyState, Field, Icon, IconButton, Input, Modal, Select, Spinner, Switch, Tabs, Textarea, cx, toast } from '@harness/ui';
+import { Badge, BiVisual, Button, EmptyState, Field, Icon, IconButton, Input, Modal, Select, Spinner, Switch, Tabs, Textarea, cx, toast, ResizablePane } from '@harness/ui';
+import { DATASETS_LIST_PANE } from '../../state/layout';
 import { client, useData } from '../../state/data';
 import { desktop } from '../../bridge';
 import { useDark } from './Doc';
@@ -128,16 +129,18 @@ function Datasets({ initial }: { initial?: string }) {
   const d = catalog.datasets.find((x) => x.name === sel);
   return (
     <div className="flex h-full min-h-0">
-      <div className="hx-scroll w-64 shrink-0 overflow-y-auto border-r border-hx-border-subtle p-2">
-        <Button size="sm" variant="primary" icon="plus" className="mb-2 w-full" onClick={() => setDefining(true)} data-new-dataset>New dataset</Button>
-        {catalog.datasets.map((x) => (
-          <button key={x.id} type="button" onClick={() => setSel(x.name)} data-dataset={x.name} className={cx('mb-0.5 flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[13px]', sel === x.name ? 'bg-hx-accent-soft' : 'hover:bg-hx-hover')}>
-            <Icon name="table" size={14} className="text-hx-muted" /><span className="min-w-0 flex-1 truncate">{x.name}</span>
-            {x.certified && <Icon name="shield-check" size={13} className="text-hx-success" />}
-            {x.state.error ? <Icon name="alert" size={13} className="text-hx-danger" /> : <span className="text-[11px] text-hx-muted">{x.state.rows?.toLocaleString() ?? ''}</span>}
-          </button>
-        ))}
-      </div>
+      <ResizablePane spec={DATASETS_LIST_PANE} edge="end" className="flex flex-col border-r border-hx-border-subtle" data-datasets-list="">
+        <div className="hx-scroll min-h-0 flex-1 overflow-y-auto p-2">
+          <Button size="sm" variant="primary" icon="plus" className="mb-2 w-full" onClick={() => setDefining(true)} data-new-dataset>New dataset</Button>
+          {catalog.datasets.map((x) => (
+            <button key={x.id} type="button" onClick={() => setSel(x.name)} data-dataset={x.name} className={cx('mb-0.5 flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[13px]', sel === x.name ? 'bg-hx-accent-soft' : 'hover:bg-hx-hover')}>
+              <Icon name="table" size={14} className="text-hx-muted" /><span className="min-w-0 flex-1 truncate">{x.name}</span>
+              {x.certified && <Icon name="shield-check" size={13} className="text-hx-success" />}
+              {x.state.error ? <Icon name="alert" size={13} className="text-hx-danger" /> : <span className="text-[11px] text-hx-muted">{x.state.rows?.toLocaleString() ?? ''}</span>}
+            </button>
+          ))}
+        </div>
+      </ResizablePane>
       <div className="hx-scroll min-w-0 flex-1 overflow-y-auto p-4">{d ? <DatasetDetail d={d} key={d.id} /> : <EmptyState icon="table" title="No dataset">A dataset is a named table the engine computes: a source's table or sheet, steps that shape it, and/or one SELECT over other datasets.</EmptyState>}</div>
       {defining && <DefineDataset onClose={(name) => { setDefining(false); if (name) setSel(name); }} />}
     </div>

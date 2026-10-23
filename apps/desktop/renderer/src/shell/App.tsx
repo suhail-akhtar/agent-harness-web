@@ -4,8 +4,9 @@
  * business: the route names a view contribution.
  */
 
-import React, { useEffect, useRef, useState } from 'react';
-import { Artifact, BlockActionsContext, Button, EmptyState, IconButton, RenderBoundary, Toaster, Tooltip } from '@harness/ui';
+import React, { useEffect, useState } from 'react';
+import { Artifact, BlockActionsContext, Button, EmptyState, IconButton, RenderBoundary, ResizablePane, Toaster, Tooltip } from '@harness/ui';
+import { SIDE_PANEL_PANE, SPLIT_PANE } from '../state/layout';
 import { useApp, navigate, HOME, NARROW_PX } from '../state/app';
 import type { View } from '../registry/registry';
 import { useData } from '../state/data';
@@ -71,7 +72,6 @@ export function App(): React.ReactElement {
   const narrow = useNarrow(NARROW_PX);
   const view = registry.views.get(route.view);
   const splitView = split ? registry.views.get(split.view) : undefined;
-  const panelDef = panel?.kind === 'plugin' ? registry.panels.get(panel.panel) : undefined;
   // Leaving narrow closes the floating sidebar (it is the narrow window's own state).
   useEffect(() => { if (!narrow) useApp.setState({ narrowSidebarOpen: false }); }, [narrow]);
   // A conversation's panel follows the conversation on screen (open on another page, it keeps the one it showed).
@@ -101,19 +101,7 @@ export function App(): React.ReactElement {
                 )}
             </div>
             {split && splitView && !narrow && <SplitPane view={splitView} params={split.params ?? {}} />}
-            {panel && (
-              <aside data-side-panel className={`flex shrink-0 flex-col border-l border-hx-border-subtle bg-hx-bg ${narrow ? 'absolute inset-y-10 right-0 z-30 w-[min(420px,92vw)] shadow-[var(--hx-shadow)]' : split ? 'w-[min(420px,32vw)]' : 'w-[min(520px,42vw)]'}`}>
-                <div className="flex h-10 items-center gap-2 border-b border-hx-border-subtle px-3">
-                  <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{panel.kind === 'plugin' ? panelDef?.title ?? 'Panel' : panel.title}</span>
-                  <IconButton icon="x" size="sm" label="Close the panel" onClick={() => useApp.setState({ panel: null })} />
-                </div>
-                <div className="min-h-0 flex-1 overflow-auto p-2">
-                  {panel.kind === 'artifact' ? <Artifact kind={panel.artifact} source={panel.source} language={panel.language} title={panel.title} fill />
-                    : panel.kind === 'file' ? <FilePreview path={panel.path} content={panel.content} fill />
-                    : panelDef ? <PanelHost panel={panelDef} params={panel.params} data={panel.data} /> : <EmptyState title="This panel is not available" />}
-                </div>
-              </aside>
-            )}
+            {panel && <SidePanel narrow={narrow} />}
           </div>
         </main>
       </div>
@@ -132,39 +120,51 @@ export function App(): React.ReactElement {
 }
 
 /**
+ * The side panel (artifacts, agents, details, plugin panels): resizable from its left edge (its
+ * width is the 'side-panel' pane's, kept in the prefs). A narrow window floats it over the page.
+ */
+function SidePanel({ narrow }: { narrow: boolean }) {
+  const panel = useApp((s) => s.panel)!;
+  const registry = useData((s) => s.registry);
+  const panelDef = panel.kind === 'plugin' ? registry.panels.get(panel.panel) : undefined;
+  const body = (
+    <>
+      <div className="flex h-10 items-center gap-2 border-b border-hx-border-subtle px-3">
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{panel.kind === 'plugin' ? panelDef?.title ?? 'Panel' : panel.title}</span>
+        <IconButton icon="x" size="sm" label="Close the panel" onClick={() => useApp.setState({ panel: null })} />
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto p-2">
+        {panel.kind === 'artifact' ? <Artifact kind={panel.artifact} source={panel.source} language={panel.language} title={panel.title} fill />
+          : panel.kind === 'file' ? <FilePreview path={panel.path} content={panel.content} fill />
+          : panelDef ? <PanelHost panel={panelDef} params={panel.params} data={panel.data} /> : <EmptyState title="This panel is not available" />}
+      </div>
+    </>
+  );
+  if (narrow) return <aside data-side-panel className="absolute inset-y-10 right-0 z-30 flex w-[min(420px,92vw)] shrink-0 flex-col border-l border-hx-border-subtle bg-hx-bg shadow-[var(--hx-shadow)]">{body}</aside>;
+  return <ResizablePane spec={SIDE_PANEL_PANE} edge="start" as="aside" data-side-panel="" className="flex flex-col border-l border-hx-border-subtle bg-hx-bg">{body}</ResizablePane>;
+}
+
+/**
  * A second view beside the first (a linked conversation next to this one): resizable with the
- * divider (drag, or the arrow keys on it), closeable, and "open here" swaps it into the main place.
+ * divider (drag, the arrow keys on it, double-click for the default), closeable, and "open here"
+ * swaps it into the main place.
  */
 function SplitPane({ view, params }: { view: View; params: Record<string, string> }) {
-  const stored = useApp((s) => s.splitWidth);
-  const box = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ x: number; w: number } | null>(null);
-  const [w, setW] = useState(() => stored || Math.round((window.innerWidth - 300) * 0.45));
-  const clamp = (x: number) => Math.max(320, Math.min(x, window.innerWidth - 560));
-  const save = (x: number) => { useApp.setState({ splitWidth: x }); try { localStorage.setItem('harness.splitWidth', String(x)); } catch { /* private */ } };
   const close = () => useApp.setState({ split: null });
   const here = () => { const r = useApp.getState().split; useApp.setState({ split: null }); if (r) navigate(r); };
   return (
-    <>
-      <div role="separator" aria-orientation="vertical" aria-label="Resize the view beside" tabIndex={0} data-split-handle
-        className="w-1.5 shrink-0 cursor-col-resize bg-hx-border-subtle/60 hover:bg-hx-accent/50 focus:bg-hx-accent/60 focus:outline-none"
-        onPointerDown={(e) => { drag.current = { x: e.clientX, w }; (e.target as Element).setPointerCapture(e.pointerId); }}
-        onPointerMove={(e) => { if (drag.current) setW(clamp(drag.current.w - (e.clientX - drag.current.x))); }}
-        onPointerUp={() => { if (drag.current) { drag.current = null; save(w); } }}
-        onKeyDown={(e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const x = clamp(w + (e.key === 'ArrowLeft' ? 32 : -32)); setW(x); save(x); } }} />
-      <div ref={box} data-split-view={view.qid} data-split-params={JSON.stringify(params)} className="flex min-w-0 shrink-0 flex-col border-l border-hx-border-subtle" style={{ width: clamp(w) }}>
-        <PaneContext.Provider value={{ split: true, close, here }}>
-          {view.qid !== 'core.chat:session' && (
-            <div className="flex h-10 shrink-0 items-center gap-2 border-b border-hx-border-subtle px-3">
-              <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{view.title}</span>
-              <Tooltip label="Open here"><IconButton icon="pop-out" size="sm" label="Open here" onClick={here} /></Tooltip>
-              <IconButton icon="x" size="sm" label="Close the view beside" onClick={close} data-close-split />
-            </div>
-          )}
-          <div className="min-h-0 flex-1"><ViewHost view={view} params={params} /></div>
-        </PaneContext.Provider>
-      </div>
-    </>
+    <ResizablePane spec={SPLIT_PANE} edge="start" handle={{ 'data-split-handle': '' }} data-split-view={view.qid} data-split-params={JSON.stringify(params)} className="flex min-w-0 flex-col border-l border-hx-border-subtle">
+      <PaneContext.Provider value={{ split: true, close, here }}>
+        {view.qid !== 'core.chat:session' && (
+          <div className="flex h-10 shrink-0 items-center gap-2 border-b border-hx-border-subtle px-3">
+            <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{view.title}</span>
+            <Tooltip label="Open here"><IconButton icon="pop-out" size="sm" label="Open here" onClick={here} /></Tooltip>
+            <IconButton icon="x" size="sm" label="Close the view beside" onClick={close} data-close-split />
+          </div>
+        )}
+        <div className="min-h-0 flex-1"><ViewHost view={view} params={params} /></div>
+      </PaneContext.Provider>
+    </ResizablePane>
   );
 }
 
