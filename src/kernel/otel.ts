@@ -47,6 +47,9 @@ export function toOtlpSpan(sessionId: string, span: TraceSpan & { at: number }) 
       status: span.error ? { code: 2, message: 'tool error' } : { code: 1 },
     };
   }
+  if (span.type === 'cache') {
+    return { ...base, name: 'cache miss', attributes: [...common, ...attr('harness.cache.cause', span.cause), ...attr('harness.cache.section', span.section), ...attr('harness.cache.expected_tokens', span.expected), ...attr('harness.cache.read_tokens', span.read)], status: { code: 1 } };
+  }
   return { ...base, name: 'context clear', attributes: [...common, ...attr('harness.cleared_results', span.results), ...attr('harness.cleared_tokens', span.tokens)], status: { code: 1 } };
 }
 

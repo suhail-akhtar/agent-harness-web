@@ -141,13 +141,14 @@ export class AnthropicProvider implements Provider {
 }
 
 /** The request body (without betas). Exported for tests: caching depends on its exact shape. */
-export function anthropicBody(req: Pick<ProviderRequest, 'model' | 'system' | 'tools' | 'messages' | 'effort' | 'compactAt' | 'compactKeep'>, contextEditing: boolean, serverCompaction = false): Record<string, unknown> {
+export function anthropicBody(req: Pick<ProviderRequest, 'model' | 'system' | 'tools' | 'messages' | 'effort' | 'compactAt' | 'compactKeep' | 'prefixTtl'>, contextEditing: boolean, serverCompaction = false): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: req.model.id,
     max_tokens: req.model.maxOutput,
     // One explicit breakpoint on the frozen system prompt (tools render before
-    // it, so it covers both) ...
-    system: [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral' } }],
+    // it, so it covers both) - with the 1-hour TTL when the session has long gaps
+    // (a longer TTL must come before shorter ones: the prefix is always first) ...
+    system: [{ type: 'text', text: req.system, cache_control: req.prefixTtl === '1h' ? { type: 'ephemeral', ttl: '1h' } : { type: 'ephemeral' } }],
     tools: req.tools.map(toAnthropicTool),
     messages: req.messages.map((m) => toAnthropicMessage(m, req.model.id)),
     // ... plus automatic caching for the growing conversation tail.
@@ -217,10 +218,12 @@ export function fromAnthropic(model: string, msg: Anthropic.Beta.Messages.BetaMe
   }
   // With server-side compaction the request ran more than one step (summary,
   // then the reply): the cost is all of them; the context is the last one's.
-  type Iter = { type?: string; input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
+  type Iter = { type?: string; input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cache_creation?: { ephemeral_1h_input_tokens?: number } | null };
   const iters = ((msg.usage as unknown as { iterations?: Iter[] }).iterations ?? []);
   const u = msg.usage;
-  const sum = (k: keyof Iter) => iters.reduce((a, it) => a + (Number(it[k]) || 0), 0);
+  const sum = (k: Exclude<keyof Iter, 'type' | 'cache_creation'>) => iters.reduce((a, it) => a + (Number(it[k]) || 0), 0);
+  // The 1-hour share of the cache writes (billed at 2x input rather than 1.25x).
+  const w1h = iters.length > 1 ? iters.reduce((a, it) => a + (Number(it.cache_creation?.ephemeral_1h_input_tokens) || 0), 0) : Number((u as unknown as Iter).cache_creation?.ephemeral_1h_input_tokens) || 0;
   const compaction = iters.find((it) => it.type === 'compaction');
   const stopMap: Record<string, StopKind> = { end_turn: 'end', tool_use: 'tool_use', max_tokens: 'max_tokens', refusal: 'refusal', stop_sequence: 'end', pause_turn: 'other' };
   const stop = stopMap[msg.stop_reason ?? ''] ?? 'other';
@@ -234,8 +237,8 @@ export function fromAnthropic(model: string, msg: Anthropic.Beta.Messages.BetaMe
     message: { role: 'assistant', content: blocks, raw: { provider: 'anthropic', model, payload: msg.content } },
     stop,
     usage: iters.length > 1
-      ? { input: sum('input_tokens'), cacheRead: sum('cache_read_input_tokens'), cacheWrite: sum('cache_creation_input_tokens'), output: sum('output_tokens'), reasoning: 0 }
-      : { ...last, output: u.output_tokens ?? 0, reasoning: 0 },
+      ? { input: sum('input_tokens'), cacheRead: sum('cache_read_input_tokens'), cacheWrite: sum('cache_creation_input_tokens'), ...(w1h ? { cacheWrite1h: w1h } : {}), output: sum('output_tokens'), reasoning: 0 }
+      : { ...last, ...(w1h ? { cacheWrite1h: w1h } : {}), output: u.output_tokens ?? 0, reasoning: 0 },
     notice,
     ...(iters.length > 1 ? { contextTokens: last.input + last.cacheRead + last.cacheWrite } : {}),
     ...(compaction ? { compacted: { summaryTokens: compaction.output_tokens ?? 0, before: (compaction.input_tokens ?? 0) + (compaction.cache_read_input_tokens ?? 0) + (compaction.cache_creation_input_tokens ?? 0) } } : {}),

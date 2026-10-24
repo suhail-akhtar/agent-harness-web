@@ -232,6 +232,8 @@ export interface ToolDefinition {
    * untrusted-content guard) before the call runs, and the call can then read only those names.
    */
   vaultNames?: Tool['vaultNames'];
+  /** false: its schema is in every request even when the session defers plugin tools (a tool most turns use). */
+  defer?: boolean;
   run(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutcome | string>;
 }
 
@@ -246,6 +248,7 @@ export function defineTool(t: ToolDefinition): Tool {
     ...(t.availableIn ? { availableIn: t.availableIn } : {}),
     ...(t.ruleSubject ? { ruleSubject: t.ruleSubject } : {}),
     ...(t.vaultNames ? { vaultNames: t.vaultNames } : {}),
+    ...(t.defer !== undefined ? { defer: t.defer } : {}),
     remoteable: false,
     summarize: t.summarize ?? ((i) => `${t.name} ${JSON.stringify(i).slice(0, 80)}`),
     async run(input, ctx) {

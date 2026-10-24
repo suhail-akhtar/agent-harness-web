@@ -8,7 +8,8 @@ import { promptTokens } from './types.ts';
 
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
-interface Rate { input: number; cacheRead: number; cacheWrite: number; output: number }
+/** cacheWrite1h: a cache write with the 1-hour TTL (Anthropic: 2x input); absent, twice the input rate. */
+interface Rate { input: number; cacheRead: number; cacheWrite: number; cacheWrite1h?: number; output: number }
 
 export interface ModelSpec {
   id: string;
@@ -56,7 +57,8 @@ export const BUILTIN_MODELS: ModelSpec[] = [
     compactAt: 160_000,
     effort: 'medium',
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-    rate: () => ({ input: 2.00, cacheRead: 0.20, cacheWrite: 2.50, output: 10.00 }),
+    // Cache writes: 1.25x input with the default 5-minute TTL, 2x with the 1-hour TTL (promptCaching.prefixTtl).
+    rate: () => ({ input: 2.00, cacheRead: 0.20, cacheWrite: 2.50, cacheWrite1h: 4.00, output: 10.00 }),
   },
   {
     id: 'claude-haiku-5-5',
@@ -69,8 +71,8 @@ export const BUILTIN_MODELS: ModelSpec[] = [
     effort: 'medium',
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     rate: (size) => size <= 100_000
-      ? { input: 0.10, cacheRead: 0.01, cacheWrite: 0.125, output: 0.50 }
-      : { input: 0.50, cacheRead: 0.05, cacheWrite: 0.625, output: 2.50 },
+      ? { input: 0.10, cacheRead: 0.01, cacheWrite: 0.125, cacheWrite1h: 0.20, output: 0.50 }
+      : { input: 0.50, cacheRead: 0.05, cacheWrite: 0.625, cacheWrite1h: 1.00, output: 2.50 },
   },
   {
     id: 'deepseek-flash',
@@ -180,6 +182,8 @@ export function getModel(id: string): ModelSpec {
 
 export function costOf(model: ModelSpec, u: Usage, at = new Date()): number {
   const r = overrides[model.id] ?? model.rate(promptTokens(u), at);
-  return (u.input * r.input + u.cacheRead * r.cacheRead + u.cacheWrite * r.cacheWrite + u.output * r.output) / 1_000_000;
+  // The 1-hour share of the writes is billed at its own rate; the rest at the 5-minute one.
+  const w1h = Math.min(u.cacheWrite, u.cacheWrite1h ?? 0);
+  return (u.input * r.input + u.cacheRead * r.cacheRead + (u.cacheWrite - w1h) * r.cacheWrite + w1h * (r.cacheWrite1h ?? r.input * 2) + u.output * r.output) / 1_000_000;
 }
 

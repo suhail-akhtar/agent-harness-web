@@ -1,0 +1,16 @@
+{
+ "configs": [
+  {
+   "name": "baseline",
+   "description": "the efficiency settings off, compaction at 60K tokens so masking and clearing happen in a short run (cache attribution stays on: it only observes)",
+   "settings": { "maxCostUsd": 0.3, "compactAt": 60000 },
+   "env": { "HARNESS_DEFER_PLUGIN_TOOLS": "off", "HARNESS_SPILL": "off", "HARNESS_MASK_BATCHED": "off", "HARNESS_PREFIX_TTL": "5m", "HARNESS_CACHE_ATTRIBUTION": "on" }
+  },
+  {
+   "name": "efficiency",
+   "description": "all five on, compaction at 60K tokens",
+   "settings": { "maxCostUsd": 0.3, "compactAt": 60000 },
+   "env": { "HARNESS_DEFER_PLUGIN_TOOLS": "on", "HARNESS_SPILL": "on", "HARNESS_MASK_BATCHED": "on", "HARNESS_PREFIX_TTL": "auto", "HARNESS_CACHE_ATTRIBUTION": "on" }
+  }
+ ]
+}

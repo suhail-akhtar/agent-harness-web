@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { makeAgentTool, parseAgentFile } from '../src/agents/agents.ts';
 import { Checkpoints } from '../src/core/checkpoints.ts';
 import { decide } from '../src/core/permissions.ts';
+import { defaultEfficiency } from '../src/core/settings.ts';
 import { createHarness } from '../src/kernel/harness.ts';
 import { HttpTransport, McpClient } from '../src/mcp/client.ts';
 import { McpManager } from '../src/mcp/manager.ts';
@@ -261,7 +262,8 @@ test('old tool results are cleared in one batch for providers without server-sid
   const { makeAgent } = await import('./helpers.ts');
   const big = 'x'.repeat(20_000);
   const steps = Array.from({ length: 9 }, (_, i) => ({ calls: [{ name: 'bash', input: { command: `printf '${big}' # ${i}` } }], usage: { input: i < 8 ? 1000 : 120_000 } }));
-  const h = await makeAgent([...steps, { text: 'ok' }]);
+  // The clearing as it was before batched masking (efficiency.batchedMasking off; test/efficiency.test.ts has the batched one).
+  const h = await makeAgent([...steps, { text: 'ok' }], { settings: { efficiency: { ...defaultEfficiency(), batchedMasking: false } } });
   h.agent.append({ role: 'user', content: [{ type: 'text', text: 'go' }] });
   await h.agent.run(new AbortController().signal);
   const cleared = h.agent.messages.flatMap((m) => m.content).filter((b) => b.type === 'tool_result' && b.content.startsWith('[Old tool output cleared'));
@@ -389,7 +391,7 @@ test('tool images ride on their result, and clearing old results drops their ima
   const root = await tempDir();
   await fs.writeFile(path.join(root, 'shot.png'), Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8ffff3f0005fe02fea7d6a4c80000000049454e44ae426082', 'hex'));
   const steps = Array.from({ length: 17 }, (_, i) => ({ calls: [{ name: 'read', input: { path: 'shot.png' } }], usage: { input: i < 16 ? 1000 : 120_000 } }));
-  const h = await makeAgent([...steps, { text: 'ok' }], { root });
+  const h = await makeAgent([...steps, { text: 'ok' }], { root, settings: { efficiency: { ...defaultEfficiency(), batchedMasking: false } } });
   h.agent.append({ role: 'user', content: [{ type: 'text', text: 'go' }] });
   await h.agent.run(new AbortController().signal);
   const resultsWithImages = (msgs: typeof h.persisted) => msgs.flatMap((m) => m.content).filter((b) => b.type === 'tool_result' && b.images?.length).length;

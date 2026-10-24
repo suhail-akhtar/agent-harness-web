@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { Agent, type AgentHooks } from '../src/core/agent.ts';
+import { Agent, type AgentConfig, type AgentHooks } from '../src/core/agent.ts';
 import { getModel } from '../src/core/models.ts';
 import { defaultSettings, type Settings } from '../src/core/settings.ts';
 import type { Block, HarnessEvent, Message, PermissionMode, Todo, Usage } from '../src/core/types.ts';
@@ -60,7 +60,7 @@ export interface Harness {
   todos: Todo[];
 }
 
-export async function makeAgent(steps: Step[], opts: { mode?: PermissionMode; settings?: Partial<Settings>; tools?: Tool[]; root?: string; host?: ToolHost } = {}): Promise<Harness> {
+export async function makeAgent(steps: Step[], opts: { mode?: PermissionMode; settings?: Partial<Settings>; tools?: Tool[]; root?: string; host?: ToolHost; /** More of the agent's config (tool groups, a spill store, a model). */ config?: Partial<AgentConfig>; /** More hooks (onTrace, onCacheMiss). */ hooks?: Partial<AgentHooks> } = {}): Promise<Harness> {
   const provider = new FakeProvider(steps);
   const root = opts.root ?? opts.host?.root ?? await tempDir();
   const events: HarnessEvent[] = [];
@@ -86,10 +86,12 @@ export async function makeAgent(steps: Step[], opts: { mode?: PermissionMode; se
     setTodos: (t) => { todos = t; },
     preamble: async () => '<environment>test</environment>',
     latestUserPrompt: () => 'the task',
+    ...opts.hooks,
   };
   const agent = new Agent({
     name: 'main', model: getModel('deepseek-flash'), provider, effort: 'high', system: 'SYSTEM', tools: opts.tools ?? BUILTIN_TOOLS,
     host: opts.host ?? new LocalHost(root), settings, cacheKey: 'test', maxSteps: 20, readFiles: new Map<string, FileStamp>(),
+    ...opts.config,
   }, hooks);
   return { agent, provider, events, persisted, root, mode, permissionAnswers, get todos() { return todos; } } as Harness;
 }

@@ -29,6 +29,8 @@ export interface ProviderRequest {
   compactAt?: number;
   /** What PreCompact hooks asked a provider-side summary to keep (added to its instructions). */
   compactKeep?: string;
+  /** '1h': the stable prefix (tools and system prompt) is cached for an hour (providers with TTL tiers: Anthropic); else the default TTL. */
+  prefixTtl?: '1h';
   signal: AbortSignal;
   onText?: (delta: string) => void;
   onReasoning?: (delta: string) => void;
