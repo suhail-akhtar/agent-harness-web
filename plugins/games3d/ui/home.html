@@ -34,6 +34,15 @@
   .strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 10px; }
   .strip .tile .thumb { aspect-ratio: 1; }
   @media (max-width: 960px) { .grid { grid-template-columns: 1fr; } }
+  .qs.own { border-style: dashed; border-color: var(--hx-accent); }
+  .qs.own .ic { background: var(--hx-accent); color: var(--hx-on-accent, #fff); }
+  .own-form { display: grid; gap: 14px; margin: 0 0 20px; }
+  .own-form .f { display: grid; gap: 6px; }
+  .own-form label.l { font-size: 12.5px; font-weight: 600; }
+  .own-form .help { font-size: 11.5px; color: var(--hx-text-muted); }
+  .own-form .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+  .own-form .acts { display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
+  .own-form textarea { min-height: 90px; }
 </style>
 <script src="harness://app/sdk/plugin-ui.js"></script>
 <script src="kit.js"></script>
@@ -49,6 +58,7 @@
   </div>
   <h2 style="margin-top:0">Start something</h2>
   <div class="quick" id="quick"></div>
+  <section class="card own-form" id="own" data-start-own hidden></section>
   <div class="grid">
     <div class="stack">
       <section class="card" data-home-projects><h2>Recent projects<span class="spacer"></span><button type="button" class="btn sm ghost" data-go="projects">All projects</button></h2><div id="projects" class="muted small">Loading…</div></section>
@@ -79,12 +89,84 @@ Kit.start(async (harness) => {
     { id: 'sprite-sheet', icon: 'film', title: 'Make a sprite sheet', hint: 'An animated character as a Studio asset', prompt: 'Make a sprite sheet with Studio: a character walk cycle of 8 frames at 32x32 pixels, pixel-art, transparent background. Save it as a Studio asset (.studio/assets/<id>/ with asset.json: kind spritesheet, frames, frameSize, fps) and show it in the 2D viewer.' },
     { id: 'level', icon: 'map', title: 'Generate a level', hint: 'A tile level from a tileset', prompt: 'Generate a level with Studio: a 2D tile level (40x20 tiles of 16 px) with a start, a goal, platforms, gaps and a few enemies, from a tileset. Save it as a Studio asset of kind level (level JSON or a Tiled .tmj with its tileset) and show it in the 2D viewer.' },
   ];
-  mount($('quick'), QUICK.map((q) => h('button', { type: 'button', class: 'qs', 'data-quick-start': q.id, onclick: async () => {
+  const ownCard = h('button', { type: 'button', class: 'qs own', 'data-quick-start': 'own', 'aria-expanded': 'false', onclick: () => toggleOwn() },
+    h('span', { class: 'ic' }, Kit.icon('sparkles', 17)), h('b', {}, 'Start your own'), h('span', {}, 'Your idea: a game, an asset pack or a model, with the engine, style and sources you choose'));
+  mount($('quick'), ownCard, QUICK.map((q) => h('button', { type: 'button', class: 'qs', 'data-quick-start': q.id, onclick: async () => {
     try {
       if (q.workflow) await harness.workflows.start(q.workflow, q.input);
       else await harness.composer.prefill(q.prompt, { newChat: true });
     } catch (e) { await harness.notify.toast(e.message, { kind: 'error' }); }
   } }, h('span', { class: 'ic' }, Kit.icon(q.icon, 17)), h('b', {}, q.title), h('span', {}, q.hint))));
+
+  // ---- Start your own: the person's idea with their choices, into make-game, asset-pack or model-3d.
+  // Submitting opens that workflow's dialog (the folder and the model are picked there, nothing runs unseen).
+  let engines = [];
+  const GENRES = ['platformer', 'top-down action', 'grid puzzle', 'side-scrolling platformer', 'isometric adventure', 'third-person collect-and-escape', 'first-person explorer', 'endless runner', 'racing', 'tower defense', 'shoot-em-up', 'match-3 puzzle', 'survival', 'roguelike'];
+  const own = { make: 'game', idea: '', engine: 'web', dimension: '2d', genre: '', sources: 'procedural', approval: 'manual', count: '5', packDim: '3d', style: '', importTo: 'none', tool: 'blender', detail: '' };
+  const ready = (id) => id === 'web' || engines.some((e) => e.engine === id && e.installed);
+  const why = (id) => { const e = engines.find((x) => x.engine === id); return !e || e.installed ? '' : `${e.title || id} is not installed`; };
+  const seg = (key, opts) => h('div', { class: 'seg', role: 'group' }, opts.map(([v, label, off]) => h('button', { type: 'button', 'aria-pressed': own[key] === v ? 'true' : 'false', disabled: !!off, title: off || '', 'data-own': `${key}:${v}`, onclick: () => { own[key] = v; renderOwn(); } }, label)));
+  const field = (label, control, help) => h('div', { class: 'f' }, h('label', { class: 'l' }, label), control, help ? h('div', { class: 'help' }, help) : null);
+  const text = (key, attrs = {}) => h('input', { type: 'text', value: own[key], 'data-own-field': key, oninput: (e) => { own[key] = e.target.value; }, ...attrs });
+  const select = (key, opts) => { const s = h('select', { 'data-own-field': key, onchange: (e) => { own[key] = e.target.value; } }, opts.map(([v, label, off]) => h('option', { value: v, disabled: !!off, selected: own[key] === v }, off ? `${label} (${off})` : label))); return s; };
+  function toggleOwn(open) {
+    const box = $('own');
+    const show = open ?? box.hidden;
+    box.hidden = !show;
+    ownCard.setAttribute('aria-expanded', String(show));
+    if (show) { renderOwn(); box.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); box.querySelector('textarea')?.focus(); }
+  }
+  function renderOwn() {
+    const engineOpts = [['web', 'Web (Three.js or Canvas)'], ['godot', 'Godot 4', why('godot')], ['unreal', 'Unreal Engine (Blueprints and Python)', why('unreal')]];
+    if (!ready(own.engine)) own.engine = 'web';
+    if (own.tool === 'blender' && !ready('blender')) own.tool = 'three';
+    const placeholder = { game: 'A cosy 2.5D farming game: plant, water and sell crops over four seasons; a small village to explore; relaxing music.', pack: '6 sci-fi crates and barrels for a space station, worn metal, one palette.', model: 'A vintage film camera: leather body, chrome lens ring, realistic, under 30k triangles.' }[own.make];
+    const kids = [
+      h('h2', { style: { margin: '0' } }, 'Start your own', h('span', { class: 'spacer' }), h('button', { type: 'button', class: 'btn sm ghost', onclick: () => toggleOwn(false) }, 'Close')),
+      field('What to make', seg('make', [['game', 'A game'], ['pack', 'An asset pack'], ['model', 'One 3D model']])),
+      field(own.make === 'game' ? 'Your game idea' : own.make === 'pack' ? 'What is in the pack' : 'What to model',
+        h('textarea', { 'data-own-field': 'idea', placeholder, oninput: (e) => { own.idea = e.target.value; } }, own.idea),
+        own.make === 'game' ? 'What the player does, the goal, the theme, anything that must be in it.' : 'The items, their use and anything that must be there.'),
+    ];
+    if (own.make === 'game') {
+      kids.push(h('div', { class: 'cols' },
+        field('Engine', select('engine', engineOpts), 'Missing engines can be set up from Engines.'),
+        field('Dimension', seg('dimension', [['2d', '2D'], ['2.5d', '2.5D'], ['3d', '3D']])),
+        field('Genre', h('div', {}, text('genre', { list: 'own-genres', placeholder: 'empty: the designer picks from your idea' }), h('datalist', { id: 'own-genres' }, GENRES.map((g) => h('option', { value: g }))))),
+      ), h('div', { class: 'cols' },
+        field('Art and sound from', select('sources', [['procedural', 'Procedural only (free)'], ['procedural+cc0', 'Procedural and free CC0 libraries'], ['all', 'Everything, paid generators too (within their caps)']])),
+        field('Checkpoints', seg('approval', [['manual', 'I approve each stage'], ['auto', 'Run straight through']]), own.approval === 'manual' ? 'You approve the concept, the art, the vertical slice and the release.' : 'No stops: the agents decide and test as they go.'),
+      ));
+    } else if (own.make === 'pack') {
+      kids.push(h('div', { class: 'cols' },
+        field('How many', text('count', { inputmode: 'numeric' })),
+        field('Kind', seg('packDim', [['2d', '2D (sprites, tiles, icons)'], ['3d', '3D (models in Blender)', why('blender')]])),
+        field('Style', text('style', { placeholder: 'empty: the art director proposes one' })),
+      ), h('div', { class: 'cols' },
+        field('Import into', select('importTo', [['none', 'Nowhere, keep as Studio assets'], ['web', 'A web game'], ['godot', 'A Godot project', why('godot')], ['unreal', 'An Unreal project', why('unreal')]])),
+        field('Checkpoints', seg('approval', [['manual', 'Approve the style guide first'], ['auto', 'Run straight through']])),
+      ));
+    } else {
+      kids.push(h('div', { class: 'cols' },
+        field('Made with', seg('tool', [['blender', 'Blender', why('blender')], ['three', 'Three.js']])),
+        field('Detail', text('detail', { placeholder: 'a clean, realistic model, under 50k triangles' })),
+        field('Checkpoints', seg('approval', [['manual', 'Approve the plan first'], ['auto', 'Run straight through']])),
+      ));
+    }
+    kids.push(h('div', { class: 'acts' }, h('span', { class: 'muted small' }, 'Next you pick the folder and the model, then it starts in a new chat you can watch.'),
+      h('button', { type: 'button', class: 'btn primary', 'data-own-start': '', onclick: () => void startOwn() }, 'Continue')));
+    mount($('own'), kids);
+  }
+  async function startOwn() {
+    const idea = own.idea.trim();
+    if (!idea) { await harness.notify.toast('Describe your idea first.', { kind: 'warning' }); $('own').querySelector('textarea')?.focus(); return; }
+    const [name, input] = own.make === 'game'
+      ? ['make-game', { brief: idea, engine: own.engine, dimension: own.dimension, genre: own.genre.trim(), sources: own.sources, approval: own.approval, budget: own.sources === 'all' ? 'paid generators allowed within their spend caps' : own.sources === 'procedural' ? 'procedural assets only, no paid generation' : 'procedural and CC0 assets, no paid generation' }]
+      : own.make === 'pack'
+        ? ['asset-pack', { brief: idea, count: String(Math.max(1, Math.min(40, Number(own.count) || 5))), dimension: own.packDim, style: own.style.trim(), engine: own.importTo, approval: own.approval }]
+        : ['model-3d', { subject: idea, engine: own.tool, approval: own.approval, ...(own.detail.trim() ? { detail: own.detail.trim() } : {}) }];
+    try { await harness.workflows.start(name, input); } catch (e) { await harness.notify.toast(e.message, { kind: 'error' }); }
+  }
 
   const stageSegs = (p) => h('div', { class: 'segs', 'aria-hidden': 'true' }, p.stages.map((s) => h('i', { class: ['done', 'approved'].includes(s.status) ? 'done' : s.id === p.stage ? 'cur' : s.status === 'changes-requested' || s.status === 'review' ? 'warn' : '' })));
   const thumbOf = (a) => {
@@ -98,6 +180,8 @@ Kit.start(async (harness) => {
 
   async function load() {
     const s = await Kit.studio(harness, 'summary');
+    engines = s.engines;
+    if (!$('own').hidden && !$('own').contains(document.activeElement)) renderOwn();
     await harness.badge.set('jobs', s.counts.jobs || null).catch(() => {});
     $('sub').textContent = `${s.counts.projects} project${s.counts.projects === 1 ? '' : 's'} · ${s.counts.assets} asset${s.counts.assets === 1 ? '' : 's'} · ${s.counts.playtests} playtest${s.counts.playtests === 1 ? '' : 's'}${s.counts.jobs ? ` · ${s.counts.jobs} job${s.counts.jobs === 1 ? '' : 's'} running` : ''}`;
     mount($('projects'), s.projects.length ? s.projects.map((p) => h('button', { type: 'button', class: 'proj', 'data-home-project': p.id, onclick: () => harness.view.open('projects', { project: p.id }) },

@@ -24,7 +24,12 @@ them this session has, and keep their results in the files below so Studio's pag
 - **Home** (`desktop_open {"target":"view","id":"games3d"}`): recent projects with their stage,
   the job queue, the engines on this machine with their gaps, recent assets and playtests, and the
   quick starts (a 2D platformer, a 3D third-person game, a model, a sprite sheet, a level).
-- **Projects** (`games3d:projects`): every folder with `.studio/project.json`. A project's page
+  **Start your own** takes the person's idea with their choices (a game: engine, 2D/2.5D/3D, genre,
+  asset sources, checkpoints; an asset pack: count, 2D or 3D, style, import target; one model:
+  Blender or Three.js) into make-game, asset-pack or model-3d. The workflow dialog that follows
+  picks the folder and the model.
+- **Projects** (`games3d:projects`): every folder with `.studio/project.json`, or with Studio
+  assets only (asset-pack's output), listed under the folder's name. A project's page
   (params `{"project": <folder or id>}`) has its stages, where the person approves, asks for
   changes or comments (their comments are for you: read them in project.json), the design
   document, budgets, builds, playtests and assets. A project whose engine plugin is off opens

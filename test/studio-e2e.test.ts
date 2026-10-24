@@ -127,7 +127,14 @@ test('Studio: the games and 3D module in the desktop, its views and viewers, dri
       const home = view('games3d:home');
       await home.locator('body[data-ready="1"]').waitFor({ timeout: 30_000 });
       await home.locator('[data-home-project]').first().waitFor({ timeout: 30_000 });
-      assert.equal(await home.locator('[data-quick-start]').count(), 5);
+      assert.equal(await home.locator('[data-quick-start]').count(), 6, 'Start your own and the five presets');
+      // Start your own: the form opens with the choices for a game, and for a pack when switched.
+      await home.locator('[data-quick-start="own"]').click();
+      await home.locator('[data-start-own] [data-own-field="engine"]').waitFor();
+      assert.equal(await home.locator('[data-start-own] [data-own="dimension:2.5d"]').count(), 1);
+      await home.locator('[data-start-own] [data-own="make:pack"]').click();
+      await home.locator('[data-start-own] [data-own-field="count"]').waitFor();
+      await home.locator('[data-quick-start="own"]').click();
       assert.equal(await home.locator('[data-home-engine]').count(), 5, 'Blender, Godot, Unreal, Unity, web');
       pid = (await home.locator('[data-home-project]').first().getAttribute('data-home-project'))!;
       assert.match(await home.locator('[data-home-project]').first().innerText(), /Coin Escape[\s\S]*waits for you/);

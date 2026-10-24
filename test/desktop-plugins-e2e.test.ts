@@ -240,7 +240,7 @@ test('plugins journey: Engineering and Operations switched on and off live, used
       // The host asks first (workflows.start), then shows the workflow's dialog with the form's inputs.
       await page.locator('[role="dialog"] button:has-text("Allow")').click();
       await page.waitForSelector('[data-workflow-dialog][data-fresh]');
-      await page.locator('[data-workflow-dialog] select').selectOption(repo);
+      await page.locator('[data-workflow-dialog] [data-work-in-select]').selectOption(repo);
       assert.match(await page.locator('[data-workflow-dialog] textarea').inputValue(), /slugify/);
       await shot('start-feature-dialog');
       await page.click('[data-start-workflow]');

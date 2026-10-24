@@ -81,6 +81,23 @@ test('studio pages: every file they load is in ui/, their scripts compile, text 
   assert.ok(three.length < 2_000_000, 'one minified bundle');
 });
 
+test('studio home: "Start your own" starts make-game, asset-pack or model-3d with inputs those workflows have', () => {
+  const html = fs.readFileSync(path.join(plugin, 'ui', 'home.html'), 'utf8');
+  assert.match(html, /data-start-own/);
+  assert.match(html, /'data-quick-start': 'own'/);
+  // Every input the form sends is one the workflow declares (a renamed input would be dropped silently).
+  const sent: Record<string, string[]> = {
+    'make-game': ['brief', 'engine', 'dimension', 'genre', 'sources', 'approval', 'budget'],
+    'asset-pack': ['brief', 'count', 'dimension', 'style', 'engine', 'approval'],
+    'model-3d': ['subject', 'engine', 'approval', 'detail'],
+  };
+  for (const [wf, keys] of Object.entries(sent)) {
+    assert.match(html, new RegExp(`\\['${wf}', \\{`), `the form starts ${wf}`);
+    const inputs = JSON.parse(fs.readFileSync(path.join(plugin, 'workflows', `${wf}.json`), 'utf8')).inputs;
+    for (const k of keys) assert.ok(k in inputs, `${wf} has the input ${k}`);
+  }
+});
+
 test('studio guide: a one-sentence purpose, what it is for, the engines and flows, worked examples; the generated half lists every command, view and argument', () => {
   const u = ui();
   const text = fs.readFileSync(path.join(plugin, 'GUIDE.md'), 'utf8');
@@ -112,6 +129,11 @@ test('studio on the server: the plugin loads with its routes (signed-in: user), 
   for (const p of ['GET studio/summary', 'POST studio/projects', 'GET studio/file', 'POST studio/project/approve', 'POST studio/jobs/cancel', 'GET studio/badges', 'GET studio/engines']) assert.ok(paths.includes(p), p);
   assert.ok(reg.routes.filter((r) => r.plugin === 'games3d').every((r) => r.auth === 'user'));
   assert.ok(reg.tools.get('model_info'));
+  // The plugin declares network hosts (image and text-to-3D services), but its local tools never send
+  // anything out: after untrusted content they run without a prompt; the ones that fetch still ask.
+  for (const t of ['model_info', 'studio_image', 'studio_sprite', 'studio_audio', 'studio_procgen', 'studio_model', 'studio_template', 'studio_library']) assert.equal(reg.tools.get(t)!.sendsOut, false, `${t} is local`);
+  const source = reg.tools.get('studio_source')!.sendsOut as (i: Record<string, unknown>) => boolean;
+  assert.equal(source({ action: 'download' }), true, 'studio_source fetches: it still asks after untrusted content');
 });
 
 // ---------------- the routes ----------------
@@ -228,6 +250,22 @@ test('studio routes: projects, a project, assets with facets, an asset, files, s
   assert.equal(t.issues[0].evidence, '.studio/playtests/pt-20261023-1/frames/0120.png');
 });
 
+test('studio routes: a folder with assets and no project.json yet (what asset-pack makes) is a project, and its assets are listed', async () => {
+  const s = await studio();
+  const pack = path.join(s.ws, 'dungeon-props');
+  const dir = path.join(pack, '.studio', 'assets', 'prop-barrel');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'barrel.glb'), barrelGlb().glb);
+  fs.writeFileSync(path.join(dir, 'asset.json'), JSON.stringify({ id: 'prop-barrel', kind: 'model', name: 'Barrel', files: [{ path: 'barrel.glb', role: 'model' }], license: { id: 'CC0-1.0' }, source: { type: 'procedural', generator: 'blender:barrel' } }));
+  const list = await s.ok('projects');
+  const p = list.projects.find((x: { folder: string }) => x.folder === 'dungeon-props');
+  assert.ok(p, 'the asset-only folder is listed');
+  assert.equal(p.name, 'dungeon-props', 'named after its folder');
+  assert.equal(p.counts.assets, 1);
+  const all = await s.ok('assets');
+  assert.ok(all.assets.some((a: { id: string }) => a.id === 'prop-barrel'), 'its asset shows on the Assets page');
+});
+
 test('studio routes refuse every path outside their folders: "..", absolute paths elsewhere, links out, bad ids; members see nothing', async () => {
   const s = await studio();
   const pid = (await s.ok('projects')).projects[0].id;
@@ -340,6 +378,17 @@ test('studio engines: found from files (no engine started): versions, Unreal wit
   // With MSVC there is no gap.
   const withMsvc = await s.probeEngines({ platform: 'win32', env: { ProgramFiles: 'C:\\Program Files', 'ProgramFiles(x86)': 'C:\\Program Files (x86)', PATH: '' }, home: 'C:\\h', exists: (p: string) => files.has(p), listDir: (d: string) => dirs[d] ?? [], readText: () => null, run: async () => 'C:\\VS\\2022\\Community\n' });
   assert.deepEqual(withMsvc.find((e: { engine: string }) => e.engine === 'unreal').gaps, []);
+  // Godot as the engine's install action leaves it: engines/godot/<version>/engine.json names the program.
+  const exe = 'C:\\h\\engines\\godot\\4.7.2\\windows\\Godot_v4.7.2-stable_win64.exe';
+  const installed = await s.probeEngines({
+    platform: 'win32', arch: 'x64', env: { PATH: '' }, home: 'C:\\h', exists: (p: string) => p === exe,
+    listDir: (d: string) => (d === 'C:\\h\\engines\\godot' ? ['4.7.2'] : []),
+    readText: (f: string) => (f === 'C:\\h\\engines\\godot\\4.7.2\\engine.json' ? JSON.stringify({ binaries: { 'win32-x64': 'windows/Godot_v4.7.2-stable_win64.exe' } }) : null),
+    run: async () => '',
+  });
+  const g = installed.find((e: { engine: string }) => e.engine === 'godot');
+  assert.equal(g.installed, true, 'the Godot the install action fetched is found');
+  assert.equal(g.version, '4.7.2');
   // The route says it in a line too (what an agent hears from detect-engines).
   const r = await s.ok('engines', { refresh: true });
   assert.match(r.text, /^Engines on this machine: Blender: /);

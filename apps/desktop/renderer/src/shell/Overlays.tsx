@@ -189,6 +189,8 @@ export function WorkflowDialog(): React.ReactElement | null {
   const [name, setName] = useState('');
   const [input, setInput] = useState<Record<string, string>>({});
   const [where, setWhere] = useState('');
+  const [model, setModel] = useState('');
+  const models = useData((s) => s.models);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const sessionId = req?.sessionId;
@@ -202,6 +204,7 @@ export function WorkflowDialog(): React.ReactElement | null {
       if (!req.workflow) { setErr('Open a conversation first: a workflow runs inside one.'); setList([]); return; }
       setName(req.workflow); setInput({ ...(req.input ?? {}) });
       try { setWhere(localStorage.getItem('harness.workIn') ?? ''); } catch { setWhere(''); }
+      setModel(useApp.getState().prefs.defaultModel || '');
       return;
     }
     client.sessions.workflows(sessionId).then((r) => {
@@ -224,12 +227,13 @@ export function WorkflowDialog(): React.ReactElement | null {
     let made: string | undefined;
     try {
       const { prefs, info } = useApp.getState();
-      const models = useData.getState().models;
-      const model = models.find((m) => m.id === prefs.defaultModel && m.available) ?? models.find((m) => m.available);
-      if (!model) throw new Error('Choose a model first (add a key in Settings > Models & providers).');
+      const all = useData.getState().models;
+      // The one picked here, else the default, else any that has a key.
+      const chosen = all.find((m) => m.id === (model || prefs.defaultModel) && m.available) ?? all.find((m) => m.available);
+      if (!chosen) throw new Error('Choose a model first (add a key in Settings > Models & providers).');
       const first = Object.values(input).find((v) => v.trim()) ?? '';
       const path = where || await scratchFolder(info?.scratch);
-      const s = await client.sessions.create({ title: `${name}: ${first.replace(/\s+/g, ' ')}`.slice(0, 60), model: model.id, ...(prefs.defaultEffort ? { effort: prefs.defaultEffort as Effort } : {}), mode: (prefs.defaultMode || 'default') as Mode, runtime: 'local', ...(path ? { path } : {}), client: clientInfo() });
+      const s = await client.sessions.create({ title: `${name}: ${first.replace(/\s+/g, ' ')}`.slice(0, 60), model: chosen.id, ...(prefs.defaultEffort ? { effort: prefs.defaultEffort as Effort } : {}), mode: (prefs.defaultMode || 'default') as Mode, runtime: 'local', ...(path ? { path } : {}), client: clientInfo() });
       made = s.id;
       const wf = (await client.sessions.workflows(s.id)).workflows.find((x) => x.name === name);
       if (!wf) throw new Error(`There is no workflow "${name}" in that folder.`);
@@ -252,7 +256,8 @@ export function WorkflowDialog(): React.ReactElement | null {
       <Modal open onClose={close} title="Run a workflow" size="lg" footer={<><Button variant="ghost" onClick={close}>Cancel</Button><Button variant="primary" loading={busy} onClick={() => void startFresh()} data-start-workflow>Start</Button></>}>
         <div data-workflow-dialog data-fresh>
           <p className="mb-2 text-[12.5px] text-hx-secondary">Runs <b>{name}</b> in a new conversation.</p>
-          <Field label="Work in" help="The folder the workflow reads and changes."><Select value={where} onChange={setWhere} options={options} /></Field>
+          <Field label="Work in" help="The folder the workflow reads and changes."><Select value={where} onChange={setWhere} options={options} data-work-in-select /></Field>
+          <Field label="Model" help="Runs the workflow's agents unless a step names its own."><Select value={model} onChange={setModel} options={[{ value: '', label: 'The default model' }, ...models.filter((m) => m.available).map((m) => ({ value: m.id, label: m.label ?? m.id }))]} data-workflow-model /></Field>
           {Object.entries(input).map(([k, v]) => (
             <Field key={k} label={k}>
               {k === 'request' || v.length > 80 ? <Textarea rows={5} value={v} onChange={(e) => setInput({ ...input, [k]: e.target.value })} /> : <Input value={v} onChange={(e) => setInput({ ...input, [k]: e.target.value })} />}
