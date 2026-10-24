@@ -39,7 +39,7 @@ export const audioTool = {
       target: { type: 'number', description: 'LUFS target' }, ceiling: { type: 'number', description: 'peak ceiling dBFS' }, mode: { type: 'string', enum: ['loudness', 'peak'] },
       input: { type: 'string', description: 'normalize/info: a WAV in the workspace' }, output: { type: 'string', description: 'normalize: where to write (default over the input)' },
       sampleRate: { type: 'number' },
-      id: { type: 'string' }, project: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, export: { type: 'string' },
+      id: { type: 'string' }, name: { type: 'string', description: 'What the asset is called on the Assets page (default from the id)' }, project: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, export: { type: 'string' },
     },
     required: ['action'],
   },

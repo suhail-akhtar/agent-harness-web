@@ -180,6 +180,8 @@ export async function buildWeb(host, project, { out = 'build/web', zip = true, n
 
 export const templateTool = {
   name: 'studio_template',
+  // Local only (files in the workspace and the library): never sends what it is given anywhere, so the taint guard need not ask.
+  sendsOut: false,
   description: 'Studio\'s web game templates, ready to fill: "list" them, "info" one (its files, game.json fields, the window.__game hook, the assets it builds), "create" one in the workspace (template: platformer-2d, topdown-2d, puzzle-2d, iso-2.5d, sidescroller-2.5d, thirdperson-3d or firstperson-3d; it copies index.html, game.json and src/ with the shared engine, vendors Three.js for 2.5D/3D, writes .studio/project.json, and builds the template\'s Studio assets with studio_sprite/studio_procgen/studio_audio unless assets: false), "build" a web build (build/web/ with only the assets game.json names, a zip, recorded in .studio/project.json builds). Every template has a title, play, pause, win and game-over state machine, an input map, assets loaded from .studio/assets, and the window.__game hook the AI player and bots read. Godot, Unreal and Unity projects start from their engine tools (godot project.create).',
   parameters: {
     type: 'object',

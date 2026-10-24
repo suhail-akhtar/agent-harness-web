@@ -237,6 +237,40 @@ export function Card({ children, className, ...rest }: React.HTMLAttributes<HTML
   return <div className={cx('rounded-xl border border-hx-border-subtle bg-hx-elevated', className)} {...rest}>{children}</div>;
 }
 
+export interface ActionPanelProps extends Omit<React.HTMLAttributes<HTMLDivElement>, 'title'> {
+  /** The small uppercase label (Approval, Question, Permission). */
+  label?: React.ReactNode;
+  icon?: string;
+  title?: React.ReactNode;
+  /** The decision: always in view, under the details. */
+  footer?: React.ReactNode;
+  tone?: 'warning' | 'accent' | 'neutral' | 'danger';
+  /** The tallest it gets before the details scroll (CSS length). */
+  maxHeight?: string;
+}
+
+/**
+ * Something inline that waits for a decision (an approval, a question, a permission): the inline
+ * counterpart of Modal. Label and title stay at the top and the footer at the bottom; only the
+ * details scroll, so the person always sees what they are deciding and how to decide it.
+ */
+export function ActionPanel({ label, icon, title, footer, tone = 'warning', maxHeight = 'min(60vh, 560px)', className, style, children, ...rest }: ActionPanelProps): React.ReactElement {
+  const border = { warning: 'border-hx-warning/35', accent: 'border-hx-accent/35', neutral: 'border-hx-border-subtle', danger: 'border-hx-danger/35' }[tone];
+  const text = { warning: 'text-hx-warning', accent: 'text-hx-accent-text', neutral: 'text-hx-muted', danger: 'text-hx-danger' }[tone];
+  return (
+    <div className={cx('flex flex-col overflow-hidden rounded-xl border bg-hx-elevated shadow-sm', border, className)} style={{ maxHeight, ...style }} {...rest}>
+      {(label || title) && (
+        <div className="shrink-0 px-3 pt-3" data-panel-head>
+          {label && <div className={cx('flex items-center gap-1.5 text-[11.5px] font-medium uppercase tracking-wide', text)}>{icon && <Icon name={icon} size={13} />}{label}</div>}
+          {title && <div className="mt-1 text-[14px] font-semibold text-hx-primary">{title}</div>}
+        </div>
+      )}
+      <div className={cx('hx-scroll min-h-0 flex-1 overflow-y-auto px-3 pt-1', footer ? 'pb-2' : 'pb-3')} data-panel-body>{children}</div>
+      {footer && <div className="shrink-0 border-t border-hx-border-subtle px-3 py-2" data-panel-footer>{footer}</div>}
+    </div>
+  );
+}
+
 export function Divider({ className }: { className?: string }): React.ReactElement {
   return <div role="separator" className={cx('h-px w-full bg-hx-border-subtle', className)} />;
 }

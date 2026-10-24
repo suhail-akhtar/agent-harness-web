@@ -192,7 +192,7 @@ export function Session({ params }: { params: Record<string, string> }): React.R
       <Transcript sessionId={id} items={s.live.items} running={running} onRetry={(t) => void send(t, [], 'send')} sources={sources} />
       {s.live.retry && <div className="mx-auto w-full max-w-column px-6 pb-1 text-[12px] text-hx-warning">{s.live.retry}</div>}
       {s.pending.length > 0 && (
-        <div data-attention className="mx-auto w-full max-w-column space-y-2 px-4 pb-2 sm:px-6">
+        <div data-attention className="hx-scroll mx-auto max-h-[65vh] w-full max-w-column shrink-0 space-y-2 overflow-y-auto px-4 pb-2 sm:px-6">
           {s.pending.map((p) => <PendingCard key={p.requestId} p={p} respond={respond} />)}
         </div>
       )}

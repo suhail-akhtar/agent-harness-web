@@ -139,7 +139,7 @@ export const modelTool = {
       license: { type: 'object', description: 'cleanup: the outside model\'s licence {id, author, url}' },
       source: { type: 'object', description: 'cleanup: where the model came from (recorded in the manifest)' },
       previewSize: { type: 'number' }, timeoutSec: { type: 'number' },
-      id: { type: 'string' }, project: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, style: { type: 'string' }, export: { type: 'string' },
+      id: { type: 'string' }, name: { type: 'string', description: 'What the asset is called on the Assets page (default from the id)' }, project: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, style: { type: 'string' }, export: { type: 'string' },
     },
     required: ['action'],
   },

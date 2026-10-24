@@ -131,7 +131,10 @@ export async function allowedAbsolute(p, roots) {
 
 // ---------------- projects ----------------
 
-/** Folders holding .studio/project.json under the roots (not inside another project; links not followed). */
+/** A Studio project: a folder with .studio/project.json, or with Studio assets only (what asset-pack makes). */
+const isProjectDir = (dir) => fs.existsSync(path.join(dir, '.studio', 'project.json')) || fs.existsSync(path.join(dir, '.studio', 'assets'));
+
+/** Studio projects under the roots (not inside another project; links not followed). */
 export async function findProjectDirs(roots, { depth = 3, maxDirs = 6000 } = {}) {
   const found = new Set();
   let seen = 0;
@@ -140,7 +143,7 @@ export async function findProjectDirs(roots, { depth = 3, maxDirs = 6000 } = {})
     while (queue.length && seen < maxDirs) {
       const { dir, d } = queue.shift();
       seen++;
-      if (fs.existsSync(path.join(dir, '.studio', 'project.json'))) { found.add(dir); continue; }
+      if (isProjectDir(dir)) { found.add(dir); continue; }
       if (d >= depth) continue;
       let entries = [];
       try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { continue; }
@@ -324,6 +327,16 @@ export async function probeEngines(o = {}) {
     const hit = newestDir(listDir(engines).filter((d) => /^godot/i.test(d))).flatMap((d) => [P.join(engines, d), ...newestDir(listDir(P.join(engines, d)).filter((f) => /^godot_v4[\w.-]*(\.exe)?$/i.test(f) && !/\.(zip|tpz)$/i.test(f))).map((f) => P.join(engines, d, f))]).find((p) => /godot_v4[^\\/]*$/i.test(p) && exists(p));
     if (hit) godot = hit;
   }
+  if (!godot) {
+    // What the engine's install action writes: engines/godot/<version>/engine.json names its program per platform.
+    const key = `${platform}-${o.arch ?? process.arch}`;
+    for (const v of newestDir(listDir(P.join(engines, 'godot')))) {
+      let meta = null;
+      try { meta = JSON.parse(readText(P.join(engines, 'godot', v, 'engine.json')) ?? 'null'); } catch { /* not ours */ }
+      const rel = meta?.binaries?.[key];
+      if (typeof rel === 'string' && exists(P.join(engines, 'godot', v, rel))) { godot = P.join(engines, 'godot', v, rel); break; }
+    }
+  }
   out.godot = { installed: !!godot, path: godot ?? undefined, version: /godot[_ -]?v?(\d+\.\d+(?:\.\d+)?)/i.exec(godot ?? '')?.[1], gaps: [], source: godot && godot.startsWith(engines) ? 'harness' : godot ? 'host' : undefined };
   if (godot) {
     const v = out.godot.version;
@@ -393,8 +406,9 @@ export function setupUiRoutes(api) {
     const dirs = await findProjectDirs(r.workspaces);
     const list = [];
     for (const dir of dirs) {
-      const file = await readJsonFile(path.join(dir, '.studio', 'project.json')).catch(() => undefined);
-      if (!file) continue;
+      // Assets with no project.json yet: listed under the folder's name, so what was made shows up.
+      const file = await readJsonFile(path.join(dir, '.studio', 'project.json')).catch(() => undefined)
+        ?? { value: {}, mtime: (await fsp.stat(path.join(dir, '.studio', 'assets')).catch(() => null))?.mtimeMs ?? 0 };
       const root = r.workspaces.find((w) => within(w, dir)) ?? path.dirname(dir);
       const p = normProject(file.value, dir, root, file.mtime);
       if (file.error) p.error = file.error;
@@ -410,7 +424,7 @@ export function setupUiRoutes(api) {
   async function project(id) {
     if (typeof id === 'string' && path.isAbsolute(id)) {
       const real = await allowedAbsolute(id, roots());
-      id = pidOf(fs.existsSync(path.join(real, '.studio', 'project.json')) ? real : path.dirname(real));
+      id = pidOf(isProjectDir(real) ? real : path.dirname(real));
     }
     if (typeof id !== 'string' || !PID.test(id)) throw bad('project is a project id (from studio/projects) or the project\'s folder');
     let p = (await projects()).find((x) => x.id === id);

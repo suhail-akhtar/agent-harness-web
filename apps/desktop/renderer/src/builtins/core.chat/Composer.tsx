@@ -133,7 +133,12 @@ export function Composer(p: ComposerProps): React.ReactElement {
     setSending(true);
     try {
       const ok = await p.onSend(t, files.map(({ name, mediaType, base64 }) => ({ name, mediaType, base64 })), how);
-      if (ok) { setText(''); setFiles([]); }
+      if (ok) {
+        // Cleared in storage too: sending from Home opens the new conversation first, which unmounts this
+        // composer before the effect that saves the draft runs, and the stale draft would come back (and be sent again).
+        try { localStorage.removeItem(`draft:${p.draftKey}`); } catch { /* none */ }
+        setText(''); setFiles([]);
+      }
     } finally { setSending(false); }
   };
 

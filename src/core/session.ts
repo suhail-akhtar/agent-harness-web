@@ -2345,7 +2345,11 @@ export class Session {
       bound?.addEventListener('abort', () => {
         if (!this.pending.has(event.requestId)) return;
         if (background) this.respond(event.requestId, { decision: 'deny', feedback: 'The user interrupted.' });
-        else if (this.pending.delete(event.requestId)) resolve({ decision: 'deny', feedback: 'The user interrupted.' });
+        else if (this.pending.delete(event.requestId)) {
+          // Clients drop the card on request_resolved; without it a stopped turn's question stays answerable.
+          this.emit({ kind: 'request_resolved', requestId: event.requestId, decision: 'deny' });
+          resolve({ decision: 'deny', feedback: 'The user interrupted.' });
+        }
       }, { once: true });
     });
   }

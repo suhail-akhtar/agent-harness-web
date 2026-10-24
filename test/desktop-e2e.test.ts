@@ -162,6 +162,8 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       await send('Please write a file for me');
       await page.waitForSelector('[data-session]', { timeout: 20_000 }).catch(async (e: Error) => { throw new Error(`${e.message.split('\n')[0]}; toasts: ${JSON.stringify(await page.evaluate(() => (window as unknown as { __toasts: string[] }).__toasts))}`); });
       sessionId = (await page.getAttribute('[data-session]', 'data-session'))!;
+      // The sent prompt is not left behind as the new-chat draft (it came back, and was sent again, as a second conversation).
+      assert.equal(await page.evaluate(() => localStorage.getItem('draft:home')), null, 'the new-chat draft is cleared once sent');
       const card = await page.waitForSelector('[data-attention] [data-pending="permission_request"]', { timeout: 30_000 });
       assert.match(await card.innerText(), /write/);
       await page.waitForSelector('[data-badge="core.inbox.pending"]', { timeout: 15_000 });
@@ -194,6 +196,10 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       await page.waitForSelector('[data-workflow="ship-check"]', { timeout: 20_000 });
       const card = await page.waitForSelector('[data-attention] [data-pending="approval_request"]', { timeout: 20_000 });
       assert.match(await card.innerText(), /Ship it\?/);
+      // The decision is always in view: the footer sits inside the window, whatever the length of the details.
+      const approve = await page.locator('[data-attention] [data-pending="approval_request"] [data-panel-footer] button:has-text("Approve")').boundingBox();
+      const view = page.viewportSize() ?? await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+      assert.ok(approve && approve.y >= 0 && approve.y + approve.height <= view.height, 'Approve is on screen');
       await shot('chat-workflow-approval');
       await page.click('[data-attention] [data-pending="approval_request"] button:has-text("Approve")');
       await page.waitForSelector('[data-workflow="ship-check"][data-status="succeeded"]', { timeout: 20_000 });

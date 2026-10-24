@@ -246,7 +246,14 @@ function Inbox() {
 function InboxItem({ a }: { a: import('@harness/client').Approval }) {
   const [full, setFull] = useState(a.request);
   const [failed, setFailed] = useState(false);
-  useEffect(() => { if (!full) client.fullRequest(a).then((r) => (r ? setFull(r) : setFailed(true))).catch(() => setFailed(true)); }, [a.requestId]);
+  useEffect(() => {
+    if (full) return;
+    client.fullRequest(a).then((r) => {
+      if (r) { setFull(r); return; }
+      // No longer pending on the server (answered elsewhere, or its turn was stopped): drop it rather than list a dead request.
+      useData.setState({ approvals: useData.getState().approvals.filter((x) => x.requestId !== a.requestId) });
+    }).catch(() => setFailed(true));
+  }, [a.requestId]);
   if (full) return <PendingCard p={full} respond={respondFor(a.sessionId)} />;
   return <div className="flex items-center gap-2 rounded-xl border border-hx-border-subtle p-3 text-[13px] text-hx-secondary">{failed ? <Icon name="warning" size={14} /> : <Spinner />}<span className="flex-1">{a.summary ?? a.kind}</span><Button size="sm" onClick={() => openSession(a.sessionId)}>Open</Button></div>;
 }

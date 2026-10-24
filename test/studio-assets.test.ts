@@ -422,6 +422,13 @@ test('builders save assets with manifests, licences and hashes; the gates pass t
   assert.equal(m.license.id, 'CC0-1.0');
   assert.equal(m.source.type, 'procedural');
   assert.match(m.hashes['sheet.png'], /^sha256:[0-9a-f]{64}$/);
+  // Named for people: the name given, else one from the id given, else the tool's default.
+  await call('studio_sprite', { action: 'sprite', kind: 'gem', seed: 7, id: 'loot-gem' });
+  await call('studio_sprite', { action: 'sprite', kind: 'gem', seed: 8, id: 'gem-b', name: 'Blue gem' });
+  const nameOf = async (id: string) => JSON.parse(await fs.readFile(path.join(root, '.studio', 'assets', id, 'asset.json'), 'utf8')).name;
+  assert.equal(await nameOf('loot-gem'), 'Loot gem');
+  assert.equal(await nameOf('gem-b'), 'Blue gem');
+  assert.equal(await nameOf('sprite-gem-2'), 'gem 2');
   assert.deepEqual(m.meta.frameSize, [32, 32]);
   // Deterministic: building the same sheet again writes the same bytes.
   const before = await fs.readFile(path.join(root, '.studio', 'assets', 'sheet-character-4', 'sheet.png'));

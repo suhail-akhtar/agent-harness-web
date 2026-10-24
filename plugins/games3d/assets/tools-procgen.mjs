@@ -116,7 +116,7 @@ export const procgenTool = {
       level: { type: 'string', description: 'solve: a level.json in the workspace' },
       tileSize: { type: 'number', description: 'Tile size in px for previews and Tiled maps (16)' },
       showPath: { type: 'boolean', description: 'Draw the solution path on the preview' },
-      id: { type: 'string' }, project: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, export: { type: 'string' },
+      id: { type: 'string' }, name: { type: 'string', description: 'What the asset is called on the Assets page (default from the id)' }, project: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, export: { type: 'string' },
     },
     required: ['action'],
   },

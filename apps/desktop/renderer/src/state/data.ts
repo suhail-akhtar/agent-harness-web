@@ -156,6 +156,8 @@ export function dispatchClientCall(sessionId: string, callId: string, tool: stri
 }
 
 /** Every global event, for plugin frames that subscribed (events.subscribe). */
+/** How long a request must stay open before it gets a desktop notification. */
+const NOTIFY_AFTER_MS = 4_000;
 const busListeners = new Set<(e: GlobalEvent) => void>();
 export const globalBus = { on(f: (e: GlobalEvent) => void): () => void { busListeners.add(f); return () => { busListeners.delete(f); }; } };
 
@@ -193,7 +195,12 @@ export function applyGlobal(e: GlobalEvent): void {
         const a = toApproval(p);
         if (a && !d.approvals.some((x) => x.requestId === a.requestId)) {
           useData.setState({ approvals: [...d.approvals, a] });
-          void desktop.notify({ title: a.kind === 'question' ? 'A question for you' : 'Waiting for your approval', body: `${a.title ?? 'A conversation'}: ${a.summary ?? a.tool ?? ''}`.slice(0, 200), route: `core.chat:session?id=${a.sessionId}` });
+          // Notify only if it is still waiting a moment later: in Auto mode the checker settles most requests
+          // within a second or two, and a "Waiting for your approval" for something no longer waiting leads nowhere.
+          setTimeout(() => {
+            if (!useData.getState().approvals.some((x) => x.requestId === a.requestId)) return;
+            void desktop.notify({ title: a.kind === 'question' ? 'A question for you' : 'Waiting for your approval', body: `${a.title ?? 'A conversation'}: ${a.summary ?? a.tool ?? ''}`.slice(0, 200), route: `core.chat:session?id=${a.sessionId}` });
+          }, NOTIFY_AFTER_MS);
         }
       } else if (p.type === 'resolved') useData.setState({ approvals: d.approvals.filter((x) => x.requestId !== p.requestId) });
       return;

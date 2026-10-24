@@ -221,6 +221,19 @@ test('the user\'s Stop stops background agents; a background agent\'s question o
   } finally { await q.close(); }
 });
 
+test('Stop resolves the turn\'s open question, so clients close its card', async () => {
+  const t = await setup({ main: [{ calls: [{ name: 'ask_user', input: { question: 'Which props?', options: ['a', 'b'] } }] }, { text: 'never' }] });
+  try {
+    await t.s.send('go');
+    await t.waitFor(() => t.s.pendingRequests().length === 1, 'the question');
+    const ask = t.s.pendingRequests()[0] as { requestId: string };
+    t.s.abort();
+    await t.waitFor(() => t.events.some((e) => e.kind === 'request_resolved' && e.requestId === ask.requestId), 'the question to be resolved');
+    assert.equal(t.s.pendingRequests().length, 0);
+    assert.equal(t.s.respond(ask.requestId, { decision: 'answer', answer: 'a' }), false, 'a late answer finds nothing');
+  } finally { await t.close(); }
+});
+
 test('the workflow tool runs a workflow in the background; it is recorded, and its outcome arrives later', async () => {
   let runId = '';
   const t = await setup({

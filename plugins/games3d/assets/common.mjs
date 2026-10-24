@@ -33,8 +33,11 @@ export async function save(ctx, input, a) {
   const { host, signal } = ctx;
   const project = await projectOf(host, input.project);
   const id = input.id ? slug(input.id) : a.id;
+  // What people see on the Assets page: the name given, else one from the id given ("prop-torch" -> "Prop torch"), else the tool's ("lamp 14").
+  const fromId = input.id ? String(input.id).replace(/[-_]+/g, ' ').trim().replace(/^./, (c) => c.toUpperCase()) : '';
+  const name = (typeof input.name === 'string' && input.name.trim()) || fromId || a.name;
   const files = a.files.map((f) => ({ ...f, data: f.image ? encodePNG(f.image) : f.data }));
-  const { dir, manifest } = await writeAsset(host, project, { ...a, id, files, tags: [...(a.tags ?? []), ...[].concat(input.tags ?? [])], style: input.style ?? a.style }, signal);
+  const { dir, manifest } = await writeAsset(host, project, { ...a, id, name, files, tags: [...(a.tags ?? []), ...[].concat(input.tags ?? [])], style: input.style ?? a.style }, signal);
   const lines = [`Asset ${manifest.id} (${manifest.kind}) in ${dir}: ${files.map((f) => f.path).join(', ')}`];
   if (input.export) {
     const to = await relIn(host, String(input.export));
