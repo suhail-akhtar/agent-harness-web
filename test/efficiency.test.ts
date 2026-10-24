@@ -183,6 +183,31 @@ test('deferral and the plugin-off rule: a loaded group stays listed and answers 
   assert.ok(!names(hb.provider.requests[1]!.tools).includes('widget_count'), 'a refused load loads nothing');
 });
 
+test('deferral: a plugin\'s workflow runs its agents with that plugin\'s tools from the start; other plugins\' still wait', async () => {
+  const data = await tempDir();
+  const root = await tempDir();
+  const desc = (what: string) => JSON.stringify(`${what}. ${'Rarely needed detail. '.repeat(120)}`);
+  for (const [name, tool] of [['widgets', 'widget_count'], ['gadgets', 'gadget_spin']] as const) {
+    const dir = path.join(root, name);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'harness-plugin.json'), JSON.stringify({ name, version: '1.0.0', description: `${name}.`, main: 'index.mjs' }));
+    const flow = name === 'widgets' ? `api.registerWorkflow({ name: 'widget-flow', description: 'Counts widgets', start: 'count', nodes: { count: { type: 'agent', prompt: 'count them', next: 'done' }, done: { type: 'end' } } });` : '';
+    await fs.writeFile(path.join(dir, 'index.mjs'), `export default { name: '${name}', setup(api) { api.registerTool({ name: '${tool}', description: ${desc(tool)}, kind: 'read', parameters: { type: 'object', properties: {} }, run: async () => 'ok' }); ${flow} } };\n`);
+  }
+  const fake = new FakeProvider([{ text: 'counted' }]);
+  const h = await createHarness({ dataDir: data, plugins: [root], backgroundWork: false, scheduler: false, search: null });
+  try {
+    for (const id of h.registry.providers.keys()) h.registry.setProviderInstance(id, fake);
+    const s = await h.sessions.create({ model: 'deepseek-flash', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: await tempDir() } });
+    const ended = new Promise<void>((r) => s.subscribe(0, ({ event }) => { if (event.kind === 'turn_end' && !event.agent) r(); }));
+    await s.startWorkflow('widget-flow', {});
+    await ended;
+    const sent = names(fake.requests[0]!.tools);
+    assert.ok(sent.includes('widget_count'), 'its own plugin\'s tool, without a load');
+    assert.ok(!sent.includes('gadget_spin') && sent.includes(LOAD_TOOLS), 'another plugin\'s still waits');
+  } finally { await h.close(); }
+});
+
 // ---------- 2. Spilled tool output ----------
 
 test('spill: the whole output goes to a session file (redacted, git-ignored), the agent gets head, tail, path and line count', async () => {
