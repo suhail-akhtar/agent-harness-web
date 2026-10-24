@@ -69,13 +69,13 @@ test('deferral: the tool list is byte-stable until a group loads, then stays loa
   assert.deepEqual(names(all), names(specs));
 });
 
-test('deferral: loads are read from the history - load_tools, a call by name, a plugin guide skill; a failed load loads nothing', () => {
-  const groups: ToolGroup[] = [{ id: 'games3d', summary: 'g', tools: ['studio_one'] }, { id: 'devops', summary: 'd', tools: ['ops_apply'] }, { id: 'visual', summary: 'v', tools: ['render'] }, { id: 'x', summary: 'x', tools: ['x_tool'] }];
+test('deferral: loads are read from the history - load_tools, a call by name, a plugin guide or skill; a failed load loads nothing', () => {
+  const groups: ToolGroup[] = [{ id: 'games3d', summary: 'g', tools: ['studio_one'] }, { id: 'devops', summary: 'd', tools: ['ops_apply'] }, { id: 'visual', summary: 'v', tools: ['render'] }, { id: 'x', summary: 'x', tools: ['x_tool'] }, { id: 'iac', summary: 'i', tools: ['iac'], skills: ['terraform-practices'] }, { id: 'y', summary: 'y', tools: ['y_tool'], skills: ['y-howto'] }];
   const msgs: Message[] = [
-    { role: 'assistant', content: [{ type: 'tool_use', id: 'a', name: LOAD_TOOLS, input: { groups: ['games3d'] } }, { type: 'tool_use', id: 'b', name: 'ops_apply', input: {} }, { type: 'tool_use', id: 'c', name: 'skill', input: { name: 'visual-guide' } }, { type: 'tool_use', id: 'd', name: LOAD_TOOLS, input: { groups: ['x'] } }] },
-    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'a', content: 'Loaded' }, { type: 'tool_result', tool_use_id: 'b', content: 'ok' }, { type: 'tool_result', tool_use_id: 'c', content: 'guide' }, { type: 'tool_result', tool_use_id: 'd', content: 'x is switched off', is_error: true }] },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'a', name: LOAD_TOOLS, input: { groups: ['games3d'] } }, { type: 'tool_use', id: 'b', name: 'ops_apply', input: {} }, { type: 'tool_use', id: 'c', name: 'skill', input: { name: 'visual-guide' } }, { type: 'tool_use', id: 'd', name: LOAD_TOOLS, input: { groups: ['x'] } }, { type: 'tool_use', id: 'e', name: 'skill', input: { name: 'terraform-practices' } }, { type: 'tool_use', id: 'f', name: 'skill', input: { name: 'y-howto' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'a', content: 'Loaded' }, { type: 'tool_result', tool_use_id: 'b', content: 'ok' }, { type: 'tool_result', tool_use_id: 'c', content: 'guide' }, { type: 'tool_result', tool_use_id: 'd', content: 'x is switched off', is_error: true }, { type: 'tool_result', tool_use_id: 'e', content: 'practices' }, { type: 'tool_result', tool_use_id: 'f', content: 'off', is_error: true }] },
   ];
-  assert.deepEqual([...loadedGroups(msgs, groups)].sort(), ['devops', 'games3d', 'visual']);
+  assert.deepEqual([...loadedGroups(msgs, groups)].sort(), ['devops', 'games3d', 'iac', 'visual']);
 });
 
 test('deferral in the loop: load_tools adds the schemas from the next request on, every later request is the same, a compaction keeps them', async () => {

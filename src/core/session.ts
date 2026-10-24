@@ -1402,6 +1402,8 @@ export class Session {
     for (const st of mcp.filter((x) => !x.ok)) this.emit({ kind: 'notice', level: 'warn', text: `MCP server ${st.name} (${st.scope}) is not available: ${st.error}` });
     // Plugin tools wait behind load_tools, one line per plugin, until the session uses them (the tools stay in the toolbox).
     const groups = settings.efficiency.deferPluginTools ? pluginGroups(tools, (t) => reg.ownerOf(t), (p) => reg.plugins.find((x) => x.name === p)?.description) : [];
+    // Loading one of a plugin's skills (its procedure for those tools) loads its tools too.
+    for (const g of groups) { const own = skills.filter((s) => reg.ownerOf(s) === g.id).map((s) => s.name); if (own.length) g.skills = own; }
     return { tools: sortTools(tools), agents: [...agents.values()], skills, mcp, workflows: [...workflows.values()], groups, closeProject: project.close };
   }
 
@@ -1919,7 +1921,7 @@ export class Session {
    * Runs a named agent in a fresh context: a chat sub-agent, or a workflow's
    * agent node. One cache key per agent kind, so sibling runs share a prefix.
    */
-  async runAgent(a: { agent: string; prompt: string; signal: AbortSignal; label?: string; description?: string; model?: string; effort?: Effort; maxSteps?: number; allowTodos?: boolean; /** A hook's verifier: no hooks of its own (they would start it again). */ noHooks?: boolean; /** 1 for a sub-agent of the main agent, 2 for one of its own, ... */ depth?: number; /** The agent that started it (it is tainted with it, and starts tainted when it is). */ parent?: Agent; /** Kept after it ends, for send_message. */ keep?: boolean; /** Starts tainted: its brief came from an agent that read untrusted content. */ tainted?: boolean; /** `model` was chosen by an agent or a workflow: only a model the person allowed (delegation). */ delegated?: boolean; /** The delegation was checked (and approved) already. */ approved?: boolean; /** Works in a fresh git worktree of the session's repository. */ isolation?: 'worktree'; /** Where its tools work (a worktree agent's sub-agents share its worktree). */ host?: ToolHost }): Promise<{ report: string; reason: string; cost: number; id: string }> {
+  async runAgent(a: { agent: string; prompt: string; signal: AbortSignal; label?: string; description?: string; model?: string; effort?: Effort; maxSteps?: number; allowTodos?: boolean; /** A hook's verifier: no hooks of its own (they would start it again). */ noHooks?: boolean; /** 1 for a sub-agent of the main agent, 2 for one of its own, ... */ depth?: number; /** The agent that started it (it is tainted with it, and starts tainted when it is). */ parent?: Agent; /** Kept after it ends, for send_message. */ keep?: boolean; /** Starts tainted: its brief came from an agent that read untrusted content. */ tainted?: boolean; /** `model` was chosen by an agent or a workflow: only a model the person allowed (delegation). */ delegated?: boolean; /** The delegation was checked (and approved) already. */ approved?: boolean; /** Works in a fresh git worktree of the session's repository. */ isolation?: 'worktree'; /** Where its tools work (a worktree agent's sub-agents share its worktree). */ host?: ToolHost; /** Deferred tool groups it starts with loaded (a plugin's workflow: that plugin's). */ loadGroups?: string[] }): Promise<{ report: string; reason: string; cost: number; id: string }> {
     const sessionHost = await this.getHost();
     const settings = await this.getSettings(sessionHost);
     const tb = await this.getToolbox(sessionHost);
@@ -1961,8 +1963,9 @@ export class Session {
       name, model, provider: this.deps.registry.provider(model), effort,
       ...(nests ? { runSubagent: (x: SubagentArgs) => this.runSubagent(x, depth + 1, self.agent, a.signal, host === sessionHost ? undefined : host) } : {}),
       system: SUBAGENT_PROMPT, tools, host, settings: a.noHooks ? { ...settings, hooks: {} } : settings,
-      // An agent type that names its tools gets them all (someone chose them); any other defers plugin groups like the main agent.
-      toolGroups: def.tools ? [] : tb.groups.map((g) => ({ ...g, tools: g.tools.filter((n) => tools.some((t) => t.spec.name === n)) })).filter((g) => g.tools.length),
+      // An agent type that names its tools gets them all (someone chose them); any other defers plugin groups like the main agent,
+      // but for its own plugin's (a plugin's agent type, a plugin's workflow node), which it has from the start.
+      toolGroups: def.tools ? [] : tb.groups.filter((g) => g.id !== this.deps.registry.ownerOf(def) && !a.loadGroups?.includes(g.id)).map((g) => ({ ...g, tools: g.tools.filter((n) => tools.some((t) => t.spec.name === n)) })).filter((g) => g.tools.length),
       spill: this.spillFor(host),
       cacheKey: `hw-${this.meta.id}-${def.name}`, maxSteps: Math.min(a.maxSteps ?? (a.allowTodos ? 150 : 60), settings.maxSteps), readFiles: new Map<string, FileStamp>(),
       inProcessHooks: a.noHooks ? [] : this.deps.registry.hooks,
@@ -2126,7 +2129,8 @@ export class Session {
       host: () => this.getHost(),
       // A session that read outside data (a webhook's alert) runs its workflow's agents as tainted too.
       // A node's model is a delegation like an agent's choice: only a model the person allowed (e.g. a reviewer on another provider).
-      runAgent: (a) => this.runAgent({ ...a, allowTodos: true, ...(a.model && a.model !== this.meta.model ? { delegated: true } : {}), ...(parent ? { parent } : {}), ...(this.meta.tainted ? { tainted: true } : {}) }),
+      // A plugin's workflow is a procedure for its tools: its agents get them without a load.
+      runAgent: (a) => this.runAgent({ ...a, allowTodos: true, ...(a.model && a.model !== this.meta.model ? { delegated: true } : {}), ...(parent ? { parent } : {}), ...(this.meta.tainted ? { tainted: true } : {}), ...(w.source ? { loadGroups: [w.source] } : {}) }),
       runGates: async (names, signal) => runGates(this.deps.registry, await this.getHost(), names, signal, await this.services(false)),
       approve: async ({ runId, node, title, message, files }) => {
         const host = await this.getHost();

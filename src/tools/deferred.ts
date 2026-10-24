@@ -22,6 +22,8 @@ export interface ToolGroup {
   /** One line: what the plugin is for. */
   summary: string;
   tools: string[];
+  /** The plugin's skills: loading one loads its tools too (a skill is the procedure for them). */
+  skills?: string[];
 }
 
 export const LOAD_TOOLS = 'load_tools';
@@ -78,8 +80,9 @@ export function groupsLoadedBy(name: string, input: Record<string, unknown> | un
     return names.filter((g) => groups.some((x) => x.id === g));
   }
   if (name === 'skill') {
-    const p = guideOf(str(input?.name));
-    return p && groups.some((g) => g.id === p) ? [p] : [];
+    const skill = str(input?.name);
+    const p = guideOf(skill);
+    return groups.filter((g) => g.id === p || g.skills?.includes(skill)).map((g) => g.id);
   }
   const own = groups.find((g) => g.tools.includes(name));
   return own ? [own.id] : [];
@@ -96,7 +99,7 @@ export function loadedGroups(messages: readonly Message[], groups: readonly Tool
   for (const m of messages) {
     for (const b of m.content) {
       if (b.type !== 'tool_use') continue;
-      if (b.name === LOAD_TOOLS && failed.has(b.id)) continue;
+      if ((b.name === LOAD_TOOLS || b.name === 'skill') && failed.has(b.id)) continue;
       for (const g of groupsLoadedBy(b.name, b.input, groups)) into.add(g);
     }
   }

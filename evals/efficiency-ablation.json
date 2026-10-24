@@ -1,0 +1,16 @@
+{
+ "configs": [
+  {
+   "name": "baseline",
+   "description": "the efficiency settings off (cache attribution stays on: it only observes, so both rows have misses by cause)",
+   "settings": { "maxCostUsd": 0.3 },
+   "env": { "HARNESS_DEFER_PLUGIN_TOOLS": "off", "HARNESS_SPILL": "off", "HARNESS_MASK_BATCHED": "off", "HARNESS_PREFIX_TTL": "5m", "HARNESS_CACHE_ATTRIBUTION": "on" }
+  },
+  {
+   "name": "efficiency",
+   "description": "deferred plugin tools, spilled output, batched masking, cache attribution, prefix TTL auto",
+   "settings": { "maxCostUsd": 0.3 },
+   "env": { "HARNESS_DEFER_PLUGIN_TOOLS": "on", "HARNESS_SPILL": "on", "HARNESS_MASK_BATCHED": "on", "HARNESS_PREFIX_TTL": "auto", "HARNESS_CACHE_ATTRIBUTION": "on" }
+  }
+ ]
+}
