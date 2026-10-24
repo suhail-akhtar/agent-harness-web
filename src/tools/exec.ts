@@ -1,5 +1,5 @@
 import type { Tool, ToolContext, ToolOutcome } from './types.ts';
-import { clip, num, str } from './types.ts';
+import { clip, clipOrSpill, num, str } from './types.ts';
 
 /**
  * Shell commands that write file CONTENT the file tools should write instead.
@@ -67,8 +67,9 @@ export const bashTool: Tool = {
     const parts: string[] = [];
     if (r.timedOut) parts.push(`Timed out after ${timeoutMs / 1000}s (the command was killed).`);
     parts.push(`exit code: ${r.code ?? 'killed'}`);
-    if (r.stdout.trim()) parts.push(clip(r.stdout.trimEnd(), MAX_OUTPUT, 'filter the output to see this part'));
-    if (r.stderr.trim()) parts.push(`stderr:\n${clip(r.stderr.trimEnd(), Math.floor(MAX_OUTPUT / 2))}`);
+    // Long output is kept whole in a session file where it can be (head and tail here), else clipped.
+    if (r.stdout.trim()) parts.push(await clipOrSpill(ctx, 'bash', r.stdout.trimEnd(), MAX_OUTPUT, 'filter the output to see this part'));
+    if (r.stderr.trim()) parts.push(`stderr:\n${await clipOrSpill(ctx, 'bash-stderr', r.stderr.trimEnd(), Math.floor(MAX_OUTPUT / 2))}`);
     if (!r.stdout.trim() && !r.stderr.trim()) parts.push('(no output)');
     if (r.orphansKilled) parts.push('Note: processes this command left running in the background (`&`) were stopped when it finished. Start servers with run_in_background instead.');
     if (ctx.host.networkPolicy === 'none' && /could not resolve|network is unreachable|temporary failure in name resolution|ENOTFOUND|EAI_AGAIN/i.test(r.stderr + r.stdout)) {

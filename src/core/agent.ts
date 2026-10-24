@@ -17,6 +17,9 @@ import { assess, claimsDone, HANDOFF_PROMPT, parseVerdict, ProgressTracker, prog
 import type { HookEvent, Settings } from './settings.ts';
 import type { Block, HarnessEvent, Message, PermissionMode, ProgressPhase, Todo, ToolDisplay, ToolResultBlock, ToolUseBlock, TurnEndReason, Usage } from './types.ts';
 import { promptTokens } from './types.ts';
+import { LOAD_TOOLS, loadedGroups, makeLoadTools, sentSpecs, type ToolGroup } from '../tools/deferred.ts';
+import { excerpt, type SpillStore, spillPathIn } from '../tools/spill.ts';
+import { attributeMiss, type CacheMiss, type CacheShape, cacheShape, type MissCause } from './cache.ts';
 
 // One model-driven loop, the same shape Claude Code and Codex document:
 // call the model -> run the tools it asked for -> append the results -> repeat
@@ -32,9 +35,12 @@ export type PermissionAnswer = { allow: true } | { allow: false; feedback?: stri
 
 /** One record per model call or tool call, for the session's trace. */
 export type TraceSpan =
-  | { type: 'model'; agent: string; model: string; ms: number; usage: Usage; cost: number; stop: string; retries: number; compaction?: boolean }
-  | { type: 'tool'; agent: string; tool: string; ms: number; error: boolean; chars: number; images: number }
-  | { type: 'clear'; agent: string; results: number; tokens: number };
+  /** tools: estimated schema tokens the request carried (chars / 4); ttl: the prefix's cache TTL when not the default. */
+  | { type: 'model'; agent: string; model: string; ms: number; usage: Usage; cost: number; stop: string; retries: number; compaction?: boolean; tools?: number; ttl?: '1h' }
+  | { type: 'tool'; agent: string; tool: string; ms: number; error: boolean; chars: number; images: number; spilled?: boolean }
+  | { type: 'clear'; agent: string; results: number; tokens: number }
+  /** A cache miss and the first section that changed (src/core/cache.ts). */
+  | ({ type: 'cache'; agent: string } & CacheMiss);
 
 export interface AgentHooks {
   emit(e: HarnessEvent): void;
@@ -44,6 +50,8 @@ export interface AgentHooks {
   onCompact(context: Message[]): void;
   onUsage(model: ModelSpec, usage: Usage, cost: number): void;
   onTrace?(span: TraceSpan): void;
+  /** A cache miss, with its cause (efficiency.cacheAttribution): counted in the session's stats. */
+  onCacheMiss?(miss: CacheMiss): void;
   overBudget(): string | undefined;
   getMode(): PermissionMode;
   /** Current permission rules, including "always allow" choices made this session. */
@@ -99,6 +107,15 @@ export interface AgentConfig {
    * (settings.reviewModel); without it the agent asks its own model, outside the transcript.
    */
   progressReviewer?: (input: { system: string; text: string }, signal: AbortSignal) => Promise<string>;
+  /**
+   * Plugin tool groups whose schemas wait behind load_tools until loaded (src/tools/deferred.ts;
+   * efficiency.deferPluginTools). Their tools are in `tools` all along: only the schemas sent wait.
+   */
+  toolGroups?: ToolGroup[];
+  /** Where loaded groups are read from besides this context: the session's whole history (a load outlives a compaction). */
+  loadHistory?: Message[];
+  /** Where long tool output is kept whole (efficiency.spill); absent: it is clipped. */
+  spill?: SpillStore;
 }
 
 /** The reviewer's answer is short: its output is capped (the model's own cap when lower). */
@@ -117,6 +134,19 @@ const CLEAR_KEEP = 6;
 /** Rough prompt cost of one attached image (a 1000px-wide render is ~1-1.5k tokens). */
 const IMAGE_TOKENS = 1200;
 const CLEARED = '[Old tool output cleared to keep the context lean. Run the tool again if you need it.]';
+/** Batched masking (efficiency.batchedMasking): results of the last this many steps are never masked. */
+export const MASK_KEEP_STEPS = 8;
+/** Results at or under this many characters are not worth masking. */
+const MASK_MIN_CHARS = 800;
+/** Tools whose output is state rather than something to look up again: never masked. */
+const MASK_EXEMPT = new Set(['todo_write', 'agent', 'skill', LOAD_TOOLS, 'ask_user']);
+/** The marker that starts every masked result (a masked result is never masked again). */
+const MASKED = '[Earlier ';
+/** A tool result longer than this (from any tool) is kept in a spill file with its head and tail shown (efficiency.spill). */
+const RESULT_SPILL_AT = 120_000;
+/** A tool call longer than this suggests gaps past the 5-minute cache: with prefixTtl 'auto' the prefix is cached for an hour from then on. */
+const LONG_CALL_MS = 4 * 60_000;
+const FIVE_MINUTES = 5 * 60_000;
 /** Tools whose path leads to a subdirectory's instruction files. */
 const FILE_TOOLS = new Set(['read', 'edit', 'write']);
 /** Skills re-attached after a compaction: the most recent few, within a token budget (as Claude Code does). */
@@ -152,20 +182,57 @@ export class Agent {
   private compactKeep?: string;
   /** This turn's progress signals (progress review on). */
   private progress?: ProgressTracker;
+  /** Deferred tool groups loaded in this agent's life (sticky: a compaction does not unload them). */
+  private loaded = new Set<string>();
+  private loadTool?: Tool;
+  /** The last request's hashed sections, and what this agent did since that moves the prefix (cache attribution). */
+  private lastShape?: CacheShape;
+  private missHint?: MissCause;
+  /** Seen a gap longer than the 5-minute cache (a long tool call, a long pause): prefixTtl 'auto' caches the prefix for an hour. */
+  longGaps = false;
+  private lastRequestAt = 0;
+  /** The agent was told once that old output will be masked. */
+  private maskWarned = false;
 
   constructor(cfg: AgentConfig, hooks: AgentHooks, messages: Message[] = []) {
     this.cfg = cfg;
     this.hooks = hooks;
     this.messages = messages;
     this.specs = cfg.tools.map((t) => t.spec).sort((a, b) => (a.name < b.name ? -1 : 1));
+    this.setGroups(cfg.toolGroups, cfg.loadHistory ?? messages);
     const r = cfg.redactor;
     if (r) setHookRedactor(cfg.settings, (p) => r.redactDeep(p));
   }
+
+  /** The deferred groups (none: every schema is sent); the loaded ones are read from `history`. */
+  private setGroups(groups: ToolGroup[] | undefined, history: readonly Message[]): void {
+    if (!groups?.length) { this.loadTool = undefined; return; }
+    loadedGroups(history, groups, this.loaded);
+    this.loadTool = makeLoadTools(() => this.cfg.toolGroups ?? [], (g) => {
+      const t = this.cfg.tools.find((x) => g.tools.includes(x.spec.name));
+      return t ? switchedOff(t, `the ${g.id} tools`) : undefined;
+    });
+  }
+
+  /**
+   * The tool schemas a request carries: every tool but those of groups not loaded yet, plus
+   * load_tools while any wait. Read from the context each time, so a load shows from the next request.
+   */
+  toolSpecs(): ToolSpec[] {
+    const groups = this.cfg.toolGroups;
+    if (!groups?.length) return this.specs;
+    loadedGroups(this.messages, groups, this.loaded);
+    return sentSpecs(this.specs, groups, this.loaded);
+  }
+
+  /** Deferred groups loaded so far. */
+  loadedToolGroups(): string[] { return [...this.loaded].sort(); }
 
   /** The tools changed (a desktop app's plugin switched on or off: its guide skill came or went): the definitions sent follow. */
   setTools(tools: AgentConfig['tools']): void {
     this.cfg = { ...this.cfg, tools };
     this.specs = tools.map((t) => t.spec).sort((a, b) => (a.name < b.name ? -1 : 1));
+    this.setGroups(this.cfg.toolGroups, this.messages);
   }
 
   /** Appends a message with any vault value in it replaced (the copy kept is the one returned). */
@@ -483,11 +550,44 @@ export class Agent {
     return cost;
   }
 
+  /**
+   * After a response: whether it read much less from the cache than the request before cached,
+   * and which section of the prompt changed first (trace, a debug event, the session's stats).
+   */
+  private noteCache(shape: CacheShape, resp: ProviderResponse, hint?: MissCause): void {
+    // On Claude, past the clearing trigger the server edits old tool results itself (context editing).
+    const serverClear = this.cfg.model.provider === 'anthropic' && this.lastPromptTokens >= this.compactAt() * 0.6 ? 'mask' : undefined;
+    const miss = attributeMiss(this.lastShape, shape, resp.usage, { hint: hint ?? this.missHint ?? (resp.compacted ? 'compaction' : serverClear) });
+    // What this request cached: its whole prompt (the provider's own count of the context it answered from, after a server-side compaction).
+    shape.prompt = resp.contextTokens ?? promptTokens(resp.usage);
+    this.lastShape = shape;
+    this.missHint = undefined;
+    if (!miss) return;
+    this.hooks.onTrace?.({ type: 'cache', agent: this.cfg.name, ...miss });
+    this.hooks.emit({ kind: 'cache_miss', ...miss, agent: this.cfg.name });
+    this.hooks.onCacheMiss?.(miss);
+  }
+
+  /** The stable prefix's cache TTL: promptCaching.prefixTtl, where 'auto' means an hour once the session has shown gaps past 5 minutes. */
+  prefixTtl(): '1h' | undefined {
+    const want = this.cfg.settings.promptCaching?.prefixTtl ?? '5m';
+    return want === '1h' || (want === 'auto' && this.longGaps) ? '1h' : undefined;
+  }
+
   async callModel(messages: Message[], signal: AbortSignal, compaction = false): Promise<ProviderResponse> {
+    const tools = this.toolSpecs();
+    // A pause longer than the cache lives (the person away, a long call) argues for the 1-hour prefix from now on.
+    const now = Date.now();
+    if (this.lastRequestAt && now - this.lastRequestAt > FIVE_MINUTES) this.longGaps = true;
+    this.lastRequestAt = now;
+    const ttl = this.prefixTtl();
+    // Cache attribution: the request's sections, hashed (from the context as kept: redaction is the same every time).
+    const shape = this.cfg.settings.efficiency?.cacheAttribution ? cacheShape({ model: this.cfg.model, tools, system: this.cfg.system, messages }, now) : undefined;
     const req: ProviderRequest = {
       model: this.cfg.model,
       system: this.cfg.system,
-      tools: this.specs,
+      tools,
+      ...(ttl ? { prefixTtl: ttl } : {}),
       // Already clean when appended; this catches a value registered after its message was (it is hidden from then on).
       messages: this.redact(messages),
       effort: this.cfg.effort,
@@ -503,7 +603,8 @@ export class Agent {
     for (let attempt = 0; ; attempt++) {
       try {
         const resp = await this.cfg.provider.send(req);
-        this.hooks.onTrace?.({ type: 'model', agent: this.cfg.name, model: this.cfg.model.id, ms: Date.now() - t0, usage: resp.usage, cost: costOf(this.cfg.model, resp.usage), stop: resp.stop, retries: attempt, ...(compaction || resp.compacted ? { compaction: true } : {}) });
+        this.hooks.onTrace?.({ type: 'model', agent: this.cfg.name, model: this.cfg.model.id, ms: Date.now() - t0, usage: resp.usage, cost: costOf(this.cfg.model, resp.usage), stop: resp.stop, retries: attempt, ...(compaction || resp.compacted ? { compaction: true } : {}), tools: schemaTokens(tools), ...(ttl ? { ttl } : {}) });
+        if (shape) this.noteCache(imagesDropped ? cacheShape({ model: this.cfg.model, tools, system: this.cfg.system, messages: req.messages }, now) : shape, resp, imagesDropped ? 'edit' : undefined);
         return resp;
       } catch (err) {
         if (signal.aborted) throw err;
@@ -525,8 +626,9 @@ export class Agent {
     }
   }
 
+  /** Any tool of this agent's, deferred or not (a deferred tool called by its own name runs, and loads its group). */
   private findTool(name: string): Tool | undefined {
-    return this.cfg.tools.find((t) => t.spec.name === name);
+    return this.cfg.tools.find((t) => t.spec.name === name) ?? (name === LOAD_TOOLS ? this.loadTool : undefined);
   }
 
   private async executeAll(calls: ToolUseBlock[], signal: AbortSignal) {
@@ -550,12 +652,14 @@ export class Agent {
     const agent = this.cfg.name;
     const started = Date.now();
     this.hooks.emit({ kind: 'tool_call', id: call.id, name: call.name, input: this.redact(call.input), agent });
-    const finish = (content: string, is_error: boolean, display?: ToolDisplay, images?: ImageData[], label?: string) => {
+    const finish = (content: string, is_error: boolean, display?: ToolDisplay, images?: ImageData[], label?: string, spilled?: boolean) => {
       content = this.redact(content);
       display = this.redact(display);
+      // A call this long (an engine build, a long playtest) means the 5-minute cache will lapse between steps.
+      if (Date.now() - started > LONG_CALL_MS) this.longGaps = true;
       const uiImages = images?.filter((im) => im.data.length <= UI_IMAGE_MAX);
       this.hooks.emit({ kind: 'tool_result', id: call.id, name: call.name, content: content.length > RESULT_PREVIEW ? content.slice(0, RESULT_PREVIEW) + '\n…' : content, is_error, display, ms: Date.now() - started, agent, ...(uiImages?.length ? { images: uiImages } : {}) });
-      this.hooks.onTrace?.({ type: 'tool', agent, tool: label ?? call.name, ms: Date.now() - started, error: is_error, chars: content.length, images: images?.length ?? 0 });
+      this.hooks.onTrace?.({ type: 'tool', agent, tool: label ?? call.name, ms: Date.now() - started, error: is_error, chars: content.length, images: images?.length ?? 0, ...(spilled ? { spilled: true } : {}) });
       return { block: { type: 'tool_result' as const, tool_use_id: call.id, content, ...(is_error ? { is_error: true } : {}) }, images, label: label ?? call.name };
     };
     if (signal.aborted) return finish('Interrupted by the user before this ran.', true);
@@ -569,7 +673,7 @@ export class Agent {
         const r = d.resolve!({ name: call.name, arguments: call.input });
         if (!('error' in r)) { tool = d; routed = r; break; }
       }
-      if (!tool) return finish(`There is no tool named "${call.name}". Available tools: ${this.specs.map((s) => s.name).join(', ')}.`, true);
+      if (!tool) return finish(`There is no tool named "${call.name}". Available tools: ${this.toolSpecs().map((s) => s.name).join(', ')}.`, true);
     }
     // A switched-off plugin's tool stays in the list (the cached prefix is unchanged) and answers with why it does not run.
     const offNow = switchedOff(tool, call.name);
@@ -681,7 +785,20 @@ export class Agent {
       if (todosBefore) content += await this.taskHooks(todosBefore, signal);
       await this.subdirInstructions(name, input, signal);
     }
-    return finish(content, !!outcome.is_error || post.blocked, outcome.display, outcome.images, name);
+    // A result too long for any context (a tool without its own limit) is kept whole in a spill file;
+    // never outside content (read back through `read`, it would lose its untrusted mark).
+    let spilled = false;
+    const spill = this.spillStore();
+    if (spill && content.length > RESULT_SPILL_AT && !untrusted) {
+      const ref = await spill.save(name, content).catch(() => undefined);
+      if (ref) { content = excerpt(content, RESULT_SPILL_AT, ref); spilled = true; }
+    }
+    return finish(content, !!outcome.is_error || post.blocked, outcome.display, outcome.images, name, spilled);
+  }
+
+  /** The session's spill store when spilling is on and tools run here (a companion's run on the person's computer). */
+  private spillStore(): SpillStore | undefined {
+    return this.cfg.settings.efficiency?.spill && this.cfg.host.kind !== 'companion' ? this.cfg.spill : undefined;
   }
 
   /**
@@ -754,6 +871,7 @@ export class Agent {
         return { content: r.block.content, is_error: r.block.is_error };
       },
       toolNames: () => this.cfg.tools.map((t) => t.spec.name),
+      ...(this.spillStore() ? { spill: (tool: string, text: string, max: number, hint?: string) => this.spillStore()!.excerpt(tool, text, max, hint) } : {}),
     };
   }
 
@@ -793,6 +911,7 @@ export class Agent {
    */
   private maybeClear(): void {
     if (this.cfg.model.provider === 'anthropic') return;
+    if (this.cfg.settings.efficiency?.batchedMasking) { this.maskBatch(); return; }
     if (this.lastPromptTokens < this.compactThreshold() * 0.6) return;
     const names = new Map<string, string>();
     for (const m of this.messages) for (const b of m.content) if (b.type === 'tool_use') names.set(b.id, b.name);
@@ -814,8 +933,63 @@ export class Agent {
       this.messages[p.mi] = { ...m, content };
     }
     this.lastPromptTokens -= total;
+    this.missHint = 'mask';
     this.hooks.onTrace?.({ type: 'clear', agent: this.cfg.name, results: old.length, tokens: total });
     this.hooks.emit({ kind: 'notice', level: 'info', text: `Cleared ${old.length} old tool results (~${Math.round(total / 1000)}k tokens) to keep the context lean.`, agent: this.cfg.name });
+  }
+
+  /**
+   * Batched masking (efficiency.batchedMasking). Rewriting history resets the cache from the first
+   * masked result on, so it happens past half the compaction point, in one large batch, and only
+   * when the results old enough to mask are worth that reset: 15% of the compaction point (at least
+   * 12k tokens). Results of the last MASK_KEEP_STEPS steps are never touched (a model that has not
+   * yet used what it read would read it again), nor errors, short results, or state (todos,
+   * sub-agent reports, skills). Each placeholder says what was there and how to get it back.
+   */
+  private maskBatch(): void {
+    const at = this.compactThreshold();
+    if (this.lastPromptTokens < at * 0.5) {
+      // Said once, before it happens: keep what you will need where it survives.
+      if (!this.maskWarned && this.lastPromptTokens >= at * 0.4) {
+        this.maskWarned = true;
+        this.notes.push('This is a long run: older tool output will soon be cleared from your context to keep it focused (files stay on disk; only what you were shown goes). Keep the values and findings you will need in your todo list, the files you write, or short notes in your replies, rather than planning to read things again.');
+      }
+      return;
+    }
+    const names = new Map<string, string>();
+    // Which step (assistant message) each call was in, counting from the end.
+    const stepOf = new Map<string, number>();
+    let steps = 0;
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const m = this.messages[i]!;
+      if (m.role !== 'assistant') continue;
+      steps++;
+      for (const b of m.content) if (b.type === 'tool_use') { names.set(b.id, b.name); stepOf.set(b.id, steps); }
+    }
+    const positions: { mi: number; bi: number; tokens: number; name: string; content: string }[] = [];
+    this.messages.forEach((m, mi) => m.content.forEach((b, bi) => {
+      if (b.type !== 'tool_result' || b.is_error || b.content.startsWith(MASKED) || b.content === CLEARED) return;
+      const name = names.get(b.tool_use_id) ?? '';
+      if (MASK_EXEMPT.has(name) || (stepOf.get(b.tool_use_id) ?? 0) <= MASK_KEEP_STEPS) return;
+      if (b.content.length <= MASK_MIN_CHARS && !b.images?.length) return;
+      positions.push({ mi, bi, name, content: b.content, tokens: Math.ceil(b.content.length / 4) + (b.images?.length ?? 0) * IMAGE_TOKENS });
+    }));
+    const total = positions.reduce((a, p) => a + p.tokens, 0);
+    if (total < Math.max(12_000, Math.round(at * 0.15))) return;
+    let freed = 0;
+    for (const p of positions) {
+      const m = this.messages[p.mi]!;
+      const text = maskedResult(p.name, p.content, this.findTool(p.name));
+      // Copy, never mutate: the stored history keeps the original.
+      const content = m.content.slice();
+      content[p.bi] = { ...(content[p.bi] as ToolResultBlock), content: text, images: undefined };
+      this.messages[p.mi] = { ...m, content };
+      freed += p.tokens - Math.ceil(text.length / 4);
+    }
+    this.lastPromptTokens -= freed;
+    this.missHint = 'mask';
+    this.hooks.onTrace?.({ type: 'clear', agent: this.cfg.name, results: positions.length, tokens: freed });
+    this.hooks.emit({ kind: 'notice', level: 'info', text: `Masked ${positions.length} old tool results (~${Math.round(freed / 1000)}k tokens) in one batch to keep the context lean; the last ${MASK_KEEP_STEPS} steps stay in full.`, agent: this.cfg.name });
   }
 
   /**
@@ -858,6 +1032,7 @@ export class Agent {
     const content: Message['content'] = [{ type: 'text', text: parts.join('\n\n') }];
     if (skills) content.push({ type: 'text', text: `${KEPT_SKILLS}\n${skills}` });
     this.messages = [this.redact({ role: 'user', content, compactionSummary: true } as Message)];
+    this.missHint = 'compaction';
     this.cfg.readFiles.clear();
     this.instructionDirs.clear();
     this.recentCalls = [];
@@ -901,6 +1076,25 @@ export function skillsToKeep(messages: Message[]): string {
     kept.unshift(`<skill name="${name}">\n${text}\n</skill>`);
   }
   return kept.join('\n');
+}
+
+/**
+ * What the model sees in place of a masked result: what was there (the tool, its size, its first
+ * line) and how to get it back - the spill file it was kept in, else running the call again. Not a
+ * bare "cleared": that reads as an empty result. Deterministic, so the same history masks the same way.
+ */
+export function maskedResult(name: string, content: string, tool?: Tool): string {
+  const first = content.split('\n', 1)[0]!.trim().slice(0, 160);
+  const saved = spillPathIn(content);
+  const how = saved ? `The whole output is in ${saved} (read or grep it).`
+    : tool && (tool.kind === 'read' || tool.kind === 'network' || tool.kind === 'exec') ? 'Run the call again if you need a detail you did not keep.'
+    : 'Work from what you already concluded.';
+  return `${MASKED}${name || 'tool'} output (${content.length} chars) masked to keep the context lean.${first ? ` It began: "${first}${first.length === 160 ? '...' : ''}".` : ''} ${how}]`;
+}
+
+/** Estimated tokens of a tool list's schemas (characters / 4, as the rest of the harness estimates). */
+export function schemaTokens(specs: readonly ToolSpec[]): number {
+  return Math.ceil(specs.reduce((a, s) => a + JSON.stringify(s).length, 0) / 4);
 }
 
 /** The text of the last assistant message (what it says it did). */

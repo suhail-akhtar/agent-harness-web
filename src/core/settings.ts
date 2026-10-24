@@ -79,6 +79,51 @@ export interface Settings {
   delegation?: Delegation;
   /** Linked sessions (start_session and friends): the person's choices. */
   linkedSessions?: LinkedSessionSettings;
+  /** Token and cache savings, each a switch (README "Efficiency"; measured in evals/results/2026-10-24-efficiency.md). */
+  efficiency: EfficiencySettings;
+  /** Prompt caching on Anthropic: the TTL of the stable prefix (tools and system prompt). */
+  promptCaching: PromptCachingSettings;
+}
+
+export interface EfficiencySettings {
+  /** Plugin tools' schemas wait behind load_tools (one line per plugin) until the session uses them (HARNESS_DEFER_PLUGIN_TOOLS). */
+  deferPluginTools: boolean;
+  /** Tool output too long for the context is kept whole in a session file (head and tail shown) instead of cut (HARNESS_SPILL). */
+  spill: boolean;
+  /** Non-Anthropic models: old tool output is masked in rare large batches, never the last 8 steps (HARNESS_MASK_BATCHED); off: the older 60% rule. */
+  batchedMasking: boolean;
+  /** Which part of the prompt changed when the provider's cache missed: trace, debug event, session stats (HARNESS_CACHE_ATTRIBUTION). */
+  cacheAttribution: boolean;
+}
+
+/** '5m': the default ephemeral TTL; '1h': the stable prefix for an hour (writes cost 2x input instead of 1.25x); 'auto': 1h once a tool call has run past 4 minutes. */
+export interface PromptCachingSettings { prefixTtl: '5m' | '1h' | 'auto' }
+
+const onOff = (v: string | undefined, dflt: boolean) => (v === undefined || v === '' ? dflt : !/^(off|0|false|no)$/i.test(v.trim()));
+const TTLS = ['5m', '1h', 'auto'] as const;
+
+/** The efficiency switches: HARNESS_* variables over the defaults. */
+export function defaultEfficiency(env: NodeJS.ProcessEnv = process.env): EfficiencySettings {
+  return {
+    deferPluginTools: onOff(env.HARNESS_DEFER_PLUGIN_TOOLS, true),
+    spill: onOff(env.HARNESS_SPILL, true),
+    batchedMasking: onOff(env.HARNESS_MASK_BATCHED, true),
+    cacheAttribution: onOff(env.HARNESS_CACHE_ATTRIBUTION, true),
+  };
+}
+
+export function defaultPromptCaching(env: NodeJS.ProcessEnv = process.env): PromptCachingSettings {
+  const t = env.HARNESS_PREFIX_TTL?.trim().toLowerCase();
+  return { prefixTtl: (TTLS as readonly string[]).includes(t ?? '') ? t as PromptCachingSettings['prefixTtl'] : 'auto' };
+}
+
+/** An operator file's efficiency section over `base` (booleans only; unknown keys ignored). */
+function cleanEfficiency(v: unknown, base: EfficiencySettings): EfficiencySettings {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return base;
+  const o = v as Record<string, unknown>;
+  const out = { ...base };
+  for (const k of Object.keys(base) as (keyof EfficiencySettings)[]) if (typeof o[k] === 'boolean') out[k] = o[k];
+  return out;
 }
 
 export interface Delegation { allowedModels: string[] | '*'; maxCostUsd?: number; requireApproval?: boolean }
@@ -121,6 +166,8 @@ export const defaultSettings = (): Settings => ({
   ...(process.env.HARNESS_GATES_ON_STOP === '1' ? { gatesOnStop: true } : {}),
   // The operator's cap on delegation: HARNESS_DELEGATION_MODELS ("*" or a comma list); none by default.
   delegation: { allowedModels: process.env.HARNESS_DELEGATION_MODELS && process.env.HARNESS_DELEGATION_MODELS.trim() !== '*' ? process.env.HARNESS_DELEGATION_MODELS.split(',').map((m) => m.trim()).filter(Boolean) : '*' },
+  efficiency: defaultEfficiency(),
+  promptCaching: defaultPromptCaching(),
 });
 
 /**
@@ -155,6 +202,9 @@ export async function operatorSettings(env: NodeJS.ProcessEnv = process.env): Pr
   if (typeof j.gatesOnStop === 'boolean') base.gatesOnStop = j.gatesOnStop;
   const d = cleanDelegation((j as { delegation?: unknown }).delegation);
   if (d) base.delegation = d;
+  base.efficiency = cleanEfficiency((j as { efficiency?: unknown }).efficiency, base.efficiency);
+  const ttl = (j as { promptCaching?: { prefixTtl?: unknown } }).promptCaching?.prefixTtl;
+  if (typeof ttl === 'string' && (TTLS as readonly string[]).includes(ttl)) base.promptCaching = { prefixTtl: ttl as PromptCachingSettings['prefixTtl'] };
   return base;
 }
 

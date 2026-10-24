@@ -34,6 +34,8 @@ export interface Usage {
   input: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Subset of cacheWrite written with the 1-hour TTL (Anthropic bills it at 2x input, not 1.25x). */
+  cacheWrite1h?: number;
   output: number;
   /** Subset of output spent on reasoning, when the provider reports it. */
   reasoning: number;
@@ -42,10 +44,12 @@ export interface Usage {
 export const emptyUsage = (): Usage => ({ input: 0, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0 });
 
 export function addUsage(a: Usage, b: Usage): Usage {
+  const w1h = (a.cacheWrite1h ?? 0) + (b.cacheWrite1h ?? 0);
   return {
     input: a.input + b.input,
     cacheRead: a.cacheRead + b.cacheRead,
     cacheWrite: a.cacheWrite + b.cacheWrite,
+    ...(w1h ? { cacheWrite1h: w1h } : {}),
     output: a.output + b.output,
     reasoning: a.reasoning + b.reasoning,
   };
@@ -99,6 +103,8 @@ export type HarnessEvent =
    */
   | { kind: 'progress'; phase: ProgressPhase; step: number; budget: number; by: 'signals' | 'review'; text: string; reasons: string[]; verdict?: 'continue' | 'refresh' | 'stop'; advice?: string; agent?: string }
   | { kind: 'retry'; attempt: number; delayMs: number; reason: string }
+  /** Debug: a request read much less from the provider's cache than the one before wrote, and which section changed first (src/core/cache.ts). */
+  | { kind: 'cache_miss'; cause: string; section: string; index?: number; expected: number; read: number; gapMs: number; agent?: string }
   | { kind: 'turn_end'; reason: TurnEndReason; agent?: string }
   | { kind: 'status'; status: SessionStatus };
 

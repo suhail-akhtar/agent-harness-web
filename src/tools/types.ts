@@ -90,6 +90,11 @@ export interface ToolContext {
   callTool?(name: string, input: Record<string, unknown>): Promise<{ content: string; is_error?: boolean }>;
   /** The tools this agent has. */
   toolNames?(): string[];
+  /**
+   * Output longer than `max`, kept whole in a session file (src/tools/spill.ts) with its head and
+   * tail returned; absent where output cannot be kept (then clip it). Use clipOrSpill.
+   */
+  spill?(tool: string, text: string, max: number, hint?: string): Promise<string>;
 }
 
 export interface Tool {
@@ -128,6 +133,12 @@ export interface Tool {
    * Permissions, hooks and validation then apply to THAT tool.
    */
   resolve?(input: Record<string, unknown>): { tool: Tool; input: Record<string, unknown> } | { error: string };
+  /**
+   * Whether its schema waits behind load_tools until the session needs it (src/tools/deferred.ts;
+   * efficiency.deferPluginTools). Default: a plugin's tools wait, core tools do not; false keeps a
+   * plugin tool every turn needs inline, true defers a rarely used core tool.
+   */
+  defer?: boolean;
 }
 
 export type { ToolOutcome };
@@ -143,4 +154,10 @@ export function clip(text: string, max: number, hint = ''): string {
   const tail = max - head;
   const dropped = text.length - head - tail;
   return `${text.slice(0, head)}\n\n[... ${dropped} characters omitted${hint ? ` - ${hint}` : ''} ...]\n\n${text.slice(text.length - tail)}`;
+}
+
+/** Long output kept whole in a session file where the session can (ctx.spill), else clipped. */
+export async function clipOrSpill(ctx: Pick<ToolContext, 'spill'>, tool: string, text: string, max: number, hint = ''): Promise<string> {
+  if (text.length <= max) return text;
+  return ctx.spill ? ctx.spill(tool, text, max, hint) : clip(text, max, hint);
 }

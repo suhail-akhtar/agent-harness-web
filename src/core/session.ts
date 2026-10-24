@@ -24,6 +24,9 @@ import { LocalHost, run } from '../runtime/host.ts';
 import { clientSkills, makeSkillTool, type Skill, skillsIn, skillsListing, workspaceSkills } from '../skills/skills.ts';
 import { sortTools } from '../tools/index.ts';
 import type { FileStamp, Tool, ToolServices } from '../tools/types.ts';
+import { loadedGroups, pluginGroups, sentSpecs, type ToolGroup } from '../tools/deferred.ts';
+import { SpillStore } from '../tools/spill.ts';
+import type { ToolSpec } from '../providers/types.ts';
 import { MemoryStore, projectKey } from '../memory/store.ts';
 import { neutralizeTags, sanitizeUntrusted, stripInvisible } from './untrusted.ts';
 import { SourceStore } from '../research/sources.ts';
@@ -86,6 +89,8 @@ export interface SessionMeta {
   contextStart: number;
   compactions: number;
   lastPromptTokens: number;
+  /** Prompt-cache misses by cause, all agents (efficiency.cacheAttribution; src/core/cache.ts). */
+  cacheMisses?: Record<string, number>;
   sessionRules: string[];
   /** User turns started (checkpoints are numbered by it). */
   turns?: number;
@@ -268,6 +273,8 @@ interface Toolbox {
   skills: Skill[];
   mcp: McpStatus[];
   workflows: WorkflowDef[];
+  /** Plugin tool groups whose schemas wait behind load_tools (efficiency.deferPluginTools; empty when off). */
+  groups: ToolGroup[];
   closeProject(): Promise<void>;
 }
 
@@ -813,6 +820,8 @@ export class Session {
     clearInterval(this.shellTimer);
     await Promise.all(this.tasks.running('shell').map((t) => t.stop().catch(() => {})));
     await this.end('deleted');
+    // Long tool output kept for this session goes with it (the workspace itself may stay: a server folder).
+    if (this.meta.runtime.kind !== 'companion') await (this.spill ?? new SpillStore(this.host?.root ?? this.workspace, this.meta.id)).remove().catch(() => {});
     if (this.meta.runtime.worktree) await this.worktreeHook('WorktreeRemove');
     if (this.toolbox) await (await this.toolbox).closeProject().catch(() => {});
     if (this.host instanceof DockerHost || this.host instanceof LocalHost) await this.host.close();
@@ -1391,7 +1400,16 @@ export class Session {
     }
     const mcp = [...server.status, ...project.status];
     for (const st of mcp.filter((x) => !x.ok)) this.emit({ kind: 'notice', level: 'warn', text: `MCP server ${st.name} (${st.scope}) is not available: ${st.error}` });
-    return { tools: sortTools(tools), agents: [...agents.values()], skills, mcp, workflows: [...workflows.values()], closeProject: project.close };
+    // Plugin tools wait behind load_tools, one line per plugin, until the session uses them (the tools stay in the toolbox).
+    const groups = settings.efficiency.deferPluginTools ? pluginGroups(tools, (t) => reg.ownerOf(t), (p) => reg.plugins.find((x) => x.name === p)?.description) : [];
+    return { tools: sortTools(tools), agents: [...agents.values()], skills, mcp, workflows: [...workflows.values()], groups, closeProject: project.close };
+  }
+
+  /** The tool schemas this session's main agent sends now, all of them, and its groups (scripts/tool-schema-size.ts). */
+  async sentToolSpecs(): Promise<{ all: ToolSpec[]; sent: ToolSpec[]; groups: ToolGroup[] }> {
+    const tb = await this.getToolbox(await this.getHost());
+    const all = tb.tools.map((t) => t.spec);
+    return { all, sent: sentSpecs(all, tb.groups, loadedGroups(this.history, tb.groups)), groups: tb.groups };
   }
 
   /**
@@ -1460,7 +1478,12 @@ export class Session {
         this.scheduleSave();
       },
       onTrace: (span) => this.trace(span),
-      overBudget: () => (this.meta.cost >= (this.settings?.maxCostUsd ?? Infinity) ? `Stopped: this session reached its spend limit of $${this.settings!.maxCostUsd.toFixed(2)}. Raise HARNESS_MAX_COST_USD to continue.` : undefined) ?? this.deps.spend?.over(this.meta.owner),
+      onCacheMiss: (miss) => {
+        const m = (this.meta.cacheMisses ??= {});
+        m[miss.cause] = (m[miss.cause] ?? 0) + 1;
+        this.scheduleSave();
+      },
+      overBudget:() => (this.meta.cost >= (this.settings?.maxCostUsd ?? Infinity) ? `Stopped: this session reached its spend limit of $${this.settings!.maxCostUsd.toFixed(2)}. Raise HARNESS_MAX_COST_USD to continue.` : undefined) ?? this.deps.spend?.over(this.meta.owner),
       getMode: () => this.meta.mode,
       rules: () => this.rules(),
       requestPermission: (tool, input, summary, suggestion, agent) => this.askPermission(tool, input, summary, suggestion, agent),
@@ -1473,6 +1496,14 @@ export class Session {
     };
   }
 
+  /** Where this session keeps long tool output (<workspace>/.harness/spill/<id>): not for a companion's (its files are on the person's computer). */
+  private spill?: SpillStore;
+  private spillFor(host: ToolHost): SpillStore | undefined {
+    if (host.kind === 'companion') return undefined;
+    this.spill ??= new SpillStore(host.root, this.meta.id, { redact: (s) => this.redactor.redact(s) });
+    return this.spill.dir.startsWith(host.root) ? this.spill : undefined;
+  }
+
   private async mainAgent(): Promise<Agent> {
     await this.loadSecrets();
     const host = await this.getHost();
@@ -1481,6 +1512,8 @@ export class Session {
     const model = this.deps.registry.model(this.meta.model);
     const cfg = {
       name: 'main', model, provider: this.deps.registry.provider(model), effort: this.meta.effort, system: systemPrompt(this.meta.outputStyle?.prompt, this.meta.clientPrompt), tools: tb.tools, host, settings,
+      // Deferred plugin groups, loaded as the session's whole history says (a load outlives a compaction).
+      toolGroups: tb.groups, loadHistory: this.history, spill: this.spillFor(host),
       cacheKey: this.meta.cacheKey ?? `hw-${this.meta.id}`, maxSteps: settings.maxSteps, readFiles: this.readFiles,
       inProcessHooks: [...this.deps.registry.hooks, ...this.gatesOnStopHook(settings)],
       hookJudge: this.hookJudge(settings),
@@ -1928,6 +1961,9 @@ export class Session {
       name, model, provider: this.deps.registry.provider(model), effort,
       ...(nests ? { runSubagent: (x: SubagentArgs) => this.runSubagent(x, depth + 1, self.agent, a.signal, host === sessionHost ? undefined : host) } : {}),
       system: SUBAGENT_PROMPT, tools, host, settings: a.noHooks ? { ...settings, hooks: {} } : settings,
+      // An agent type that names its tools gets them all (someone chose them); any other defers plugin groups like the main agent.
+      toolGroups: def.tools ? [] : tb.groups.map((g) => ({ ...g, tools: g.tools.filter((n) => tools.some((t) => t.spec.name === n)) })).filter((g) => g.tools.length),
+      spill: this.spillFor(host),
       cacheKey: `hw-${this.meta.id}-${def.name}`, maxSteps: Math.min(a.maxSteps ?? (a.allowTodos ? 150 : 60), settings.maxSteps), readFiles: new Map<string, FileStamp>(),
       inProcessHooks: a.noHooks ? [] : this.deps.registry.hooks,
       hookJudge: this.hookJudge(settings),

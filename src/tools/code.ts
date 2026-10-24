@@ -4,7 +4,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import type { Tool, ToolKind } from './types.ts';
-import { clip, num, str } from './types.ts';
+import { clipOrSpill, num, str } from './types.ts';
 
 // run_script: the model writes a short JavaScript program that calls tools and
 // keeps only what matters - "code mode". Fetch ten pages and pull one number
@@ -94,7 +94,7 @@ return \`\${n} of \${files.length} files have TODOs\`;`,
     });
     send({ code: str(input.code), tools: names, timeoutMs });
     const r = await done;
-    const body = clip(r.output.trim(), 20_000, 'print less, or summarise in the script');
+    const body = await clipOrSpill(ctx, 'run_script', r.output.trim(), 20_000, 'print less, or summarise in the script');
     if (!r.ok) return { content: `The script failed after ${calls} tool call(s): ${r.error}${body ? `\nOutput before it failed:\n${body}` : ''}`, is_error: true };
     return { content: `${body || '(the script printed nothing and returned nothing)'}\n[${calls} tool call(s) inside the script]` };
   },

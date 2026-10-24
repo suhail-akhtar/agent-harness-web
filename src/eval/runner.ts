@@ -174,6 +174,13 @@ export interface EvalRun {
   isolation?: { deniedUrls: string[]; commands: string };
   /** Progress reviews at step checkpoints (all agents of the run): budgets extended, fresh starts, model reviews, stops, flagged "done"s. */
   progress?: { extensions: number; refreshes: number; reviews: number; stops: number; flags: number; stopped?: string };
+  /** Prompt-cache misses by cause (efficiency.cacheAttribution), all agents. */
+  cacheMisses?: Record<string, number>;
+  /** Mean estimated tool-schema tokens per model request (the tool list's share of every prompt). */
+  schemaTokens?: number;
+  /** Tool results kept whole in spill files, and old results masked (in batches). */
+  spills?: number;
+  masked?: number;
 }
 
 /** Where the eval packs are published: every case's hidden checks can be downloaded from there. */
@@ -430,6 +437,12 @@ export async function runOne(c: EvalCase, model: string, repeat: number, out: st
     const spans = await s.readTrace();
     run.modelCalls = spans.filter((x) => x.type === 'model').length;
     run.toolCalls = spans.filter((x) => x.type === 'tool').length;
+    // What the efficiency settings did: schema tokens per request, cache misses by cause, spills, masked results.
+    const sized = spans.filter((x): x is Extract<typeof x, { type: 'model' }> => x.type === 'model' && typeof x.tools === 'number');
+    if (sized.length) run.schemaTokens = Math.round(sized.reduce((a, x) => a + x.tools!, 0) / sized.length);
+    if (s.meta.cacheMisses && Object.keys(s.meta.cacheMisses).length) run.cacheMisses = { ...s.meta.cacheMisses };
+    run.spills = spans.filter((x) => x.type === 'tool' && x.spilled).length;
+    run.masked = spans.reduce((a, x) => a + (x.type === 'clear' ? x.results : 0), 0);
     // A provider failure (no credits, a bad key, an outage) says nothing about the model or the harness.
     const problem = run.status !== 'succeeded' && run.status !== 'done' ? providerProblem([runs[0]?.error, ...errors]) : undefined;
     if (problem) { run.status = 'provider-error'; run.error = problem; run.unscored = true; }
@@ -632,6 +645,14 @@ export function report(all: EvalRun[], harness?: Record<string, string>, configO
       const r0 = rs[0]!;
       const [dp, dc] = r0.config === baseline ? ['baseline', 'baseline'] : delta(rs, byModel.get(`${r0.model}|${baseline}`));
       lines.push(`| ${r0.model} | ${r0.config ?? '-'} | ${passes(rs)}/${rs.length} | ${ci(passes(rs), rs.length)} | ${dp} | ${spread(rs.map((r) => r.cost), usd)} | ${dc} | ${spread(rs.map((r) => r.seconds), time)} |`);
+    }
+  }
+  // Token and cache efficiency per run: prompt tokens, cache hits, the tool list's share, and why the cache missed.
+  if (runs.some((r) => r.schemaTokens !== undefined || r.cacheMisses)) {
+    lines.push('', '## Tokens and cache', '', '| Case | Model |' + (order.length ? ' Config |' : '') + ' Input tokens | Cache hit | Schema tokens/request | Calls | Cache misses by cause | Spilled | Masked |', '|---|---|' + (order.length ? '---|' : '') + '---|---|---|---|---|---|---|');
+    for (const r of [...runs].sort((a, b) => `${a.pack}/${a.case}|${a.model}`.localeCompare(`${b.pack}/${b.case}|${b.model}`) || rank(a.config) - rank(b.config))) {
+      const misses = Object.entries(r.cacheMisses ?? {}).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(', ') || 'none';
+      lines.push(`| ${r.pack}/${r.case} | ${r.model} |${order.length ? ` ${r.config ?? '-'} |` : ''} ${r.inputTokens.toLocaleString('en-US')} | ${pct(r.cacheHit)} | ${r.schemaTokens?.toLocaleString('en-US') ?? '-'} | ${r.modelCalls} | ${misses} | ${r.spills ?? 0} | ${r.masked ?? 0} |`);
     }
   }
   // Where the step budget was reached: extended, restarted fresh or stopped (and why).
