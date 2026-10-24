@@ -10,7 +10,7 @@ import { str } from './types.ts';
 // it in load_tools' description (its name, purpose and tool names) instead of the schemas.
 //
 // Loading is sticky and derived from the history: a group is loaded once any call loaded it
-// (load_tools naming it, a call to one of its tools by name, or its plugin's guide skill), so
+// (load_tools naming it, a call to one of its tools by name, or one of its plugin's skills), so
 // every request of the session renders the same list from the same history, and the prefix
 // changes only when a group is first loaded: one cache miss per group per session.
 // The tools themselves stay in the agent's toolbox (only their schemas are left out), so a
