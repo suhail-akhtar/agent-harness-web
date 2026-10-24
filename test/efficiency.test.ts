@@ -382,12 +382,18 @@ test('attribution in the loop: a group load is a tools miss, in the trace, as a 
   assert.ok(h.events.some((e) => e.kind === 'cache_miss' && e.cause === 'tools' && e.section === 'tools'));
   assert.ok(spans.filter((s) => s.type === 'model').every((s) => typeof (s as { tools?: number }).tools === 'number'), 'each model span carries its schema tokens');
 
-  // Off: no attribution at all.
-  const quiet: { type: string }[] = [];
-  const q = await makeAgent([{ calls: [{ name: 'glob', input: { pattern: '*' } }], usage: { input: 20_000 } }, { text: 'ok', usage: { input: 21_000 } }], { settings: { efficiency: { ...defaultEfficiency(), cacheAttribution: false } }, hooks: { onTrace: (s) => quiet.push(s) } });
-  q.agent.append({ role: 'user', content: [{ type: 'text', text: 'go' }] });
-  await q.agent.run(new AbortController().signal);
-  assert.equal(quiet.filter((s) => s.type === 'cache').length, 0);
+  // Off: no attribution at all, and the requests are the same either way (it only observes).
+  const sent: string[] = [];
+  for (const cacheAttribution of [false, true]) {
+    const quiet: { type: string }[] = [];
+    const root = await tempDir();
+    const q = await makeAgent([{ calls: [{ name: 'glob', input: { pattern: '*' } }], usage: { input: 20_000 } }, { text: 'ok', usage: { input: 21_000 } }], { root, settings: { efficiency: { ...defaultEfficiency(), cacheAttribution } }, hooks: { onTrace: (s) => quiet.push(s) } });
+    q.agent.append({ role: 'user', content: [{ type: 'text', text: 'go' }] });
+    await q.agent.run(new AbortController().signal);
+    if (!cacheAttribution) assert.equal(quiet.filter((s) => s.type === 'cache').length, 0);
+    sent.push(JSON.stringify(q.provider.requests.map((r) => ({ system: r.system, tools: r.tools, messages: r.messages, ttl: r.prefixTtl }))).split(root).join('<ws>'));
+  }
+  assert.equal(sent[0], sent[1]);
 });
 
 // ---------- 5. The 1-hour prefix TTL on Anthropic ----------

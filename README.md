@@ -1296,7 +1296,9 @@ Every report names the harness that produced it - version, commit (and whether i
 
 Every model and tool call is a span in the session's `trace.jsonl` (UI: "Open trace"). With `HARNESS_OTEL_ENDPOINT` (and `HARNESS_OTEL_HEADERS="k=v,k=v"`) they are also exported as OTLP/HTTP JSON: one trace per session, `chat <model>` spans with `gen_ai.*` token attributes plus cache reads, cost and retries, and `execute_tool <name>` spans with errors. Batched off the request path; a failed export is logged and dropped.
 
-## Measured (2026-10-20 to 2026-10-22)
+## Measured (2026-10-20 to 2026-10-24)
+
+**The efficiency package (2026-10-24, [full report](evals/results/2026-10-24-efficiency.md)):** baseline (the five settings off) against all on, on DeepSeek Flash and Claude Sonnet 5.5, devops cases plus a long games case. Every run passed its hidden checks in both configurations. Deferred plugin tools cut the tool list from ~22K to ~8-11K schema tokens per request and the mean prompt per request by about 40% on both models; cost fell 14-15% on Sonnet where the runs took the same path, and was flat on DeepSeek (its cached input is nearly free). Loading a group cost one prompt-cache miss at most (none when another session had loaded the same set: the list is canonical). Details, the masking and spill results, and where a change did not help are in the report.
 
 Every result below was checked independently, outside the agent's own claims: hidden HTTP acceptance checks, rendering and reading every slide, playing each game in the headless browser, viewing each model from four sides. One run per model per task, so these are observations, not benchmark statistics (`npm run eval -- --repeat N` gives those).
 
