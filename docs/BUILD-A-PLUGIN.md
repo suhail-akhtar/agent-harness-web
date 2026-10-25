@@ -236,6 +236,7 @@ HarnessPluginUI.connect().then(async (harness) => {
 </html>
 ```
 
+- Icons (`icon` on the plugin, nav items, views, commands) are names from the app's set: `activity`, `alert`, `apps`, `archive`, `arrow-down`, `arrow-left`, `arrow-right`, `arrow-up`, `atom`, `bell`, `bolt`, `book`, `bookmark`, `bot`, `box`, `brain`, `bug`, `calculator`, `calendar`, `chart`, `chat`, `check`, `clock`, `cloud`, `code`, `command`, `compass`, `copy`, `cpu`, `database`, `dollar`, `download`, `edit`, `external`, `eye`, `file`, `file-text`, `files`, `filter`, `flask`, `folder`, `folder-open`, `folder-plus`, `function`, `git`, `git-branch`, `git-pr`, `globe`, `grid`, `heart`, `help`, `history`, `home`, `image`, `inbox`, `info`, `key`, `keyboard`, `layers`, `library`, `link`, `list`, `lock`, `mail`, `map`, `memory`, `monitor`, `moon`, `palette`, `panel-right`, `paperclip`, `pause`, `pin`, `play`, `plug`, `plus`, `puzzle`, `refresh`, `robot`, `rocket`, `save`, `search`, `server`, `settings`, `share`, `shield`, `sidebar`, `sparkles`, `stack`, `star`, `stop`, `sun`, `table`, `tag`, `terminal`, `trash`, `upload`, `user`, `users`, `vault`, `warning`, `workflow`, `wrench`, `x`, `zap`. An unknown name is shown as `puzzle`, and `npm run plugin -- check` warns with the nearest names.
 - The theme's colours are CSS variables (`--hx-bg`, `--hx-text-primary`, `--hx-text-muted`,
   `--hx-accent`, `--hx-border`, ...): use them and the page follows light and dark.
 - `harness.browser.open` needs the `browser.open` capability, `events.subscribe` needs

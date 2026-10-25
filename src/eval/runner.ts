@@ -258,6 +258,16 @@ function isolationDisclosure(runs: EvalRun[]): Record<string, string> {
   return { 'web tools refuse': denied.join(', ') || 'nothing', commands: commands.join('; ') || 'not recorded' };
 }
 
+/**
+ * An unattended answer to a question with a form: each field's default, else its first choice, else a
+ * neutral value of its type (a text field says the person is not there to decide).
+ */
+export function formDefaults(form: Record<string, unknown>): Record<string, unknown> {
+  const props = (form.properties ?? {}) as Record<string, { type?: string; default?: unknown; enum?: unknown[] }>;
+  return Object.fromEntries(Object.entries(props).map(([k, f]) => [k,
+    f.default !== undefined ? f.default : f.enum?.length ? f.enum[0] : f.type === 'boolean' ? true : f.type === 'number' || f.type === 'integer' ? 0 : f.type === 'array' ? [] : 'Use your best judgement.']));
+}
+
 /** A provider's own failure (billing, authentication, an outage), as opposed to the agent failing the task. */
 export function providerProblem(texts: (string | undefined)[]): string | undefined {
   const re = /no credits|insufficient[_ ]quota|exceeded your current quota|billing|credit balance is too low|invalid[_ ]?api[_ ]?key|incorrect api key|authentication|unauthori[sz]ed|\b40[13]\b|overloaded|\b5(02|03|29)\b|service unavailable/i;
@@ -415,7 +425,7 @@ export async function runOne(c: EvalCase, model: string, repeat: number, out: st
           if (event.phase === 'flagged') p.flags++;
         }
         if (event.kind === 'permission_request') s.respond(event.requestId, { decision: 'allow' });
-        if (event.kind === 'question') s.respond(event.requestId, { decision: 'answer', answer: 'Use your best judgement.' });
+        if (event.kind === 'question') s.respond(event.requestId, { decision: 'answer', answer: event.form ? JSON.stringify(formDefaults(event.form)) : 'Use your best judgement.' });
         if (event.kind === 'plan_proposed' || event.kind === 'approval_request') s.respond(event.requestId, { decision: 'approve' });
         if (event.kind === 'turn_end' && !event.agent) { endReason = event.reason; resolve(); }
       });

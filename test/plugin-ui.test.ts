@@ -62,7 +62,6 @@ test('plugin-ui manifest: mistakes are refused with a message a person can act o
   assert.throws(bad({ settings: [{ id: 's', title: 'S', scope: 'app', schema: { type: 'object', properties: { x: { type: 'string', pattern: '(' } } } }] }), /not a valid regular expression/);
   assert.throws(bad({ renderers: [{ id: 'r', for: { tool: 'a', fence: 'b' }, kind: 'frame', entry: 'r.html' }] }), /needs "for"/);
   assert.throws(bad({ composerChips: [{ id: 'k', title: 'K', kind: 'select', setting: 'nodot' }] }), /"setting" like/);
-  assert.throws(bad({ navItems: [{ id: 'n', title: 'N', view: 'v', icon: 'not-an-icon' }] }), /unknown icon/);
   assert.throws(() => validateUiManifest({ apiVersion: 99 }), /newer than this host supports/);
   assert.throws(() => validateUiManifest({ capabilities: ['root'] }), /"ui.capabilities" lists capabilities from/);
   assert.throws(() => validateUiManifest({ trust: 'declarative', capabilities: ['sessions.read'], contributes: {} }), /declarative UI runs no code/);
@@ -177,4 +176,14 @@ test('plugin-ui SDK: connects on init, round-trips calls, applies the theme, del
 test('plugin-ui SDK: outside the app (no host) it says so instead of hanging', async () => {
   const win = { parent: { postMessage() {} }, addEventListener() {} };
   await assert.rejects(connect(win as never, { timeoutMs: 50 }), /no host answered/);
+});
+
+test('plugin ui: an unknown icon is shown as puzzle with a warning naming the nearest ones, not a lost UI', () => {
+  const warnings: string[] = [];
+  const m = validateUiManifest({ icon: 'flame', contributes: { navItems: [{ id: 'n', title: 'N', view: 'v', icon: 'flame' }], views: [{ id: 'v', title: 'V', kind: 'markdown', markdown: 'x', icon: 'chart' }] } }, { warnings });
+  assert.equal(m.icon, 'puzzle');
+  assert.equal(m.contributes.navItems?.[0]?.icon, 'puzzle');
+  assert.equal(m.contributes.views?.[0]?.icon, 'chart', 'a known icon is kept');
+  assert.equal(warnings.length, 2);
+  assert.match(warnings[0]!, /Nav item "n": unknown icon "flame", shown as "puzzle" \(nearest: /);
 });

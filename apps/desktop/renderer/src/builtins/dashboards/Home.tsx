@@ -6,7 +6,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { BUILTIN_TEMPLATES } from '@harness/plugin-ui';
-import { Badge, Button, Icon } from '@harness/ui';
+import { Badge, Button, Icon, Page } from '@harness/ui';
 import { useData } from '../../state/data';
 import { navigate, prefill } from '../../state/app';
 import { HomeSection, ModuleHeader } from '../plugin-home';
@@ -37,8 +37,7 @@ export function DashboardsHome(): React.ReactElement {
   const templates = [...BUILTIN_TEMPLATES.map((t) => ({ id: t.id, title: t.title, purpose: t.purpose })), ...registry.dashboardTemplates.map((t) => ({ id: t.qid, title: t.title, purpose: t.purpose ?? t.description ?? '' }))];
   const data = (tab: string, extra: Record<string, string> = {}) => () => navigate({ view: 'core.dashboards:data', params: { tab, ...extra } });
   return (
-    <div className="hx-scroll h-full overflow-y-auto" data-module-home="core.dashboards">
-      <div className="mx-auto max-w-5xl px-6 py-8">
+    <Page data-module-home="core.dashboards" width="wide">
         <ModuleHeader model={m}>
           <Button size="sm" icon="apps" onClick={() => setTemplating(true)} data-home-template>From a template</Button>
           <Button size="sm" icon="database" onClick={data('sources')} data-home-add-data>Add data</Button>
@@ -107,8 +106,7 @@ export function DashboardsHome(): React.ReactElement {
             ))}
           </div>
         </HomeSection>
-      </div>
       {templating && <TemplateDialog onClose={() => setTemplating(false)} />}
-    </div>
+    </Page>
   );
 }

@@ -14,7 +14,7 @@ import { within } from '../tools/paths.ts';
 // real path (links followed) must stay inside that folder - a plugin folder's own code
 // (index.mjs, the manifest) is never served.
 
-export interface PluginUi { ui?: UiManifest; uiError?: string; uiHash?: string }
+export interface PluginUi { ui?: UiManifest; uiError?: string; uiHash?: string; /** What validation put right (an unknown icon): the UI is used, the plugin's author should fix it. */ uiWarnings?: string[] }
 
 /** Content types of what a plugin UI may hold; anything else is served as bytes. */
 export const UI_MIME: Record<string, string> = {
@@ -123,8 +123,9 @@ export async function uiHash(dir: string, ui: UiManifest, section: unknown): Pro
 export async function readPluginUi(dir: string, section: unknown, trust: UiTrust): Promise<PluginUi> {
   if (section === undefined) return {};
   try {
-    const ui = validateUiManifest(section, { trustCeiling: trust });
-    return { ui, uiHash: await uiHash(dir, ui, section) };
+    const warnings: string[] = [];
+    const ui = validateUiManifest(section, { trustCeiling: trust, warnings });
+    return { ui, uiHash: await uiHash(dir, ui, section), ...(warnings.length ? { uiWarnings: warnings } : {}) };
   } catch (e) {
     return { uiError: (e as Error).message };
   }

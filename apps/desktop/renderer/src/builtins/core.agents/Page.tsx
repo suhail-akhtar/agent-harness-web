@@ -7,7 +7,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import type { GlobalEvent, SessionMeta } from '@harness/client';
-import { Badge, Button, EmptyState, Icon, toast } from '@harness/ui';
+import { Badge, Button, EmptyState, Icon, toast, Page, Section, PageState } from '@harness/ui';
 import { client, globalBus, useData } from '../../state/data';
 import { openSession, openSplit } from '../../state/app';
 import { useSessionLive } from '../core.chat/live';
@@ -92,11 +92,10 @@ export function AgentsPage(): React.ReactElement {
   const recent = useMemo(() => [...sessions].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 30), [sessions]);
   useEffect(() => { for (const s of recent) void refreshProposals(s.id); }, [recent.map((s) => s.id).join(',')]);
   return (
-    <div className="hx-scroll h-full overflow-y-auto" data-agents-page>
-      <div className="mx-auto max-w-4xl px-6 py-8">
-        <div className="mb-5 flex items-center gap-3"><h1 className="flex-1 text-[20px] font-semibold">Agents</h1>{active.length > 0 && <Button variant="ghost" icon="stop" onClick={() => { for (const s of active) stop(s.id); }}>Stop all</Button>}</div>
-        <h2 className="mb-2 text-[12px] font-medium uppercase tracking-wide text-hx-muted">Working now</h2>
-        {!roots.length ? <EmptyState icon="bot" title="No agent is working">Conversations at work, their sub-agents, background tasks and linked sessions show here.</EmptyState> : roots.map((s) => <Working key={s.id} s={s} />)}
+    <Page data-agents-page width="wide" title="Agents" actions={active.length > 0 ? <Button variant="ghost" icon="stop" onClick={() => { for (const s of active) stop(s.id); }}>Stop all</Button> : undefined}>
+        <Section title="Working now" className="mb-0">
+        {!roots.length ? <PageState kind="empty" icon="bot" title="No agent is working" detail="Conversations at work, their sub-agents, background tasks and linked sessions show here." /> : roots.map((s) => <Working key={s.id} s={s} />)}
+        </Section>
         <div className="mt-6 space-y-2" data-proposals-waiting>{recent.map((s) => <SessionProposals key={s.id} s={s} />)}</div>
         {items.length > 0 && (
           <>
@@ -112,7 +111,6 @@ export function AgentsPage(): React.ReactElement {
             </div>
           </>
         )}
-      </div>
-    </div>
+    </Page>
   );
 }

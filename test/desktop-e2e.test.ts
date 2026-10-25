@@ -251,6 +251,14 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       assert.ok(await page.locator('[data-entry="cmd:core.settings:open"]').count());
       await page.keyboard.press('Escape');
       await page.waitForSelector('[data-palette]', { state: 'detached' });
+      // The component gallery, from the palette: every standard component renders.
+      await page.keyboard.press('Control+K');
+      await page.waitForSelector('[data-palette]');
+      await page.keyboard.type('component gallery');
+      await page.click('[data-entry="cmd:core.gallery:open"]');
+      await page.waitForSelector('[data-gallery] [data-state="error"]');
+      assert.ok(await page.locator('[data-gallery] [data-page-header]').count(), 'the gallery is a Page');
+      await shot('component-gallery');
     });
 
     await step('settings: every section renders, plugin schema sections too', async () => {

@@ -91,7 +91,7 @@ test('ui.menu: nav item refs (own or "<plugin>:<id>"), inline items with sub-ite
   bad({ menu: { items: [{ id: 'a', title: 'X', view: 'va' }] } }, /the id "a" is taken/);
   bad({ menu: { items: [{ id: 'x', title: 'X', view: 'elsewhere' }] } }, /not one of this plugin's views/);
   bad({ menu: { items: [{ id: 'x', view: 'va' }] } }, /needs a "title"/);
-  bad({ menu: { items: ['a'], icon: 'not-an-icon' } }, /unknown icon/);
+  { const w: string[] = []; const ok = validateUiManifest({ ...base, menu: { items: ['a'], icon: 'not-an-icon' } }, { warnings: w }); assert.equal(ok.menu?.icon, 'puzzle', 'an unknown icon is shown as puzzle, not a lost menu'); assert.match(w[0]!, /unknown icon "not-an-icon"/); }
   bad({ menu: { items: ['a'], title: 'x'.repeat(41) } }, /at most 40 characters/);
   bad({ menu: 'a' }, /is an object/);
   bad({ home: 'missing' }, /not one of this plugin's views/);

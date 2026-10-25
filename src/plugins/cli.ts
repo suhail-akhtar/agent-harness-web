@@ -94,6 +94,7 @@ async function check(dir: string): Promise<number> {
     const ui = e?.ui as { contributes?: Record<string, unknown[]> } | undefined;
     list('ui', ui?.contributes ? Object.entries(ui.contributes).filter(([, v]) => Array.isArray(v) && v.length).map(([k, v]) => `${v.length} ${k}`) : []);
     if (e && !tools.length && !skills.length && !agents.length && !workflows.length && !gates.length && !routes.length && !ui?.contributes) problems.push('it adds nothing (no tools, skills, agents, workflows, gates, routes or ui)');
+    for (const w of e?.uiWarnings ?? []) console.error(`WARNING: ${w}`);
     for (const x of problems) console.error(`PROBLEM: ${x}`);
     console.log(problems.length ? `${problems.length} problem(s)` : 'OK');
     return problems.length ? 1 : 0;

@@ -1,7 +1,7 @@
 /** The Dashboards and Reports pages: what there is, how much it is used, whether it is published; create one. */
 
 import React, { useEffect, useState } from 'react';
-import { Badge, Button, EmptyState, Field, Icon, Input, Modal, Select, cx } from '@harness/ui';
+import { Badge, Button, EmptyState, Field, Icon, Input, Modal, Select, cx, Page, PageState } from '@harness/ui';
 import { navigate } from '../../state/app';
 import { act, useDataStore } from './api';
 import { TemplateDialog } from './LayoutUi';
@@ -17,16 +17,13 @@ export function Library({ params }: { params: Record<string, string> }): React.R
   const list = (docs ?? []).filter((d) => d.type === type && (!q || d.title.toLowerCase().includes(q.toLowerCase())));
   const noun = type === 'report' ? 'report' : 'dashboard';
   return (
-    <div className="hx-scroll h-full overflow-y-auto" data-bi-library={type}>
-      <div className="mx-auto max-w-5xl px-6 py-8">
-        <div className="mb-5 flex flex-wrap items-center gap-3">
-          <h1 className="flex-1 text-[20px] font-semibold">{type === 'report' ? 'Reports' : 'Dashboards'}</h1>
+    <Page data-bi-library={type} width="wide" title={type === 'report' ? 'Reports' : 'Dashboards'} actions={<>
           <Input icon="search" placeholder={`Search ${noun}s`} value={q} onChange={(e) => setQ(e.target.value)} className="w-56" aria-label={`Search ${noun}s`} />
           <Button variant="secondary" icon="database" onClick={() => navigate({ view: 'core.dashboards:data' })}>Data</Button>
           <Button variant="secondary" icon="apps" onClick={() => setTemplating(true)} data-new-from-template>From a template</Button>
           <Button variant="primary" icon="plus" onClick={() => setCreating(true)} data-new-doc>New {noun}</Button>
-        </div>
-        {docs === null ? <p className="text-hx-muted">Loading…</p> : !list.length ? (
+        </>}>
+        {docs === null ? <PageState kind="loading" /> : !list.length ? (
           <EmptyState icon={type === 'report' ? 'file-text' : 'chart'} title={q ? 'Nothing matches' : `No ${noun}s yet`} action={<Button variant="primary" icon="plus" onClick={() => setCreating(true)}>New {noun}</Button>}>
             {type === 'report' ? 'A report is a document with live numbers: prose and visuals, refreshed and frozen in a snapshot, printed with page headers.' : 'Add data on the Data page, then build a dashboard here; or ask the agent ("build a sales dashboard from sales.xlsx") and pin charts from any conversation.'}
           </EmptyState>
@@ -41,10 +38,9 @@ export function Library({ params }: { params: Record<string, string> }): React.R
             ))}
           </div>
         )}
-      </div>
       {templating && <TemplateDialog onClose={() => setTemplating(false)} />}
       <NewDoc open={creating} type={type} models={catalog?.models.map((m) => ({ value: m.id, label: m.name })) ?? []} onClose={() => setCreating(false)} />
-    </div>
+    </Page>
   );
 }
 

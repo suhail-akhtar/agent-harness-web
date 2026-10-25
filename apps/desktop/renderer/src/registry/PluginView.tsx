@@ -4,7 +4,7 @@
  */
 
 import React, { createContext, useContext, useState } from 'react';
-import { Button, EmptyState, Icon, Markdown, SchemaForm, withDefaults, validate, RenderBoundary, toast } from '@harness/ui';
+import { Button, EmptyState, Icon, Markdown, SchemaForm, withDefaults, validate, RenderBoundary, toast, Page, ListRow } from '@harness/ui';
 import type { JsonSchema } from '@harness/plugin-ui';
 import { client, useData } from '../state/data';
 import { navigate, prefill, useApp, HOME } from '../state/app';
@@ -70,33 +70,20 @@ export function ViewHost({ view, params }: { view: View; params: Record<string, 
       }
       // A frame page opened again with other params (an incident, a feature) starts again with them: its init carries them.
       case 'frame': return <div className="h-full p-0"><PluginFrame key={JSON.stringify(params)} plugin={view.plugin} contribution={view.qid} entry={view.entry} params={params} fill title={view.title} /></div>;
-      case 'markdown': return <div className="hx-scroll h-full overflow-auto"><div className="mx-auto max-w-column px-6 py-8"><Markdown text={view.markdown} /></div></div>;
+      case 'markdown': return <Page><Markdown text={view.markdown} /></Page>;
       case 'links': return (
-        <div className="hx-scroll h-full overflow-auto"><div className="mx-auto max-w-3xl px-6 py-8">
-          <h1 className="mb-4 text-[20px] font-semibold">{view.title}</h1>
-          {view.description && <p className="mb-4 text-[13px] text-hx-muted">{view.description}</p>}
+        <Page title={view.title} subtitle={view.description}>
           <div className="grid gap-2 sm:grid-cols-2">
-            {view.links.map((l) => (
-              <button key={l.url} type="button" onClick={() => void desktop.openExternal(l.url)} className="flex items-start gap-3 rounded-xl border border-hx-border-subtle bg-hx-elevated p-3 text-left hover:border-hx-border">
-                <Icon name="external" size={16} className="mt-0.5 text-hx-muted" />
-                <span><span className="block text-[13.5px] font-medium">{l.title}</span>{l.description && <span className="block text-[12px] text-hx-muted">{l.description}</span>}<span className="block truncate text-[11px] text-hx-muted">{l.url}</span></span>
-              </button>
-            ))}
+            {view.links.map((l) => <ListRow key={l.url} card icon="external" onClick={() => void desktop.openExternal(l.url)} title={l.title} subtitle={l.description ? `${l.description} · ${l.url}` : l.url} />)}
           </div>
-        </div></div>
+        </Page>
       );
       case 'prompt-board': return (
-        <div className="hx-scroll h-full overflow-auto"><div className="mx-auto max-w-3xl px-6 py-8">
-          <h1 className="mb-4 text-[20px] font-semibold">{view.title}</h1>
+        <Page title={view.title}>
           <div className="grid gap-2 sm:grid-cols-2">
-            {view.prompts.map((p, i) => (
-              <button key={i} type="button" onClick={() => prefill(p.prompt, true)} className="flex items-start gap-3 rounded-xl border border-hx-border-subtle bg-hx-elevated p-3 text-left hover:border-hx-border">
-                <Icon name={p.icon ?? 'sparkles'} size={16} className="mt-0.5 text-hx-accent-text" />
-                <span><span className="block text-[13.5px] font-medium">{p.title}</span><span className="line-clamp-2 block text-[12px] text-hx-muted">{p.prompt}</span></span>
-              </button>
-            ))}
+            {view.prompts.map((p, i) => <ListRow key={i} card icon={<Icon name={p.icon ?? 'sparkles'} size={16} className="shrink-0 text-hx-accent-text" />} onClick={() => prefill(p.prompt, true)} title={p.title} subtitle={p.prompt} />)}
           </div>
-        </div></div>
+        </Page>
       );
       case 'form': return <FormView view={view} />;
     }
@@ -121,14 +108,12 @@ function FormView({ view }: { view: Extract<View, { kind: 'form' }> }) {
     } finally { setBusy(false); }
   };
   return (
-    <div className="hx-scroll h-full overflow-auto"><div className="mx-auto max-w-2xl px-6 py-8">
-      <h1 className="text-[20px] font-semibold">{view.title}</h1>
-      {view.description && <p className="mt-1 text-[13px] text-hx-muted">{view.description}</p>}
-      <div className="mt-4 rounded-xl border border-hx-border-subtle bg-hx-elevated px-4">
+    <Page width="narrow" title={view.title} subtitle={view.description}>
+      <div className="rounded-xl border border-hx-border-subtle bg-hx-elevated px-4">
         <SchemaForm schema={view.schema} value={value} onChange={setValue} showAllErrors={tried} pickPath={() => desktop.openFolder()} />
       </div>
       <div className="mt-4 flex justify-end"><Button variant="primary" loading={busy} onClick={() => void submit()}>{view.submit.label ?? 'Submit'}</Button></div>
-    </div></div>
+    </Page>
   );
 }
 

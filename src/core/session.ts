@@ -9,7 +9,7 @@ import { describeWatch, TASK_TOOLS, type TaskEntry, TaskRegistry, type TaskServi
 import { formatGates, makeGatesTool, runGates } from '../gates/gates.ts';
 import { newRun, WorkflowRunner } from '../graph/runner.ts';
 import type { RunRecord, WorkflowDef, WorkflowHost, WorkflowNode } from '../graph/types.ts';
-import { usesNodeType } from '../graph/validate.ts';
+import { usesNodeType, validateWorkflow } from '../graph/validate.ts';
 import { switchedOff, type InProcessHook } from '../kernel/registry.ts';
 import { loadWorkflowDir } from '../plugins/loader.ts';
 import type { Registry } from '../kernel/registry.ts';
@@ -1052,6 +1052,7 @@ export class Session {
         list: async () => (await this.workflows()).map((w) => ({ name: w.name, description: w.description ?? '', inputs: Object.keys(w.inputs ?? {}) })),
         run: (name: string, input: Record<string, string>, signal: AbortSignal) => this.runWorkflowInline(name, input, signal),
         start: (name: string, input: Record<string, string>) => this.startWorkflowInBackground(name, input),
+        check: () => this.checkProjectWorkflows(),
       } } : {}),
       tasks: this.taskService(caller, main),
       ...(vault ? { vault } : {}),
@@ -2141,6 +2142,26 @@ export class Session {
     }
     this.projectWorkflowCache = { sig, list };
     return list;
+  }
+
+  /** Each workflow file of the workspace with why it is not loaded (bad JSON, an invalid graph, code nodes, shell steps where the project's commands are not trusted). */
+  async checkProjectWorkflows(): Promise<{ file: string; name?: string; loaded: boolean; problems: string[] }[]> {
+    const host = await this.getHost();
+    if (host.kind === 'companion') return [];
+    const dir = path.join(host.root, '.harness', 'workflows');
+    let names: string[];
+    try { names = (await fs.readdir(dir)).filter((n) => n.endsWith('.json')).sort(); } catch { return []; }
+    const out: { file: string; name?: string; loaded: boolean; problems: string[] }[] = [];
+    for (const n of names) {
+      const file = `.harness/workflows/${n}`;
+      let w: WorkflowDef;
+      try { w = JSON.parse(await fs.readFile(path.join(dir, n), 'utf8')) as WorkflowDef; } catch (e) { out.push({ file, loaded: false, problems: [`not valid JSON: ${(e as Error).message}`] }); continue; }
+      const problems = validateWorkflow(w);
+      if (usesNodeType(w, 'code')) problems.push('code nodes are only for workflows written in TypeScript by plugins');
+      if (!problems.length && usesNodeType(w, 'shell') && !this.projectTrusted(host)) problems.push("it has shell steps, and this session does not trust the project's commands (they run in a sandboxed session, or with HARNESS_TRUST_PROJECT=1): use agent or gate steps instead");
+      out.push({ file, ...(typeof w?.name === 'string' ? { name: w.name } : {}), loaded: !problems.length, problems });
+    }
+    return out;
   }
 
   async listRuns(): Promise<WorkflowRunView[]> {

@@ -187,3 +187,13 @@ test('the research pack loads; its workflow is valid; the citations gate and too
   assert.match(read.content, /^<source url="https:\/\/www\.example\.org\/mcp\/">\nAnthropic announced/);
   await h.close();
 });
+
+test('readable: a page that leaves out </head> (HTML allows it) keeps its body (seen live: an HTTP/3 usage page read as empty)', () => {
+  const page = '<!DOCTYPE HTML><html lang="en"><head>\n<meta charset="utf-8">\n<title>Usage of HTTP/3</title>\n<script async src="a.js"></script>\n<body>\n<script>var x = 1;</script>\n<div id="main"><h1>HTTP/3</h1><p>HTTP/3 is used by 41.1% of all the websites.</p></div>\n</body></html>';
+  const r = readable(page);
+  assert.equal(r.title, 'Usage of HTTP/3');
+  assert.match(r.text, /HTTP\/3 is used by 41\.1% of all the websites/);
+  assert.doesNotMatch(r.text, /var x/);
+  // A head that is never ended at all, with no body: nothing of it is shown, as before.
+  assert.equal(readable('<html><head><title>T</title><meta name="x">').text, '');
+});

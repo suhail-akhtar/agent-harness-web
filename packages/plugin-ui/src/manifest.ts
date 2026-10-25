@@ -26,6 +26,24 @@ export const ICON_NAMES = [
 ] as const;
 export type IconName = typeof ICON_NAMES[number];
 
+/** Where validateUiManifest collects what it put right (an unknown icon); set only while it runs. */
+let fixes: string[] | undefined;
+/** The icon names nearest to one the set lacks (by edit distance), for the warning. */
+function nearestIcons(name: string): string[] {
+  const d = (a: string, b: string) => { const row = Array.from({ length: b.length + 1 }, (_, i) => i); for (let i = 1; i <= a.length; i++) { let prev = row[0]!; row[0] = i; for (let j = 1; j <= b.length; j++) { const t = row[j]!; row[j] = Math.min(row[j]! + 1, row[j - 1]! + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1)); prev = t; } } return row[b.length]!; };
+  return [...ICON_NAMES].sort((a, b) => d(name, a) - d(name, b)).slice(0, 4);
+}
+/**
+ * An icon from the set, or "puzzle" with a warning for one it lacks: a wrong icon name is not worth
+ * losing a plugin's whole UI over (the warning says which names come closest).
+ */
+function iconOf(raw: unknown, where: string): IconName | undefined {
+  if (raw === undefined) return undefined;
+  if ((ICON_NAMES as readonly string[]).includes(String(raw))) return raw as IconName;
+  fixes?.push(`${where}: unknown icon "${String(raw)}", shown as "puzzle" (nearest: ${nearestIcons(String(raw)).join(', ')}).`);
+  return 'puzzle';
+}
+
 /** How much a plugin's UI is trusted to run. */
 export type UiTrust = 'declarative' | 'frame' | 'native';
 
@@ -480,7 +498,7 @@ function checkMenu(raw: unknown, navItems: Array<Record<string, unknown>>, views
   if (!isObj(raw)) throw new ManifestError('"ui.menu" is an object: { "title"?, "icon"?, "order"?, "collapsed"?, "items": [...] }.');
   const m = raw;
   if (m.title !== undefined && (typeof m.title !== 'string' || !m.title.trim() || m.title.length > 40)) throw new ManifestError('"ui.menu.title" is at most 40 characters.');
-  if (m.icon !== undefined && !(ICON_NAMES as readonly string[]).includes(String(m.icon))) throw new ManifestError(`"ui.menu.icon": unknown icon "${String(m.icon)}".`);
+  if (m.icon !== undefined) m.icon = iconOf(m.icon, '"ui.menu.icon"');
   if (m.order !== undefined && (typeof m.order !== 'number' || !Number.isFinite(m.order))) throw new ManifestError('"ui.menu.order" is a number.');
   if (m.collapsed !== undefined && typeof m.collapsed !== 'boolean') throw new ManifestError('"ui.menu.collapsed" is true or false.');
   if (!Array.isArray(m.items) || !m.items.length || m.items.length > MENU_MAX_ITEMS) throw new ManifestError(`"ui.menu.items" is a list of 1 to ${MENU_MAX_ITEMS} items: nav item ids, or { "id", "title", "view", "children"? }.`);
@@ -499,7 +517,7 @@ function checkMenu(raw: unknown, navItems: Array<Record<string, unknown>>, views
     if (seen.has(it.id) || navIds.has(it.id)) throw new ManifestError(`${where}: the id "${it.id}" is taken (by another item or a nav item).`);
     seen.add(it.id);
     if (typeof it.title !== 'string' || !it.title.trim() || it.title.length > 80) throw new ManifestError(`${where}: item "${it.id}" needs a "title" (at most 80 characters).`);
-    if (it.icon !== undefined && !(ICON_NAMES as readonly string[]).includes(String(it.icon))) throw new ManifestError(`${where}: item "${it.id}": unknown icon "${String(it.icon)}".`);
+    if (it.icon !== undefined) it.icon = iconOf(it.icon, `${where}: item "${it.id}"`);
     if (typeof it.view !== 'string' || !QREF.test(it.view)) throw new ManifestError(`${where}: item "${it.id}" needs a "view".`);
     if (!it.view.includes(':') && !views.some((v) => v.id === it.view)) throw new ManifestError(`${where}: item "${it.id}" opens "${it.view}", which is not one of this plugin's views.`);
     if (it.params !== undefined && (!isObj(it.params) || !Object.values(it.params).every((v) => typeof v === 'string'))) throw new ManifestError(`${where}: item "${it.id}": "params" are text values.`);
@@ -520,7 +538,13 @@ function checkMenu(raw: unknown, navItems: Array<Record<string, unknown>>, views
  * Validates and normalises the `ui` section. Throws a ManifestError a person (or model) can act on.
  * `trustCeiling` is the most the host allows this plugin (native only for signed first-party ones).
  */
-export function validateUiManifest(input: unknown, opts: { trustCeiling?: UiTrust } = {}): UiManifest {
+export function validateUiManifest(input: unknown, opts: { trustCeiling?: UiTrust; warnings?: string[] } = {}): UiManifest {
+  const before = fixes;
+  fixes = opts.warnings ?? [];
+  try { return validateUi(input, opts); } finally { fixes = before; }
+}
+
+function validateUi(input: unknown, opts: { trustCeiling?: UiTrust }): UiManifest {
   if (!isObj(input)) throw new ManifestError('"ui" must be an object.');
   const m = input;
   const apiVersion = m.apiVersion === undefined ? UI_API_VERSION : Number(m.apiVersion);
@@ -546,7 +570,7 @@ export function validateUiManifest(input: unknown, opts: { trustCeiling?: UiTrus
     }
   };
   const title = (kind: string, it: Record<string, unknown>) => { if (typeof it.title !== 'string' || !it.title.trim() || it.title.length > 80) throw new ManifestError(`${kind} "${String(it.id ?? it.name)}" needs a "title" (at most 80 characters).`); };
-  const icon = (kind: string, it: Record<string, unknown>) => { if (it.icon !== undefined && !(ICON_NAMES as readonly string[]).includes(String(it.icon))) throw new ManifestError(`${kind} "${String(it.id)}": unknown icon "${String(it.icon)}".`); };
+  const icon = (kind: string, it: Record<string, unknown>) => { if (it.icon !== undefined) it.icon = iconOf(it.icon, `${kind} "${String(it.id)}"`); };
   let usesCode = false; let usesNative = false;
   const body = (kind: string, it: Record<string, unknown>, kinds: string[]) => {
     if (!kinds.includes(String(it.kind))) throw new ManifestError(`${kind} "${String(it.id)}" has kind "${String(it.kind)}"; use ${kinds.join(', ')}.`);
@@ -729,7 +753,7 @@ export function validateUiManifest(input: unknown, opts: { trustCeiling?: UiTrus
     apiVersion,
     ...(menu ? { menu } : {}), ...(home ? { home } : {}), ...(m.guide !== undefined ? { guide: String(m.guide) } : {}), ...(tools ? { tools } : {}),
     displayName: typeof m.displayName === 'string' ? m.displayName.slice(0, 60) : undefined,
-    icon: typeof m.icon === 'string' && (ICON_NAMES as readonly string[]).includes(m.icon) ? m.icon as IconName : undefined,
+    icon: iconOf(m.icon, '"ui.icon"'),
     category: typeof m.category === 'string' ? m.category.slice(0, 40) : undefined,
     trust: declared as UiTrust,
     capabilities: [...new Set(caps as Capability[])],

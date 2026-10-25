@@ -6,7 +6,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { Attachment, Effort, Mode } from '@harness/client';
-import { Button, EmptyState, Icon, IconButton, Input, Popover, MenuList, Spinner, Tooltip, toast, type MenuItem } from '@harness/ui';
+import { Button, EmptyState, Icon, IconButton, Input, Popover, MenuList, Spinner, Tooltip, toast, type MenuItem, Page, PageState, ListRow } from '@harness/ui';
 import { useApp, openSession, navigate, setCrumb } from '../../state/app';
 import { useData, client, clientInfo, notePluginsTold, syncClientPlugins } from '../../state/data';
 import { desktop, scratchFolder } from '../../bridge';
@@ -173,8 +173,8 @@ export function Session({ params }: { params: Record<string, string> }): React.R
   const pane = usePane();
   useEffect(() => { if (!pane.split && s.meta) setCrumb({ view: 'core.chat:session', title: s.meta.title }); }, [s.meta?.title, pane.split]);
 
-  if (!s.loaded) return <div className="flex h-full flex-col"><TopBar title="Loading…" /><div className="flex flex-1 items-center justify-center"><Spinner size={20} /></div></div>;
-  if (s.error) return <div className="flex h-full flex-col"><TopBar title="Conversation" /><EmptyState icon="alert" title="This conversation could not be opened" action={<Button onClick={() => navigate({ view: 'core.chat:home' })}>Go home</Button>}>{s.error}</EmptyState></div>;
+  if (!s.loaded) return <div className="flex h-full flex-col"><TopBar title="Loading…" /><div className="flex flex-1 items-center justify-center"><PageState kind="loading" /></div></div>;
+  if (s.error) return <div className="flex h-full flex-col"><TopBar title="Conversation" /><PageState kind="error" title="This conversation could not be opened" detail={s.error} action={<Button onClick={() => navigate({ view: 'core.chat:home' })}>Go home</Button>} /></div>;
   return (
     <div className="flex h-full flex-col" data-session={id} data-status={s.status}>
       <TopBar title={s.meta?.title}>
@@ -230,21 +230,16 @@ export function Search(): React.ReactElement {
     return () => clearTimeout(t);
   }, [q, archived]);
   return (
-    <div className="hx-scroll h-full overflow-y-auto" data-search>
-      <div className="mx-auto max-w-3xl px-6 py-8">
-        <h1 className="mb-4 text-[20px] font-semibold">Search conversations</h1>
+    <Page data-search title="Search conversations">
         <div className="flex gap-2"><Input icon="search" autoFocus placeholder="Titles and first messages" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search conversations" /><Button variant={archived ? 'subtle' : 'ghost'} icon="archive" onClick={() => setArchived(!archived)}>{archived ? 'Archived' : 'Active'}</Button></div>
         <div className="mt-4 divide-y divide-hx-border-subtle">
-          {list === null ? <Spinner /> : !list.length ? <EmptyState icon="search" title="Nothing found" /> : list.map((s) => (
-            <button key={s.id} type="button" onClick={() => openSession(s.id)} className="flex w-full items-center gap-3 px-1 py-2.5 text-left hover:bg-hx-hover">
-              <Icon name="chat" size={15} className="text-hx-muted" />
-              <span className="min-w-0 flex-1"><span className="block truncate text-[13.5px]">{s.title || 'New conversation'}</span><span className="block text-[11.5px] text-hx-muted">{new Date(s.updatedAt).toLocaleString()} · {s.model} · {fmtCost(s.cost)}</span></span>
-              {s.status && s.status !== 'idle' && <span className="text-[11px] text-hx-accent-text">{s.status}</span>}
-            </button>
+          {list === null ? <PageState kind="loading" /> : !list.length ? <PageState kind="empty" icon="search" title="Nothing found" /> : list.map((s) => (
+            <ListRow key={s.id} icon="chat" onClick={() => openSession(s.id)} className="rounded-none px-1 py-2.5" title={s.title || 'New conversation'}
+              subtitle={`${new Date(s.updatedAt).toLocaleString()} · ${s.model} · ${fmtCost(s.cost)}`}
+              meta={s.status && s.status !== 'idle' ? <span className="text-hx-accent-text">{s.status}</span> : undefined} />
           ))}
         </div>
-      </div>
-    </div>
+    </Page>
   );
 }
 
@@ -254,7 +249,7 @@ export function RecentCard(): React.ReactElement {
   if (!recent.length) return <p className="text-[12.5px] text-hx-muted">Your conversations will show here.</p>;
   return (
     <div className="space-y-0.5">
-      {recent.map((s) => <button key={s.id} type="button" onClick={() => openSession(s.id)} className="flex w-full items-center gap-2 rounded-lg px-1.5 py-1 text-left text-[13px] hover:bg-hx-hover"><Icon name="chat" size={14} className="text-hx-muted" /><span className="min-w-0 flex-1 truncate">{s.title || 'New conversation'}</span><span className="text-[11px] text-hx-muted">{new Date(s.updatedAt).toLocaleDateString()}</span></button>)}
+      {recent.map((s) => <ListRow key={s.id} icon="chat" onClick={() => openSession(s.id)} className="px-1.5 py-1" title={s.title || 'New conversation'} meta={new Date(s.updatedAt).toLocaleDateString()} />)}
     </div>
   );
 }

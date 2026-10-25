@@ -6,7 +6,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import type { ArtifactMeta } from '@harness/client';
-import { Badge, Button, Icon } from '@harness/ui';
+import { Badge, Button, Icon, Page } from '@harness/ui';
 import { client, useData } from '../../state/data';
 import { navigate, openPluginPanel, openSession, prefill } from '../../state/app';
 import { HomeSection, ModuleHeader } from '../plugin-home';
@@ -38,8 +38,7 @@ export function AgentsHome(): React.ReactElement {
   const library = registry.views.has('core.artifacts:library');
   if (!m) return <div />;
   return (
-    <div className="hx-scroll h-full overflow-y-auto" data-module-home="core.agents">
-      <div className="mx-auto max-w-5xl px-6 py-8">
+    <Page data-module-home="core.agents" width="wide">
         <ModuleHeader model={m}>
           <Button size="sm" icon="bot" onClick={() => navigate({ view: 'core.agents:agents' })}>All agents</Button>
         </ModuleHeader>
@@ -82,7 +81,6 @@ export function AgentsHome(): React.ReactElement {
             ))}
           </div>
         </HomeSection>
-      </div>
-    </div>
+    </Page>
   );
 }

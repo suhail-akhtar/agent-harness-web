@@ -1,5 +1,6 @@
 import type { Tool } from './types.ts';
 import { bool, num, str } from './types.ts';
+import { WORKFLOW_FORMAT } from '../graph/format.ts';
 
 // schedule: the agent sets up work for later in its own session ("check the
 // deploy in 20 minutes", "every morning, run the flaky test 50 times and report").
@@ -56,11 +57,11 @@ export const workflowTool: Tool = {
   sendsOut: false,
   spec: {
     name: 'workflow',
-    description: 'Run one of this session\'s workflows now - a fixed graph of agent steps, quality gates and approvals (e.g. build-feature: requirements, plan, test-first build, review; long-task: a project built feature by feature) - and get its outcome. Use it when the user asks for that process or a big job matches one; for ordinary work do it yourself. "list" shows the workflows and their inputs. With run_in_background the run starts and you get its id at once; its outcome reaches you as a reminder when it ends.',
+    description: 'Run one of this session\'s workflows now - a fixed graph of agent steps, quality gates and approvals (e.g. build-feature: requirements, plan, test-first build, review; long-task: a project built feature by feature) - and get its outcome. Use it when the user asks for that process or a big job matches one; for ordinary work do it yourself. "list" shows the workflows and their inputs. To make a reusable one for this project (the user asks for a process to repeat, a pipeline with an approval): "format" gives the file format, write .harness/workflows/<name>.json, "check" validates it, then "run" it. With run_in_background the run starts and you get its id at once; its outcome reaches you as a reminder when it ends.',
     input_schema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['list', 'run'] },
+        action: { type: 'string', enum: ['list', 'run', 'format', 'check'] },
         name: { type: 'string' },
         input: { type: 'object', description: 'The workflow\'s inputs, as strings', additionalProperties: { type: 'string' } },
         run_in_background: { type: 'boolean' },
@@ -68,13 +69,21 @@ export const workflowTool: Tool = {
       required: ['action'],
     },
   },
-  summarize: (i) => str(i.action) === 'run' ? `${bool(i.run_in_background) ? '[background] ' : ''}workflow ${str(i.name)}` : 'workflow list',
+  summarize: (i) => str(i.action) === 'run' ? `${bool(i.run_in_background) ? '[background] ' : ''}workflow ${str(i.name)}` : `workflow ${str(i.action) || 'list'}`,
   async run(input, ctx) {
     const wf = ctx.services?.workflows;
     if (!wf) return { content: 'Workflows are not available here (sub-agents and scripts cannot start them).', is_error: true };
+    if (str(input.action) === 'format') return { content: WORKFLOW_FORMAT };
+    if (str(input.action) === 'check') {
+      const files = (await wf.check?.()) ?? [];
+      if (!files.length) return { content: 'No workflow files in .harness/workflows/ yet. "format" shows how to write one.' };
+      return { content: files.map((f) => `${f.file}${f.name ? ` (${f.name})` : ''}: ${f.loaded ? 'OK, loaded' : `NOT LOADED\n  - ${f.problems.join('\n  - ')}`}`).join('\n'), is_error: files.some((f) => !f.loaded) };
+    }
     if (str(input.action) === 'list') {
       const all = await wf.list();
-      return { content: all.length ? all.map((w) => `- ${w.name}${w.inputs.length ? ` (inputs: ${w.inputs.join(', ')})` : ''}: ${w.description}`).join('\n') : 'No workflows are installed.' };
+      const broken = ((await wf.check?.()) ?? []).filter((f) => !f.loaded);
+      const note = broken.length ? `\n\nNot loaded (see "check"): ${broken.map((f) => f.file).join(', ')}` : '';
+      return { content: `${all.length ? all.map((w) => `- ${w.name}${w.inputs.length ? ` (inputs: ${w.inputs.join(', ')})` : ''}: ${w.description}`).join('\n') : 'No workflows are installed.'}${note}\n\nYour own: "format" shows the file format for .harness/workflows/<name>.json.` };
     }
     const raw = input.input && typeof input.input === 'object' ? input.input as Record<string, unknown> : {};
     const values = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)]));

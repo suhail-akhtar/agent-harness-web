@@ -6,7 +6,7 @@
  */
 
 import React from 'react';
-import { Badge, Button, EmptyState, Icon, Markdown, cx } from '@harness/ui';
+import { Badge, Button, EmptyState, Icon, Markdown, cx, Page } from '@harness/ui';
 import { navigate, prefill, showFullWindow, useApp } from '../state/app';
 import { useData } from '../state/data';
 import { HomeCardHost } from '../registry/PluginView';
@@ -28,7 +28,7 @@ export function ModuleHeader({ model, children }: { model: Pick<HomeModel, 'plug
       </div>
       <div className="flex flex-wrap items-center gap-2">
         {children}
-        <Button size="sm" variant="ghost" icon="book" data-module-guide={model.plugin} onClick={() => showFullWindow(`${model.title}: guide for agents`, <div className="hx-scroll h-full overflow-auto"><div className="mx-auto max-w-column px-6 py-6"><Markdown text={guideFor(registry, model.plugin) ?? ''} /></div></div>)}>Guide for agents</Button>
+        <Button size="sm" variant="ghost" icon="book" data-module-guide={model.plugin} onClick={() => showFullWindow(`${model.title}: guide for agents`, <Page><Markdown text={guideFor(registry, model.plugin) ?? ''} /></Page>)}>Guide for agents</Button>
         <Button size="sm" variant="primary" icon="sparkles" data-home-ask={model.plugin} onClick={() => prefill(model.ask, true)}>Ask the agent about {model.title}</Button>
       </div>
     </header>
@@ -54,8 +54,7 @@ export function PluginHome({ params }: { params: Record<string, string> }): Reac
   const commands = m.actions.filter((a) => a.kind === 'command');
   const slash = m.actions.filter((a) => a.kind === 'slash');
   return (
-    <div className="hx-scroll h-full overflow-y-auto" data-plugin-home={plugin}>
-      <div className="mx-auto max-w-5xl px-6 py-8">
+    <Page data-plugin-home={plugin} width="wide">
         <ModuleHeader model={m} />
         {m.description && m.description !== m.purpose && <p className="-mt-3 mb-6 max-w-3xl text-[13px] leading-relaxed text-hx-muted">{m.description}</p>}
         {m.statusItems.length > 0 && (
@@ -118,7 +117,6 @@ export function PluginHome({ params }: { params: Record<string, string> }): Reac
           </HomeSection>
         )}
         {!m.pages.length && !m.actions.length && !m.settings.length && <p className={cx('text-[13px] text-hx-muted')}>This plugin adds no pages or commands of its own: it works in conversations (renderers, tools).</p>}
-      </div>
-    </div>
+    </Page>
   );
 }

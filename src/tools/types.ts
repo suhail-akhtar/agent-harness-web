@@ -37,6 +37,8 @@ export interface ToolServices {
     run(name: string, input: Record<string, string>, signal: AbortSignal): Promise<{ status: string; summary: string; cost: number }>;
     /** Starts a run detached and returns its id; the outcome reaches the agent later as a reminder. */
     start?(name: string, input: Record<string, string>): Promise<string>;
+    /** The workspace's own workflow files (.harness/workflows), each with what keeps it from loading. */
+    check?(): Promise<{ file: string; name?: string; loaded: boolean; problems: string[] }[]>;
   };
   /** This session's background tasks (shells, sub-agents, workflows, monitors). */
   tasks?: import('./tasks.ts').TaskService;

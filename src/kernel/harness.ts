@@ -259,6 +259,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       ...await readPluginUi(dir, m.ui, trustOf(signature)),
     };
     if (e.uiError) log(`plugin ${m.name}: its ui section is not used: ${e.uiError}`);
+    for (const w of e.uiWarnings ?? []) log(`plugin ${m.name}: ${w}`);
     // Its guide for agents (ui.guide, or a <name>-guide skill): desktop sessions list it and load it on demand.
     Object.assign(e, await readPluginGuide(dir, m, e.ui));
     entries.set(m.name, e);

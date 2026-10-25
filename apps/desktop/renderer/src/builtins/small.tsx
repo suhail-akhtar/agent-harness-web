@@ -9,7 +9,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import type { SessionMeta, TaskView } from '@harness/client';
-import { Badge, Button, EmptyState, Icon, IconButton, Spinner, toast, cx } from '@harness/ui';
+import { Badge, Button, EmptyState, Icon, IconButton, ListRow, Page, PageState, Section, Spinner, toast, cx } from '@harness/ui';
 import type { BuiltinPlugin } from '../state/data';
 import { useData, client } from '../state/data';
 import { useApp, navigate, openSession, setCrumb, NARROW_PX } from '../state/app';
@@ -126,9 +126,7 @@ function Projects() {
   const sessions = useData((s) => s.sessions);
   const [making, setMaking] = useState(false);
   return (
-    <div className="hx-scroll h-full overflow-y-auto" data-projects>
-      <div className="mx-auto max-w-4xl px-6 py-8">
-        <div className="mb-5 flex items-center gap-3"><h1 className="flex-1 text-[20px] font-semibold">Projects</h1><Button icon="plus" onClick={() => setMaking(true)} data-new-project>New project</Button><Button variant="primary" icon="folder-plus" onClick={() => void openFolder()}>Open a folder</Button></div>
+    <Page data-projects width="wide" title="Projects" actions={<><Button icon="plus" onClick={() => setMaking(true)} data-new-project>New project</Button><Button variant="primary" icon="folder-plus" onClick={() => void openFolder()}>Open a folder</Button></>}>
         {making && <NewProject onDone={() => setMaking(false)} />}
         {!projects.length ? <EmptyState icon="folder" title="No projects yet" action={<Button variant="primary" icon="folder-plus" onClick={() => void openFolder()}>Open a folder</Button>}>Open a folder and the agent can work in it. Each conversation started there runs in that folder.</EmptyState> : (
           <div className="grid gap-3 sm:grid-cols-2">
@@ -143,8 +141,7 @@ function Projects() {
             })}
           </div>
         )}
-      </div>
-    </div>
+    </Page>
   );
 }
 
@@ -157,34 +154,24 @@ function Project({ params }: { params: Record<string, string> }) {
   if (!project) return <EmptyState icon="folder" title="This project is not in your list" action={<Button onClick={() => navigate({ view: 'core.projects:projects' })}>All projects</Button>} />;
   const newChat = () => { try { localStorage.setItem('harness.workIn', path); } catch { /* none */ } navigate({ view: 'core.chat:home' }); };
   return (
-    <div className="hx-scroll h-full overflow-y-auto" data-project-view={path}>
-      <div className="mx-auto max-w-3xl px-6 py-8">
-        <div className="flex items-center gap-3">
-          <Icon name="folder-open" size={22} className="text-hx-accent-text" />
-          <div className="min-w-0 flex-1"><h1 className="truncate text-[20px] font-semibold">{project.name}</h1><div className="truncate text-[12px] text-hx-muted">{path}</div></div>
-          <Button icon="external" variant="ghost" onClick={() => void desktop.showItem(path)}>Show</Button>
-          <Button variant="primary" icon="edit" onClick={newChat}>New chat here</Button>
-        </div>
-        <h2 className="mb-2 mt-6 text-[13px] font-medium text-hx-muted">Conversations</h2>
+    <Page data-project-view={path} title={project.name} subtitle={path} lead={<Icon name="folder-open" size={22} className="text-hx-accent-text" />}
+      actions={<><Button icon="external" variant="ghost" onClick={() => void desktop.showItem(path)}>Show</Button><Button variant="primary" icon="edit" onClick={newChat}>New chat here</Button></>}>
+        <Section title="Conversations">
         {!mine.length ? <p className="text-[13px] text-hx-muted">No conversations in this folder yet.</p> : (
           <div className="divide-y divide-hx-border-subtle rounded-xl border border-hx-border-subtle">
             {mine.map((s) => <SessionLine key={s.id} s={s} />)}
           </div>
         )}
+        </Section>
         <div className="mt-8"><Button variant="ghost" icon="trash" onClick={() => void useApp.getState().ask({ title: 'Remove this project?', body: 'It leaves the list; the folder and its conversations stay.', confirmLabel: 'Remove' }).then(async (y) => { if (y) { await desktop.removeProject(path); navigate({ view: 'core.projects:projects' }); } })}>Remove from projects</Button></div>
-      </div>
-    </div>
+    </Page>
   );
 }
 
 function SessionLine({ s }: { s: SessionMeta }) {
   return (
-    <button type="button" onClick={() => openSession(s.id)} className="flex w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-hx-hover">
-      <Icon name="chat" size={15} className="text-hx-muted" />
-      <span className="min-w-0 flex-1 truncate text-[13.5px]">{s.title || 'New conversation'}</span>
-      {s.status && s.status !== 'idle' && <Badge tone={s.status === 'waiting' ? 'warning' : 'accent'}>{s.status === 'waiting' ? 'Needs you' : 'Working'}</Badge>}
-      <span className="text-[11.5px] text-hx-muted">{new Date(s.updatedAt).toLocaleDateString()}</span>
-    </button>
+    <ListRow icon="chat" onClick={() => openSession(s.id)} className="rounded-none px-3 py-2.5" title={s.title || 'New conversation'}
+      meta={<span className="flex items-center gap-2">{s.status && s.status !== 'idle' && <Badge tone={s.status === 'waiting' ? 'warning' : 'accent'}>{s.status === 'waiting' ? 'Needs you' : 'Working'}</Badge>}{new Date(s.updatedAt).toLocaleDateString()}</span>} />
   );
 }
 
@@ -229,17 +216,14 @@ function Inbox() {
     return [...by.entries()];
   }, [approvals]);
   return (
-    <div className="hx-scroll h-full overflow-y-auto" data-inbox>
-      <div className="mx-auto max-w-3xl px-6 py-8">
-        <div className="mb-5 flex items-center gap-3"><h1 className="flex-1 text-[20px] font-semibold">Waiting for you</h1><IconButton icon="refresh" label="Refresh" onClick={() => void useData.getState().refreshApprovals()} /></div>
-        {!groups.length ? <EmptyState icon="inbox" title="Nothing is waiting for you">Permission requests, questions, plans and workflow approvals from every conversation land here.</EmptyState> : groups.map(([sid, list]) => (
+    <Page data-inbox title="Waiting for you" actions={<IconButton icon="refresh" label="Refresh" onClick={() => void useData.getState().refreshApprovals()} />}>
+        {!groups.length ? <PageState kind="empty" icon="inbox" title="Nothing is waiting for you" detail="Permission requests, questions, plans and workflow approvals from every conversation land here." /> : groups.map(([sid, list]) => (
           <section key={sid} className="mb-6" data-inbox-session={sid}>
             <button type="button" onClick={() => openSession(sid)} className="mb-2 flex items-center gap-2 text-[13px] font-medium text-hx-secondary hover:text-hx-primary"><Icon name="chat" size={14} />{list[0]!.title ?? sessions.find((s) => s.id === sid)?.title ?? sid}<Icon name="arrow-right" size={13} /></button>
             <div className="space-y-2">{list.map((a) => <InboxItem key={a.requestId} a={a} />)}</div>
           </section>
         ))}
-      </div>
-    </div>
+    </Page>
   );
 }
 
@@ -304,10 +288,8 @@ function Activity() {
   }, [active.map((s) => s.id).join(',')]);
   const stop = (id: string) => void client.sessions.abort(id).then(() => toast('Stopped')).catch((e: Error) => toast(e.message, { kind: 'error' }));
   return (
-    <div className="hx-scroll h-full overflow-y-auto" data-activity>
-      <div className="mx-auto max-w-3xl px-6 py-8">
-        <h1 className="mb-5 text-[20px] font-semibold">Activity</h1>
-        {!active.length ? <EmptyState icon="activity" title="Nothing is running">Conversations at work, and their background shells, sub-agents and workflow runs, show here.</EmptyState> : active.map((s) => (
+    <Page data-activity title="Activity">
+        {!active.length ? <PageState kind="empty" icon="activity" title="Nothing is running" detail="Conversations at work, and their background shells, sub-agents and workflow runs, show here." /> : active.map((s) => (
           <div key={s.id} data-activity-session={s.id} className="mb-3 rounded-xl border border-hx-border-subtle bg-hx-elevated p-3">
             <div className="flex items-center gap-2">
               {s.status === 'running' ? <Spinner className="text-hx-accent-text" /> : <Icon name="clock" size={15} className="text-hx-warning" />}
@@ -321,8 +303,7 @@ function Activity() {
             ))}
           </div>
         ))}
-      </div>
-    </div>
+    </Page>
   );
 }
 

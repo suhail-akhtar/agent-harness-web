@@ -2,6 +2,7 @@ export * from './theme.ts';
 export * from './schema.ts';
 export { Icon, ICONS, hasIcon } from './icons.tsx';
 export * from './components/primitives.tsx';
+export * from './components/layout.tsx';
 export * from './components/overlay.tsx';
 export * from './components/toast.tsx';
 export * from './components/SchemaForm.tsx';

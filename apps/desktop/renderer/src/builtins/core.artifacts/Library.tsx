@@ -6,7 +6,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import type { ArtifactMeta } from '@harness/client';
-import { Badge, EmptyState, Icon, IconButton, Input, Select, Spinner, Tooltip, cx } from '@harness/ui';
+import { Badge, EmptyState, Icon, IconButton, Input, Select, Spinner, Tooltip, cx, Page } from '@harness/ui';
 import { client } from '../../state/data';
 import { openPluginPanel, openSession } from '../../state/app';
 import { KIND_ICON, ago } from './Panel';
@@ -44,9 +44,7 @@ export function Library(): React.ReactElement {
   const kinds = useMemo(() => [...new Set([...(list ?? []).map((a) => a.kind), ...KINDS])], [list]);
   const open = (a: ArtifactMeta) => { if (!a.sessionId) return; openSession(a.sessionId); openPluginPanel('core.artifacts:artifacts', { id: a.sessionId, artifact: a.id }); };
   return (
-    <div className="hx-scroll h-full overflow-y-auto" data-library>
-      <div className="mx-auto max-w-5xl px-6 py-8">
-        <div className="mb-4 flex items-center gap-3"><h1 className="flex-1 text-[20px] font-semibold">Library</h1><span className="text-[12px] text-hx-muted">{list ? `${shown.length} artifact${shown.length === 1 ? '' : 's'}` : ''}</span></div>
+    <Page data-library width="wide" title="Library" actions={<span className="text-[12px] text-hx-muted">{list ? `${shown.length} artifact${shown.length === 1 ? '' : 's'}` : ''}</span>}>
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <div className="min-w-[220px] flex-1"><Input icon="search" placeholder="Search titles, kinds and languages" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search the library" data-library-search /></div>
           <Select aria-label="Kind" data-library-kind value={kind} onChange={setKind} options={[{ value: '', label: 'Every kind' }, ...kinds.map((k) => ({ value: k, label: k }))]} className="h-9 w-40" />
@@ -79,7 +77,6 @@ export function Library(): React.ReactElement {
                 ))}
               </div>
             )}
-      </div>
-    </div>
+    </Page>
   );
 }

@@ -8,7 +8,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import type { CatalogueEntry } from '@harness/client';
 import { isMissing } from '@harness/client';
 import { CONTRIBUTION_POINTS, type Capability } from '@harness/plugin-ui';
-import { Badge, Button, Checkbox, EmptyState, Icon, InfoNote, Input, Modal, Spinner, Switch, Tabs, toast } from '@harness/ui';
+import { Badge, Button, Checkbox, EmptyState, Icon, InfoNote, Input, Modal, Spinner, Switch, Tabs, toast, Page } from '@harness/ui';
 import type { BuiltinPlugin } from '../../state/data';
 import { useData, client } from '../../state/data';
 import { useApp } from '../../state/app';
@@ -22,12 +22,7 @@ function PluginsPage() {
   const [q, setQ] = useState('');
   const shown = plugins.filter((p) => `${p.name} ${p.description ?? ''} ${p.ui?.displayName ?? ''}`.toLowerCase().includes(q.toLowerCase()));
   return (
-    <div className="hx-scroll h-full overflow-y-auto" data-plugins-page>
-      <div className="mx-auto max-w-4xl px-6 py-8">
-        <div className="mb-4 flex flex-wrap items-center gap-3">
-          <h1 className="flex-1 text-[20px] font-semibold">Plugins</h1>
-          <Tabs value={tab} onChange={setTab} tabs={[{ id: 'installed', label: 'Installed', count: plugins.length }, { id: 'catalogue', label: 'Catalogue' }, { id: 'dev', label: 'Developer' }]} />
-        </div>
+    <Page data-plugins-page width="wide" title="Plugins" actions={<Tabs value={tab} onChange={setTab} tabs={[{ id: 'installed', label: 'Installed', count: plugins.length }, { id: 'catalogue', label: 'Catalogue' }, { id: 'dev', label: 'Developer' }]} />}>
         {tab === 'installed' && (
           <>
             <div className="mb-3"><Input icon="search" placeholder="Filter plugins" value={q} onChange={(e) => setQ(e.target.value)} /></div>
@@ -36,8 +31,7 @@ function PluginsPage() {
         )}
         {tab === 'catalogue' && <Catalogue />}
         {tab === 'dev' && <Developer />}
-      </div>
-    </div>
+    </Page>
   );
 }
 

@@ -3,7 +3,7 @@
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Badge, Button, Field, Icon, IconButton, Input, Kbd, Select, Switch, Spinner, cx, toast, InfoNote } from '@harness/ui';
+import { Badge, Button, Field, Icon, IconButton, Input, Kbd, Select, Switch, Spinner, cx, toast, InfoNote, Page } from '@harness/ui';
 import { useApp } from '../../state/app';
 import { useData, client } from '../../state/data';
 import { allThemes } from '../../state/theme';
@@ -282,6 +282,6 @@ export function About(): React.ReactElement {
 
 /** The About page (Help > About): the same facts as the settings section, as a page. */
 export function AboutPage(): React.ReactElement {
-  return <div className="hx-scroll h-full overflow-y-auto" data-about-page><div className="mx-auto max-w-2xl px-6 py-8"><About /></div></div>;
+  return <Page data-about-page width="narrow"><About /></Page>;
 }
 

@@ -6,7 +6,7 @@
 import React, { useEffect, useState } from 'react';
 import type { Delegation, EffectiveSetting, McpBundle, ProviderInfo, Schedule, SessionMeta, VaultEntry } from '@harness/client';
 import { isMissing } from '@harness/client';
-import { Badge, Button, EmptyState, Field, Icon, IconButton, Input, InfoNote, Select, Spinner, Switch, Textarea, cx, toast, SecretInput } from '@harness/ui';
+import { Badge, Button, EmptyState, Field, Icon, IconButton, Input, InfoNote, Select, Spinner, Switch, Textarea, cx, toast, SecretInput, Checkbox } from '@harness/ui';
 import { useData, client } from '../../state/data';
 import { useApp } from '../../state/app';
 import { recommendedModel } from '../../state/recommend';
@@ -84,11 +84,10 @@ export function DelegationSettings(): React.ReactElement {
           {models.map((m) => {
             const ok = allowedByOperator(m.id);
             return (
-              <label key={m.id} data-delegation-model={m.id} className={cx('flex items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px]', ok ? 'hover:bg-hx-hover' : 'opacity-50')} title={ok ? m.notes : 'Not allowed by the operator'}>
-                <input type="checkbox" className="accent-[var(--hx-accent)]" checked={list.includes(m.id)} disabled={!ok} onChange={(e) => toggle(m.id, e.target.checked)} />
-                <span className="min-w-0 flex-1 truncate">{m.label}</span>
-                <span className="text-[11px] text-hx-muted">{m.provider}{m.available ? '' : ' · no key'}</span>
-              </label>
+              <div key={m.id} data-delegation-model={m.id} className={cx('rounded-lg px-2 py-1.5', ok && 'hover:bg-hx-hover')} title={ok ? m.notes : 'Not allowed by the operator'}>
+                <Checkbox className="flex w-full text-[12.5px]" checked={list.includes(m.id)} disabled={!ok} onChange={(v) => toggle(m.id, v)}
+                  label={<><span className="min-w-0 flex-1 truncate">{m.label}</span><span className="text-[11px] text-hx-muted">{m.provider}{m.available ? '' : ' · no key'}</span></>} />
+              </div>
             );
           })}
         </div>

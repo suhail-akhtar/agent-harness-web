@@ -139,9 +139,9 @@ export function Switch({ checked, onChange, label, disabled, id }: { checked: bo
   );
 }
 
-export function Checkbox({ checked, onChange, label, disabled }: { checked: boolean; onChange: (v: boolean) => void; label?: React.ReactNode; disabled?: boolean }): React.ReactElement {
+export function Checkbox({ checked, onChange, label, disabled, className }: { checked: boolean; onChange: (v: boolean) => void; label?: React.ReactNode; disabled?: boolean; className?: string }): React.ReactElement {
   return (
-    <label className={cx('inline-flex cursor-pointer items-center gap-2 text-[13px] text-hx-primary', disabled && 'cursor-not-allowed opacity-60')}>
+    <label className={cx('inline-flex cursor-pointer items-center gap-2 text-[13px] text-hx-primary', disabled && 'cursor-not-allowed opacity-60', className)}>
       <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} className="h-4 w-4 accent-[var(--hx-accent)]" />
       {label}
     </label>

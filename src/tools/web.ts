@@ -125,8 +125,10 @@ export function htmlToText(html: string, opts: { dropChrome?: boolean } = {}): s
     i = gt + 1;
     if (!name) continue; // <!doctype>, <?xml?>
     if (!closing && (SKIP.has(name) || (opts.dropChrome && CHROME.has(name))) && !inner.endsWith('/')) {
-      // Drop the element; an unclosed one runs to the end, as in a browser.
+      // Drop the element; an unclosed one runs to the end, as in a browser - except <head>, whose end
+      // tag HTML lets a page leave out: there, as in a browser, the head ends where <body> begins.
       const close = lower.indexOf(`</${name}`, i);
+      if (close < 0 && name === 'head') { const body = lower.indexOf('<body', i); if (body >= 0) { i = body; continue; } }
       if (close < 0) break;
       const e = html.indexOf('>', close);
       i = e < 0 ? html.length : e + 1;
