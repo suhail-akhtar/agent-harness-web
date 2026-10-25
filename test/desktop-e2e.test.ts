@@ -243,6 +243,35 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       await api('DELETE', `/api/sessions/${otherId}`);
     });
 
+    await step('a large pasted image is scaled to 2048 px on its long edge before it is sent', async () => {
+      const before = ((await api('GET', `/api/sessions/${sessionId}`)).body as { history: unknown[] }).history.length;
+      await page.locator('[data-composer-input]').focus();
+      await page.evaluate(async () => {
+        const c = new OffscreenCanvas(3000, 1500);
+        const g = c.getContext('2d')!;
+        g.fillStyle = '#3366cc'; g.fillRect(0, 0, 3000, 1500); g.fillStyle = '#fff'; g.fillRect(100, 100, 800, 400);
+        const file = new File([await c.convertToBlob({ type: 'image/png' })], 'wide.png', { type: 'image/png' });
+        const dt = new DataTransfer(); dt.items.add(file);
+        document.querySelector('[data-composer-input]')!.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+      });
+      await page.waitForSelector('[data-attachments]', { timeout: 10_000 });
+      await send('describe this picture');
+      await page.waitForFunction(async ([id, n]) => { const r = await fetch(`/api/sessions/${id}`, { headers: { 'x-harness': '1' } }); const j = await r.json(); return j.history.length > n; }, [sessionId, before] as const, { timeout: 30_000 });
+      const detail = (await api('GET', `/api/sessions/${sessionId}`)).body as { history: Array<{ role: string; content: Array<{ type: string; data?: string; text?: string }> }> };
+      const sent = detail.history.slice(before).find((m) => m.role === 'user')!;
+      const img = sent.content.find((b) => b.type === 'image');
+      let png: Buffer;
+      if (img?.data) png = Buffer.from(img.data, 'base64');
+      else {
+        // A model that cannot see images gets the file saved in the workspace instead.
+        const where = /\.harness\/uploads\/[^\s,\]]+/.exec(sent.content.map((b) => b.text ?? '').join(' '))?.[0];
+        assert.ok(where, 'the image went as an image or as a saved file');
+        png = fs.readFileSync(path.join(work, where));
+      }
+      assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20)], [2048, 1024], 'scaled to 2048 x 1024');
+      await page.waitForSelector('[data-session][data-status="idle"]', { timeout: 30_000 });
+    });
+
     await step('the command palette opens with Ctrl+K and runs commands', async () => {
       await page.keyboard.press('Control+K');
       await page.waitForSelector('[data-palette]');

@@ -39,10 +39,12 @@ interface Traits {
   thinking: 'effort' | 'always' | 'toggle' | 'none';
   /** Writes are billed per TTL tier and prompt_cache_options applies (K3 only). */
   cacheWrite: boolean;
+  /** Tools loaded mid-session can go in as a system message where they loaded (K3 and K3.1 Pro; K2.6 answers "tokenization failed"). */
+  inlineTools?: boolean;
 }
 const TRAITS: Record<string, Traits> = {
-  'kimi-k3': { thinking: 'effort', cacheWrite: true },
-  'kimi-k3.1-pro': { thinking: 'effort', cacheWrite: true },
+  'kimi-k3': { thinking: 'effort', cacheWrite: true, inlineTools: true },
+  'kimi-k3.1-pro': { thinking: 'effort', cacheWrite: true, inlineTools: true },
   'kimi-k2.7-code': { thinking: 'always', cacheWrite: false },
   'kimi-k2.7-code-highspeed': { thinking: 'always', cacheWrite: false },
   'kimi-k2.6': { thinking: 'toggle', cacheWrite: false },
@@ -114,7 +116,7 @@ export function loadedAt(messages: ProviderRequest['messages'], sent: ReadonlySe
 export function moonshotBody(req: Pick<ProviderRequest, 'model' | 'system' | 'tools' | 'messages' | 'effort' | 'cacheKey' | 'prefixTtl'>, env: NodeJS.ProcessEnv = process.env): Record<string, unknown> {
   const traits = TRAITS[req.model.id] ?? { thinking: 'none', cacheWrite: false };
   const byName = new Map(req.tools.map((t) => [t.name, t]));
-  const inline = loadedAt(req.messages, new Set(byName.keys()));
+  const inline = traits.inlineTools ? loadedAt(req.messages, new Set(byName.keys())) : new Map<number, string[]>();
   const later = new Set([...inline.values()].flat());
   const messages: unknown[] = [{ role: 'system', content: req.system }];
   req.messages.forEach((m, i) => {

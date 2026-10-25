@@ -302,3 +302,17 @@ test('moonshot K3.1 Pro: tools loaded mid-session go in as a system message wher
   assert.equal(costOf(m, { input: 0, cacheRead: 0, cacheWrite: 1_000_000, output: 0, reasoning: 0 }), 2);
   assert.equal(m.maxOutput, 131_072);
 });
+
+test('moonshot: tools loaded mid-session stay in the top list on K2 models (they refuse a system message with tools)', () => {
+  const WIDGET = { name: 'widget_count', description: 'Counts widgets', input_schema: { type: 'object' as const, properties: {} } };
+  const messages: Message[] = [
+    { role: 'user', content: [{ type: 'text', text: 'count' }] },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'load_tools', input: { groups: ['widgets'] } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'Loaded; callable from your next step:\nwidgets: widget_count' }] },
+  ];
+  for (const id of ['kimi-k2.6', 'kimi-k2.7-code']) {
+    const b = moonshotBody(request(id, { tools: [READ_TOOL, WIDGET], messages }));
+    assert.deepEqual((b.tools as Array<{ function: { name: string } }>).map((t) => t.function.name), ['read', 'widget_count'], id);
+    assert.ok(!(b.messages as Array<{ tools?: unknown }>).some((m) => m.tools), id);
+  }
+});

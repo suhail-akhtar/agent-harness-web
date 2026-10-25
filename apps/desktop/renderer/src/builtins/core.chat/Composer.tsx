@@ -44,7 +44,37 @@ export const MODE_LABEL: Record<Mode, { label: string; hint: string; icon: strin
 };
 
 interface Pending { name: string; mediaType: string; base64: string; size: number }
-const readFile = (f: File) => new Promise<Pending>((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve({ name: f.name, mediaType: f.type || 'application/octet-stream', base64: String(r.result).split(',')[1] ?? '', size: f.size }); r.onerror = () => reject(r.error); r.readAsDataURL(f); });
+const readBlob = (name: string, b: Blob, type: string) => new Promise<Pending>((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve({ name, mediaType: type, base64: String(r.result).split(',')[1] ?? '', size: b.size }); r.onerror = () => reject(r.error); r.readAsDataURL(b); });
+/**
+ * The long edge an attached image is scaled down to. Models see no more beyond it (Claude's guidance is about
+ * 1,568 px, GPT tiles to 2,048, Kimi asks for at most 4K) but pay for every pixel: a 4K screenshot costs
+ * several times the tokens. GIFs keep their size (an animation would lose its frames).
+ */
+export const IMAGE_MAX_EDGE = 2048;
+async function readFile(f: File): Promise<Pending> {
+  const type = f.type || 'application/octet-stream';
+  if (/^image\/(png|jpeg|webp)$/.test(type)) {
+    try {
+      const bmp = await createImageBitmap(f);
+      const scale = IMAGE_MAX_EDGE / Math.max(bmp.width, bmp.height);
+      if (scale < 1) {
+        const c = document.createElement('canvas');
+        c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
+        const g = c.getContext('2d');
+        if (g) {
+          g.imageSmoothingQuality = 'high';
+          g.drawImage(bmp, 0, 0, c.width, c.height);
+          const out = type === 'image/png' ? 'image/png' : 'image/jpeg';
+          const blob = await new Promise<Blob | null>((r) => c.toBlob(r, out, 0.9));
+          bmp.close();
+          if (blob) return readBlob(f.name, blob, out);
+        }
+      }
+      bmp.close();
+    } catch { /* not decodable here: sent as it is */ }
+  }
+  return readBlob(f.name, f, type);
+}
 const MIME: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', pdf: 'application/pdf', txt: 'text/plain', md: 'text/markdown', csv: 'text/csv', json: 'application/json' };
 
 export function Composer(p: ComposerProps): React.ReactElement {
