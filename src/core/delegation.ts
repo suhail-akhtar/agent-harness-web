@@ -9,7 +9,8 @@ import type { Delegation } from './settings.ts';
 
 /** Short notes on what each built-in model is good for (a plugin's model can say so in ModelSpec.strengths). */
 const STRENGTHS: Record<string, string> = {
-  'claude-sonnet-5-5': 'strongest reasoning, review, hard code',
+  'claude-opus-5-5': 'strongest: planning, hard reasoning, long agentic work',
+  'claude-sonnet-5-5': 'strong reasoning, review, hard code',
   'claude-haiku-5-5': 'fast, cheap, solid tool use',
   'deepseek-flash': 'very cheap, good coding',
   'gpt-6-luna': 'cheap, broad knowledge',

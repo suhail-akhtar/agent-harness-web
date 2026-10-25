@@ -47,6 +47,21 @@ export function deepseekPeak(at: Date): boolean {
 
 export const BUILTIN_MODELS: ModelSpec[] = [
   {
+    id: 'claude-opus-5-5',
+    label: 'Claude Opus 5.5',
+    provider: 'anthropic',
+    vision: true,
+    notes: 'The most capable Claude for long agentic coding and knowledge work. Thinking is always on: effort is the control.',
+    contextWindow: 1_000_000,
+    maxOutput: 128_000,
+    // At $4 per million input tokens a long prompt is the cost: compact well before the window.
+    compactAt: 180_000,
+    effort: 'medium',
+    efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    // Cache writes: 1.25x input with the default 5-minute TTL, 2x with the 1-hour TTL; reads $0.20.
+    rate: () => ({ input: 4.00, cacheRead: 0.20, cacheWrite: 5.00, cacheWrite1h: 8.00, output: 20.00 }),
+  },
+  {
     id: 'claude-sonnet-5-5',
     label: 'Claude Sonnet 5.5',
     provider: 'anthropic',
