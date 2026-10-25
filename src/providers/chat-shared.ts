@@ -67,8 +67,9 @@ export interface StreamedTurn {
  */
 export async function readChatStream(res: Response, req: ProviderRequest, onError: (e: NonNullable<ChatChunk['error']>) => ProviderError): Promise<StreamedTurn> {
   const acc = new Accumulator(req);
+  let done = false;
   for await (const ev of readSse(res, req.signal)) {
-    if (ev.data === '[DONE]') break;
+    if (ev.data === '[DONE]') { done = true; break; }
     let chunk: ChatChunk;
     try { chunk = JSON.parse(ev.data); } catch { continue; }
     if (chunk.error) throw onError(chunk.error);
@@ -79,6 +80,9 @@ export async function readChatStream(res: Response, req: ProviderRequest, onErro
     if (u && u.cached_tokens !== undefined && !u.prompt_tokens_details) u.prompt_tokens_details = { cached_tokens: u.cached_tokens };
     acc.add(chunk, true);
   }
+  // A stream that stopped with neither [DONE] nor a finish reason was cut off, not answered: asked again
+  // (Kimi: "always use data: [DONE]" to tell a complete reply).
+  if (!done && !acc.finish_ && !req.signal.aborted) throw new ProviderError('the response stream ended before it was complete', 0, true);
   return { acc, finish: acc.finish_ };
 }
 

@@ -324,3 +324,15 @@ test('moonshot: a compaction asks for text (tool_choice none) and keeps the tool
   assert.equal(summary.tool_choice, 'none');
   assert.deepEqual(summary.tools, plain.tools);
 });
+
+test('moonshot: a stream cut off (no [DONE], no finish reason) is a retryable error, not a finished turn; a finish reason without [DONE] still is one', async () => {
+  const cut = await mockServer(() => ({ sse: [delta({ role: 'assistant', content: '' }), delta({ content: 'half an ans' })], done: false }));
+  try {
+    await assert.rejects(new MoonshotProvider('sk', `${cut.url}/v1`).send(request('kimi-k3.1-pro')), (e: unknown) => e instanceof ProviderError && e.retryable && /ended before it was complete/.test(e.message));
+  } finally { await cut.close(); }
+  const finished = await mockServer(() => ({ sse: [delta({ role: 'assistant', content: '' }), delta({ content: 'ok' }, 'stop')], done: false }));
+  try {
+    const r = await new MoonshotProvider('sk', `${finished.url}/v1`).send(request('kimi-k3.1-pro'));
+    assert.equal(r.stop, 'end');
+  } finally { await finished.close(); }
+});
