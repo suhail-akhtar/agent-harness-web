@@ -258,7 +258,7 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       await page.keyboard.press('Escape');
     });
 
-    await step('a large pasted image is scaled to 2048 px on its long edge before it is sent', async () => {
+    await step('a large pasted image is scaled to the long edge of its model before it is sent', async () => {
       const before = ((await api('GET', `/api/sessions/${sessionId}`)).body as { history: unknown[] }).history.length;
       await page.locator('[data-composer-input]').focus();
       await page.evaluate(async () => {
@@ -283,7 +283,10 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
         assert.ok(where, 'the image went as an image or as a saved file');
         png = fs.readFileSync(path.join(work, where));
       }
-      assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20)], [2048, 1024], 'scaled to 2048 x 1024');
+      // The session's model sets the edge (DeepSeek 1302, Opus 5.5 2576, else 2048).
+      const meta = ((await api('GET', `/api/sessions/${sessionId}`)).body as { meta: { model: string } }).meta;
+      const edge = ((await api('GET', '/api/models')).body as Array<{ id: string; imageMaxEdge?: number }>).find((m) => m.id === meta.model)?.imageMaxEdge ?? 2048;
+      assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20)], [edge, edge / 2], `scaled to ${edge} x ${edge / 2} for ${meta.model}`);
       await page.waitForSelector('[data-session][data-status="idle"]', { timeout: 30_000 });
     });
 

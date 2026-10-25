@@ -622,7 +622,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
   }
 
   /** The model catalog as clients see it (GET /api/models, and /api/config's models). */
-  const modelCatalog = () => harness.registry.listModels().map((m) => ({ id: m.id, label: m.label, provider: m.provider, contextWindow: m.contextWindow, compactAt: m.compactAt, effort: m.effort, efforts: m.efforts, available: m.available, vision: m.vision, notes: m.notes, tier: tierOf(m), maxOutput: m.maxOutput, price: (({ input, output }) => ({ input, output }))(m.rate(0, new Date())) }));
+  const modelCatalog = () => harness.registry.listModels().map((m) => ({ id: m.id, label: m.label, provider: m.provider, contextWindow: m.contextWindow, compactAt: m.compactAt, effort: m.effort, efforts: m.efforts, available: m.available, vision: m.vision, notes: m.notes, tier: tierOf(m), maxOutput: m.maxOutput, imageMaxEdge: m.imageMaxEdge ?? 2048, price: (({ input, output }) => ({ input, output }))(m.rate(0, new Date())) }));
   /** Each provider's own list of what it offers now, for ten minutes (GET /api/models/live). */
   const liveCache = new Map<string, { at: number; models?: LiveModel[]; error?: string }>();
 

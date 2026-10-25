@@ -24,6 +24,8 @@ export interface ModelSpec {
   strengths?: string;
   /** false: every tool goes in from the first request (a provider that cannot take tools later in a conversation, where a load would rewrite the cached prefix). */
   deferTools?: boolean;
+  /** The long edge (px) an attached image is scaled to: past it the model sees no more and pays per pixel. Default 2048. */
+  imageMaxEdge?: number;
   /** The model picker's group (src/providers/catalog.ts); without it, from the output price. */
   tier?: 'frontier' | 'balanced' | 'fast';
   contextWindow: number;
@@ -55,6 +57,7 @@ export const BUILTIN_MODELS: ModelSpec[] = [
     label: 'Claude Fable 5.1',
     provider: 'anthropic',
     vision: true,
+    imageMaxEdge: 2576,
     notes: "Anthropic's most capable model, for the most demanding reasoning and long agentic work. Needs an organisation with 30-day data retention (zero data retention is refused).",
     contextWindow: 1_000_000,
     maxOutput: 128_000,
@@ -69,6 +72,8 @@ export const BUILTIN_MODELS: ModelSpec[] = [
     label: 'Claude Opus 5.5',
     provider: 'anthropic',
     vision: true,
+    // The high-resolution tier: up to 2576 px on the long edge.
+    imageMaxEdge: 2576,
     notes: 'The most capable Claude for long agentic coding and knowledge work. Thinking is always on: effort is the control.',
     contextWindow: 1_000_000,
     maxOutput: 128_000,
@@ -112,6 +117,8 @@ export const BUILTIN_MODELS: ModelSpec[] = [
     label: 'DeepSeek V4.1 Flash',
     provider: 'deepseek',
     vision: true,
+    // Every image is resized to about 1300x1300 (1024 tokens at most): https://api-docs.deepseek.com/guides/vision.
+    imageMaxEdge: 1302,
     contextWindow: 1_048_576,
     // Up to 393K; DeepSeek's own harness asks for 256K (its default at max effort is 128K, so 64K cut answers off).
     maxOutput: 256_000,

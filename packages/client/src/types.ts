@@ -12,7 +12,7 @@ export type Mode = 'default' | 'acceptEdits' | 'auto' | 'dontAsk' | 'plan' | 'by
 export const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 export const MODES: readonly Mode[] = ['default', 'acceptEdits', 'auto', 'dontAsk', 'plan', 'bypass'];
 
-export interface ModelInfo { id: string; label: string; provider: string; contextWindow: number; compactAt: number; effort: Effort; efforts: Effort[]; available: boolean; vision?: boolean; notes?: string; /** The picker's group (newer servers). */ tier?: 'frontier' | 'balanced' | 'fast'; maxOutput?: number; /** USD per million tokens (newer servers). */ price?: { input: number; output: number } }
+export interface ModelInfo { id: string; label: string; provider: string; contextWindow: number; compactAt: number; effort: Effort; efforts: Effort[]; available: boolean; vision?: boolean; notes?: string; /** The picker's group (newer servers). */ tier?: 'frontier' | 'balanced' | 'fast'; maxOutput?: number; /** The long edge (px) attached images are scaled to for this model (newer servers). */ imageMaxEdge?: number; /** USD per million tokens (newer servers). */ price?: { input: number; output: number } }
 /** What a provider offers now (GET /api/models/live); known: the harness has its spec and can run it. */
 export interface LiveProviderModels { id: string; label: string; error?: string; models: Array<{ id: string; name?: string; created?: number; known: boolean }> }
 export interface CompanionInfo { id: string; name: string; online: boolean; info: { platform: string; root: string } | null }

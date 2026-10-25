@@ -46,17 +46,17 @@ export const MODE_LABEL: Record<Mode, { label: string; hint: string; icon: strin
 interface Pending { name: string; mediaType: string; base64: string; size: number }
 const readBlob = (name: string, b: Blob, type: string) => new Promise<Pending>((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve({ name, mediaType: type, base64: String(r.result).split(',')[1] ?? '', size: b.size }); r.onerror = () => reject(r.error); r.readAsDataURL(b); });
 /**
- * The long edge an attached image is scaled down to. Models see no more beyond it (Claude's guidance is about
- * 1,568 px, GPT tiles to 2,048, Kimi asks for at most 4K) but pay for every pixel: a 4K screenshot costs
+ * The long edge an attached image is scaled down to, unless the model says (DeepSeek resizes to about 1300,
+ * Opus 5.5 reads up to 2576). Past it a model sees no more but pays for every pixel: a 4K screenshot costs
  * several times the tokens. GIFs keep their size (an animation would lose its frames).
  */
 export const IMAGE_MAX_EDGE = 2048;
-async function readFile(f: File): Promise<Pending> {
+async function readFile(f: File, maxEdge = IMAGE_MAX_EDGE): Promise<Pending> {
   const type = f.type || 'application/octet-stream';
   if (/^image\/(png|jpeg|webp)$/.test(type)) {
     try {
       const bmp = await createImageBitmap(f);
-      const scale = IMAGE_MAX_EDGE / Math.max(bmp.width, bmp.height);
+      const scale = maxEdge / Math.max(bmp.width, bmp.height);
       if (scale < 1) {
         const c = document.createElement('canvas');
         c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
@@ -182,7 +182,8 @@ export function Composer(p: ComposerProps): React.ReactElement {
     const total = [...files.map((f) => f.size), ...list.map((f) => f.size)].reduce((a, b) => a + b, 0);
     if (files.length + list.length > 10) { toast('At most 10 attachments', { kind: 'warning' }); return; }
     if (total > 20 * 1024 * 1024) { toast('Attachments are limited to 20 MB in all', { kind: 'warning' }); return; }
-    try { const read = await Promise.all(list.map(readFile)); setFiles((f) => [...f, ...read]); } catch (e) { toast((e as Error).message, { kind: 'error' }); }
+    const edge = useData.getState().models.find((m) => m.id === p.value.model)?.imageMaxEdge;
+    try { const read = await Promise.all(list.map((f) => readFile(f, edge))); setFiles((f) => [...f, ...read]); } catch (e) { toast((e as Error).message, { kind: 'error' }); }
   };
   const pickFiles = async () => {
     try {
