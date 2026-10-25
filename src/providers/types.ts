@@ -31,6 +31,15 @@ export interface ProviderRequest {
   compactKeep?: string;
   /** '1h': the stable prefix (tools and system prompt) is cached for an hour (providers with TTL tiers: Anthropic); else the default TTL. */
   prefixTtl?: '1h';
+  /** 'none': the answer must be text (a compaction's summary); the tools stay listed so the cached prefix is unchanged. */
+  toolChoice?: 'none';
+  /**
+   * With deferred tool groups: every tool the agent has (loaded or not) and the names that wait behind
+   * load_tools, for a provider that declares them all from the first request and adds each where it
+   * loaded (Claude's mid-conversation tool changes). `tools` stays what is callable now.
+   */
+  allTools?: ToolSpec[];
+  deferrable?: string[];
   signal: AbortSignal;
   onText?: (delta: string) => void;
   onReasoning?: (delta: string) => void;

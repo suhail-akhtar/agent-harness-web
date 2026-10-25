@@ -19,7 +19,7 @@ test('context breakdown: estimated before the first request, the provider count 
   const h = await createHarness({ dataDir: data, plugins: [plugins], shippedPlugins: [plugins], backgroundWork: false, scheduler: false, search: null });
   try {
     for (const id of h.registry.providers.keys()) h.registry.setProviderInstance(id, fake);
-    const s = await h.sessions.create({ model: 'deepseek-flash', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: await tempDir() } });
+    const s = await h.sessions.create({ model: 'claude-haiku-5-5', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: await tempDir() } });
     const before = await s.contextBreakdown();
     assert.equal(before.measured, false, 'nothing sent yet: an estimate');
     const part = (b: typeof before, id: string) => b.parts.find((p) => p.id === id)?.tokens ?? -1;
@@ -38,5 +38,17 @@ test('context breakdown: estimated before the first request, the provider count 
     assert.equal(after.parts.reduce((a, p) => a + p.tokens, 0), 50_000, 'the messages are the rest');
     assert.ok(part(after, 'plugin-tools') > pluginBefore, 'a loaded group takes room');
     assert.ok(after.deferred.tools < before.deferred.tools, 'and waits no more');
+  } finally { await h.close(); }
+});
+
+test('DeepSeek sends every tool from the first request (its Chat Completions takes no tools later in the history): nothing waits behind load_tools', async () => {
+  const data = await tempDir();
+  const plugins = path.resolve('plugins');
+  const h = await createHarness({ dataDir: data, plugins: [plugins], shippedPlugins: [plugins], backgroundWork: false, scheduler: false, search: null });
+  try {
+    const s = await h.sessions.create({ model: 'deepseek-flash', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: await tempDir() } });
+    const b = await s.contextBreakdown();
+    assert.equal(b.deferred.tools, 0);
+    assert.ok((b.parts.find((p) => p.id === 'plugin-tools')?.tokens ?? 0) > 1000, 'plugin tools are in the context');
   } finally { await h.close(); }
 });

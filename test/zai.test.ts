@@ -53,7 +53,7 @@ test('zai: glm-5.3-flash request - forced thinking with preserved reasoning, eff
     assert.equal(b.tool_choice, 'auto');
     assert.equal(b.tool_stream, true);
     assert.equal(b.stream, true);
-    assert.equal(b.max_tokens, 64_000);
+    assert.equal(b.max_tokens, 131_072);
     assert.deepEqual(b.thinking, { type: 'enabled', clear_thinking: false });
     assert.equal(b.reasoning_effort, 'max');
     for (const k of ['stream_options', 'temperature', 'top_p', 'do_sample', 'prompt_cache_key', 'max_completion_tokens']) assert.ok(!(k in b), `${k} must not be sent`);

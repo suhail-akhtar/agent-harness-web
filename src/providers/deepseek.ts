@@ -78,11 +78,14 @@ export class DeepSeekProvider implements Provider {
     const raw: ChatAssistant = { role: 'assistant', content: content || null, reasoning_content: reasoning };
     if (toolCalls.length) raw.tool_calls = toolCalls;
 
+    // The server stopped the answer itself (short of resources, or cut off): another try, not the model's end.
+    // https://api-docs.deepseek.com/api/create-chat-completion (finish_reason).
+    if (finish === 'insufficient_system_resource' || finish === 'aborted') throw new ProviderError(`DeepSeek (${req.model.id}) stopped the response: ${finish}`, 503, true);
     const stopMap: Record<string, StopKind> = { stop: 'end', tool_calls: 'tool_use', length: 'max_tokens', content_filter: 'refusal' };
     let stop = stopMap[finish ?? ''] ?? 'other';
     if (toolCalls.length && stop !== 'max_tokens') stop = 'tool_use';
     if (!toolCalls.length && stop === 'tool_use') stop = 'end';
-    const hit = usage?.prompt_cache_hit_tokens ?? usage?.prompt_tokens_details_cached_tokens ?? 0;
+    const hit = usage?.prompt_cache_hit_tokens ?? (usage as { prompt_tokens_details?: { cached_tokens?: number } } | undefined)?.prompt_tokens_details?.cached_tokens ?? 0;
     const prompt = usage?.prompt_tokens ?? 0;
     return {
       message: { role: 'assistant', content: blocks, raw: { provider: 'deepseek', model: req.model.id, payload: raw } },

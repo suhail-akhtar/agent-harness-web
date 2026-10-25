@@ -22,6 +22,10 @@ export interface ModelSpec {
   notes?: string;
   /** A few words on what it is good for, in the catalogue agents pick delegates from. */
   strengths?: string;
+  /** false: every tool goes in from the first request (a provider that cannot take tools later in a conversation, where a load would rewrite the cached prefix). */
+  deferTools?: boolean;
+  /** The model picker's group (src/providers/catalog.ts); without it, from the output price. */
+  tier?: 'frontier' | 'balanced' | 'fast';
   contextWindow: number;
   /** max_tokens sent per request (a cap, not a reservation). */
   maxOutput: number;
@@ -46,6 +50,20 @@ export function deepseekPeak(at: Date): boolean {
 }
 
 export const BUILTIN_MODELS: ModelSpec[] = [
+  {
+    id: 'claude-fable-5-1',
+    label: 'Claude Fable 5.1',
+    provider: 'anthropic',
+    vision: true,
+    notes: "Anthropic's most capable model, for the most demanding reasoning and long agentic work. Needs an organisation with 30-day data retention (zero data retention is refused).",
+    contextWindow: 1_000_000,
+    maxOutput: 128_000,
+    // At $10 per million input tokens, compact early.
+    compactAt: 160_000,
+    effort: 'high',
+    efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    rate: () => ({ input: 10.00, cacheRead: 0.25, cacheWrite: 12.50, cacheWrite1h: 20.00, output: 50.00 }),
+  },
   {
     id: 'claude-opus-5-5',
     label: 'Claude Opus 5.5',
@@ -81,7 +99,7 @@ export const BUILTIN_MODELS: ModelSpec[] = [
     provider: 'anthropic',
     vision: true,
     contextWindow: 1_000_000,
-    maxOutput: 64_000,
+    maxOutput: 128_000,
     compactAt: 92_000,
     effort: 'medium',
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -95,13 +113,36 @@ export const BUILTIN_MODELS: ModelSpec[] = [
     provider: 'deepseek',
     vision: true,
     contextWindow: 1_048_576,
-    maxOutput: 64_000,
-    compactAt: 160_000,
+    // Up to 393K; DeepSeek's own harness asks for 256K (its default at max effort is 128K, so 64K cut answers off).
+    maxOutput: 256_000,
+    // A cache hit is $0.003-0.006 per million: a long context costs little, a compaction's fresh prefix much more
+    // (DeepSeek's Claude Code guide compacts at 786K). Later than other models, short of the window.
+    compactAt: 400_000,
     effort: 'high',
     efforts: ['low', 'high', 'max'],
+    // A tool group loaded mid-session would rewrite the tool list at the top of every request (Chat Completions
+    // takes no tools later in the history), and every cached token after it: send every tool from the start.
+    deferTools: false,
     rate: (_size, at) => deepseekPeak(at)
       ? { input: 0.30, cacheRead: 0.006, cacheWrite: 0, output: 1.20 }
       : { input: 0.15, cacheRead: 0.003, cacheWrite: 0, output: 0.60 },
+  },
+  {
+    id: 'deepseek-v4-pro',
+    label: 'DeepSeek V4 Pro',
+    provider: 'deepseek',
+    vision: false,
+    notes: 'Text only (no images). Stronger than Flash at about four times its price.',
+    contextWindow: 1_048_576,
+    maxOutput: 256_000,
+    compactAt: 400_000,
+    effort: 'high',
+    efforts: ['low', 'high', 'max'],
+    deferTools: false,
+    // https://api-docs.deepseek.com/quick_start/pricing (checked 2026-10-26).
+    rate: (_size, at) => deepseekPeak(at)
+      ? { input: 1.32, cacheRead: 0.044, cacheWrite: 0, output: 3.96 }
+      : { input: 0.66, cacheRead: 0.022, cacheWrite: 0, output: 1.98 },
   },
   {
     id: 'gpt-6-luna',
@@ -112,11 +153,12 @@ export const BUILTIN_MODELS: ModelSpec[] = [
     // The published rate card covers prompts up to 272K; the harness keeps
     // the context below that so every request stays on it.
     contextWindow: 272_000,
-    maxOutput: 64_000,
+    maxOutput: 128_000,
     compactAt: 160_000,
     effort: 'medium',
     efforts: ['low', 'medium', 'high', 'xhigh'],
-    rate: () => ({ input: 0.10, cacheRead: 0.01, cacheWrite: 0, output: 0.50 }),
+    // Cache writes: $0.125 (30 minutes), $0.25 (12 hours), https://developers.openai.com/api/docs/guides/prompt-caching (checked 2026-10-26).
+    rate: () => ({ input: 0.10, cacheRead: 0.01, cacheWrite: 0.125, cacheWrite1h: 0.25, output: 0.50 }),
   },
   // Moonshot AI (Kimi Open Platform), pay as you go. Prices from
   // https://platform.kimi.ai/docs/pricing/chat and, for K3's cache tiers,
@@ -130,7 +172,7 @@ export const BUILTIN_MODELS: ModelSpec[] = [
     notes: 'Always thinks; effort is K3\'s reasoning_effort (low / high / max). Needs a first top-up of at least $1; a new account (Tier0) is limited to 3 requests a minute.',
     // 1,048,576 tokens, one flat rate at every prompt size.
     contextWindow: 1_048_576,
-    maxOutput: 64_000,
+    maxOutput: 131_072,
     // Cached input is $0.30/M: each step over a 120K prompt costs about 3.6 cents.
     compactAt: 120_000,
     effort: 'high',
@@ -142,6 +184,8 @@ export const BUILTIN_MODELS: ModelSpec[] = [
     id: 'kimi-k3.1-pro',
     label: 'Kimi K3.1 Pro',
     provider: 'moonshot',
+    // Moonshot's flagship: priced below its class.
+    tier: 'frontier',
     vision: true,
     notes: 'K3 post-trained further, cheaper per token. Always thinks; effort is reasoning_effort (low / high / max).',
     contextWindow: 1_048_576,
@@ -154,11 +198,25 @@ export const BUILTIN_MODELS: ModelSpec[] = [
     rate: () => ({ input: 2.00, cacheRead: 0.20, cacheWrite: 2.00, cacheWrite1h: 4.00, output: 10.00 }),
   },
   {
+    id: 'kimi-k3.1-pro-highspeed',
+    label: 'Kimi K3.1 Pro Highspeed',
+    provider: 'moonshot',
+    vision: true,
+    tier: 'frontier',
+    notes: 'Kimi K3.1 Pro, 2-3x faster, at twice its input and output price (cache hits cost the same). Always thinks; effort is reasoning_effort.',
+    contextWindow: 1_048_576,
+    maxOutput: 131_072,
+    compactAt: 120_000,
+    effort: 'high',
+    efforts: ['low', 'high', 'max'],
+    rate: () => ({ input: 4.00, cacheRead: 0.20, cacheWrite: 4.00, cacheWrite1h: 8.00, output: 20.00 }),
+  },
+  {
     id: 'kimi-k2.7-code',
     label: 'Kimi K2.7 Code',
     provider: 'moonshot',
     vision: true,
-    notes: 'Kimi\'s coding model. Always thinks, with no effort control.',
+    notes: 'Retires: new accounts lose the K2 models on 2026-10-31, all accounts by the end of December 2026. Kimi\'s coding model. Always thinks, with no effort control.',
     contextWindow: 262_144,
     maxOutput: 64_000,
     compactAt: 128_000,
@@ -172,7 +230,7 @@ export const BUILTIN_MODELS: ModelSpec[] = [
     label: 'Kimi K2.6',
     provider: 'moonshot',
     vision: true,
-    notes: 'Effort low turns thinking off (faster, cheaper); high thinks.',
+    notes: 'Retires: new accounts lose the K2 models on 2026-10-31, all accounts by the end of December 2026. Effort low turns thinking off (faster, cheaper); high thinks.',
     contextWindow: 262_144,
     maxOutput: 64_000,
     compactAt: 128_000,
@@ -189,13 +247,41 @@ export const BUILTIN_MODELS: ModelSpec[] = [
     vision: true,
     notes: 'Always thinks; effort is reasoning_effort (low / high / max).',
     contextWindow: 1_000_000,
-    maxOutput: 64_000,
+    // The API's maximum (its default is 64K): a max-effort turn that writes a large file is not cut off.
+    maxOutput: 131_072,
     // Cached input is $0.03/M, so a long context is cheap; compacting at 200K keeps steps fast.
     compactAt: 200_000,
     effort: 'high',
     efforts: ['low', 'high', 'max'],
     // Implicit caching; cache storage is free for a limited time (no write charge).
     rate: () => ({ input: 0.15, cacheRead: 0.03, cacheWrite: 0.15, output: 0.50 }),
+  },
+  {
+    id: 'glm-5.3-flashx',
+    label: 'GLM-5.3-FlashX',
+    provider: 'zai',
+    vision: true,
+    notes: 'GLM-5.3-Flash at about 200 tokens a second. Always thinks; effort is reasoning_effort (low / high / max).',
+    contextWindow: 1_000_000,
+    maxOutput: 131_072,
+    compactAt: 200_000,
+    effort: 'high',
+    efforts: ['low', 'high', 'max'],
+    // https://docs.z.ai/guides/overview/pricing (checked 2026-10-26).
+    rate: () => ({ input: 0.37, cacheRead: 0.075, cacheWrite: 0.37, output: 1.25 }),
+  },
+  {
+    id: 'glm-5.3',
+    label: 'GLM-5.3',
+    provider: 'zai',
+    vision: false,
+    notes: 'The stronger GLM coder; text only. Always thinks; effort is reasoning_effort (low / high / max).',
+    contextWindow: 1_000_000,
+    maxOutput: 131_072,
+    compactAt: 200_000,
+    effort: 'high',
+    efforts: ['low', 'high', 'max'],
+    rate: () => ({ input: 1.40, cacheRead: 0.26, cacheWrite: 1.40, output: 4.40 }),
   },
 ];
 

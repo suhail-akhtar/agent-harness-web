@@ -110,7 +110,7 @@ test('delegation: another model only when the person allows it; the allowed ones
     assert.ok(s.meta.byModel['claude-sonnet-5-5']!.cost > 0 && s.meta.byModel['deepseek-flash']!.cost > 0, 'each model\'s cost is its own');
     assert.deepEqual(s.meta.delegatedProviders, ['anthropic']);
     const tool = t.ds.byKey['d1']![0]!.tools.find((x) => x.name === 'agent')!;
-    assert.match(tool.description, /Other models \(model param; default deepseek-flash\):\n- claude-sonnet-5-5 \(anthropic, \$\$\$, 1M: strongest reasoning, review, hard code\)/);
+    assert.match(tool.description, /Other models \(model param; default deepseek-flash\):\n- claude-sonnet-5-5 \(anthropic, \$\$\$, 1M: strong reasoning, review, hard code\)/);
     // A workflow's reviewer node on another model: the same consent (the cap is spent here, so it is refused).
     await s.startWorkflow('review', {});
     await waitFor(async () => (await s.listRuns())[0]?.status === 'failed', 'the run to fail');

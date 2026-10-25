@@ -1461,7 +1461,8 @@ export class Session {
     const model = this.deps.registry.model(this.meta.model);
     const est = (s: string | undefined) => Math.ceil((s ?? '').length / 4);
     const all = tb.tools.map((t) => t.spec);
-    const sent = this.agent ? this.agent.toolSpecs() : sentSpecs(all, tb.groups, loadedGroups(this.history, tb.groups));
+    const groups = model.deferTools === false ? [] : tb.groups;
+    const sent = this.agent ? this.agent.toolSpecs() : sentSpecs(all, groups, loadedGroups(this.history, groups));
     const sentNames = new Set(sent.map((s) => s.name));
     const owner = (name: string) => { const t = tb.tools.find((x) => x.spec.name === name); return t ? this.deps.registry.ownerOf(t) : undefined; };
     const kind = (name: string) => (name.startsWith('mcp__') ? 'mcp' : owner(name) ? 'plugin' : 'core');
@@ -1585,7 +1586,7 @@ export class Session {
     const cfg = {
       name: 'main', model, provider: this.deps.registry.provider(model), effort: this.meta.effort, system: systemPrompt(this.meta.outputStyle?.prompt, this.meta.clientPrompt), tools: tb.tools, host, settings,
       // Deferred plugin groups, loaded as the session's whole history says (a load outlives a compaction).
-      toolGroups: tb.groups, loadHistory: this.history, spill: this.spillFor(host),
+      toolGroups: model.deferTools === false ? [] : tb.groups, loadHistory: this.history, spill: this.spillFor(host),
       cacheKey: this.meta.cacheKey ?? `hw-${this.meta.id}`, maxSteps: settings.maxSteps, readFiles: this.readFiles,
       inProcessHooks: [...this.deps.registry.hooks, ...this.gatesOnStopHook(settings)],
       hookJudge: this.hookJudge(settings),
@@ -2035,7 +2036,7 @@ export class Session {
       system: SUBAGENT_PROMPT, tools, host, settings: a.noHooks ? { ...settings, hooks: {} } : settings,
       // An agent type that names its tools gets them all (someone chose them); any other defers plugin groups like the main agent,
       // but for its own plugin's (a plugin's agent type, a plugin's workflow node), which it has from the start.
-      toolGroups: def.tools ? [] : tb.groups.filter((g) => g.id !== this.deps.registry.ownerOf(def) && !a.loadGroups?.includes(g.id)).map((g) => ({ ...g, tools: g.tools.filter((n) => tools.some((t) => t.spec.name === n)) })).filter((g) => g.tools.length),
+      toolGroups: def.tools || model.deferTools === false ? [] : tb.groups.filter((g) => g.id !== this.deps.registry.ownerOf(def) && !a.loadGroups?.includes(g.id)).map((g) => ({ ...g, tools: g.tools.filter((n) => tools.some((t) => t.spec.name === n)) })).filter((g) => g.tools.length),
       spill: this.spillFor(host),
       cacheKey: `hw-${this.meta.id}-${def.name}`, maxSteps: Math.min(a.maxSteps ?? (a.allowTodos ? 150 : 60), settings.maxSteps), ...(a.toolBudget ? { toolBudget: a.toolBudget } : {}), readFiles: new Map<string, FileStamp>(),
       inProcessHooks: a.noHooks ? [] : this.deps.registry.hooks,

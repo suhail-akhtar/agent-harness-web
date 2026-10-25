@@ -4,6 +4,7 @@ import type { Block, Message } from '../core/types.ts';
 import type { ModelSpec } from '../core/models.ts';
 import type { Provider, ProviderRequest, ProviderResponse, StopKind, ToolSpec } from './types.ts';
 import { ProviderError } from './types.ts';
+import { loadedAt } from './tool-loads.ts';
 
 // Claude over the official SDK's beta Messages stream.
 //
@@ -94,7 +95,9 @@ export class AnthropicProvider implements Provider {
     };
     try {
       bump();
-      const params = { ...this.body(req), betas: this.contextEditing ? [...BETAS, ...(this.compactsServerSide(req.model, req.compactAt) ? [COMPACT_BETA] : [])] : [] };
+      const body = this.body(req);
+      const mid = Array.isArray(body.tools) && (body.tools as Array<{ defer_loading?: boolean }>).some((t) => t.defer_loading) ? [MID_TOOLS_BETA] : [];
+      const params = { ...body, betas: [...(this.contextEditing ? [...BETAS, ...(this.compactsServerSide(req.model, req.compactAt) ? [COMPACT_BETA] : [])] : []), ...mid] };
       const stream = liveness.run(bump, () => this.client.beta.messages.stream(params as unknown as Anthropic.Beta.Messages.MessageCreateParamsStreaming, { signal: ctl.signal }));
       stream.on('streamEvent', bump);
       stream.on('text', (d) => req.onText?.(d));
@@ -140,8 +143,38 @@ export class AnthropicProvider implements Provider {
   }
 }
 
+/**
+ * The models that take tools added mid-conversation (beta mid-conversation-tool-changes-2026-07-01): every tool
+ * is declared from the first request, the deferred ones with defer_loading, and a loaded one is added by a system
+ * message where it loaded - the tool list never changes, so neither the cache nor the history preserved thinking
+ * checks does. Not Haiku 5.5 or Sonnet 5 (there a load still grows the list).
+ */
+export const MID_TOOL_CHANGES = new Set(['claude-opus-5-5', 'claude-opus-5', 'claude-fable-5-1', 'claude-sonnet-5-5']);
+export const MID_TOOLS_BETA = 'mid-conversation-tool-changes-2026-07-01';
+
+/** The tools on top and the additions to place, for a model with mid-conversation tool changes; undefined: the plain list. */
+export function midConversationTools(req: Pick<ProviderRequest, 'model' | 'tools' | 'messages' | 'allTools' | 'deferrable'>): { tools: Record<string, unknown>[]; additions: Map<number, string[]> } | undefined {
+  if (!MID_TOOL_CHANGES.has(req.model.id) || !req.allTools?.length || !req.deferrable?.length) return undefined;
+  const deferrable = new Set(req.deferrable);
+  const sent = new Map(req.tools.map((t) => [t.name, t]));
+  const additions = loadedAt(req.messages, new Set([...sent.keys()].filter((n) => deferrable.has(n))));
+  const placed = new Set([...additions.values()].flat());
+  // A group loaded some other way (its skill loaded it) has no load_tools result to place an addition after: listed plainly.
+  const plain = new Set([...sent.keys()].filter((n) => deferrable.has(n) && !placed.has(n)));
+  const names = [...new Set([...req.allTools.map((t) => t.name), ...sent.keys()])];
+  const spec = (n: string) => sent.get(n) ?? req.allTools!.find((t) => t.name === n)!;
+  return { tools: names.map((n) => ({ ...toAnthropicTool(spec(n)), ...(deferrable.has(n) && !plain.has(n) ? { defer_loading: true } : {}) })), additions };
+}
+
 /** The request body (without betas). Exported for tests: caching depends on its exact shape. */
-export function anthropicBody(req: Pick<ProviderRequest, 'model' | 'system' | 'tools' | 'messages' | 'effort' | 'compactAt' | 'compactKeep' | 'prefixTtl'>, contextEditing: boolean, serverCompaction = false): Record<string, unknown> {
+export function anthropicBody(req: Pick<ProviderRequest, 'model' | 'system' | 'tools' | 'messages' | 'effort' | 'compactAt' | 'compactKeep' | 'prefixTtl' | 'allTools' | 'deferrable'>, contextEditing: boolean, serverCompaction = false): Record<string, unknown> {
+  const mid = midConversationTools(req);
+  const messages: unknown[] = [];
+  req.messages.forEach((m, i) => {
+    messages.push(toAnthropicMessage(m, req.model.id));
+    const added = mid?.additions.get(i);
+    if (added) messages.push({ role: 'system', content: added.map((name) => ({ type: 'tool_addition', tool: { type: 'tool_reference', name } })) });
+  });
   const body: Record<string, unknown> = {
     model: req.model.id,
     max_tokens: req.model.maxOutput,
@@ -149,8 +182,8 @@ export function anthropicBody(req: Pick<ProviderRequest, 'model' | 'system' | 't
     // it, so it covers both) - with the 1-hour TTL when the session has long gaps
     // (a longer TTL must come before shorter ones: the prefix is always first) ...
     system: [{ type: 'text', text: req.system, cache_control: req.prefixTtl === '1h' ? { type: 'ephemeral', ttl: '1h' } : { type: 'ephemeral' } }],
-    tools: req.tools.map(toAnthropicTool),
-    messages: req.messages.map((m) => toAnthropicMessage(m, req.model.id)),
+    tools: mid ? mid.tools : req.tools.map(toAnthropicTool),
+    messages,
     // ... plus automatic caching for the growing conversation tail.
     cache_control: { type: 'ephemeral' },
     thinking: { type: 'adaptive', display: 'summarized' },

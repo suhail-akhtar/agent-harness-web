@@ -35,6 +35,7 @@ import { LinkedError } from '../core/linked.ts';
 import { dataRoutes, type DataHttpContext, publishedRoutes } from '../data/http.ts';
 import { FormAnswerError, nodeViews } from '../core/session.ts';
 import { cleanName as cleanAttachmentName, codeImports, deletePath, fileTree, gitDiff, gitLog, gitStatus, renamePath, saveUploads, searchFiles, WorkspaceError, WRITE_LIMIT, writeFile } from './workspace-api.ts';
+import { tierOf, type LiveModel } from '../providers/catalog.ts';
 
 // The HTTP side: JSON API, an SSE stream per session, the built UI, and the
 // companion endpoints. Provider keys stay in this process.
@@ -621,7 +622,9 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
   }
 
   /** The model catalog as clients see it (GET /api/models, and /api/config's models). */
-  const modelCatalog = () => harness.registry.listModels().map((m) => ({ id: m.id, label: m.label, provider: m.provider, contextWindow: m.contextWindow, compactAt: m.compactAt, effort: m.effort, efforts: m.efforts, available: m.available, vision: m.vision, notes: m.notes }));
+  const modelCatalog = () => harness.registry.listModels().map((m) => ({ id: m.id, label: m.label, provider: m.provider, contextWindow: m.contextWindow, compactAt: m.compactAt, effort: m.effort, efforts: m.efforts, available: m.available, vision: m.vision, notes: m.notes, tier: tierOf(m), maxOutput: m.maxOutput, price: (({ input, output }) => ({ input, output }))(m.rate(0, new Date())) }));
+  /** Each provider's own list of what it offers now, for ten minutes (GET /api/models/live). */
+  const liveCache = new Map<string, { at: number; models?: LiveModel[]; error?: string }>();
 
   /** A plugin as GET /api/plugins lists it: never its folder. */
   const pluginView = (e: import('../kernel/harness.ts').PluginEntry) => ({
@@ -784,6 +787,23 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       const list = modelCatalog();
       if (!list.length) { res.setHeader('retry-after', '1'); throw new HttpError(503, 'the engine is still starting: models are not loaded yet'); }
       return send(res, 200, list);
+    }
+    if (p === '/api/models/live' && method === 'GET') {
+      // What every provider with a key offers now, marked with whether the harness can run it (it has the
+      // model's spec: prices and context, so a run is costed and limited). A provider that fails says why.
+      const fresh = url.searchParams.get('refresh') === '1';
+      const out = await Promise.all([...registry.providers.entries()].map(async ([id, def]) => {
+        const key = registry.keyInfo(id).key;
+        const base = providerBaseUrl(registry, id);
+        if (!def.listModels || !key || !base) return { id, label: def.label ?? id, models: [], ...(def.listModels ? { error: key ? 'no base URL' : 'no key' } : { error: 'this provider cannot list its models' }) };
+        let c = liveCache.get(id);
+        if (fresh || !c || Date.now() - c.at > 10 * 60_000) {
+          c = await def.listModels(key, base, AbortSignal.timeout(15_000)).then((models) => ({ at: Date.now(), models }), (e: Error) => ({ at: Date.now(), error: e.message.slice(0, 200) }));
+          liveCache.set(id, c);
+        }
+        return { id, label: def.label ?? id, ...(c.error ? { error: c.error } : {}), models: (c.models ?? []).map((m) => ({ ...m, known: registry.models.has(m.id) })).sort((a, b) => (b.created ?? 0) - (a.created ?? 0)) };
+      }));
+      return send(res, 200, { providers: out });
     }
     if (p === '/api/providers' && method === 'GET') {
       await harness.providerKeys.refresh();

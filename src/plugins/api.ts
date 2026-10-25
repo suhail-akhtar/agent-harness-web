@@ -66,6 +66,8 @@ export interface ProviderDef {
   baseUrlEnv?: string;
   /** `opts.baseUrl`: an address an administrator set through the API (PUT /api/providers/:id); else the provider's own default. */
   create(apiKey: string, opts?: { baseUrl?: string }): Provider;
+  /** What the provider offers now (its list-models endpoint), for the model picker; baseUrl is the one in use. */
+  listModels?(apiKey: string, baseUrl: string, signal: AbortSignal): Promise<import('../providers/catalog.ts').LiveModel[]>;
 }
 
 export interface PluginAPI {

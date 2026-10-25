@@ -7,8 +7,8 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import type { Attachment, Effort, Mode, ModelInfo } from '@harness/client';
-import { Button, Icon, IconButton, MenuList, Popover, Tooltip, cx, toast, type MenuItem } from '@harness/ui';
+import type { Attachment, Effort, LiveProviderModels, Mode, ModelInfo } from '@harness/client';
+import { Button, Icon, IconButton, MenuList, Popover, Tooltip, cx, toast, type MenuItem, Input, ListRow } from '@harness/ui';
 import { useData, client } from '../../state/data';
 import { useApp } from '../../state/app';
 import { runAction } from '../../registry/actions';
@@ -275,39 +275,64 @@ export function Composer(p: ComposerProps): React.ReactElement {
 
 const EFFORT_LABEL: Record<Effort, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' };
 
+const TIERS = [['frontier', 'Most capable'], ['balanced', 'Balanced'], ['fast', 'Fast & low cost']] as const;
+const usd = (n: number) => (n >= 1 ? `$${n.toFixed(n % 1 ? 2 : 0)}` : `$${n.toFixed(2)}`);
+
+/**
+ * The model picker: a search over every model, grouped by tier (the strongest first), with each
+ * model's provider, context and price; then what the providers offer that the harness cannot run yet
+ * (no spec: a run could not be costed or limited), from each provider's own list.
+ */
 export function ModelPicker({ value, onChange }: { value: ComposerValue; onChange: (v: Partial<ComposerValue>) => void }): React.ReactElement {
   const models = useData((s) => s.models);
   const providers = useData((s) => s.providers);
   const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const [live, setLive] = useState<LiveProviderModels[] | null>(null);
   const ref = useRef<HTMLButtonElement>(null);
   const current = models.find((m) => m.id === value.model);
-  const groups = useMemo(() => {
-    const by = new Map<string, ModelInfo[]>();
-    for (const m of models) by.set(m.provider, [...(by.get(m.provider) ?? []), m]);
-    return [...by.entries()].sort((a, b) => Number(b[1].some((m) => m.available)) - Number(a[1].some((m) => m.available)));
-  }, [models]);
+  const provLabel = (id: string) => providers?.find((p) => p.id === id)?.label ?? id;
+  useEffect(() => { if (open && !live) client.liveModels().then((r) => setLive(r.providers)).catch(() => setLive([])); }, [open]);
+  useEffect(() => { if (!open) setQ(''); }, [open]);
+  const match = (...xs: Array<string | undefined>) => { const t = q.trim().toLowerCase(); return !t || t.split(/s+/).every((w) => xs.some((x) => x?.toLowerCase().includes(w))); };
+  const shown = useMemo(() => models.filter((m) => match(m.label, m.id, provLabel(m.provider), m.tier)), [models, q, providers]);
+  const groups = TIERS.map(([tier, label]) => ({ tier, label, list: shown.filter((m) => (m.tier ?? 'balanced') === tier).sort((a, b) => Number(b.available) - Number(a.available) || a.provider.localeCompare(b.provider)) })).filter((g) => g.list.length);
+  const more = (live ?? []).flatMap((p) => p.models.filter((m) => !m.known && match(m.id, m.name, p.label)).map((m) => ({ ...m, provider: p.id, label: p.label })));
+  const pick = (m: ModelInfo) => { onChange({ model: m.id, effort: m.effort }); setOpen(false); };
   const effort = value.effort ?? current?.effort;
   return (
     <>
       <button ref={ref} type="button" data-model-picker onClick={() => setOpen(!open)} className="inline-flex h-7 max-w-[220px] items-center gap-1 rounded-lg px-2 text-[12.5px] text-hx-secondary hover:bg-hx-hover hover:text-hx-primary">
         <Icon name="cpu" size={14} /><span className="truncate">{current?.label ?? (value.model || 'Choose a model')}</span>{effort && current?.efforts && current.efforts.length > 1 && <span className="text-hx-muted">· {EFFORT_LABEL[effort]}</span>}<Icon name="chevron-down" size={12} />
       </button>
-      <Popover open={open} onClose={() => setOpen(false)} anchor={ref} placement="top-start" className="w-[340px]" label="Models">
-        <div className="hx-scroll max-h-[360px] overflow-y-auto" data-model-list>
-          {groups.map(([prov, list]) => (
-            <div key={prov}>
-              <div className="px-2.5 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-hx-muted">{providers?.find((p) => p.id === prov)?.label ?? prov}</div>
-              {list.map((m) => (
-                <button key={m.id} type="button" data-model={m.id} disabled={!m.available} onClick={() => { onChange({ model: m.id, effort: m.effort }); setOpen(false); }}
-                  className={cx('flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px]', m.id === value.model ? 'bg-hx-active' : 'hover:bg-hx-hover', !m.available && 'opacity-50')}>
-                  <span className="min-w-0 flex-1"><span className="block truncate">{m.label}</span><span className="block truncate text-[11px] text-hx-muted">{m.available ? `${Math.round(m.contextWindow / 1000)}K context${m.vision ? ' · images' : ''}` : 'No key: add one in Settings'}</span></span>
-                  {m.id === value.model && <Icon name="check" size={14} className="text-hx-accent-text" />}
-                </button>
+      <Popover open={open} onClose={() => setOpen(false)} anchor={ref} placement="top-start" className="w-[380px]" label="Models">
+        <div className="p-2 pb-1">
+          <Input icon="search" autoFocus placeholder="Search models and providers" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search models" data-model-search
+            onKeyDown={(e) => { if (e.key === 'Enter') { const first = groups.flatMap((g) => g.list).find((m) => m.available); if (first) { e.preventDefault(); pick(first); } } }} />
+        </div>
+        <div className="hx-scroll max-h-[400px] overflow-y-auto px-1 pb-1" data-model-list>
+          {groups.map((g) => (
+            <div key={g.tier} data-model-tier={g.tier}>
+              <div className="px-2 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-hx-muted">{g.label}</div>
+              {g.list.map((m) => (
+                <ListRow key={m.id} data-model={m.id} disabled={!m.available} active={m.id === value.model} onClick={() => pick(m)}
+                  title={<span className="flex items-center gap-1.5">{m.label}{m.id === value.model && <Icon name="check" size={13} className="text-hx-accent-text" />}</span>}
+                  subtitle={m.available ? `${provLabel(m.provider)} · ${Math.round(m.contextWindow / 1000)}K context${m.vision ? ' · images' : ''}` : `${provLabel(m.provider)} · no key: add one in Settings`}
+                  meta={m.price ? `${usd(m.price.input)} / ${usd(m.price.output)}` : undefined} />
               ))}
             </div>
           ))}
+          {!shown.length && models.length > 0 && <div className="p-3 text-[12.5px] text-hx-muted">No model matches "{q}".</div>}
           {!models.length && <div className="p-3 text-[12.5px] text-hx-muted">No models yet: the engine is starting.</div>}
+          {more.length > 0 && (
+            <div data-model-more>
+              <div className="px-2 pb-1 pt-3 text-[11px] font-medium uppercase tracking-wide text-hx-muted">More from your providers</div>
+              {more.slice(0, q ? 60 : 12).map((m) => <ListRow key={`${m.provider}:${m.id}`} data-model-offered={m.id} disabled title={m.name ?? m.id} subtitle={`${m.label} · not set up in Harness yet (its prices are not known)`} />)}
+              {!q && more.length > 12 && <div className="px-2 py-1 text-[11.5px] text-hx-muted">{more.length - 12} more: search to find them.</div>}
+            </div>
+          )}
         </div>
+        <div className="border-t border-hx-border-subtle px-3 py-1.5 text-[11px] text-hx-muted">Prices: USD per million tokens, input / output.</div>
         {current && current.efforts.length > 1 && (
           <div className="border-t border-hx-border-subtle p-2">
             <div className="mb-1 px-1 text-[11px] font-medium uppercase tracking-wide text-hx-muted">Effort</div>

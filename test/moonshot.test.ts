@@ -49,7 +49,7 @@ test('moonshot: kimi-k3 request - effort, cache key, strict tools, usage in the 
     assert.equal(b.tool_choice, 'auto');
     assert.equal(b.stream, true);
     assert.deepEqual(b.stream_options, { include_usage: true });
-    assert.equal(b.max_completion_tokens, 64_000);
+    assert.equal(b.max_completion_tokens, 131_072);
     assert.ok(!('max_tokens' in b), 'max_tokens is deprecated on Kimi');
     assert.equal(b.prompt_cache_key, 'sess-1');
     assert.equal(b.reasoning_effort, 'high', 'medium maps to high (K3 has low/high/max)');
@@ -315,4 +315,12 @@ test('moonshot: tools loaded mid-session stay in the top list on K2 models (they
     assert.deepEqual((b.tools as Array<{ function: { name: string } }>).map((t) => t.function.name), ['read', 'widget_count'], id);
     assert.ok(!(b.messages as Array<{ tools?: unknown }>).some((m) => m.tools), id);
   }
+});
+
+test('moonshot: a compaction asks for text (tool_choice none) and keeps the tools listed (the cached prefix is unchanged)', () => {
+  const plain = moonshotBody(request('kimi-k3.1-pro'));
+  const summary = moonshotBody(request('kimi-k3.1-pro', { toolChoice: 'none' }));
+  assert.equal(plain.tool_choice, 'auto');
+  assert.equal(summary.tool_choice, 'none');
+  assert.deepEqual(summary.tools, plain.tools);
 });

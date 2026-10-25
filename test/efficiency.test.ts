@@ -120,7 +120,7 @@ test('deferral in a session with bundled plugins: plugin tools wait behind load_
   const h = await createHarness({ dataDir: data, plugins: [plugins], shippedPlugins: [plugins], backgroundWork: false, scheduler: false, search: null });
   try {
     for (const id of h.registry.providers.keys()) h.registry.setProviderInstance(id, fake);
-    const s = await h.sessions.create({ model: 'deepseek-flash', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: await tempDir() } });
+    const s = await h.sessions.create({ model: 'claude-haiku-5-5', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: await tempDir() } });
     const before = await s.sentToolSpecs();
     assert.ok(before.all.some((t) => t.name === 'render') && !before.sent.some((t) => t.name === 'render'));
     assert.ok(before.groups.some((g) => g.id === 'games3d'), 'games3d is a group');
@@ -152,7 +152,7 @@ test('deferral and the plugin-off rule: a loaded group stays listed and answers 
   const h = await createHarness({ dataDir: data, plugins: [root], backgroundWork: false, scheduler: false, search: null });
   try {
     for (const id of h.registry.providers.keys()) h.registry.setProviderInstance(id, fake);
-    const s = await h.sessions.create({ model: 'deepseek-flash', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: await tempDir() } });
+    const s = await h.sessions.create({ model: 'claude-haiku-5-5', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: await tempDir() } });
     await s.send('count');
     await until(() => h.sessions.statusOf(s.meta.id) === 'idle' && fake.requests.length >= 3);
     const tr = s.history.flatMap((m) => m.content.filter((b) => b.type === 'tool_result')) as { content: string; is_error?: boolean }[];
@@ -168,7 +168,7 @@ test('deferral and the plugin-off rule: a loaded group stays listed and answers 
     assert.equal(JSON.stringify(fake.requests.at(-1)!.tools), loadedList, 'the cached tool list is unchanged by switching off');
 
     // A second session, the plugin off from its start: the plugin's tools are not in it at all.
-    const s2 = await h.sessions.create({ model: 'deepseek-flash', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: await tempDir() } });
+    const s2 = await h.sessions.create({ model: 'claude-haiku-5-5', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: await tempDir() } });
     assert.ok(!(await s2.sentToolSpecs()).all.some((t) => t.name === 'widget_count'));
   } finally { await h.close(); }
 
@@ -198,7 +198,7 @@ test('deferral: a plugin\'s workflow runs its agents with that plugin\'s tools f
   const h = await createHarness({ dataDir: data, plugins: [root], backgroundWork: false, scheduler: false, search: null });
   try {
     for (const id of h.registry.providers.keys()) h.registry.setProviderInstance(id, fake);
-    const s = await h.sessions.create({ model: 'deepseek-flash', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: await tempDir() } });
+    const s = await h.sessions.create({ model: 'claude-haiku-5-5', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: await tempDir() } });
     const ended = new Promise<void>((r) => s.subscribe(0, ({ event }) => { if (event.kind === 'turn_end' && !event.agent) r(); }));
     await s.startWorkflow('widget-flow', {});
     await ended;

@@ -3,7 +3,7 @@ import type { JsonSchema, Provider, ProviderRequest, ProviderResponse, ToolSpec 
 import { ProviderError } from './types.ts';
 import { postStream } from './http.ts';
 import { errorBody, finishTurn, readChatStream, toReasoningChat } from './chat-shared.ts';
-import { LOAD_TOOLS } from '../tools/deferred.ts';
+import { loadedAt } from './tool-loads.ts';
 
 // Moonshot AI's Kimi models (kimi-k3.1-pro, kimi-k3, kimi-k2.7-code, kimi-k2.6) over the
 // Kimi Open Platform's OpenAI-compatible Chat Completions endpoint.
@@ -45,6 +45,7 @@ interface Traits {
 const TRAITS: Record<string, Traits> = {
   'kimi-k3': { thinking: 'effort', cacheWrite: true, inlineTools: true },
   'kimi-k3.1-pro': { thinking: 'effort', cacheWrite: true, inlineTools: true },
+  'kimi-k3.1-pro-highspeed': { thinking: 'effort', cacheWrite: true, inlineTools: true },
   'kimi-k2.7-code': { thinking: 'always', cacheWrite: false },
   'kimi-k2.7-code-highspeed': { thinking: 'always', cacheWrite: false },
   'kimi-k2.6': { thinking: 'toggle', cacheWrite: false },
@@ -90,30 +91,8 @@ export function kimiTool(t: ToolSpec) {
   return { type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema as JsonSchema, strict: mfjsStrict(t.input_schema) } };
 }
 
-/**
- * The tools each load_tools result made callable (by its position in the history): Kimi's dynamic tool
- * loading takes their definitions as a system message at that point, so the prefix before it (and the
- * tools list on top) stays cached. https://platform.kimi.ai/docs/guide/kimi-k3-1-pro-quickstart
- */
-export function loadedAt(messages: ProviderRequest['messages'], sent: ReadonlySet<string>): Map<number, string[]> {
-  const calls = new Set<string>();
-  const at = new Map<number, string[]>();
-  const placed = new Set<string>();
-  messages.forEach((m, i) => {
-    for (const b of m.content) {
-      if (b.type === 'tool_use' && b.name === LOAD_TOOLS) calls.add(b.id);
-      if (b.type !== 'tool_result' || !calls.has(b.tool_use_id) || b.is_error) continue;
-      const body = /^Loaded; callable from your next step:\n([\s\S]*)$/.exec(b.content)?.[1] ?? '';
-      const names = body.split('\n').flatMap((l) => /^[^:\s]+: (.+)$/.exec(l)?.[1]?.split(', ') ?? []).filter((n) => sent.has(n) && !placed.has(n));
-      for (const n of names) placed.add(n);
-      if (names.length) at.set(i, [...(at.get(i) ?? []), ...names]);
-    }
-  });
-  return at;
-}
-
 /** The request body. Exported for tests: the cache depends on its exact shape. */
-export function moonshotBody(req: Pick<ProviderRequest, 'model' | 'system' | 'tools' | 'messages' | 'effort' | 'cacheKey' | 'prefixTtl'>, env: NodeJS.ProcessEnv = process.env): Record<string, unknown> {
+export function moonshotBody(req: Pick<ProviderRequest, 'model' | 'system' | 'tools' | 'messages' | 'effort' | 'cacheKey' | 'prefixTtl' | 'toolChoice'>, env: NodeJS.ProcessEnv = process.env): Record<string, unknown> {
   const traits = TRAITS[req.model.id] ?? { thinking: 'none', cacheWrite: false };
   const byName = new Map(req.tools.map((t) => [t.name, t]));
   const inline = traits.inlineTools ? loadedAt(req.messages, new Set(byName.keys())) : new Map<number, string[]>();
@@ -127,8 +106,9 @@ export function moonshotBody(req: Pick<ProviderRequest, 'model' | 'system' | 'to
   const body: Record<string, unknown> = { model: req.model.id, messages };
   const top = req.tools.filter((t) => !later.has(t.name));
   if (top.length) body.tools = top.map(kimiTool);
-  // auto is the only value every Kimi model accepts with thinking on.
-  if (req.tools.length) body.tool_choice = 'auto';
+  // auto, or none for a compaction's summary: both are accepted by every Kimi model with thinking on, and a
+  // per-request tool_choice keeps the prefix cache (https://platform.kimi.ai/docs/guide/use-tool-choice).
+  if (req.tools.length) body.tool_choice = req.toolChoice ?? 'auto';
   body.stream = true;
   body.stream_options = { include_usage: true };
   // max_tokens is deprecated on Kimi; the server lowers this cap itself when the prompt leaves less room.

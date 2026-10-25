@@ -11,7 +11,7 @@
 
 import { GlobalEvents, sessionEvents, type Fetch } from './events.ts';
 import {
-  isPending, PENDING_KINDS, type Approval, type FileTree, type SearchHit, type Attachment, type CatalogueEntry, type Config, type Capabilities, type ContextBreakdown, type EffectiveSetting, type Effort, type FileContent, type FileEntry,
+  isPending, PENDING_KINDS, type Approval, type FileTree, type SearchHit, type Attachment, type CatalogueEntry, type Config, type Capabilities, type ContextBreakdown, type LiveProviderModels, type EffectiveSetting, type Effort, type FileContent, type FileEntry,
   type GitLogEntry, type GitStatus, type Health, type HarnessEvent, type HistoryPage, type McpBundle, type Me, type Mode, type ModelInfo, type PendingRequest, type PluginInfo,
   type ProviderInfo, type ProviderTest, type Schedule, type SessionDetail, type SessionMeta, type SessionsPage, type TaskView, type VaultEntry, type VersionInfo, type WorkflowInfo, type WorkflowRunView,
   type ArtifactContent, type ArtifactMeta, type Proposal, type TraceSpan,
@@ -115,6 +115,9 @@ export class HarnessClient {
   version(): Promise<VersionInfo | null> { return this.optional('version', () => this.get<VersionInfo>('/api/version'), () => null); }
   me(): Promise<Me> { return this.get<Me>('/api/me'); }
   config(): Promise<Config> { return this.get<Config>('/api/config'); }
+
+  /** What each provider with a key offers now (its own list), each model marked known when the harness can run it. */
+  liveModels(refresh = false): Promise<{ providers: LiveProviderModels[] }> { return this.get(`/api/models/live${refresh ? '?refresh=1' : ''}`); }
 
   /**
    * Models with whether each has a key. GET /api/models (new), else the config's list. A server

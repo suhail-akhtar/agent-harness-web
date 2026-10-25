@@ -590,6 +590,8 @@ export class Agent {
       system: this.cfg.system,
       tools,
       ...(ttl ? { prefixTtl: ttl } : {}),
+      ...(compaction ? { toolChoice: 'none' as const } : {}),
+      ...(this.cfg.toolGroups?.length ? { allTools: this.specs, deferrable: this.cfg.toolGroups.flatMap((g) => g.tools) } : {}),
       // Already clean when appended; this catches a value registered after its message was (it is hidden from then on).
       messages: this.redact(messages),
       effort: this.cfg.effort,

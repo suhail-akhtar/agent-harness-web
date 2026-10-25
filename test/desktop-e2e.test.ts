@@ -243,6 +243,21 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       await api('DELETE', `/api/sessions/${otherId}`);
     });
 
+    await step('the model picker: grouped by tier, searchable, Enter picks the first match', async () => {
+      await page.click('[data-model-picker]');
+      await page.waitForSelector('[data-model-list]');
+      const tiers = await page.$$eval('[data-model-tier]', (els) => els.map((e) => e.getAttribute('data-model-tier')));
+      assert.deepEqual(tiers.filter((t) => ['frontier', 'balanced', 'fast'].includes(t!)), tiers, 'only the three tiers');
+      assert.equal(tiers[0], 'frontier', 'the strongest first');
+      assert.ok(await page.locator('[data-model-tier="frontier"] [data-model="claude-opus-5-5"]').count(), 'Opus 5.5 is among the most capable');
+      await page.fill('[data-model-search]', 'haiku');
+      assert.deepEqual(await page.$$eval('[data-model-list] [data-model]', (els) => els.map((e) => e.getAttribute('data-model'))), ['claude-haiku-5-5']);
+      await shot('model-picker-search');
+      await page.fill('[data-model-search]', 'no such model at all');
+      await page.waitForSelector('[data-model-list] >> text=No model matches');
+      await page.keyboard.press('Escape');
+    });
+
     await step('a large pasted image is scaled to 2048 px on its long edge before it is sent', async () => {
       const before = ((await api('GET', `/api/sessions/${sessionId}`)).body as { history: unknown[] }).history.length;
       await page.locator('[data-composer-input]').focus();
