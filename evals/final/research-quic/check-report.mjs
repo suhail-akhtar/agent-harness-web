@@ -7,7 +7,6 @@ const need = [
   ['RFC 9000 (QUIC transport)', /rfc\s*9000/],
   ['RFC 9001 (QUIC with TLS)', /rfc\s*9001/],
   ['RFC 9114 (HTTP/3)', /rfc\s*9114/],
-  ['RFC 9204 (QPACK)', /rfc\s*9204|qpack/],
   ['QUIC published in May 2021', /may\s+(\d{1,2},?\s+)?2021|2021-05/],
   ['HTTP/3 published in June 2022', /june\s+(\d{1,2},?\s+)?2022|2022-06/],
   ['runs over UDP', /\budp\b/],
