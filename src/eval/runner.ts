@@ -31,7 +31,7 @@ import path from 'node:path';
 import { runGates } from '../gates/gates.ts';
 import type { Harness } from '../kernel/harness.ts';
 import { createHarness } from '../kernel/harness.ts';
-import { LocalHost, run } from '../runtime/host.ts';
+import { LocalHost, run, type ToolHost } from '../runtime/host.ts';
 import type { LocalSandbox } from '../runtime/os-sandbox.ts';
 import { allowedImages } from '../runtime/docker.ts';
 import { defaultSettings } from '../core/settings.ts';
@@ -150,7 +150,12 @@ async function enterConfig(c: HarnessConfig, out: string): Promise<() => void> {
   return () => { for (const [k, v] of Object.entries(before)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } };
 }
 
-export interface EvalCheck { name: string; run?: string; gates?: string[]; files?: string[]; playtest?: string; timeoutSec?: number }
+/**
+ * where: "session" runs a command in the session's own sandbox (the agent's tests: built and passing on Linux,
+ * they are judged there, not on this machine); the default "host" is for hidden scripts that read the case
+ * folder, which the sandbox never sees. Gates always run where the agent worked.
+ */
+export interface EvalCheck { name: string; run?: string; gates?: string[]; files?: string[]; playtest?: string; timeoutSec?: number; where?: 'host' | 'session' }
 export interface EvalCase {
   name: string; description?: string; dir: string; pack: string;
   workflow?: string; input?: Record<string, string>; prompt?: string;
@@ -327,7 +332,7 @@ async function freePort(): Promise<number> {
  * (PowerShell doubles a quote; bash closes and reopens). {{port}}: a free port for this
  * command, so runs in parallel never collide.
  */
-async function caseCommand(host: LocalHost, c: EvalCase, ws: string, cmd: string): Promise<string> {
+async function caseCommand(host: Pick<ToolHost, 'shell'>, c: EvalCase, ws: string, cmd: string): Promise<string> {
   const quote = (s: string) => host.shell === 'powershell' ? `'${s.replace(/'/g, "''")}'` : `'${s.replace(/'/g, `'\\''`)}'`;
   const fill = (s: string, token: string, p: string) => s.replace(new RegExp(`\\{\\{${token}\\}\\}([^\\s'"|;&<>()]*)`, 'g'), (_m, rest: string) => quote(p.split(path.sep).join('/') + rest));
   return fill(fill(cmd, 'case', c.dir), 'ws', ws).replaceAll('{{port}}', String(await freePort()));
@@ -340,18 +345,21 @@ async function caseStep(c: EvalCase, ws: string, which: 'setup' | 'teardown'): P
   if (r.code !== 0 || r.timedOut) throw new Error(`${which} ${r.timedOut ? 'timed out' : `exited ${r.code}`}: ${`${r.stdout}\n${r.stderr}`.trim().slice(-600)}`);
 }
 
-export async function runChecks(h: Harness, c: EvalCase, ws: string, signal: AbortSignal, services?: ToolServices): Promise<CheckResult[]> {
+export async function runChecks(h: Harness, c: EvalCase, ws: string, signal: AbortSignal, services?: ToolServices, sessionHost?: ToolHost): Promise<CheckResult[]> {
   const host = new LocalHost(ws);
+  const agentHost = sessionHost ?? host;
   const results: CheckResult[] = [];
   for (const ch of c.checks) {
     try {
       if (ch.run) {
-        const cmd = await caseCommand(host, c, ws, ch.run);
-        const r = await host.exec(cmd, { timeoutMs: (ch.timeoutSec ?? 300) * 1000, signal });
+        if (ch.where === 'session' && /{{case}}/.test(ch.run)) throw new Error('a check that runs in the session cannot use {{case}} (the sandbox never sees the case folder)');
+        const where = ch.where === 'session' ? agentHost : host;
+        const cmd = await caseCommand(where, c, ch.where === 'session' ? where.root : ws, ch.run);
+        const r = await where.exec(cmd, { timeoutMs: (ch.timeoutSec ?? 300) * 1000, signal });
         const out = `${r.stdout}\n${r.stderr}`.trim().split('\n').slice(-6).join('\n');
         results.push({ name: ch.name, pass: r.code === 0 && !r.timedOut, detail: r.timedOut ? 'timed out' : `exit ${r.code}${out ? `: ${out.slice(-600)}` : ''}` });
       } else if (ch.gates) {
-        const gs = await runGates(h.registry, host, ch.gates, signal, services);
+        const gs = await runGates(h.registry, agentHost, ch.gates, signal, services);
         const missing = ch.gates.filter((n) => !gs.some((g) => g.name === n));
         const bad = gs.filter((g) => !g.pass);
         results.push({ name: ch.name, pass: !bad.length && !missing.length, detail: [...gs.map((g) => `${g.pass ? 'PASS' : 'FAIL'} ${g.name}: ${g.summary}${g.pass ? '' : ` ${(g.details ?? '').slice(0, 400)}`}`), ...missing.map((m) => `gate ${m} not registered`)].join('\n') });
@@ -458,7 +466,7 @@ export async function runOne(c: EvalCase, model: string, repeat: number, out: st
     if (problem) { run.status = 'provider-error'; run.error = problem; run.unscored = true; }
     const paused = pauses();
     if (paused > 0 && !run.unscored) { run.status = 'machine-asleep'; run.error = `the machine was asleep (or the process paused) for ${Math.round(paused / 60_000)} min during the run`; run.unscored = true; }
-    run.checks = await runChecks(h, c, ws, new AbortController().signal, { sources: s.sources });
+    run.checks = await runChecks(h, c, ws, new AbortController().signal, { sources: s.sources }, await s.commandHost());
     run.pass = ['succeeded', 'done'].includes(run.status) && run.checks.every((x) => x.pass);
   } catch (e) {
     run.error = (e as Error).message;
@@ -496,7 +504,7 @@ export async function rejudge(out: string, cases: EvalCase[], opts: { plugins: s
         if (problem) { run.status = 'provider-error'; run.error = problem; run.unscored = true; }
       }
       const before = run.checks.filter((x) => x.pass).length;
-      run.checks = await runChecks(h, c, run.workspace, new AbortController().signal, s ? { sources: s.sources } : undefined);
+      run.checks = await runChecks(h, c, run.workspace, new AbortController().signal, s ? { sources: s.sources } : undefined, s ? await s.commandHost() : undefined);
       run.pass = ['succeeded', 'done'].includes(run.status) && run.checks.every((x) => x.pass);
       opts.log?.(`${run.unscored ? 'NOT SCORED' : run.pass ? 'PASS' : 'FAIL'} ${c.pack}/${c.name} ${run.model}${run.config ? ` [${run.config}]` : ''} #${run.repeat}: ${before} -> ${run.checks.filter((x) => x.pass).length}/${run.checks.length} checks`);
       await fs.writeFile(path.join(base, 'result.json'), JSON.stringify(run, null, 1));

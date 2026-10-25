@@ -8,8 +8,20 @@
     "constraints": "Node.js 22, no npm dependencies at runtime"
   },
   "checks": [
-    { "name": "quality gates", "gates": ["node-test"] },
-    { "name": "every feature verified", "run": "node -e \"const a=JSON.parse(require('fs').readFileSync('.harness/long-task/features.json','utf8'));const left=a.filter(f=>f.passes!==true);console.log((a.length-left.length)+'/'+a.length+' features verified');process.exit(left.length?1:0)\"" },
-    { "name": "hidden end-to-end test", "run": "node {{case}}/check-cli.mjs {{ws}}", "timeoutSec": 120 }
+    {
+      "name": "quality gates",
+      "gates": [
+        "node-test"
+      ]
+    },
+    {
+      "name": "every feature verified",
+      "run": "node -e \"const a=JSON.parse(require('fs').readFileSync('.harness/long-task/features.json','utf8'));const left=a.filter(f=>f.passes!==true);console.log((a.length-left.length)+'/'+a.length+' features verified');process.exit(left.length?1:0)\""
+    },
+    {
+      "name": "hidden end-to-end test",
+      "run": "node {{case}}/check-cli.mjs {{ws}}",
+      "timeoutSec": 120
+    }
   ]
 }

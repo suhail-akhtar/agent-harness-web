@@ -96,7 +96,11 @@ export class AnthropicProvider implements Provider {
     try {
       bump();
       const body = this.body(req);
-      const mid = Array.isArray(body.tools) && (body.tools as Array<{ defer_loading?: boolean }>).some((t) => t.defer_loading) ? [MID_TOOLS_BETA] : [];
+      const mid = [
+        ...(Array.isArray(body.tools) && (body.tools as Array<{ defer_loading?: boolean }>).some((t) => t.defer_loading) ? [MID_TOOLS_BETA] : []),
+        ...((body.messages as Array<{ output_config?: unknown }>).some((m) => m.output_config) ? [MID_EFFORT_BETA] : []),
+        ...(body.fallbacks ? [FALLBACK_BETA] : []),
+      ];
       const params = { ...body, betas: [...(this.contextEditing ? [...BETAS, ...(this.compactsServerSide(req.model, req.compactAt) ? [COMPACT_BETA] : [])] : []), ...mid] };
       const stream = liveness.run(bump, () => this.client.beta.messages.stream(params as unknown as Anthropic.Beta.Messages.MessageCreateParamsStreaming, { signal: ctl.signal }));
       stream.on('streamEvent', bump);
@@ -151,6 +155,17 @@ export class AnthropicProvider implements Provider {
  */
 export const MID_TOOL_CHANGES = new Set(['claude-opus-5-5', 'claude-opus-5', 'claude-fable-5-1', 'claude-sonnet-5-5']);
 export const MID_TOOLS_BETA = 'mid-conversation-tool-changes-2026-07-01';
+/** Models that take an effort change as a system message where it happened (the messages cache is kept). */
+export const MID_EFFORT = new Set(['claude-opus-5-5', 'claude-opus-5', 'claude-fable-5-1', 'claude-sonnet-5-5', 'claude-haiku-5-5']);
+export const MID_EFFORT_BETA = 'mid-conversation-output-config-2026-07-01';
+/**
+ * Models with server-side refusal fallback: a policy decline is answered by the model Anthropic picks for it
+ * instead of ending the turn (fallbacks "default"; a notice names the model that answered). Off with
+ * HARNESS_ANTHROPIC_FALLBACK=off. Haiku 5.5 has none.
+ */
+export const FALLBACK_MODELS = new Set(['claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5-5']);
+export const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
+export const fallbackOn = (model: string, env: NodeJS.ProcessEnv = process.env) => FALLBACK_MODELS.has(model) && env.HARNESS_ANTHROPIC_FALLBACK !== 'off';
 
 /** The tools on top and the additions to place, for a model with mid-conversation tool changes; undefined: the plain list. */
 export function midConversationTools(req: Pick<ProviderRequest, 'model' | 'tools' | 'messages' | 'allTools' | 'deferrable'>): { tools: Record<string, unknown>[]; additions: Map<number, string[]> } | undefined {
@@ -167,10 +182,16 @@ export function midConversationTools(req: Pick<ProviderRequest, 'model' | 'tools
 }
 
 /** The request body (without betas). Exported for tests: caching depends on its exact shape. */
-export function anthropicBody(req: Pick<ProviderRequest, 'model' | 'system' | 'tools' | 'messages' | 'effort' | 'compactAt' | 'compactKeep' | 'prefixTtl' | 'allTools' | 'deferrable'>, contextEditing: boolean, serverCompaction = false): Record<string, unknown> {
+export function anthropicBody(req: Pick<ProviderRequest, 'model' | 'system' | 'tools' | 'messages' | 'effort' | 'compactAt' | 'compactKeep' | 'prefixTtl' | 'allTools' | 'deferrable' | 'effortLog'>, contextEditing: boolean, serverCompaction = false, env: NodeJS.ProcessEnv = process.env): Record<string, unknown> {
   const mid = midConversationTools(req);
+  // An effort changed between turns: the request keeps the effort the context began with, each change is a
+  // system message where it happened, so the cached history stays (changing output_config.effort would not).
+  const log = MID_EFFORT.has(req.model.id) && req.effortLog?.changes.length ? req.effortLog : undefined;
+  const changes = new Map(log?.changes.map((c) => [c.index, c.effort]));
   const messages: unknown[] = [];
   req.messages.forEach((m, i) => {
+    const e = changes.get(i);
+    if (e) messages.push({ role: 'system', content: [], output_config: { effort: e } });
     messages.push(toAnthropicMessage(m, req.model.id));
     const added = mid?.additions.get(i);
     if (added) messages.push({ role: 'system', content: added.map((name) => ({ type: 'tool_addition', tool: { type: 'tool_reference', name } })) });
@@ -187,7 +208,8 @@ export function anthropicBody(req: Pick<ProviderRequest, 'model' | 'system' | 't
     // ... plus automatic caching for the growing conversation tail.
     cache_control: { type: 'ephemeral' },
     thinking: { type: 'adaptive', display: 'summarized' },
-    output_config: { effort: req.effort },
+    output_config: { effort: log ? log.base : req.effort },
+    ...(fallbackOn(req.model.id, env) ? { fallbacks: 'default' } : {}),
   };
   if (contextEditing) {
     body.context_management = {
@@ -266,8 +288,12 @@ export function fromAnthropic(model: string, msg: Anthropic.Beta.Messages.BetaMe
     notice = `The model declined this request${d?.category ? ` (${d.category})` : ''}.${d?.explanation ? ' ' + d.explanation : ''}`;
   }
   const last = { input: u.input_tokens ?? 0, cacheRead: u.cache_read_input_tokens ?? 0, cacheWrite: u.cache_creation_input_tokens ?? 0 };
+  // Refusal fallback: another model answered (the top-level model names it). Its turn is replayed to that model
+  // only; to the one asked, it is rebuilt from its text and tool calls (its thinking is not theirs to read).
+  const servedBy = typeof msg.model === 'string' && msg.model && msg.model !== model ? msg.model : undefined;
+  if (servedBy) notice = [notice, `${model} declined this request; ${servedBy} answered it instead (refusal fallback; its cost is counted at ${model}'s rates).`].filter(Boolean).join(' ');
   return {
-    message: { role: 'assistant', content: blocks, raw: { provider: 'anthropic', model, payload: msg.content } },
+    message: { role: 'assistant', content: blocks, raw: { provider: 'anthropic', model: servedBy ?? model, payload: msg.content } },
     stop,
     usage: iters.length > 1
       ? { input: sum('input_tokens'), cacheRead: sum('cache_read_input_tokens'), cacheWrite: sum('cache_creation_input_tokens'), ...(w1h ? { cacheWrite1h: w1h } : {}), output: sum('output_tokens'), reasoning: 0 }

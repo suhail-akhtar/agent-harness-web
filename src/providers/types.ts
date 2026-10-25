@@ -40,6 +40,12 @@ export interface ProviderRequest {
    */
   allTools?: ToolSpec[];
   deferrable?: string[];
+  /**
+   * Effort changes within this context: the effort the context began with and each change, before the message
+   * at `index`. A provider that takes a mid-conversation effort change keeps the first on the request and adds
+   * each change in place (the cache is kept); others use `effort`, the current one.
+   */
+  effortLog?: { base: import('../core/models.ts').Effort; changes: Array<{ index: number; effort: import('../core/models.ts').Effort }> };
   signal: AbortSignal;
   onText?: (delta: string) => void;
   onReasoning?: (delta: string) => void;

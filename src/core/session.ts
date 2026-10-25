@@ -771,6 +771,9 @@ export class Session {
   }
 
   /** Where this session's commands really run: the host, whether it contains them, and the network they have. */
+  /** Where this session's commands run (its sandbox): for checks that must see what the agent saw. */
+  commandHost(): Promise<ToolHost> { return this.getHost(); }
+
   async hostInfo(): Promise<{ kind: ToolHost['kind']; sandbox: string; network: ToolHost['networkPolicy']; hidden: string[] }> {
     const h = await this.getHost();
     const sandbox = h instanceof LocalHost ? h.osSandbox ?? 'none' : h.sandboxed ? h.kind : 'none';

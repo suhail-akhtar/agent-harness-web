@@ -11,7 +11,8 @@
     {
       "name": "its own tests pass",
       "run": "npm test",
-      "timeoutSec": 300
+      "timeoutSec": 300,
+      "where": "session"
     },
     {
       "name": "hidden acceptance checks",

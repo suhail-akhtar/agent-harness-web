@@ -163,6 +163,8 @@ export class Agent {
   messages: Message[];
   /** Prompt size of the last request: what the context window holds now. */
   lastPromptTokens = 0;
+  /** The effort this context began with and where it changed (ProviderRequest.effortLog); reset when the context is replaced. */
+  private effortLog?: { base: Effort; changes: Array<{ index: number; effort: Effort }> };
   private specs: ToolSpec[];
   private recentCalls: string[] = [];
   /** Untrusted content (a web page, an MCP result, a sub-agent that read some) has entered this context. */
@@ -591,6 +593,7 @@ export class Agent {
       tools,
       ...(ttl ? { prefixTtl: ttl } : {}),
       ...(compaction ? { toolChoice: 'none' as const } : {}),
+      ...(!compaction ? { effortLog: this.noteEffort(messages.length) } : {}),
       ...(this.cfg.toolGroups?.length ? { allTools: this.specs, deferrable: this.cfg.toolGroups.flatMap((g) => g.tools) } : {}),
       // Already clean when appended; this catches a value registered after its message was (it is hidden from then on).
       messages: this.redact(messages),
@@ -631,6 +634,19 @@ export class Agent {
   }
 
   /** Any tool of this agent's, deferred or not (a deferred tool called by its own name runs, and loads its group). */
+  /**
+   * The effort log for a request: the first request's effort is the base; a different one later is a change
+   * before the newest message (the person changed it between turns).
+   */
+  private noteEffort(count: number): NonNullable<ProviderRequest['effortLog']> | undefined {
+    const now = this.cfg.effort;
+    if (!now) return undefined;
+    if (!this.effortLog) { this.effortLog = { base: now, changes: [] }; return this.effortLog; }
+    const last = this.effortLog.changes.at(-1)?.effort ?? this.effortLog.base;
+    if (now !== last) this.effortLog.changes.push({ index: Math.max(0, count - 1), effort: now });
+    return this.effortLog;
+  }
+
   /** Calls made of each tool with a budget (toolBudget). */
   private budgetUsed = new Map<string, number>();
 
@@ -1047,6 +1063,7 @@ export class Agent {
     const content: Message['content'] = [{ type: 'text', text: parts.join('\n\n') }];
     if (skills) content.push({ type: 'text', text: `${KEPT_SKILLS}\n${skills}` });
     this.messages = [this.redact({ role: 'user', content, compactionSummary: true } as Message)];
+    this.effortLog = undefined;
     this.missHint = 'compaction';
     this.cfg.readFiles.clear();
     this.instructionDirs.clear();

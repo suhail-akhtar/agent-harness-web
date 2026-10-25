@@ -38,3 +38,28 @@ test('Haiku 5.5 (no mid-conversation tool changes) keeps the plain list: what is
   assert.ok(!b.tools.some((t) => t.defer_loading));
   assert.ok(!b.messages.some((m) => m.role === 'system'));
 });
+
+test('Claude: an effort change between turns keeps the first effort on the request and adds the change where it happened', () => {
+  const msgs: Message[] = [
+    { role: 'user', content: [{ type: 'text', text: 'one' }] },
+    { role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
+    { role: 'user', content: [{ type: 'text', text: 'two, think harder' }] },
+  ];
+  const effortLog = { base: 'low' as const, changes: [{ index: 2, effort: 'high' as const }] };
+  const b = anthropicBody({ model: getModel('claude-opus-5-5'), system: 'S', tools: [], messages: msgs, effort: 'high', effortLog }, false) as unknown as Body & { output_config: { effort: string } };
+  assert.equal(b.output_config.effort, 'low', 'the effort the context began with');
+  assert.deepEqual(b.messages.map((m) => m.role), ['user', 'assistant', 'system', 'user']);
+  assert.deepEqual((b.messages[2] as { output_config?: unknown }).output_config, { effort: 'high' });
+  // No change: as before (the current effort, no system message).
+  const plain = anthropicBody({ model: getModel('claude-opus-5-5'), system: 'S', tools: [], messages: msgs, effort: 'medium', effortLog: { base: 'medium', changes: [] } }, false) as unknown as Body & { output_config: { effort: string } };
+  assert.equal(plain.output_config.effort, 'medium');
+  assert.ok(!plain.messages.some((m) => m.role === 'system'));
+});
+
+test('Claude: refusal fallback on Opus 5.5 and Sonnet 5.5 (default), not on Haiku; HARNESS_ANTHROPIC_FALLBACK=off turns it off', () => {
+  const body = (model: string, env: NodeJS.ProcessEnv = {}) => anthropicBody({ model: getModel(model), system: 'S', tools: [], messages: loaded.slice(0, 1), effort: 'low' }, false, false, env) as unknown as { fallbacks?: string };
+  assert.equal(body('claude-opus-5-5').fallbacks, 'default');
+  assert.equal(body('claude-sonnet-5-5').fallbacks, 'default');
+  assert.equal(body('claude-haiku-5-5').fallbacks, undefined);
+  assert.equal(body('claude-opus-5-5', { HARNESS_ANTHROPIC_FALLBACK: 'off' }).fallbacks, undefined);
+});

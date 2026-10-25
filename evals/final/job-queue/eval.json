@@ -8,9 +8,34 @@
     "stack": "Node.js 22, no external dependencies (node:http, node:test), persistence in a JSON file written atomically. npm start runs the service."
   },
   "checks": [
-    { "name": "its own tests pass", "run": "npm test", "timeoutSec": 300 },
-    { "name": "hidden acceptance checks", "run": "node {{case}}/acceptance.mjs {{ws}} \"npm start\" {{port}}", "timeoutSec": 300 },
-    { "name": "quality gates", "gates": ["node-test", "secrets", "conflict-markers"] },
-    { "name": "delivery documents", "files": ["docs/requirements.md", "docs/architecture.md", "docs/reviews/code-review.md", "docs/delivery-report.md", "README.md"] }
+    {
+      "name": "its own tests pass",
+      "run": "npm test",
+      "timeoutSec": 300,
+      "where": "session"
+    },
+    {
+      "name": "hidden acceptance checks",
+      "run": "node {{case}}/acceptance.mjs {{ws}} \"npm start\" {{port}}",
+      "timeoutSec": 300
+    },
+    {
+      "name": "quality gates",
+      "gates": [
+        "node-test",
+        "secrets",
+        "conflict-markers"
+      ]
+    },
+    {
+      "name": "delivery documents",
+      "files": [
+        "docs/requirements.md",
+        "docs/architecture.md",
+        "docs/reviews/code-review.md",
+        "docs/delivery-report.md",
+        "README.md"
+      ]
+    }
   ]
 }
