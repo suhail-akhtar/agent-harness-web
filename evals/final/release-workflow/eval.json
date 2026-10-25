@@ -1,0 +1,12 @@
+{
+  "name": "release-workflow",
+  "description": "The agent designs a reusable release process as a harness workflow (tests, a version from Conventional Commits, changelog, a person's approval, commit and tag) and then runs it. Judged on the workflow graph, the release it made, and the run record showing the approval step.",
+  "timeoutMin": 45,
+  "setup": "node {{case}}/setup.mjs {{ws}}",
+  "prompt": "Make a reusable release process for this repository as a harness workflow in .harness/workflows/release.json, then use it to make the release. The workflow must: run the tests and end as failed if they fail; work out the next version from the commits since the latest tag by the Conventional Commits rules (a breaking change, \"!\" or BREAKING CHANGE, is major; feat is minor; fix is patch; nothing releasable means no release); set that version in package.json and add a section for it at the top of CHANGELOG.md with the changes grouped under Features and Fixes; ask a person to approve the release before anything is committed; on approval commit everything as \"chore(release): vX.Y.Z\" and create the annotated tag vX.Y.Z; on rejection leave the repository as it was. Then run your workflow to release this repository.",
+  "checks": [
+    { "name": "the workflow is a valid graph with the steps asked for", "run": "node {{case}}/check-release.mjs {{ws}} workflow", "timeoutSec": 60 },
+    { "name": "the release is right", "run": "node {{case}}/check-release.mjs {{ws}} release", "timeoutSec": 120 },
+    { "name": "the workflow ran, through its approval", "run": "node {{case}}/check-release.mjs {{ws}} ran", "timeoutSec": 60 }
+  ]
+}

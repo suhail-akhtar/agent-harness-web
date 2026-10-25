@@ -1,0 +1,11 @@
+{
+  "name": "plugin-from-guide",
+  "description": "A newcomer's task: build a working plugin by following docs/BUILD-A-PLUGIN.md (tools, a skill, a route and a desktop page), judged by loading it into a real harness and calling its tools and route with hidden inputs.",
+  "timeoutMin": 60,
+  "setup": "node {{case}}/setup.mjs {{ws}}",
+  "prompt": "Build a harness plugin called habit-tracker in plugins/habit-tracker, following docs/BUILD-A-PLUGIN.md (the guide; examples/ has two working plugins). It must have:\n- Three tools. habit_add {name, why?} adds a habit (names are unique ignoring case; adding one that exists is an error result). habit_checkin {name, date?} records the habit as done on a day (date YYYY-MM-DD in local time, default today; an unknown habit or a malformed or future date is an error result; checking in twice on the same day counts once). habit_report {} lists every habit with its current streak, one line each, exactly in the form \"<name>: <n>-day streak\" (the streak is the number of consecutive days with a check-in ending today, or ending yesterday when there is none today; otherwise 0).\n- The data kept in the plugin's own data folder on the server, so it survives a restart.\n- A route GET habits (signed-in users) answering {\"habits\": [{\"name\", \"streak\", \"total\", \"lastCheckin\"}]}: total is the number of days checked in, lastCheckin the latest date or null.\n- A skill that tells the agent when to use these tools (coaching someone on their habits).\n- A page in the desktop app, opened from the sidebar, that shows each habit with its streak, read from that route.\nWrite plugins/habit-tracker/README.md saying how to install and use it. You cannot run the harness here, so check your code by reading it against the guide and with node where you can.",
+  "checks": [
+    { "name": "it loads as the server loads it", "run": "node {{case}}/check-plugin.mjs {{ws}}/plugins/habit-tracker", "timeoutSec": 180 },
+    { "name": "deliverables", "files": ["plugins/habit-tracker/harness-plugin.json", "plugins/habit-tracker/README.md"] }
+  ]
+}

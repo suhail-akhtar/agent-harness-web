@@ -1,0 +1,17 @@
+{
+  "name": "threejs-orchard",
+  "description": "A new 3D Three.js game through make-game, unattended end to end: a gather-carry-deliver loop with moving hazards and a timer, judged on the Studio gates, the bots winning it in the headless browser, and a packaged web build.",
+  "workflow": "make-game",
+  "timeoutMin": 240,
+  "input": {
+    "brief": "A 3D third-person game in Three.js: a hedgehog in a hilly orchard at dusk picks up fallen apples and carries them back to a basket by the farmhouse. It can carry at most 3 apples at a time. Hay carts roll along the orchard paths; a cart that hits the hedgehog knocks the apples it carries out onto the grass. Deliver 10 apples before night falls (3 minutes) to win; when night falls first, the game is lost. The camera follows the hedgehog; the HUD shows apples carried, apples delivered and the time left.",
+    "engine": "web",
+    "dimension": "3d",
+    "genre": "third-person gather and deliver"
+  },
+  "checks": [
+    { "name": "its own gates", "gates": ["studio-project", "web-game", "game-starts", "no-softlock", "playtest-pass", "web-build"] },
+    { "name": "bots win it in 3D", "run": "node {{case}}/../../games3d/lib/check-game.mjs --dimension 3d --three --seconds 300", "timeoutSec": 900 },
+    { "name": "deliverables", "files": ["design/GDD.md", "vendor/three/build/three.module.js", "build/web/index.html"] }
+  ]
+}
