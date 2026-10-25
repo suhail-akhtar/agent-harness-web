@@ -58,10 +58,10 @@ if (mode === 'workflow') {
   }
   const mine = runs.filter((r) => r.workflow === 'release');
   check('a run of the release workflow', mine.length > 0, runs.map((r) => r.workflow));
-  const done = mine.find((r) => r.status === 'succeeded');
-  check('it succeeded', !!done, mine.map((r) => `${r.status}${r.error ? `: ${r.error}` : ''}`));
-  const approval = done?.history?.find((h) => h.type === 'approval');
-  check('it went through an approval, approved', approval && /approve/i.test(String(approval.outcome)), done?.history?.map((h) => `${h.node}:${h.type}:${h.outcome}`));
+  // The release run: one that succeeded through an approved approval (a later run may rightly find nothing to release).
+  const approved = (r) => r.history?.some((h) => h.type === 'approval' && /approve/i.test(String(h.outcome)));
+  check('a run succeeded', mine.some((r) => r.status === 'succeeded'), mine.map((r) => `${r.status}${r.error ? `: ${r.error}` : ''}`));
+  check('it went through an approval, approved', mine.some((r) => r.status === 'succeeded' && approved(r)), mine.map((r) => r.history?.map((h) => `${h.node}:${h.type}:${h.outcome}`).join(' > ')));
 } else {
   console.log('usage: node check-release.mjs <workspace> workflow|release|ran');
   process.exit(2);

@@ -62,3 +62,16 @@ test('eval runner: a question with a form is answered with an object (defaults, 
   assert.deepEqual(formDefaults({ type: 'object', properties: { decision: { type: 'string', enum: ['approve', 'reject'] }, note: { type: 'string' }, n: { type: 'number', default: 3 }, ok: { type: 'boolean' } } }),
     { decision: 'approve', note: 'Use your best judgement.', n: 3, ok: true });
 });
+
+test('workflow format: the shell quoting rule it teaches holds in bash (a value joined to quoted text, never inside quotes)', async () => {
+  const { renderShell } = await import('../src/graph/state.ts');
+  const { execFileSync } = await import('node:child_process');
+  const run = { input: { version: '1.4.0' }, state: {}, values: {} } as never;
+  const tag = (WORKFLOW_EXAMPLE.nodes.tag as { command: string }).command;
+  const cmd = renderShell(tag.replace(/^git commit -am /, 'printf "%s|" ').replace(/ && git tag -a .*$/, ''), run);
+  let bash = 'bash';
+  try { execFileSync(bash, ['-c', 'true']); } catch { return; }
+  assert.equal(execFileSync(bash, ['-c', cmd], { encoding: 'utf8' }), 'chore(release): v1.4.0|');
+  // The mistake the rule warns about: a value inside quotes keeps its quotes.
+  assert.equal(execFileSync(bash, ['-c', renderShell('printf "%s" "v{{input.version}}"', run)], { encoding: 'utf8' }), "v'1.4.0'");
+});

@@ -11,7 +11,7 @@ export const WORKFLOW_EXAMPLE = {
     test: { type: 'shell', command: 'npm test', next: { on: { ok: 'prepare', fail: 'failed' } } },
     prepare: { type: 'agent', prompt: 'Set version {{input.version}} in package.json and add its section to CHANGELOG.md. Do not commit.', next: 'approve' },
     approve: { type: 'approval', message: 'Release v{{input.version}}?\n\n{{state.prepare}}', files: ['CHANGELOG.md'], next: { on: { approve: 'tag', reject: 'undo' } } },
-    tag: { type: 'shell', command: 'git commit -am "chore(release): v{{input.version}}" && git tag -a v{{input.version}} -m v{{input.version}}', next: 'done' },
+    tag: { type: 'shell', command: 'git commit -am "chore(release): v"{{input.version}} && git tag -a v{{input.version}} -m v{{input.version}}', next: 'done' },
     undo: { type: 'shell', command: 'git checkout -- .', next: 'failed' },
     done: { type: 'end', status: 'success' },
     failed: { type: 'end', status: 'failed' },
@@ -24,7 +24,7 @@ Top level: {"name", "description", "inputs"?: {"<x>": {"description", "required"
 
 Nodes ("type" and its fields; every node but end has "next"):
 - agent: "prompt" (required), "agent"? (a sub-agent name; default general), "model"?, "effort"?, "maxSteps"?, "decide"?: ["APPROVE", "REQUEST_CHANGES"] (the first word found in its report is the outcome), "outputs"?: [state fields it reports in a JSON block]. A fresh context each run; its report is {{state.<id>}}.
-- shell: "command" (required), "timeoutMs"?. Outcomes ok | fail (or exit-N). Every {{...}} value is quoted as one argument. Shell steps run only where the project's commands are trusted (a sandboxed session, or HARNESS_TRUST_PROJECT=1); elsewhere a workflow with one is not loaded ("check" says so).
+- shell: "command" (required), "timeoutMs"?. Outcomes ok | fail (or exit-N). Every {{...}} value is quoted for you as one argument, so never put one inside quotes: "v{{x}}" gives v'1.2' with the quotes in it; write v{{x}}, or "some text "{{x}} to join it to quoted text. Shell steps run only where the project's commands are trusted (a sandboxed session, or HARNESS_TRUST_PROJECT=1); elsewhere a workflow with one is not loaded ("check" says so).
 - gate: "gates": ["node-test", ...] or "applicable", "maxFailures"?. Outcomes pass | fail | exhausted; the evidence of a failure is {{feedback}} for the next step.
 - approval: "message" (required, templated), "files"?: [paths shown with it]. A person answers; outcomes approve | reject (a rejection's reason is {{feedback}}).
 - branch: "value": "{{input.mode}}" (its text is the outcome) or "when": "state.failures > 2 && input.mode != 'dry'" (outcome true | false).
