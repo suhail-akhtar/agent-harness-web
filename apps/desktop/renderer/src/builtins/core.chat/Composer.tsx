@@ -18,6 +18,8 @@ import { formatChord } from '../../registry/keybindings';
 export interface ComposerValue { model: string; effort?: Effort; mode: Mode; think: boolean }
 export interface ComposerProps {
   draftKey: string;
+  /** False: a fresh start each time (the home page; a new chat opens clean). */
+  keepDraft?: boolean;
   value: ComposerValue;
   onChange: (v: Partial<ComposerValue>) => void;
   onSend: (text: string, attachments: Attachment[], how: 'send' | 'queue') => Promise<boolean> | boolean;
@@ -49,7 +51,8 @@ export function Composer(p: ComposerProps): React.ReactElement {
   const prefs = useApp((s) => s.prefs);
   const prefillReq = useApp((s) => s.prefill);
   const registry = useData((s) => s.registry);
-  const [text, setText] = useState(() => { try { return localStorage.getItem(`draft:${p.draftKey}`) ?? ''; } catch { return ''; } });
+  const keep = p.keepDraft !== false;
+  const [text, setText] = useState(() => { try { if (!keep) { localStorage.removeItem(`draft:${p.draftKey}`); return ''; } return localStorage.getItem(`draft:${p.draftKey}`) ?? ''; } catch { return ''; } });
   const [files, setFiles] = useState<Pending[]>([]);
   const [menu, setMenu] = useState<null | { kind: '@' | '/'; query: string; start: number }>(null);
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
@@ -59,9 +62,12 @@ export function Composer(p: ComposerProps): React.ReactElement {
   const box = useRef<HTMLTextAreaElement>(null);
   const wrap = useRef<HTMLDivElement>(null);
 
-  // Drafts survive switching conversations and restarts.
-  useEffect(() => { try { if (text) localStorage.setItem(`draft:${p.draftKey}`, text); else localStorage.removeItem(`draft:${p.draftKey}`); } catch { /* none */ } }, [text, p.draftKey]);
-  useEffect(() => { try { setText(localStorage.getItem(`draft:${p.draftKey}`) ?? ''); } catch { /* none */ } setFiles([]); }, [p.draftKey]);
+  // Drafts survive switching conversations and restarts, each under its own conversation: the text is
+  // saved only under the key it was loaded for (on a switch the save runs before the load, with the
+  // old text and the new key, and would carry one conversation's draft into the next).
+  const textKey = useRef(p.draftKey);
+  useEffect(() => { if (!keep || textKey.current !== p.draftKey) return; try { if (text) localStorage.setItem(`draft:${p.draftKey}`, text); else localStorage.removeItem(`draft:${p.draftKey}`); } catch { /* none */ } }, [text, p.draftKey]);
+  useEffect(() => { if (textKey.current === p.draftKey) return; textKey.current = p.draftKey; try { setText(keep ? localStorage.getItem(`draft:${p.draftKey}`) ?? '' : ''); } catch { setText(''); } setFiles([]); }, [p.draftKey]);
   useEffect(() => { if (prefillReq) { setText(prefillReq.text); useApp.setState({ prefill: null }); setTimeout(() => box.current?.focus(), 0); } }, [prefillReq]);
   useEffect(() => { const el = box.current; if (!el) return; el.style.height = 'auto'; el.style.height = `${Math.min(280, el.scrollHeight)}px`; }, [text]);
   useEffect(() => { if (p.autoFocus) box.current?.focus(); }, [p.autoFocus, p.draftKey]);

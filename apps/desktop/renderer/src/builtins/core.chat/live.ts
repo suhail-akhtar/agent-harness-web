@@ -112,8 +112,9 @@ function start(id: string): void {
     if (cancelled) return;
     const spec = models.find((m) => m.id === d.meta.model);
     setState(id, () => fromDetail(d, spec?.compactAt ?? spec?.contextWindow ?? 0));
-    // A workflow run still going gets its card back.
-    client.sessions.workflows(id).then((r) => { if (!cancelled) for (const run of r.runs.filter((x) => x.status === 'running' || x.status === 'waiting')) setState(id, (s) => ({ ...s, live: apply(s.live, { kind: 'workflow', phase: 'started', run }) })); }).catch(() => {});
+    // Every workflow run gets its card back, finished ones too: a conversation a workflow started keeps its
+    // work in the run, not the history, and would otherwise reopen empty.
+    client.sessions.workflows(id).then((r) => { if (!cancelled) setState(id, (s) => ({ ...s, live: [...r.runs].reverse().reduce((l, run) => apply(l, { kind: 'workflow', phase: 'started', run }), s.live) })); }).catch(() => {});
     // Cost and model per sub-agent (the history keeps neither).
     if (Object.keys(stores.get(id)?.state.agents ?? {}).length || Object.keys(d.meta.byModel ?? {}).length > 1) client.sessions.trace(id).then((spans) => { if (!cancelled && Array.isArray(spans)) setState(id, (s) => ({ ...s, agents: withTrace(s.agents, spans) })); }).catch(() => {});
     const stopStream = client.sessions.events(id, d.lastSeq, (e) => {

@@ -33,7 +33,7 @@ import { SourceStore } from '../research/sources.ts';
 import { cloneRepository, publish, PublishError, shq } from '../git/publish.ts';
 import { createWorktree, removeWorktree, type Worktree, WorktreeError, worktreeWritable } from '../git/worktree.ts';
 import type { SearchService } from '../research/search.ts';
-import { Agent, type AgentHooks, type PermissionAnswer, type TraceSpan } from './agent.ts';
+import { Agent, schemaTokens, type AgentHooks, type PermissionAnswer, type TraceSpan } from './agent.ts';
 import { type CheckpointFiles, Checkpoints } from './checkpoints.ts';
 import { fireHooks, type HookJudge, type HookRunners, runHooks, setHookRedactor } from './hooks.ts';
 import { Redactor } from '../vault/redact.ts';
@@ -64,6 +64,21 @@ import type { SubagentArgs } from '../agents/agents.ts';
 import { validateValue, type JsonSchema, type UiManifest } from '../../packages/plugin-ui/src/manifest.ts';
 
 export type RuntimeKind = 'docker' | 'local' | 'companion';
+
+/** What fills a session's context (GET /api/sessions/:id/context): estimated parts, the messages the rest of the provider's count. */
+export interface ContextBreakdown {
+  model: string;
+  window: number;
+  /** Where the context is compacted (the room above it is the compaction buffer). */
+  compactAt: number;
+  used: number;
+  /** used is the provider's count of the last request (else an estimate: nothing sent yet). */
+  measured: boolean;
+  parts: Array<{ id: string; label: string; tokens: number }>;
+  /** Tools whose schemas wait behind load_tools: no room taken until loaded. */
+  deferred: { tools: number; tokens: number };
+  compactions: number;
+}
 
 export interface SessionMeta {
   id: string;
@@ -1424,6 +1439,54 @@ export class Session {
     if (!this.deps.linked || env === 'off' || this.meta.runtime.kind === 'companion') return false;
     const mine = settings.linkedSessions?.enabled;
     return env === 'on' || mine === true || (mine !== false && (this.meta.client?.kind === 'desktop' || this.meta.client?.kind === 'web'));
+  }
+
+  /**
+   * What fills the main agent's context, part by part, for the desktop's context panel: the system
+   * prompt, the tool schemas sent (core, plugins', MCP servers'), the instructions, memory and skills
+   * listing the conversation opened with, and the messages, which are the rest of the provider's own
+   * count of the last request (the other parts are estimates: characters / 4). The tools that wait
+   * behind load_tools are counted apart: they take no room until loaded.
+   */
+  async contextBreakdown(): Promise<ContextBreakdown> {
+    const host = await this.getHost();
+    const settings = await this.getSettings(host);
+    const tb = await this.getToolbox(host);
+    const model = this.deps.registry.model(this.meta.model);
+    const est = (s: string | undefined) => Math.ceil((s ?? '').length / 4);
+    const all = tb.tools.map((t) => t.spec);
+    const sent = this.agent ? this.agent.toolSpecs() : sentSpecs(all, tb.groups, loadedGroups(this.history, tb.groups));
+    const sentNames = new Set(sent.map((s) => s.name));
+    const owner = (name: string) => { const t = tb.tools.find((x) => x.spec.name === name); return t ? this.deps.registry.ownerOf(t) : undefined; };
+    const kind = (name: string) => (name.startsWith('mcp__') ? 'mcp' : owner(name) ? 'plugin' : 'core');
+    const tools = { core: 0, plugin: 0, mcp: 0 };
+    for (const s of sent) tools[kind(s.name)] += schemaTokens([s]);
+    const waiting = all.filter((s) => !sentNames.has(s.name));
+    const memory = await (await this.memoryStore())?.briefing().catch(() => '') ?? '';
+    const instructions = await loadInstructions(host, { managedFile: process.env.HARNESS_INSTRUCTIONS?.trim() || undefined, user: await loadUserInstructions(this.deps.dataDir, this.meta.owner) }).then((x) => x.text).catch(() => '');
+    // The opening parts are in the context only until a compaction replaces the conversation with a summary.
+    const opening = this.meta.compactions ? 0 : 1;
+    const parts: ContextBreakdown['parts'] = [
+      { id: 'system', label: 'System prompt', tokens: est(this.agent?.cfg.system ?? systemPrompt(this.meta.outputStyle?.prompt, this.meta.clientPrompt)) },
+      { id: 'tools', label: 'System tools', tokens: tools.core },
+      { id: 'plugin-tools', label: 'Plugin tools', tokens: tools.plugin },
+      { id: 'mcp-tools', label: 'MCP tools', tokens: tools.mcp },
+      { id: 'instructions', label: 'Instructions', tokens: est(instructions) * opening },
+      { id: 'memory', label: 'Memory', tokens: est(memory) * opening },
+      { id: 'skills', label: 'Skills', tokens: est(skillsListing(tb.skills)) * opening },
+    ];
+    const fixed = parts.reduce((a, p) => a + p.tokens, 0);
+    const context = this.agent?.messages ?? this.history.slice(this.meta.contextStart);
+    const measured = this.meta.lastPromptTokens || this.agent?.lastPromptTokens || 0;
+    const counted = est(JSON.stringify(context.map((m) => m.content.map((b) => (b.type === 'image' ? '' : b)))));
+    parts.push({ id: 'messages', label: 'Messages', tokens: measured ? Math.max(0, measured - fixed) : counted });
+    const window = model.contextWindow;
+    const compactAt = Math.min(settings.compactAt ?? model.compactAt, Math.floor(window * 0.85));
+    return {
+      // Never less than its parts (a provider that counts low, or estimates a little high).
+      model: model.id, window, compactAt, used: Math.max(measured || 0, parts.reduce((a, p) => a + p.tokens, 0)), measured: !!measured,
+      parts, deferred: { tools: waiting.length, tokens: schemaTokens(waiting) }, compactions: this.meta.compactions,
+    };
   }
 
   async capabilities(): Promise<{ tools: { name: string; kind: string }[]; agents: { name: string; description: string; source?: string }[]; skills: { name: string; description: string; source: string }[]; mcp: McpStatus[]; plugins: Registry['plugins'] }> {

@@ -26,6 +26,21 @@ export interface Config {
 }
 export interface Usage { input: number; cacheRead: number; cacheWrite: number; output: number; reasoning: number }
 export interface Todo { content: string; status: 'pending' | 'in_progress' | 'completed' }
+/** What fills a conversation's context: estimated parts; the messages are the rest of the provider's count of the last request. */
+export interface ContextBreakdown {
+  model: string;
+  window: number;
+  /** Where the context is compacted (the room above it is the compaction buffer). */
+  compactAt: number;
+  used: number;
+  /** used is the provider's own count (false: an estimate, nothing sent yet). */
+  measured: boolean;
+  parts: Array<{ id: string; label: string; tokens: number }>;
+  /** Tools whose schemas wait until loaded (no room taken). */
+  deferred: { tools: number; tokens: number };
+  compactions: number;
+}
+
 export interface SessionMeta {
   id: string; title: string; model: string; effort: Effort; mode: Mode;
   runtime: { kind: 'docker' | 'local' | 'companion'; network: 'none' | 'full' | 'allowlist'; companionId?: string; path?: string; image?: string };

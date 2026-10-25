@@ -118,7 +118,7 @@ function DefaultItem({ item, sessionId, fence, sources, running, isLastAnswer, o
     case 'tool': return <ToolCard item={item} sessionId={sessionId} />;
     case 'notice': return <div data-notice={item.level} className={cx('my-1 flex items-start gap-2 rounded-lg px-3 py-2 text-[12.5px]', item.level === 'error' ? 'bg-hx-danger/8 text-hx-danger' : item.level === 'warn' ? 'bg-hx-warning/8 text-hx-warning' : 'bg-hx-pill text-hx-secondary')}><Icon name={item.level === 'error' ? 'alert' : item.level === 'warn' ? 'warning' : 'info'} size={14} className="mt-0.5 shrink-0" /><span className="whitespace-pre-wrap">{item.text}</span></div>;
     case 'compaction': return <div className="my-2 flex items-center gap-3 text-[11.5px] text-hx-muted"><span className="h-px flex-1 bg-hx-border-subtle" />Context compacted{item.before ? ` · ${fmtTokens(item.before)} → ${fmtTokens(item.after ?? 0)} tokens` : ''}<span className="h-px flex-1 bg-hx-border-subtle" /></div>;
-    case 'workflow': return <WorkflowCard item={item} />;
+    case 'workflow': return <WorkflowCard item={item} sessionId={sessionId} />;
     case 'progress': return <ProgressCard item={item} />;
     // Without the plugin that draws them (core.agents): a line each.
     case 'chapter': return <div data-chapter={item.index} className="mt-4 text-[14px] font-semibold">{item.index}. {item.title}</div>;
@@ -337,8 +337,12 @@ function ArtifactCard({ f, sessionId }: { f: ArtifactFile; sessionId: string }) 
   );
 }
 
-function WorkflowCard({ item }: { item: Extract<Item, { kind: 'workflow' }> }) {
+function WorkflowCard({ item, sessionId }: { item: Extract<Item, { kind: 'workflow' }>; sessionId: string }) {
   const run = item.run;
+  const [resuming, setResuming] = useState(false);
+  // A run that stopped part way (failed, stopped, interrupted: a spend limit, a crash) carries on from the step it was at.
+  const resumable = !!run.current && ['failed', 'aborted', 'interrupted'].includes(run.status);
+  const resume = () => { setResuming(true); client.sessions.resumeRun(sessionId, run.id).catch((e: Error) => toast(e.message, { kind: 'error' })).finally(() => setResuming(false)); };
   const [open, setOpen] = useState<number | null>(null);
   // The graph needs where each node goes (newer servers say); without it, the steps.
   const graphable = run.nodes.length > 1 && run.nodes.some((n) => n.next?.length);
@@ -371,7 +375,12 @@ function WorkflowCard({ item }: { item: Extract<Item, { kind: 'workflow' }> }) {
           );
         })}
       </ol>}
-      {run.error && <div className="border-t border-hx-border-subtle px-3 py-2 text-[12px] text-hx-danger">{run.error}</div>}
+      {(run.error || resumable) && (
+        <div className="flex items-center gap-2 border-t border-hx-border-subtle px-3 py-2">
+          {run.error && <span className="min-w-0 flex-1 text-[12px] text-hx-danger">{run.error}</span>}
+          {resumable && <Button size="sm" icon="play" className="ml-auto shrink-0" loading={resuming} onClick={resume} data-workflow-resume>Resume from {title(run.current!)}</Button>}
+        </div>
+      )}
     </div>
   );
 }

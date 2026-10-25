@@ -1422,6 +1422,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         return void res.end(JSON.stringify(bundle));
       }
       if (action === 'capabilities' && method === 'GET') return send(res, 200, await s.capabilities());
+      if (action === 'context' && method === 'GET') return send(res, 200, await s.contextBreakdown());
       if (action === 'checkpoints' && method === 'GET') return send(res, 200, await s.listCheckpoints());
       if (action === 'rewind' && method === 'POST') {
         const b = await readJson(req);

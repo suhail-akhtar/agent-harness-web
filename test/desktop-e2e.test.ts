@@ -206,6 +206,43 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       await shot('chat-workflow-done', page.locator('[data-workflow="ship-check"]'));
     });
 
+    await step('drafts stay with their conversation, a new chat starts clean, a reopened conversation keeps its workflow card, the context panel', async () => {
+      const box = page.locator('[data-composer-input]');
+      // The context panel, from the meter in the header.
+      await page.click('[data-context-meter]');
+      await page.waitForSelector('[data-context-panel] [data-context-part="tools"]', { timeout: 15_000 });
+      assert.match(await page.locator('[data-context-used]').innerText(), /% used/);
+      await shot('context-panel', page.locator('[data-context-panel]'));
+      await page.keyboard.press('Escape');
+      // A second conversation, opened straight from the first: neither takes the other's draft.
+      const second = await api('POST', '/api/sessions', { title: 'Second conversation', runtime: 'local' });
+      assert.equal(second.status, 201, JSON.stringify(second.body));
+      const otherId = (second.body as { id: string }).id;
+      await box.fill('draft for the first');
+      await page.locator(`[data-session-row="${otherId}"] button`).first().click({ timeout: 15_000 });
+      await page.waitForSelector(`[data-session="${otherId}"]`);
+      assert.equal(await box.inputValue(), '', 'the second conversation opens without the first one\'s draft');
+      await box.fill('draft for the second');
+      await newChat();
+      assert.equal(await box.inputValue(), '', 'a new chat starts clean');
+      await box.fill('typed on the new chat, not sent');
+      // Long enough for the first conversation's stream to close: it is read again when it reopens.
+      await page.waitForTimeout(2_000);
+      await page.click(`[data-session-row="${sessionId}"] button`);
+      await page.waitForSelector(`[data-session="${sessionId}"]`);
+      assert.equal(await box.inputValue(), 'draft for the first', 'back in the first conversation: its draft');
+      await page.waitForSelector('[data-workflow="ship-check"][data-status="succeeded"]', { timeout: 15_000 });
+      await page.click(`[data-session-row="${otherId}"] button`);
+      await page.waitForSelector(`[data-session="${otherId}"]`);
+      assert.equal(await box.inputValue(), 'draft for the second');
+      await newChat();
+      assert.equal(await box.inputValue(), '', 'the unsent new-chat text is not kept');
+      await page.click(`[data-session-row="${sessionId}"] button`);
+      await page.waitForSelector(`[data-session="${sessionId}"]`);
+      await box.fill('');
+      await api('DELETE', `/api/sessions/${otherId}`);
+    });
+
     await step('the command palette opens with Ctrl+K and runs commands', async () => {
       await page.keyboard.press('Control+K');
       await page.waitForSelector('[data-palette]');

@@ -6,20 +6,21 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { Attachment, Effort, Mode } from '@harness/client';
-import { Button, EmptyState, Icon, IconButton, Input, Popover, MenuList, Spinner, Tooltip, cx, toast, type MenuItem } from '@harness/ui';
+import { Button, EmptyState, Icon, IconButton, Input, Popover, MenuList, Spinner, Tooltip, toast, type MenuItem } from '@harness/ui';
 import { useApp, openSession, navigate, setCrumb } from '../../state/app';
 import { useData, client, clientInfo, notePluginsTold, syncClientPlugins } from '../../state/data';
 import { desktop, scratchFolder } from '../../bridge';
 import { TopBar } from '../../shell/Bars';
 import { HomeCardHost } from '../../registry/PluginView';
 import { Composer, chipContext, type ComposerValue } from './Composer';
-import { Transcript, fmtCost, fmtTokens } from './Transcript';
+import { Transcript, fmtCost } from './Transcript';
 import { useSessionLive } from './live';
 import { PendingCard, respondFor } from '../../components/Pending';
 import { usePane } from '../../registry/PluginView';
 import { ProductMark } from '../../components/ProductMark';
 import { recommendedModel } from '../../state/recommend';
 import { CostByModel } from '../../components/CostByModel';
+import { ContextMeter } from '../../components/ContextPanel';
 
 const EFFORT_RANK: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 /** Think on: at least "high", when the model offers it. */
@@ -91,7 +92,7 @@ export function Home(): React.ReactElement {
             </button>
           )}
         </div>
-        <Composer draftKey="home" value={value} onChange={(v) => setValue((x) => ({ ...x, ...v }))} onSend={(t, a) => start(t, a)} autoFocus left={<WorkIn value={where} onChange={setWhere} projects={projects} scratch={info?.scratch} />} />
+        <Composer draftKey="home" keepDraft={false} value={value} onChange={(v) => setValue((x) => ({ ...x, ...v }))} onSend={(t, a) => start(t, a)} autoFocus left={<WorkIn value={where} onChange={setWhere} projects={projects} scratch={info?.scratch} />} />
         <div className="mx-auto w-full max-w-column px-4 sm:px-6">
           {homePrompts.length > 0 && (
             <div className="mt-2 flex flex-wrap justify-center gap-2" data-home-prompts>
@@ -169,7 +170,6 @@ export function Session({ params }: { params: Record<string, string> }): React.R
   };
   const stop = () => void client.sessions.abort(id).catch((e: Error) => toast(e.message, { kind: 'error' }));
   const respond = respondFor(id);
-  const ctxPct = s.live.contextWindow ? Math.min(100, Math.round((s.live.contextTokens / s.live.contextWindow) * 100)) : 0;
   const pane = usePane();
   useEffect(() => { if (!pane.split && s.meta) setCrumb({ view: 'core.chat:session', title: s.meta.title }); }, [s.meta?.title, pane.split]);
 
@@ -180,9 +180,7 @@ export function Session({ params }: { params: Record<string, string> }): React.R
       <TopBar title={s.meta?.title}>
         {s.meta && (
           <div className="mr-1 hidden items-center gap-3 text-[11.5px] text-hx-muted md:flex" data-session-meter>
-            <Tooltip label={`${s.live.contextTokens.toLocaleString()} of ${s.live.contextWindow.toLocaleString()} tokens before the context is compacted`}>
-              <span className="flex items-center gap-1.5"><span className="h-1.5 w-16 overflow-hidden rounded-full bg-hx-pill"><span className={cx('block h-full rounded-full', ctxPct > 85 ? 'bg-hx-danger' : ctxPct > 60 ? 'bg-hx-warning' : 'bg-hx-accent')} style={{ width: `${ctxPct}%` }} /></span>{fmtTokens(s.live.contextTokens)}</span>
-            </Tooltip>
+            <ContextMeter sessionId={id} tokens={s.live.contextTokens} window={s.live.contextWindow} />
             <UsageButton meta={s.meta} />
           </div>
         )}

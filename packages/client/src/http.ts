@@ -11,7 +11,7 @@
 
 import { GlobalEvents, sessionEvents, type Fetch } from './events.ts';
 import {
-  isPending, PENDING_KINDS, type Approval, type FileTree, type SearchHit, type Attachment, type CatalogueEntry, type Config, type Capabilities, type EffectiveSetting, type Effort, type FileContent, type FileEntry,
+  isPending, PENDING_KINDS, type Approval, type FileTree, type SearchHit, type Attachment, type CatalogueEntry, type Config, type Capabilities, type ContextBreakdown, type EffectiveSetting, type Effort, type FileContent, type FileEntry,
   type GitLogEntry, type GitStatus, type Health, type HarnessEvent, type HistoryPage, type McpBundle, type Me, type Mode, type ModelInfo, type PendingRequest, type PluginInfo,
   type ProviderInfo, type ProviderTest, type Schedule, type SessionDetail, type SessionMeta, type SessionsPage, type TaskView, type VaultEntry, type VersionInfo, type WorkflowInfo, type WorkflowRunView,
   type ArtifactContent, type ArtifactMeta, type Proposal, type TraceSpan,
@@ -183,6 +183,8 @@ export class HarnessClient {
     startWorkflow: (id: string, name: string, input: Record<string, string>) => this.post<unknown>(`/api/sessions/${id}/workflows`, { name, input }),
     resumeRun: (id: string, runId: string) => this.post<unknown>(`/api/sessions/${id}/runs/${runId}/resume`),
     capabilities: (id: string) => this.get<Capabilities>(`/api/sessions/${id}/capabilities`),
+    /** What fills the conversation's context, part by part. */
+    context: (id: string) => this.get<ContextBreakdown>(`/api/sessions/${id}/context`),
     sources: (id: string) => this.get<Array<{ id?: string | number; url: string; title?: string; snippet?: string }>>(`/api/sessions/${id}/sources`),
     tasks: async (id: string): Promise<TaskView[]> => (await this.sessions.get(id)).tasks ?? [],
     events: (id: string, after: number, onEvent: (e: HarnessEvent, seq: number) => void, onState?: (s: 'open' | 'retrying' | 'closed' | 'missing') => void) =>
