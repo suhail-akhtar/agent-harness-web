@@ -78,6 +78,8 @@ export interface AgentConfig {
   settings: Settings;
   cacheKey: string;
   maxSteps: number;
+  /** Calls allowed per tool in this agent's run (a workflow step's toolBudget): past it a call is refused with why. */
+  toolBudget?: Record<string, number>;
   readFiles: Map<string, FileStamp>;
   /** Hooks registered by trusted code plugins. */
   inProcessHooks?: InProcessHook[];
@@ -627,6 +629,9 @@ export class Agent {
   }
 
   /** Any tool of this agent's, deferred or not (a deferred tool called by its own name runs, and loads its group). */
+  /** Calls made of each tool with a budget (toolBudget). */
+  private budgetUsed = new Map<string, number>();
+
   private findTool(name: string): Tool | undefined {
     return this.cfg.tools.find((t) => t.spec.name === name) ?? (name === LOAD_TOOLS ? this.loadTool : undefined);
   }
@@ -696,6 +701,14 @@ export class Agent {
     const name = tool.spec.name;
     const offResolved = switchedOff(tool, name);
     if (offResolved) return finish(offResolved, true, undefined, undefined, name);
+    // A step's budget for an expensive tool (a workflow's toolBudget): asked in words, models still re-ran
+    // the same playtest nine times in one step; past the budget the call is refused, and says why.
+    const budget = this.cfg.toolBudget?.[name];
+    if (budget !== undefined) {
+      const used = this.budgetUsed.get(name) ?? 0;
+      if (used >= budget) return finish(`${name} has been run ${used} time${used === 1 ? '' : 's'} in this step, its budget. The checks after this step run it again with the final version: finish your changes and report.`, true, undefined, undefined, name);
+      this.budgetUsed.set(name, used + 1);
+    }
 
     // An allowlist sandbox whose proxy holds credentials that can write (a gist, an issue) is,
     // for the untrusted-content guard, a way out like open network; read-only ones are not.

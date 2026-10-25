@@ -75,3 +75,23 @@ test('workflow format: the shell quoting rule it teaches holds in bash (a value 
   // The mistake the rule warns about: a value inside quotes keeps its quotes.
   assert.equal(execFileSync(bash, ['-c', renderShell('printf "%s" "v{{input.version}}"', run)], { encoding: 'utf8' }), "v'1.4.0'");
 });
+
+test('toolBudget: past a step\'s budget a tool call is refused with why, other tools still run; the graph checks the budget', async () => {
+  const { makeAgent } = await import('./helpers.ts');
+  const { BUILTIN_TOOLS } = await import('../src/tools/index.ts');
+  let ran = 0;
+  const bot = { kind: 'read' as const, parallelSafe: false, remoteable: false, spec: { name: 'game_bot', description: 'plays', input_schema: { type: 'object' as const, properties: {} } }, summarize: () => 'bot', run: async () => { ran++; return { content: `won (${ran})` }; } };
+  const h = await makeAgent([
+    { calls: [{ name: 'game_bot', input: {} }] }, { calls: [{ name: 'game_bot', input: {} }] }, { calls: [{ name: 'game_bot', input: {} }] },
+    { calls: [{ name: 'glob', input: { pattern: '*' } }] }, { text: 'done' },
+  ], { tools: [...BUILTIN_TOOLS, bot], config: { toolBudget: { game_bot: 2 } } });
+  h.agent.append({ role: 'user', content: [{ type: 'text', text: 'play it' }] });
+  await h.agent.run(new AbortController().signal);
+  assert.equal(ran, 2, 'the third call did not run');
+  const results = h.agent.messages.flatMap((m) => m.content.filter((b) => b.type === 'tool_result')) as Array<{ content: string; is_error?: boolean }>;
+  assert.match(results[2]!.content, /game_bot has been run 2 times in this step, its budget/);
+  assert.equal(results[2]!.is_error, true);
+  assert.equal(results[3]!.is_error, undefined, 'another tool still runs');
+  const bad = { ...WORKFLOW_EXAMPLE, nodes: { ...WORKFLOW_EXAMPLE.nodes, prepare: { ...WORKFLOW_EXAMPLE.nodes.prepare, toolBudget: { game_bot: -1 } } } };
+  assert.match(validateWorkflow(bad as never).join(' '), /toolBudget is/);
+});

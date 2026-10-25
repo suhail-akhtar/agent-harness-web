@@ -33,6 +33,11 @@ export interface AgentNode extends Base {
   /** Model calls this step may make (default 150, capped by the server's HARNESS_MAX_STEPS). */
   maxSteps?: number;
   /**
+   * Calls this step may make of a tool ({"game_bot": 2}): for an expensive check the gates after the
+   * step repeat anyway. Past it the call is refused with why (asked in the prompt, models re-ran a playtest nine times).
+   */
+  toolBudget?: Record<string, number>;
+  /**
    * Outcome words the agent must state (e.g. ["APPROVE", "REQUEST_CHANGES"]):
    * the first one found in its report becomes the outcome `next` routes on.
    */
@@ -184,7 +189,7 @@ export interface RunRecord {
 /** What the runner needs from its host session. */
 export interface WorkflowHost {
   host(): Promise<ToolHost>;
-  runAgent(args: { agent: string; label: string; prompt: string; model?: string; effort?: Effort; maxSteps?: number; signal: AbortSignal }): Promise<{ report: string; reason: string; cost: number }>;
+  runAgent(args: { agent: string; label: string; prompt: string; model?: string; effort?: Effort; maxSteps?: number; toolBudget?: Record<string, number>; signal: AbortSignal }): Promise<{ report: string; reason: string; cost: number }>;
   runGates(names: string[] | 'applicable', signal: AbortSignal): Promise<{ name: string; pass: boolean; summary: string; details?: string; severity?: string }[]>;
   approve(args: { runId: string; node: string; title: string; message: string; files: string[] }): Promise<{ approved: boolean; feedback?: string }>;
   emit(e: { kind: 'workflow'; run: RunRecord; node?: string; phase: 'started' | 'node_started' | 'node_finished' | 'finished' }): void;

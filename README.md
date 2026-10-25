@@ -392,7 +392,7 @@ A workflow is a graph of steps that the harness drives, not the model. Each step
 
 | Node | What it does | Outcomes it routes on |
 |---|---|---|
-| `agent` | Runs a sub-agent (`agent`, `prompt`, optional `model`, `effort`) in a fresh context. Its report is kept as `{{state.<node>}}`; with `outputs`, it also reports declared state fields in a JSON block. | the first `decide` word found in the report, e.g. `APPROVE` / `REQUEST_CHANGES`; `invalid-output` when its JSON block is missing or mistyped and `next` names it |
+| `agent` | Runs a sub-agent (`agent`, `prompt`, optional `model`, `effort`, `maxSteps`, and `toolBudget` such as `{"game_bot": 2}`: calls past it are refused with why) in a fresh context. Its report is kept as `{{state.<node>}}`; with `outputs`, it also reports declared state fields in a JSON block. | the first `decide` word found in the report, e.g. `APPROVE` / `REQUEST_CHANGES`; `invalid-output` when its JSON block is missing or mistyped and `next` names it |
 | `gate` | Runs quality gates (`gates: "applicable"` or names). On failure the evidence becomes `{{feedback}}` for the next step. | `pass`, `fail`, `exhausted` (after `maxFailures`) |
 | `approval` | Shows a person a message and files; they approve, or send it back with what to change. | `approve`, `reject` |
 | `parallel` | Runs its `branches` at once. | the first negative branch outcome (`REQUEST_CHANGES`, `REJECT`, `FAIL`…), else `all` |

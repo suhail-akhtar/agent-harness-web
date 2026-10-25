@@ -237,7 +237,7 @@ export class WorkflowRunner {
       case 'agent': {
         if (this.w.maxAgentRuns && run.agentRuns >= this.w.maxAgentRuns) return { failed: true, summary: `agent-run limit (${this.w.maxAgentRuns}) reached` };
         run.agentRuns++;
-        const r = await this.host.runAgent({ agent: node.agent ?? 'general', label: id, prompt: this.brief(node), model: nodeModel(node.model, run), effort: node.effort, maxSteps: node.maxSteps, signal });
+        const r = await this.host.runAgent({ agent: node.agent ?? 'general', label: id, prompt: this.brief(node), model: nodeModel(node.model, run), effort: node.effort, maxSteps: node.maxSteps, ...(node.toolBudget ? { toolBudget: node.toolBudget } : {}), signal });
         run.cost += r.cost;
         run.state[id] = r.report.slice(0, SUMMARY_MAX);
         // Out of steps (or of time, HARNESS_MAX_TURN_MINUTES) is unfinished work, not a failure: the next step (a gate) judges it.
@@ -431,7 +431,7 @@ export class WorkflowRunner {
       case 'agent': {
         if (this.w.maxAgentRuns && run.agentRuns >= this.w.maxAgentRuns) return { failed: true, summary: `agent-run limit (${this.w.maxAgentRuns}) reached` };
         run.agentRuns++;
-        const r = await this.host.runAgent({ agent: t.agent ?? 'general', label, prompt: this.brief(t, scope), model: nodeModel(t.model, run), effort: t.effort, maxSteps: t.maxSteps, signal });
+        const r = await this.host.runAgent({ agent: t.agent ?? 'general', label, prompt: this.brief(t, scope), model: nodeModel(t.model, run), effort: t.effort, maxSteps: t.maxSteps, ...(t.toolBudget ? { toolBudget: t.toolBudget } : {}), signal });
         run.cost += r.cost;
         if (r.reason !== 'done' && r.reason !== 'max_tokens') return { failed: true, summary: r.reason === 'max_steps' ? `ran out of steps: ${r.report.slice(-500)}` : `agent stopped: ${r.reason}`, cost: r.cost };
         let output: unknown = r.report;

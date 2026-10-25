@@ -81,6 +81,7 @@ export function validateWorkflow(w: WorkflowDef): string[] {
         if (!Array.isArray(n.outputs) || !n.outputs.length) errors.push(`${where}: outputs must be a list of declared state fields`);
         else for (const o of n.outputs) if (!fields[o]) errors.push(`${where}: outputs "${o}", which is not a declared state field`);
       }
+      if (n.toolBudget !== undefined && (!n.toolBudget || typeof n.toolBudget !== 'object' || Array.isArray(n.toolBudget) || Object.values(n.toolBudget).some((v) => !Number.isInteger(v) || (v as number) < 0))) errors.push(`${where}: toolBudget is {"<tool>": <calls, a whole number>}`);
     }
     if (n.type === 'shell') { if (!n.command?.trim()) errors.push(`${where}: shell node needs a command`); refs(n.command); }
     if (n.type === 'approval') refs(n.message);
