@@ -156,7 +156,8 @@ export const defaultSettings = (): Settings => ({
   maxSteps: Number(process.env.HARNESS_MAX_STEPS ?? 150),
   progressReview: defaultProgressReview(),
   ...(process.env.HARNESS_REVIEW_MODEL ? { reviewModel: process.env.HARNESS_REVIEW_MODEL } : {}),
-  maxCostUsd: Number(process.env.HARNESS_MAX_COST_USD ?? 5),
+  // Per conversation; 0 is no limit; anything unreadable keeps the default.
+  maxCostUsd: ((n) => (Number.isFinite(n) && n >= 0 ? n : 5))(Number(process.env.HARNESS_MAX_COST_USD ?? 5)),
   maxTurnMinutes: Math.max(0, Number(process.env.HARNESS_MAX_TURN_MINUTES ?? 0) || 0),
   maxSubagentDepth: Math.min(3, Math.max(1, Number(process.env.HARNESS_SUBAGENT_DEPTH ?? 1) || 1)),
   maxParallelSubagents: Math.min(20, Math.max(1, Number(process.env.HARNESS_SUBAGENTS_PARALLEL ?? 10) || 10)),
@@ -326,7 +327,8 @@ export async function saveUserInstructions(dataDir: string, owner: string | unde
  * their limits apply only where they are lower.
  */
 export function applyUserSettings(base: Settings, u: UserSettings): Settings {
-  const lower = (b: number, v: number | undefined) => (v ? Math.min(b, v) : b);
+  // A person's limit applies where it is lower; where the operator has none (0), theirs is the limit.
+  const lower = (b: number, v: number | undefined) => (v ? (b > 0 ? Math.min(b, v) : v) : b);
   return {
     ...base,
     // The operator's allow rules are remembered apart: only they hold after untrusted content (see decide()).

@@ -66,7 +66,11 @@ function engineEntry(): string {
 
 const local = new EngineHost({
   entry: engineEntry(),
-  env: () => ({ HARNESS_HOME: home.layout.home, HARNESS_DATA: home.dataDir, HARNESS_LOCAL_ROOTS: localRoots().join(path.delimiter), HARNESS_DESKTOP: '1' }),
+  env: () => {
+    // The person is this engine's operator: their spend limit (Settings > Application) is the engine's.
+    const limit = prefs.get().spendLimitUsd;
+    return { HARNESS_HOME: home.layout.home, HARNESS_DATA: home.dataDir, HARNESS_LOCAL_ROOTS: localRoots().join(path.delimiter), HARNESS_DESKTOP: '1', ...(typeof limit === 'number' && limit >= 0 ? { HARNESS_MAX_COST_USD: String(limit) } : {}) };
+  },
 });
 let engine: Engine = local;
 let mainWindow: BrowserWindow | null = null;

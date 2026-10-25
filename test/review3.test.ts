@@ -60,6 +60,10 @@ test('a repository\'s allow rules never allow a call that leaves the sandbox; a 
   // A person's own rules: kept, but not as the operator's (they do not hold after untrusted content).
   const op = defaultSettings();
   op.permissions.allow.push('web_fetch');
+  // The spend limit: 0 is none; a person's own applies where it is lower, or where the operator has none.
+  assert.equal(applyUserSettings({ ...op, maxCostUsd: 0 }, { permissions: { allow: [], deny: [], ask: [] } }).maxCostUsd, 0);
+  assert.equal(applyUserSettings({ ...op, maxCostUsd: 0 }, { permissions: { allow: [], deny: [], ask: [] }, maxCostUsd: 3 }).maxCostUsd, 3);
+  assert.equal(applyUserSettings({ ...op, maxCostUsd: 5 }, { permissions: { allow: [], deny: [], ask: [] }, maxCostUsd: 50 }).maxCostUsd, 5, 'a person cannot raise the operator limit');
   const mine = applyUserSettings(op, { permissions: { allow: ['bash'], deny: [], ask: [] } });
   const merged = mergeSettings(mine, {}, false);
   assert.deepEqual(merged.permissions.operatorAllow, ['web_fetch']);

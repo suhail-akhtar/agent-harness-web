@@ -1485,7 +1485,8 @@ export class Session {
         m[miss.cause] = (m[miss.cause] ?? 0) + 1;
         this.scheduleSave();
       },
-      overBudget: () => (this.meta.cost >= (this.settings?.maxCostUsd ?? Infinity) ? `Stopped: this session reached its spend limit of $${this.settings!.maxCostUsd.toFixed(2)}. Raise HARNESS_MAX_COST_USD to continue.` : undefined) ?? this.deps.spend?.over(this.meta.owner),
+      // 0 is "no limit" (the desktop's No limit, or HARNESS_MAX_COST_USD=0 on a server).
+      overBudget: () => ((this.settings?.maxCostUsd ?? 0) > 0 && this.meta.cost >= this.settings!.maxCostUsd ? `Stopped: this conversation reached its spend limit of $${this.settings!.maxCostUsd.toFixed(2)}. Raise it in Settings (Application > Spend limit per conversation, or HARNESS_MAX_COST_USD on a server), then say "continue".` : undefined) ?? this.deps.spend?.over(this.meta.owner),
       getMode: () => this.meta.mode,
       rules: () => this.rules(),
       requestPermission: (tool, input, summary, suggestion, agent) => this.askPermission(tool, input, summary, suggestion, agent),

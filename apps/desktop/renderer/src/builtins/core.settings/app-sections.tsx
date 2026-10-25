@@ -97,10 +97,32 @@ export function Application(): React.ReactElement {
             <Button size="sm" variant="ghost" onClick={() => void desktop.engineLogs().then(setLogs)}>Show log</Button></div>
         </Field>
         {logs && <pre className="hx-scroll my-2 max-h-64 overflow-auto rounded-lg bg-hx-code p-2 font-mono text-[11px] leading-4">{logs.join('\n')}</pre>}
+        <SpendLimit />
         <Field label="App folder" help={`Window, preferences and plugin grants on this computer: ${info?.dataDir ?? ''}`} inline><Button size="sm" icon="folder-open" onClick={() => void desktop.openDataFolder()}>Open</Button></Field>
       </Section>
       <Location />
     </div>
+  );
+}
+
+/** The spend limit per conversation of this app's own engine (the person is its operator); it applies once the engine restarts. */
+function SpendLimit(): React.ReactElement {
+  const prefs = useApp((s) => s.prefs);
+  const [applied, setApplied] = useState(prefs.spendLimitUsd);
+  const cur = prefs.spendLimitUsd;
+  const amounts = [...new Set([5, 10, 25, 50, 100, 250, ...(typeof cur === 'number' && cur > 0 ? [cur] : [])])].sort((a, b) => a - b);
+  const options = [{ value: 'default', label: 'Default ($5)' }, ...amounts.map((n) => ({ value: String(n), label: `$${n}` })), { value: '0', label: 'No limit' }];
+  const pending = cur !== applied;
+  const help = pending
+    ? 'Applies after the engine restarts (running conversations stop).'
+    : 'A conversation stops when its model calls reach this; raise it and say "continue". No limit: only your providers\' own limits apply.';
+  return (
+    <Field label="Spend limit per conversation" help={help} inline>
+      <div className="flex items-center gap-2" data-spend-limit>
+        <Select value={cur === null ? 'default' : String(cur)} onChange={(v) => set({ spendLimitUsd: v === 'default' ? null : Number(v) })} options={options} />
+        {pending && <Button size="sm" variant="primary" icon="refresh" onClick={() => { setApplied(cur); void desktop.engineRestart(); }}>Restart engine</Button>}
+      </div>
+    </Field>
   );
 }
 

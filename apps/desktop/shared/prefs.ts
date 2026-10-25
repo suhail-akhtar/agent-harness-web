@@ -27,6 +27,8 @@ export interface DesktopPrefs {
   startAtLogin: boolean;
   keepInTray: boolean;
   preventSleep: boolean;
+  /** Spend limit per conversation for this app's own engine, in USD: null keeps the engine's default ($5), 0 is no limit. */
+  spendLimitUsd: number | null;
   window: WindowBounds;
   sidebar: { collapsed: boolean; width: number; showArchived: boolean };
   /** Resizable panes other than the sidebar: pane id -> its size (px) and whether it is collapsed (absent: the default). */
@@ -67,6 +69,7 @@ export const DEFAULT_PREFS: DesktopPrefs = {
   startAtLogin: false,
   keepInTray: false,
   preventSleep: false,
+  spendLimitUsd: null,
   window: { width: 1280, height: 820, maximized: false },
   sidebar: { collapsed: false, width: 272, showArchived: false },
   panes: {},
@@ -93,6 +96,8 @@ export function mergePrefs(base: DesktopPrefs, patch: unknown): DesktopPrefs {
   const def = DEFAULT_PREFS as unknown as Record<string, unknown>;
   for (const [k, v] of Object.entries(patch)) {
     if (!(k in def) || v === undefined) continue;
+    // null (the engine's default) or a non-negative amount (0: no limit).
+    if (k === 'spendLimitUsd') { if (v === null || (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100_000)) out[k] = v; continue; }
     const d = def[k];
     if (Array.isArray(d)) { if (Array.isArray(v)) out[k] = structuredClone(v); continue; }
     if (isObj(d)) {
