@@ -829,6 +829,11 @@ export class Session {
     for (const e of r?.errors ?? []) console.error(`session ${this.meta.id}: ${e}`);
   }
 
+  /** Stops what runs this session's commands (its sandbox container), keeping everything it wrote: for one-shot runs (evals, the CLI) that end with the process. */
+  async releaseHost(): Promise<void> {
+    if (this.host instanceof DockerHost || this.host instanceof LocalHost) await this.host.close().catch(() => {});
+  }
+
   async destroy(): Promise<void> {
     this.abort();
     // Background shells end with their session.

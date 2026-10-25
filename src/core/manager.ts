@@ -125,9 +125,10 @@ export class SessionManager {
   }
 
   /** Server shutdown: stop every turn, then SessionEnd hooks (reason "shutdown") for sessions that ran. */
-  async close(): Promise<void> {
+  /** releaseHosts: also stop each session's sandbox (a one-shot run); a server keeps them to reuse after a restart. */
+  async close(o: { releaseHosts?: boolean } = {}): Promise<void> {
     clearInterval(this.idleTimer);
     for (const s of this.sessions.values()) s.abort();
-    await Promise.all([...this.sessions.values()].map((s) => s.end('shutdown').catch(() => {})));
+    await Promise.all([...this.sessions.values()].map(async (s) => { await s.end('shutdown').catch(() => {}); if (o.releaseHosts) await s.releaseHost(); }));
   }
 }

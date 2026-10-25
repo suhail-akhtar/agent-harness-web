@@ -45,6 +45,8 @@ import { DataService } from '../data/service.ts';
 //   await s.send('Fix the failing tests');
 
 export interface HarnessOptions {
+  /** On close, stop every session's sandbox container as well (evals and the CLI: one job, then the process ends). A server leaves them for after a restart. */
+  releaseHosts?: boolean;
   dataDir: string;
   /** Plugin folders (each a plugin, or a folder of plugins). Trusted: their code runs in this process. */
   plugins?: string[];
@@ -605,7 +607,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     async close() {
       scheduler?.stop();
       await data.stop();
-      await sessions.close();
+      await sessions.close({ releaseHosts: opts.releaseHosts });
       // The leases go last: other servers may take the sessions over once they are free.
       await leases?.close();
       await otel?.close();

@@ -85,6 +85,8 @@ async function main() {
   const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const h = await createHarness({
     dataDir,
+    // One job, then the process ends: its sandbox container goes too.
+    releaseHosts: true,
     plugins: [path.join(appRoot, 'plugins'), ...(process.env.HARNESS_PLUGINS || '').split(path.delimiter).filter(Boolean)],
     shippedPlugins: [path.join(appRoot, 'plugins')],
     installDir: paths.installDir,
