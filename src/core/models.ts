@@ -14,7 +14,7 @@ interface Rate { input: number; cacheRead: number; cacheWrite: number; cacheWrit
 export interface ModelSpec {
   id: string;
   label: string;
-  /** Registered provider id: 'anthropic' | 'openai' | 'deepseek' | 'moonshot' | 'zai' | a plugin's. */
+  /** Registered provider id: 'anthropic' | 'openai' | 'deepseek' | 'moonshot' | 'zai' | 'xai' | a plugin's. */
   provider: string;
   /** Accepts images (screenshots, renders) in its input. */
   vision: boolean;
@@ -247,6 +247,54 @@ export const BUILTIN_MODELS: ModelSpec[] = [
   },
   // Z.ai, pay as you go. Prices from https://docs.z.ai/guides/overview/pricing,
   // limits from https://docs.z.ai/guides/vlm/glm-5.3-flash (checked 2026-10-22).
+  // xAI (Grok): https://docs.x.ai/docs/models (checked 2026-10-26). Past 200K prompt tokens every token of
+  // the request is billed at the long-context rate, so the context is compacted before it.
+  {
+    id: 'grok-4.7',
+    label: 'Grok 4.7',
+    provider: 'xai',
+    vision: true,
+    tier: 'frontier',
+    notes: "xAI's strongest. Always reasons; effort low / medium / high / xhigh. Images: png and jpg.",
+    contextWindow: 500_000,
+    maxOutput: 128_000,
+    compactAt: 180_000,
+    effort: 'high',
+    efforts: ['low', 'medium', 'high', 'xhigh'],
+    rate: (size) => size > 200_000
+      ? { input: 4.00, cacheRead: 1.00, cacheWrite: 4.00, output: 12.00 }
+      : { input: 2.00, cacheRead: 0.50, cacheWrite: 2.00, output: 6.00 },
+  },
+  {
+    id: 'grok-4.3',
+    label: 'Grok 4.3',
+    provider: 'xai',
+    vision: true,
+    notes: 'Cheaper Grok with a 1M context. Effort low / medium / high / xhigh. Images: png and jpg.',
+    contextWindow: 1_000_000,
+    maxOutput: 128_000,
+    compactAt: 180_000,
+    effort: 'low',
+    efforts: ['low', 'medium', 'high', 'xhigh'],
+    rate: (size) => size > 200_000
+      ? { input: 2.50, cacheRead: 0.40, cacheWrite: 2.50, output: 5.00 }
+      : { input: 1.25, cacheRead: 0.20, cacheWrite: 1.25, output: 2.50 },
+  },
+  {
+    id: 'grok-build-0.1',
+    label: 'Grok Build 0.1',
+    provider: 'xai',
+    vision: true,
+    notes: "xAI's coding model (also called grok-code-fast). 256K context.",
+    contextWindow: 256_000,
+    maxOutput: 128_000,
+    compactAt: 160_000,
+    effort: 'high',
+    efforts: ['low', 'medium', 'high'],
+    rate: (size) => size > 200_000
+      ? { input: 2.00, cacheRead: 0.40, cacheWrite: 2.00, output: 4.00 }
+      : { input: 1.00, cacheRead: 0.20, cacheWrite: 1.00, output: 2.00 },
+  },
   {
     id: 'glm-5.3-flash',
     label: 'GLM-5.3-Flash',

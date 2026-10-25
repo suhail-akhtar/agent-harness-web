@@ -19,6 +19,8 @@ const STRENGTHS: Record<string, string> = {
   'kimi-k2.7-code': 'coding',
   'kimi-k2.6': 'general, cheap at low effort',
   'glm-5.3-flash': 'cheap, long context',
+  'grok-4.7': 'strong reasoning, 500K context',
+  'grok-4.3': 'cheap, 1M context',
 };
 
 /** $ to $$$$ by output price per million tokens (at a fixed date, so the line never changes with the hour). */

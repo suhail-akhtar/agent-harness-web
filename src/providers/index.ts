@@ -4,6 +4,7 @@ import { DeepSeekProvider } from './deepseek.ts';
 import { MoonshotProvider } from './moonshot.ts';
 import { OpenAIProvider } from './openai.ts';
 import { ZaiProvider } from './zai.ts';
+import { XaiProvider, XAI_BASE, xaiModels } from './xai.ts';
 import { anthropicModels, openAiChatModel, openAiCompatibleModels } from './catalog.ts';
 
 // The built-in providers. Keys are read from the server's environment, else from a key an
@@ -17,5 +18,6 @@ export const BUILTIN_PROVIDERS: Record<string, ProviderDef> = {
   // Base URLs: MOONSHOT_BASE_URL (China platform: https://api.moonshot.cn/v1), ZAI_BASE_URL (Coding Plan, BigModel).
   moonshot: { label: 'Moonshot AI (Kimi)', defaultBaseUrl: 'https://api.moonshot.ai/v1', baseUrlEnv: 'MOONSHOT_BASE_URL', keyEnv: ['MOONSHOT_API_KEY'], create: (key, o) => new MoonshotProvider(key, o?.baseUrl), listModels: (k, b, s) => openAiCompatibleModels(k, b, s),
     options: [{ id: 'webTools', label: 'Web search and page reading with Kimi', help: "web_search goes to Kimi's search API, and web_fetch asks Kimi's fetch API for pages it cannot read itself ($0.002 a call, on this key)." }] },
+  xai: { label: 'xAI (Grok)', defaultBaseUrl: XAI_BASE, baseUrlEnv: 'XAI_BASE_URL', keyEnv: ['XAI_API_KEY'], create: (key, o) => new XaiProvider(key, o?.baseUrl), listModels: xaiModels },
   zai: { label: 'Z.ai (GLM)', defaultBaseUrl: 'https://api.z.ai/api/paas/v4', baseUrlEnv: 'ZAI_BASE_URL', keyEnv: ['ZAI_API_KEY'], create: (key, o) => new ZaiProvider(key, o?.baseUrl), listModels: (k, b, s) => openAiCompatibleModels(k, b, s) },
 };
