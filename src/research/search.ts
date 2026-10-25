@@ -6,8 +6,9 @@ import type { SearchHit } from './sources.ts';
 // the Claude or OpenAI API, called once per query by a small model. Every model
 // gets the same tool, whichever key the server has.
 //
-// HARNESS_SEARCH picks one: brave | tavily | exa | searxng | deepseek | anthropic | openai | off.
-// Default: the first that has a key, in that order.
+// HARNESS_SEARCH picks one: brave | tavily | exa | searxng | deepseek | kimi | anthropic | openai | off.
+// Default: the first that has a key, in that order - except Kimi, which is used only when an administrator
+// turns it on in the Kimi provider's settings ("web tools"), and then first (and for pages web_fetch cannot read).
 
 export interface SearchOptions { max?: number; allowedDomains?: string[]; blockedDomains?: string[] }
 export interface SearchResult { hits: SearchHit[]; cost: number; backend: string }
@@ -16,6 +17,8 @@ export interface SearchBackend {
   name: string;
   /** True when it can run (its key or URL is set). */
   available(): boolean;
+  /** Chosen ahead of the others while true (a backend someone turned on on purpose); checked at every search. */
+  preferred?(): boolean;
   search(query: string, opts: SearchOptions, signal: AbortSignal): Promise<SearchResult>;
 }
 
@@ -207,7 +210,46 @@ export const openaiBackend: SearchBackend = {
   },
 };
 
-export const BUILTIN_SEARCH: SearchBackend[] = [braveBackend, tavilyBackend, exaBackend, searxngBackend, deepseekBackend, anthropicBackend, openaiBackend];
+/** Kimi's web tools, when its provider's "web tools" switch is on (set by the harness: key, address, switch). */
+let kimiTools: () => { enabled: boolean; key?: string; baseUrl?: string } = () => ({ enabled: false });
+export function setKimiTools(f: typeof kimiTools): void { kimiTools = f; }
+const kimiOn = () => { const k = kimiTools(); return k.enabled && !!k.key ? k : undefined; };
+const kimiBase = (b?: string) => (b ?? 'https://api.moonshot.ai/v1').replace(/\/+$/, '');
+
+/** POST /v1/tools/search on the Kimi platform ($0.002 a call; nothing found is free). https://platform.kimi.ai/docs */
+export const kimiBackend: SearchBackend = {
+  name: 'kimi',
+  available: () => !!kimiOn(),
+  preferred: () => !!kimiOn(),
+  async search(q, o, signal) {
+    const k = kimiOn();
+    if (!k) throw new Error('Kimi web tools are off (turn them on in the Kimi provider settings)');
+    const res = await fetch(`${kimiBase(k.baseUrl)}/tools/search`, {
+      method: 'POST', signal,
+      headers: { authorization: `Bearer ${k.key}`, 'content-type': 'application/json', 'user-agent': UA },
+      body: JSON.stringify({ text_query: siteQuery(q, o).slice(0, 500), limit: Math.min(20, (o.max ?? 8) + (o.allowedDomains?.length || o.blockedDomains?.length ? 6 : 0)), timeout_seconds: 20, include_content: false }),
+    });
+    const j = await json(res, 'Kimi');
+    const rows = (j.search_results ?? j.results ?? []) as { title?: string; url?: string; snippet?: string; summary?: string; content?: string; date?: string; published_at?: string }[];
+    const hits = rows.map((r) => ({ title: r.title ?? '', url: r.url ?? '', snippet: (r.snippet || r.summary || r.content || '').replace(/\s+/g, ' ').slice(0, 400), date: (r.date ?? r.published_at)?.slice(0, 10) }));
+    return { hits: filterHits(hits, o).slice(0, o.max ?? 8), cost: hits.length ? 0.002 : 0, backend: 'kimi' };
+  },
+};
+
+/** A page read with Kimi's POST /v1/tools/fetch (markdown), when its web tools are on; undefined when off or it fails. */
+export async function kimiFetch(url: string, signal: AbortSignal): Promise<{ title?: string; text: string } | undefined> {
+  const k = kimiOn();
+  if (!k) return undefined;
+  try {
+    const res = await fetch(`${kimiBase(k.baseUrl)}/tools/fetch`, { method: 'POST', signal, headers: { authorization: `Bearer ${k.key}`, 'content-type': 'application/json', 'user-agent': UA }, body: JSON.stringify({ url }) });
+    if (!res.ok) return undefined;
+    const j = await res.json() as { markdown?: string; title?: string; data?: { markdown?: string; title?: string } };
+    const text = j.markdown ?? j.data?.markdown;
+    return text?.trim() ? { title: j.title ?? j.data?.title, text } : undefined;
+  } catch { return undefined; }
+}
+
+export const BUILTIN_SEARCH: SearchBackend[] = [braveBackend, tavilyBackend, exaBackend, searxngBackend, deepseekBackend, kimiBackend, anthropicBackend, openaiBackend];
 
 function priceOf(model: string, u: Parameters<typeof costOf>[1]): number {
   try { return costOf(getModel(model), u); } catch { return 0; }
@@ -221,8 +263,14 @@ function strip(s: string): string { return s.replace(/<[^>]+>/g, '').replace(/&a
  */
 export function makeSearchService(backends: SearchBackend[], choice = env('HARNESS_SEARCH')): SearchService | undefined {
   if (choice === 'off') return undefined;
-  const pick = choice ? backends.find((b) => b.name === choice) : backends.find((b) => b.available());
-  if (!pick) return undefined;
-  if (choice && !pick.available()) throw new Error(`HARNESS_SEARCH=${choice}, but its key or URL is not set`);
-  return { backend: pick.name, search: (q, o, s) => pick.search(q, o, s) };
+  const fixed = choice ? backends.find((b) => b.name === choice) : backends.find((b) => b.available() && !b.preferred);
+  const switchable = choice ? [] : backends.filter((b) => b.preferred);
+  if (!fixed && !switchable.length) return undefined;
+  if (choice && fixed && !fixed.available()) throw new Error(`HARNESS_SEARCH=${choice}, but its key or URL is not set`);
+  // A backend someone turned on (Kimi's web tools) goes first while it is on, at every search.
+  const now = () => switchable.find((b) => b.preferred!() && b.available()) ?? fixed;
+  return {
+    get backend() { return now()?.name ?? 'none'; },
+    search: (q, o, s) => { const b = now(); if (!b) throw new Error('no web search backend is configured (a search API key, or Kimi web tools in the provider settings)'); return b.search(q, o, s); },
+  };
 }

@@ -21,7 +21,7 @@ import { Scheduler } from '../core/scheduler.ts';
 import { type InstalledMcpb, installedMcpb, installMcpb, McpbError, saveInstalled } from '../mcp/mcpb.ts';
 import { sandboxCredentials as sandboxCredentials_ } from '../runtime/credentials.ts';
 import { BUILTIN_TOOLS } from '../tools/index.ts';
-import { BUILTIN_SEARCH, makeSearchService, type SearchService } from '../research/search.ts';
+import { BUILTIN_SEARCH, makeSearchService, setKimiTools, type SearchService } from '../research/search.ts';
 import { Registry, type LoadedPlugin, type PluginParts } from './registry.ts';
 import { VaultStore } from '../vault/store.ts';
 import { createBridge, type PluginBridge } from '../plugins/host.ts';
@@ -33,7 +33,7 @@ import { within } from '../tools/paths.ts';
 import { PausedRuns } from '../graph/paused.ts';
 import { EventHub } from './events.ts';
 import { ClientPresence } from '../core/client.ts';
-import { ProviderKeys } from './provider-keys.ts';
+import { ProviderKeys, providerBaseUrl } from './provider-keys.ts';
 import { DataService } from '../data/service.ts';
 
 // The harness as a library: one call assembles the registry (built-ins, then
@@ -482,6 +482,8 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   };
   // Keys and base URLs set through the API: the environment's key still wins (Registry.keyInfo).
   const providerKeys = await new ProviderKeys({ dataDir: opts.dataDir, vault, registry, log }).load();
+  // Kimi's web tools: only when an administrator switched them on in the Kimi provider settings.
+  setKimiTools(() => ({ enabled: providerKeys.option('moonshot', 'webTools'), key: registry.keyInfo('moonshot').key, baseUrl: providerBaseUrl(registry, 'moonshot') }));
   // Which client apps are listening now (desktop tools reach a session only while one is).
   const clients = new ClientPresence();
   // Data and dashboards: plugins' contributed data sources are their own routes, called in the server.

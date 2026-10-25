@@ -18,6 +18,8 @@ export const providerKeyEntry = (id: string) => `provider-${id.replace(/[^A-Za-z
 export class ProviderKeys {
   private keys = new Map<string, { key: string; version: number }>();
   private urls: Record<string, string> = {};
+  /** Each provider's switches (ProviderDef.options), off unless set. */
+  private opts: Record<string, Record<string, boolean>> = {};
   private file: string;
   private refreshing?: Promise<void>;
   private checked = 0;
@@ -32,7 +34,7 @@ export class ProviderKeys {
   get vaultOn(): boolean { return !!this.o.vault; }
 
   async load(): Promise<this> {
-    this.urls = (await readJson<{ baseUrls?: Record<string, string> }>(this.file, {})).baseUrls ?? {};
+    await this.readFile();
     await this.refresh(true);
     return this;
   }
@@ -55,7 +57,7 @@ export class ProviderKeys {
           if (this.keys.get(id)?.version === e.version) continue;
           try { this.keys.set(id, { key: await vault.reveal(SERVER, e.name, `the ${id} provider's API key`, { scope: 'operator' }), version: e.version }); } catch (err) { this.o.log?.(`provider key ${id}: ${(err as Error).message}`); }
         }
-        this.urls = (await readJson<{ baseUrls?: Record<string, string> }>(this.file, {})).baseUrls ?? {};
+        await this.readFile();
         this.checked = Date.now();
       } finally { this.refreshing = undefined; }
     })();
@@ -69,6 +71,26 @@ export class ProviderKeys {
   }
 
   baseUrl(id: string): string | undefined { return this.urls[id]; }
+
+  private async readFile(): Promise<void> {
+    const f = await readJson<{ baseUrls?: Record<string, string>; options?: Record<string, Record<string, boolean>> }>(this.file, {});
+    this.urls = f.baseUrls ?? {};
+    this.opts = f.options ?? {};
+  }
+
+  /** A provider's switch (declared in ProviderDef.options): off unless an administrator turned it on. */
+  option(id: string, name: string): boolean { return this.opts[id]?.[name] === true; }
+  options(id: string): Record<string, boolean> { return { ...(this.opts[id] ?? {}) }; }
+
+  async setOptions(id: string, patch: Record<string, boolean>): Promise<void> {
+    await withFileLock(this.file, async () => {
+      const f = await readJson<{ baseUrls?: Record<string, string>; options?: Record<string, Record<string, boolean>> }>(this.file, {});
+      const all = f.options ?? {};
+      all[id] = { ...(all[id] ?? {}), ...patch };
+      await writeFileAtomic(this.file, JSON.stringify({ ...f, options: all }, null, 1));
+      this.opts = all;
+    });
+  }
 
   async setKey(id: string, key: string, by: VaultActor): Promise<void> {
     const vault = this.o.vault;
@@ -88,9 +110,10 @@ export class ProviderKeys {
 
   async setBaseUrl(id: string, url: string | undefined): Promise<void> {
     await withFileLock(this.file, async () => {
-      const cur = (await readJson<{ baseUrls?: Record<string, string> }>(this.file, {})).baseUrls ?? {};
+      const f = await readJson<{ baseUrls?: Record<string, string> }>(this.file, {});
+      const cur = f.baseUrls ?? {};
       if (url) cur[id] = url; else delete cur[id];
-      await writeFileAtomic(this.file, JSON.stringify({ baseUrls: cur }, null, 1));
+      await writeFileAtomic(this.file, JSON.stringify({ ...f, baseUrls: cur }, null, 1));
       this.urls = cur;
     });
   }

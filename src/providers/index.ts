@@ -15,6 +15,7 @@ export const BUILTIN_PROVIDERS: Record<string, ProviderDef> = {
   openai: { label: 'OpenAI', defaultBaseUrl: 'https://api.openai.com/v1', baseUrlEnv: 'HARNESS_OPENAI_BASE_URL', keyEnv: ['OPENAI_API_KEY'], create: (key, o) => new OpenAIProvider(key, o?.baseUrl), listModels: (k, b, s) => openAiCompatibleModels(k, b, s, openAiChatModel) },
   deepseek: { label: 'DeepSeek', defaultBaseUrl: 'https://api.deepseek.com', baseUrlEnv: 'HARNESS_DEEPSEEK_BASE_URL', keyEnv: ['DEEPSEEK_API_KEY'], create: (key, o) => new DeepSeekProvider(key, o?.baseUrl), listModels: (k, b, s) => openAiCompatibleModels(k, b, s) },
   // Base URLs: MOONSHOT_BASE_URL (China platform: https://api.moonshot.cn/v1), ZAI_BASE_URL (Coding Plan, BigModel).
-  moonshot: { label: 'Moonshot AI (Kimi)', defaultBaseUrl: 'https://api.moonshot.ai/v1', baseUrlEnv: 'MOONSHOT_BASE_URL', keyEnv: ['MOONSHOT_API_KEY'], create: (key, o) => new MoonshotProvider(key, o?.baseUrl), listModels: (k, b, s) => openAiCompatibleModels(k, b, s) },
+  moonshot: { label: 'Moonshot AI (Kimi)', defaultBaseUrl: 'https://api.moonshot.ai/v1', baseUrlEnv: 'MOONSHOT_BASE_URL', keyEnv: ['MOONSHOT_API_KEY'], create: (key, o) => new MoonshotProvider(key, o?.baseUrl), listModels: (k, b, s) => openAiCompatibleModels(k, b, s),
+    options: [{ id: 'webTools', label: 'Web search and page reading with Kimi', help: "web_search goes to Kimi's search API, and web_fetch asks Kimi's fetch API for pages it cannot read itself ($0.002 a call, on this key)." }] },
   zai: { label: 'Z.ai (GLM)', defaultBaseUrl: 'https://api.z.ai/api/paas/v4', baseUrlEnv: 'ZAI_BASE_URL', keyEnv: ['ZAI_API_KEY'], create: (key, o) => new ZaiProvider(key, o?.baseUrl), listModels: (k, b, s) => openAiCompatibleModels(k, b, s) },
 };

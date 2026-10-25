@@ -135,6 +135,12 @@ function ProviderCard({ p, admin, models, onChanged }: { p: ProviderInfo; admin:
           <Button size="sm" disabled={!!busy || base === (p.baseUrl ?? '')} onClick={() => void run('base', async () => { await client.providers.set(p.id, { baseUrl: base.trim() || null }); toast('Address saved'); })}>Save address</Button>
         </div>
       )}
+      {admin && (p.options ?? []).map((o) => (
+        <div key={o.id} className="mt-3 flex items-start gap-3" data-provider-option={`${p.id}:${o.id}`}>
+          <Switch checked={o.value} disabled={!!busy || !p.configured} label={o.label} onChange={(v) => void run('option', async () => { await client.providers.set(p.id, { options: { [o.id]: v } }); toast(`${o.label}: ${v ? 'on' : 'off'}`); })} />
+          <div className="min-w-0 flex-1"><div className="text-[13px] text-hx-primary">{o.label}</div>{o.help && <div className="text-[12px] text-hx-muted">{o.help}{!p.configured ? ' Needs a key first.' : ''}</div>}</div>
+        </div>
+      ))}
     </div>
   );
 }

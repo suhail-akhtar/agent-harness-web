@@ -143,7 +143,7 @@ export class HarnessClient {
 
   providers = {
     list: (): Promise<ProviderInfo[] | null> => this.optional('providers', async () => { const r = await this.get<ProviderInfo[] | { providers: ProviderInfo[] }>('/api/providers'); return Array.isArray(r) ? r : r.providers; }, () => null),
-    set: (id: string, body: { apiKey?: string; baseUrl?: string | null }) => this.put<ProviderInfo>(`/api/providers/${encodeURIComponent(id)}`, body),
+    set: (id: string, body: { apiKey?: string; baseUrl?: string | null; options?: Record<string, boolean> }) => this.put<ProviderInfo>(`/api/providers/${encodeURIComponent(id)}`, body),
     removeKey: (id: string) => this.del<{ ok: boolean }>(`/api/providers/${encodeURIComponent(id)}/key`),
     test: (id: string) => this.post<ProviderTest>(`/api/providers/${encodeURIComponent(id)}/test`),
   };

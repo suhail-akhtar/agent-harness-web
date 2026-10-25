@@ -175,6 +175,8 @@ export interface VersionInfo { version: string; apiVersion?: number; uiApiVersio
 export interface ProviderInfo {
   id: string; label?: string; keyEnv?: string[]; configured: boolean; source?: 'env' | 'vault' | 'none' | string;
   baseUrl?: string | null; baseUrlEditable?: boolean; models?: string[]; keyless?: boolean; note?: string;
+  /** The provider's switches (off by default), with their current values. */
+  options?: Array<{ id: string; label: string; help?: string; value: boolean }>;
 }
 export interface ProviderTest { ok: boolean; latencyMs?: number; model?: string; error?: string }
 

@@ -3,6 +3,7 @@ import net from 'node:net';
 import { Agent, type Dispatcher, EnvHttpProxyAgent, fetch as undiciFetch } from 'undici';
 import type { Tool } from './types.ts';
 import { num, str } from './types.ts';
+import { kimiFetch } from '../research/search.ts';
 
 // web_fetch runs on the server, never in the sandbox, so it is guarded against
 // SSRF: only http(s), every hop's address checked against private, loopback,
@@ -298,6 +299,12 @@ export const webFetchTool: Tool = {
       const raw = bytes.toString('utf8');
       if (/html/i.test(type) || /^\s*<(!doctype|html)/i.test(raw)) ({ title, text } = readable(raw));
       else text = raw;
+    }
+    // A page that reads as (nearly) empty here - built by scripts, or refusing plain fetchers - is read by Kimi's
+    // fetch API when its web tools are switched on (the Kimi provider settings; off by default).
+    if (res.status < 400 && text.trim().length < 200 && !/pdf/i.test(type)) {
+      const k = await kimiFetch(url.toString(), ctx.signal);
+      if (k && k.text.trim().length > text.trim().length) { text = k.text; title = k.title ?? title; }
     }
     if (res.status < 400 && text.trim()) await ctx.services?.sources?.recordFetch({ url: asked, finalUrl: url.toString(), title, text }).catch(() => {});
     const offset = Math.max(0, Math.floor(num(input.offset) ?? 0));

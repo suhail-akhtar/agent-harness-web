@@ -814,6 +814,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
           id, label: def.label ?? id, keyEnv: def.keyEnv, configured: k.source !== 'none' || !!def.keyless || registry.hasInstance(id), source: k.source,
           ...(baseUrl ? { baseUrl } : {}), baseUrlEditable: !!def.defaultBaseUrl,
           models: [...registry.models.values()].filter((m) => m.provider === id).map((m) => m.id), ...(def.keyless ? { keyless: true } : {}),
+          ...(def.options?.length ? { options: def.options.map((o) => ({ ...o, value: harness.providerKeys.option(id, o.id) })) } : {}),
         };
       }));
     }
@@ -834,6 +835,16 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
           if (typeof b.apiKey === 'string') await harness.providerKeys.setKey(id, b.apiKey.trim(), actor);
         } catch (e) { throw e instanceof VaultError ? new HttpError(e.status, e.message) : new HttpError(409, (e as Error).message); }
         if (b.baseUrl !== undefined) await harness.providerKeys.setBaseUrl(id, baseUrl);
+        if (b.options !== undefined) {
+          if (!b.options || typeof b.options !== 'object' || Array.isArray(b.options)) throw new HttpError(400, 'options is {"<option>": true | false}');
+          const known = new Set((def.options ?? []).map((o) => o.id));
+          const patch: Record<string, boolean> = {};
+          for (const [k, v] of Object.entries(b.options as Record<string, unknown>)) {
+            if (!known.has(k) || typeof v !== 'boolean') throw new HttpError(400, `${id} has no option "${k}" (or it is not true/false)`);
+            patch[k] = v;
+          }
+          await harness.providerKeys.setOptions(id, patch);
+        }
         const k = registry.keyInfo(id);
         return send(res, 200, { id, configured: k.source !== 'none' || !!def.keyless, source: k.source, ...(harness.providerKeys.baseUrl(id) ? { baseUrl: harness.providerKeys.baseUrl(id) } : {}), ...(k.source === 'env' && typeof b.apiKey === 'string' ? { note: `The environment's key (${def.keyEnv.join(' or ')}) is in use and wins over the stored one.` } : {}) });
       }
