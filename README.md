@@ -275,7 +275,7 @@ The UI's **Memory** panel shows, edits and deletes what is remembered. `HARNESS_
 
 ## Plugins
 
-A plugin is a folder with `harness-plugin.json`. See `examples/plugins/acme` for a working one that the test suite loads.
+A plugin is a folder with `harness-plugin.json`. New to it? [Build your first plugin](docs/BUILD-A-PLUGIN.md) walks through one end to end (tools, a skill, a route and a page), and `npm run plugin -- check <dir>` loads a plugin as the server would and lists what it adds. See `examples/plugins/acme` for a working one that the test suite loads.
 
 ```json
 {

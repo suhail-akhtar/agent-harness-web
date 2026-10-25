@@ -119,7 +119,7 @@
       "title": "Art direction and asset plan",
       "agent": "art-director",
       "effort": "medium",
-      "prompt": "Stage: art. Load the asset-pipeline and game-art-2d skills. Write design/style-guide.md (the look in words, a palette of 6-16 hex colours, sprite or tile sizes in px or polygon budgets and real sizes in metres for 3D, outline and shading rules, lighting, what must read at a glance) and design/asset-plan.json: {\"style\": \"...\", \"palette\": [...], \"assets\": [{\"id\", \"kind\", \"tool\", \"input\", \"purpose\"}]} - every asset the game loads, under the id the game will use (web: the ids game.json names; studio_template info lists a template's), built procedurally first (studio_sprite, studio_procgen, studio_audio; studio_model for 3D models in Blender), and only from studio_source when the sources allowed ({{input.sources}}) include it. Keep it consistent: one palette, one scale, seeds recorded.\nFeedback, if any: {{feedback}}",
+      "prompt": "Stage: art. Load the asset-pipeline and game-art-2d skills. Write design/style-guide.md (the look in words, a palette of 6-16 hex colours, sprite or tile sizes in px or polygon budgets and real sizes in metres for 3D, outline and shading rules, lighting, what must read at a glance) and design/asset-plan.json: {\"style\": \"...\", \"palette\": [...], \"assets\": [{\"id\", \"kind\", \"tool\", \"input\", \"purpose\"}]} - every asset the game loads, under the id the game will use (web: the ids game.json names; studio_template info lists a template's), built procedurally first (studio_sprite, studio_procgen, studio_audio; studio_model for 3D models in Blender, only when studio_model {\"action\": \"status\"} says Blender is there; without it, plan 3D models the engine builds from primitives in code, never a studio_model build that can only fail), and only from studio_source when the sources allowed ({{input.sources}}) include it. Keep it consistent: one palette, one scale, seeds recorded.\nFeedback, if any: {{feedback}}",
       "next": "approve-art-mode"
     },
     "approve-art-mode": {
@@ -203,7 +203,7 @@
       "title": "Prototype",
       "agent": "game-engineer",
       "maxSteps": 150,
-      "prompt": "Stage: prototype. Build the playable prototype: a graybox level and the core mechanic from design/GDD.md, in {{input.engine}} (dimension {{input.dimension}}). Load web-game-templates (web), godot-essentials (godot) or unreal-essentials (unreal).\n- web: studio_template create with the template the plan names (it keeps the assets already made under their ids and builds the template's missing ones), then change game.json (title, tuning, levels) and src/main.js for the design.\n- godot: godot project.create (template 2d, 2.5d or 3d by the dimension, project \"game\"), then scripts/main.gd: the mechanic, StudioHook state (player, score, won, targets) and a --selftest that checks each rule.\n- unreal: unreal project.create (the third-person template for 3D), then a script with harness_ue (coin_game_kit, build_level with the collectibles on a route, set_default_maps) and unreal test checks; package for Win64 so the game can be played.\nThen play it: game_bot {\"mode\": \"goal\"} must reach the goal. Engine notes - web: the Studio web template in the workspace root (index.html, game.json, src/main.js, src/engine/), assets referenced as \"asset:<id>\" in game.json. godot: the Godot 4 project in game/ (godot tool; StudioHook publishes player, score, won, targets; assets in game/assets via asset.import or the builders' export). unreal: the Unreal project made by unreal project.create (Blueprints and editor Python through harness_ue; Blender .glb models through unreal asset.import; a packaged Win64 build for playing).",
+      "prompt": "Stage: prototype. Build the playable prototype: a graybox level and the core mechanic from design/GDD.md, in {{input.engine}} (dimension {{input.dimension}}). Load web-game-templates (web), godot-essentials (godot) or unreal-essentials (unreal).\n- web: studio_template create with the template the plan names (it keeps the assets already made under their ids and builds the template's missing ones), then change game.json (title, tuning, levels) and src/main.js for the design.\n- godot: godot project.create (template 2d, 2.5d or 3d by the dimension, project \"game\"), then scripts/main.gd: the mechanic, StudioHook state (player, score, won, targets) and a --selftest that checks each rule.\n- unreal: unreal project.create (the third-person template for 3D), then a script with harness_ue (coin_game_kit, build_level with the collectibles on a route, set_default_maps) and unreal test checks; package for Win64 so the game can be played.\nThen play it: game_bot {\"mode\": \"goal\"} must reach the goal. Engine notes - web: the Studio web template in the workspace root (index.html, game.json, src/main.js, src/engine/), assets referenced as \"asset:<id>\" in game.json. godot: the Godot 4 project in game/ (godot tool; StudioHook publishes player, score, won, targets; assets in game/assets via asset.import or the builders' export). unreal: the Unreal project made by unreal project.create (Blueprints and editor Python through harness_ue; Blender .glb models through unreal asset.import; a packaged Win64 build for playing). Test budget: game_bot goal once the mechanic works and once after your last change, not after every edit (the gates play it again); game_play frames at most 3 times in this stage, after a batch of visual changes, not one by one.",
       "next": "prototype-check"
     },
     "prototype-check": {
@@ -274,7 +274,7 @@
       "title": "Fix: Prototype",
       "agent": "game-engineer",
       "maxSteps": 150,
-      "prompt": "Stage: prototype-fix. The prototype checks failed. Fix the game (never weaken a check; change a test only when the test is wrong, and say why), then play it again with game_bot goal.\n\nThe checks that failed, with their evidence:\n{{feedback}}",
+      "prompt": "Stage: prototype-fix. The prototype checks failed. Fix the game (never weaken a check; change a test only when the test is wrong, and say why), then play it again with game_bot goal. Test budget: game_bot goal once the mechanic works and once after your last change, not after every edit (the gates play it again); game_play frames at most 3 times in this stage, after a batch of visual changes, not one by one.\n\nThe checks that failed, with their evidence:\n{{feedback}}",
       "next": "prototype-check"
     },
     "playtest": {
@@ -321,7 +321,7 @@
       "title": "Vertical slice",
       "agent": "game-engineer",
       "maxSteps": 150,
-      "prompt": "Stage: vertical-slice. Bring one level to its final look: every placeholder replaced by the assets made (web: game.json \"asset:<id>\" references; godot: the sprites, tiles and models in game/assets loaded by scripts/main.gd; unreal: the Blender meshes imported with unreal asset.import and placed by a script), animation states, feedback on every action (particles, shake, sound), readable HUD. Keep the bots winning (game_bot goal) and look at the frames yourself.",
+      "prompt": "Stage: vertical-slice. Bring one level to its final look: every placeholder replaced by the assets made (web: game.json \"asset:<id>\" references; godot: the sprites, tiles and models in game/assets loaded by scripts/main.gd; unreal: the Blender meshes imported with unreal asset.import and placed by a script), animation states, feedback on every action (particles, shake, sound), readable HUD. Keep the bots winning (game_bot goal) and look at the frames yourself. Test budget: game_bot goal once the mechanic works and once after your last change, not after every edit (the gates play it again); game_play frames at most 3 times in this stage, after a batch of visual changes, not one by one.",
       "next": "slice-check"
     },
     "slice-check": {
@@ -392,7 +392,7 @@
       "title": "Fix: Vertical slice",
       "agent": "game-engineer",
       "maxSteps": 150,
-      "prompt": "Stage: slice-fix. The vertical-slice checks failed. Fix them and play again.\n\nThe checks that failed, with their evidence:\n{{feedback}}",
+      "prompt": "Stage: slice-fix. The vertical-slice checks failed. Fix them and play again. Test budget: game_bot goal once the mechanic works and once after your last change, not after every edit (the gates play it again); game_play frames at most 3 times in this stage, after a batch of visual changes, not one by one.\n\nThe checks that failed, with their evidence:\n{{feedback}}",
       "next": "slice-check"
     },
     "approve-slice-mode": {
