@@ -3,8 +3,9 @@ import type { JsonSchema, Provider, ProviderRequest, ProviderResponse, ToolSpec 
 import { ProviderError } from './types.ts';
 import { postStream } from './http.ts';
 import { errorBody, finishTurn, readChatStream, toReasoningChat } from './chat-shared.ts';
+import { LOAD_TOOLS } from '../tools/deferred.ts';
 
-// Moonshot AI's Kimi models (kimi-k3, kimi-k2.7-code, kimi-k2.6) over the
+// Moonshot AI's Kimi models (kimi-k3.1-pro, kimi-k3, kimi-k2.7-code, kimi-k2.6) over the
 // Kimi Open Platform's OpenAI-compatible Chat Completions endpoint.
 //
 // Why Chat Completions and not the Anthropic-compatible /anthropic/v1/messages:
@@ -41,6 +42,7 @@ interface Traits {
 }
 const TRAITS: Record<string, Traits> = {
   'kimi-k3': { thinking: 'effort', cacheWrite: true },
+  'kimi-k3.1-pro': { thinking: 'effort', cacheWrite: true },
   'kimi-k2.7-code': { thinking: 'always', cacheWrite: false },
   'kimi-k2.7-code-highspeed': { thinking: 'always', cacheWrite: false },
   'kimi-k2.6': { thinking: 'toggle', cacheWrite: false },
@@ -51,9 +53,10 @@ export function kimiEffort(e: Effort): 'low' | 'high' | 'max' {
   return e === 'low' ? 'low' : e === 'xhigh' || e === 'max' ? 'max' : 'high';
 }
 
-/** HARNESS_MOONSHOT_CACHE_TTL=1h selects the 1-hour cache tier for K3 (writes cost 2x; worth it when turns are more than 5 minutes apart). */
-export function moonshotCacheTtl(env: NodeJS.ProcessEnv = process.env): '5m' | '1h' {
-  return env.HARNESS_MOONSHOT_CACHE_TTL === '1h' ? '1h' : '5m';
+/** The cache tier for K3: HARNESS_MOONSHOT_CACHE_TTL=1h or 5m fixes it; unset, the session's own choice (1h once it has shown long gaps). Writes cost 2x at 1h. */
+export function moonshotCacheTtl(env: NodeJS.ProcessEnv = process.env, prefixTtl?: '1h'): '5m' | '1h' {
+  const set = env.HARNESS_MOONSHOT_CACHE_TTL;
+  return set === '1h' || (set !== '5m' && prefixTtl === '1h') ? '1h' : '5m';
 }
 
 // MFJS (Moonshot Flavored JSON Schema): strict tool schemas (the default) must
@@ -85,17 +88,45 @@ export function kimiTool(t: ToolSpec) {
   return { type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema as JsonSchema, strict: mfjsStrict(t.input_schema) } };
 }
 
+/**
+ * The tools each load_tools result made callable (by its position in the history): Kimi's dynamic tool
+ * loading takes their definitions as a system message at that point, so the prefix before it (and the
+ * tools list on top) stays cached. https://platform.kimi.ai/docs/guide/kimi-k3-1-pro-quickstart
+ */
+export function loadedAt(messages: ProviderRequest['messages'], sent: ReadonlySet<string>): Map<number, string[]> {
+  const calls = new Set<string>();
+  const at = new Map<number, string[]>();
+  const placed = new Set<string>();
+  messages.forEach((m, i) => {
+    for (const b of m.content) {
+      if (b.type === 'tool_use' && b.name === LOAD_TOOLS) calls.add(b.id);
+      if (b.type !== 'tool_result' || !calls.has(b.tool_use_id) || b.is_error) continue;
+      const body = /^Loaded; callable from your next step:\n([\s\S]*)$/.exec(b.content)?.[1] ?? '';
+      const names = body.split('\n').flatMap((l) => /^[^:\s]+: (.+)$/.exec(l)?.[1]?.split(', ') ?? []).filter((n) => sent.has(n) && !placed.has(n));
+      for (const n of names) placed.add(n);
+      if (names.length) at.set(i, [...(at.get(i) ?? []), ...names]);
+    }
+  });
+  return at;
+}
+
 /** The request body. Exported for tests: the cache depends on its exact shape. */
-export function moonshotBody(req: Pick<ProviderRequest, 'model' | 'system' | 'tools' | 'messages' | 'effort' | 'cacheKey'>, env: NodeJS.ProcessEnv = process.env): Record<string, unknown> {
+export function moonshotBody(req: Pick<ProviderRequest, 'model' | 'system' | 'tools' | 'messages' | 'effort' | 'cacheKey' | 'prefixTtl'>, env: NodeJS.ProcessEnv = process.env): Record<string, unknown> {
   const traits = TRAITS[req.model.id] ?? { thinking: 'none', cacheWrite: false };
+  const byName = new Map(req.tools.map((t) => [t.name, t]));
+  const inline = loadedAt(req.messages, new Set(byName.keys()));
+  const later = new Set([...inline.values()].flat());
   const messages: unknown[] = [{ role: 'system', content: req.system }];
-  for (const m of req.messages) messages.push(...toReasoningChat(m, { provider: 'moonshot', toolImages: 'inline' }));
+  req.messages.forEach((m, i) => {
+    messages.push(...toReasoningChat(m, { provider: 'moonshot', toolImages: 'inline' }));
+    const loaded = inline.get(i);
+    if (loaded) messages.push({ role: 'system', tools: loaded.map((n) => kimiTool(byName.get(n)!)) });
+  });
   const body: Record<string, unknown> = { model: req.model.id, messages };
-  if (req.tools.length) {
-    body.tools = req.tools.map(kimiTool);
-    // auto is the only value every Kimi model accepts with thinking on.
-    body.tool_choice = 'auto';
-  }
+  const top = req.tools.filter((t) => !later.has(t.name));
+  if (top.length) body.tools = top.map(kimiTool);
+  // auto is the only value every Kimi model accepts with thinking on.
+  if (req.tools.length) body.tool_choice = 'auto';
   body.stream = true;
   body.stream_options = { include_usage: true };
   // max_tokens is deprecated on Kimi; the server lowers this cap itself when the prompt leaves less room.
@@ -105,7 +136,9 @@ export function moonshotBody(req: Pick<ProviderRequest, 'model' | 'system' | 'to
   // K2.6: low turns thinking off; otherwise thinking with Preserved Thinking, so
   // earlier turns' reasoning stays in the prompt as sent (the prefix stays cached).
   if (traits.thinking === 'toggle') body.thinking = req.effort === 'low' ? { type: 'disabled' } : { type: 'enabled', keep: 'all' };
-  if (traits.cacheWrite && moonshotCacheTtl(env) === '1h') body.prompt_cache_options = { mode: 'implicit', ttl: '1h' };
+  // The 1-hour tier when asked for (HARNESS_MOONSHOT_CACHE_TTL=1h) or when the session has shown gaps past 5 minutes
+  // (promptCaching.prefixTtl 'auto', as for Claude): a 5-minute prefix would be written again after every long tool call.
+  if (traits.cacheWrite && moonshotCacheTtl(env, req.prefixTtl) === '1h') body.prompt_cache_options = { mode: 'implicit', ttl: '1h' };
   return body;
 }
 
@@ -127,7 +160,10 @@ export class MoonshotProvider implements Provider {
       throw await this.classify(err.status, errorBody(err), err.retryAfterMs, req.model.id);
     }
     const turn = await readChatStream(res, req, (e) => kimiError(0, { type: e.type, message: e.message ?? 'stream error' }, undefined, req.model.id, this.baseUrl));
-    return finishTurn(turn, req.model.id, 'moonshot', body);
+    const out = finishTurn(turn, req.model.id, 'moonshot', body);
+    // Writes under a 1-hour request go to the 1-hour entry (billed at its rate).
+    if ((body.prompt_cache_options as { ttl?: string } | undefined)?.ttl === '1h' && out.usage.cacheWrite) out.usage = { ...out.usage, cacheWrite1h: out.usage.cacheWrite };
+    return out;
   }
 
   /** Maps an error; an insufficient balance also reports the balance left (one cheap call, only on that error). */

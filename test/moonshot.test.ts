@@ -275,3 +275,30 @@ test('moonshot: a harness session on kimi-k3 - the loop runs the tool call and t
     for (const [k, v] of [['MOONSHOT_API_KEY', saved.key], ['MOONSHOT_BASE_URL', saved.base]] as const) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   }
 });
+
+test('moonshot K3.1 Pro: tools loaded mid-session go in as a system message where they loaded (the prefix stays cached); the 1-hour tier follows the session', () => {
+  const WIDGET = { name: 'widget_count', description: 'Counts widgets', input_schema: { type: 'object' as const, properties: {} } };
+  const messages: Message[] = [
+    { role: 'user', content: [{ type: 'text', text: 'count the widgets' }] },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'load_tools', input: { groups: ['widgets'] } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'Loaded; callable from your next step:\nwidgets: widget_count' }] },
+  ];
+  const b = moonshotBody(request('kimi-k3.1-pro', { tools: [READ_TOOL, WIDGET], messages }));
+  assert.deepEqual((b.tools as Array<{ function: { name: string } }>).map((t) => t.function.name), ['read'], 'the top list is the one the session started with');
+  const sys = (b.messages as Array<{ role: string; tools?: Array<{ function: { name: string } }>; content?: unknown }>);
+  const at = sys.findIndex((m) => m.role === 'system' && m.tools);
+  assert.equal(at, sys.length - 1, 'right after the load result');
+  assert.deepEqual(sys[at]!.tools!.map((t) => t.function.name), ['widget_count']);
+  assert.ok(!('content' in sys[at]!));
+  // Before any load: as before.
+  assert.ok(!(moonshotBody(request('kimi-k3.1-pro', { tools: [READ_TOOL, WIDGET] })).messages as Array<{ tools?: unknown }>).some((m) => m.tools));
+  // The cache tier: the session's 1h once it has shown long gaps, unless the operator fixed it.
+  assert.deepEqual(moonshotBody(request('kimi-k3.1-pro', { prefixTtl: '1h' }), {}).prompt_cache_options, { mode: 'implicit', ttl: '1h' });
+  assert.ok(!('prompt_cache_options' in moonshotBody(request('kimi-k3.1-pro', { prefixTtl: '1h' }), { HARNESS_MOONSHOT_CACHE_TTL: '5m' })));
+  assert.ok(!('prompt_cache_options' in moonshotBody(request('kimi-k3.1-pro'), {})));
+  // 1-hour writes at their own rate: $4 against $2 per million on K3.1 Pro.
+  const m = getModel('kimi-k3.1-pro');
+  assert.equal(costOf(m, { input: 0, cacheRead: 0, cacheWrite: 1_000_000, cacheWrite1h: 1_000_000, output: 0, reasoning: 0 }), 4);
+  assert.equal(costOf(m, { input: 0, cacheRead: 0, cacheWrite: 1_000_000, output: 0, reasoning: 0 }), 2);
+  assert.equal(m.maxOutput, 131_072);
+});

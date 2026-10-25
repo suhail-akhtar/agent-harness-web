@@ -13,6 +13,7 @@ const STRENGTHS: Record<string, string> = {
   'claude-haiku-5-5': 'fast, cheap, solid tool use',
   'deepseek-flash': 'very cheap, good coding',
   'gpt-6-luna': 'cheap, broad knowledge',
+  'kimi-k3.1-pro': 'long agentic coding, cheaper than K3',
   'kimi-k3': 'long agentic coding',
   'kimi-k2.7-code': 'coding',
   'kimi-k2.6': 'general, cheap at low effort',

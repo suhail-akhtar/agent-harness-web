@@ -120,8 +120,23 @@ export const BUILTIN_MODELS: ModelSpec[] = [
     compactAt: 120_000,
     effort: 'high',
     efforts: ['low', 'high', 'max'],
-    // Cache writes are billed per TTL tier: $3 (5 minutes, the default) or $6 (1 hour, HARNESS_MOONSHOT_CACHE_TTL=1h).
-    rate: () => ({ input: 3.00, cacheRead: 0.30, cacheWrite: process.env.HARNESS_MOONSHOT_CACHE_TTL === '1h' ? 6.00 : 3.00, output: 15.00 }),
+    // Cache writes are billed per TTL tier: $3 (5 minutes) or $6 (1 hour; the provider reports those as cacheWrite1h).
+    rate: () => ({ input: 3.00, cacheRead: 0.30, cacheWrite: 3.00, cacheWrite1h: 6.00, output: 15.00 }),
+  },
+  {
+    id: 'kimi-k3.1-pro',
+    label: 'Kimi K3.1 Pro',
+    provider: 'moonshot',
+    vision: true,
+    notes: 'K3 post-trained further, cheaper per token. Always thinks; effort is reasoning_effort (low / high / max).',
+    contextWindow: 1_048_576,
+    // The API's own default for max_completion_tokens.
+    maxOutput: 131_072,
+    compactAt: 120_000,
+    effort: 'high',
+    efforts: ['low', 'high', 'max'],
+    // Same tiers as K3 (checked 2026-10-25): cache writes $2 (5 minutes) or $4 (1 hour).
+    rate: () => ({ input: 2.00, cacheRead: 0.20, cacheWrite: 2.00, cacheWrite1h: 4.00, output: 10.00 }),
   },
   {
     id: 'kimi-k2.7-code',
