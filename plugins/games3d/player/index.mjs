@@ -508,7 +508,8 @@ export function setupPlayer(api) {
       if (r.metrics?.consoleErrors) problems.push(`${r.metrics.consoleErrors} console error(s)`);
       if (!r.goalReached) problems.push(r.goal ? `nobody reached the goal (${r.goal})` : 'no player reached the game\'s goal (give game_playtest a goal and make the game say when it is reached: window.__game.won)');
       const budget = r.metrics?.fpsBudget ?? 30;
-      if (typeof r.metrics?.fpsAvg === 'number' && r.metrics.fpsAvg < budget) problems.push(`${r.metrics.fpsAvg} fps (budget ${budget})`);
+      // Software rendering (the headless browser, no GPU) says nothing about a player's frame rate: not judged here.
+      if (typeof r.metrics?.fpsAvg === 'number' && r.metrics.fpsAvg < budget && r.metrics.renderer !== 'software') problems.push(`${r.metrics.fpsAvg} fps (budget ${budget})`);
       for (const v of r.verdicts ?? []) if (!v.pass) problems.push(`verdict failed: ${v.claim}`);
       return problems.length
         ? { pass: false, summary: `playtest ${r.id}: ${problems.slice(0, 3).join('; ')}`, details: describeReport(r, got.dir) }

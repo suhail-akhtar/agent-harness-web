@@ -215,7 +215,8 @@ export class CompatProvider implements Provider {
     if (stream && c.streamUsage !== false) body.stream_options = { include_usage: true };
     if (c.tools !== false && req.tools.length) {
       body.tools = req.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } }));
-      body.tool_choice = 'auto';
+      // none for a compaction's summary (the tools stay listed, so the cached prefix is the same).
+      body.tool_choice = req.toolChoice ?? 'auto';
       if (c.parallelToolCalls) body.parallel_tool_calls = true;
     }
     const field = c.maxTokensField ?? 'max_tokens';
@@ -235,13 +236,19 @@ export class CompatProvider implements Provider {
     }
     const acc = new Accumulator(req);
     if (body.stream) {
+      let done = false;
       for await (const ev of readSse(res, req.signal)) {
-        if (ev.data === '[DONE]') break;
+        if (ev.data === '[DONE]') { done = true; break; }
         let chunk: ChatChunk;
         try { chunk = JSON.parse(ev.data); } catch { continue; }
         if (chunk.error) throw new ProviderError(`${this.cfg.id}: ${chunk.error.message ?? 'stream error'}`, 500, true);
+        // Some servers put the final usage inside the choice.
+        const inChoice = (chunk.choices?.[0] as { usage?: ChatChunk['usage'] } | undefined)?.usage;
+        if (!chunk.usage && inChoice) chunk.usage = inChoice;
         acc.add(chunk, true);
       }
+      // Neither [DONE] nor a finish reason: the stream was cut off, not finished (asked again).
+      if (!done && !acc.finish_ && !req.signal.aborted) throw new ProviderError(`${this.cfg.id}: the response stream ended before it was complete`, 0, true);
     } else {
       let chunk: ChatChunk;
       try { chunk = await res.json() as ChatChunk; } catch (err) { throw new ProviderError(`${this.cfg.id}: unreadable response: ${(err as Error).message}`, 0, true); }
@@ -340,7 +347,8 @@ export class Accumulator {
     const choice = chunk.choices?.[0];
     if (!choice) return;
     const d = (streamed ? choice.delta : choice.message ?? choice.delta) ?? {};
-    const r = d.reasoning_content ?? d.reasoning;
+    // || not ??: a server that sends an empty reasoning_content beside the real reasoning (both fields).
+    const r = d.reasoning_content || d.reasoning;
     if (r) { this.reasoning += r; this.req.onReasoning?.(r); }
     if (d.content) this.think.push(d.content);
     if (d.refusal) this.refusal += d.refusal;

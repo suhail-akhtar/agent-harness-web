@@ -310,3 +310,19 @@ test('compat: a harness session through a configured model - tool call executed 
     if (before === undefined) delete process.env.HARNESS_MODELS_JSON; else process.env.HARNESS_MODELS_JSON = before;
   }
 });
+
+test('compat: a stream cut off (no [DONE], no finish reason) is retried, not taken as the answer; a compaction sends tool_choice none', async () => {
+  const { mockServer: chatMock, delta: d } = await import('./chat-mock.ts');
+  const cut = await chatMock(() => ({ sse: [d({ role: 'assistant', content: '' }), d({ content: 'half an ans' })], done: false }));
+  try {
+    const { cfg, p } = provider({ id: 'm', baseUrl: `${cut.url}/v1` });
+    await assert.rejects(p.send(request(cfg)), (e: unknown) => e instanceof ProviderError && e.retryable && /ended before it was complete/.test(e.message));
+  } finally { await cut.close(); }
+  const ok = await chatMock(() => ({ sse: [d({ role: 'assistant', content: '' }), d({ content: 'summary' }, 'stop')] }));
+  try {
+    const { cfg, p } = provider({ id: 'm', baseUrl: `${ok.url}/v1` });
+    const tools = [{ name: 'read', description: 'r', input_schema: { type: 'object' as const, properties: {} } }];
+    await p.send(request(cfg, { tools, toolChoice: 'none' }));
+    assert.equal(ok.seen[0]!.body.tool_choice, 'none');
+  } finally { await ok.close(); }
+});

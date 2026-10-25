@@ -268,7 +268,13 @@ export async function runPlaytest({ start, write, read, list, signal }, opts = {
   const consoleErrors = [...new Set(console_.filter((c) => c.startsWith('error:')))];
   metrics.consoleErrors = consoleErrors.length;
   if (consoleErrors.length) issues.push({ severity: 'major', title: `Console errors (${consoleErrors.length}): ${consoleErrors[0].slice(7, 160)}` });
-  if (metrics.fpsAvg !== undefined && metrics.fpsAvg < fpsBudget) issues.push({ severity: 'major', title: `Frame rate ${metrics.fpsAvg} fps on average (budget ${fpsBudget}; worst second ${metrics.fpsMin})` });
+  // A web game is played in a headless browser drawing WebGL in software (SwiftShader: no GPU): its frame rate is
+  // the CPU's, not a player's, so under the budget it is a note to check on real hardware, not a failure.
+  const software = !opts.engine || opts.engine === 'web' || opts.engine === 'browser';
+  if (software) metrics.renderer = 'software';
+  if (metrics.fpsAvg !== undefined && metrics.fpsAvg < fpsBudget) issues.push(software
+    ? { severity: 'minor', title: `Frame rate ${metrics.fpsAvg} fps in software rendering (budget ${fpsBudget}): measured without a GPU; check on real hardware` }
+    : { severity: 'major', title: `Frame rate ${metrics.fpsAvg} fps on average (budget ${fpsBudget}; worst second ${metrics.fpsMin})` });
   if (opts.goal && !goalReached && !issues.some((i) => i.severity === 'blocker')) issues.push({ severity: 'major', title: `No player reached the goal: ${opts.goal}` });
   const stuckOnly = segments.filter((s) => s.mode !== 'monkey' && s.stuck && !s.softlocks);
   if (stuckOnly.length && !goalReached) issues.push({ severity: 'minor', title: `A bot got stuck for a while (${stuckOnly.map((s) => s.player).join(', ')}); see the stuck events` });
