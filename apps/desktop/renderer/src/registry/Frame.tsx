@@ -32,7 +32,8 @@ export function PluginFrame(p: FrameProps): React.ReactElement {
   const grants = useData((s) => s.grants);
   const declared = (entry?.ui?.capabilities ?? []) as Capability[];
   const builtin = entry?.source === 'builtin';
-  const decision = builtin ? { state: 'granted' as const, capabilities: declared } : decide(grants[p.plugin], entry?.uiHash, declared);
+  const ownFolder = useData((s) => s.devPlugins.some((d) => d.name === p.plugin));
+  const decision = builtin ? { state: 'granted' as const, capabilities: declared } : decide(grants[p.plugin], entry?.uiHash, declared, { acrossEdits: ownFolder });
   const [, force] = useState(0);
   if (!entry) return <FrameNote icon="puzzle" text={`The plugin ${p.plugin} is not available.`} />;
   if (decision.state === 'ask' && declared.length && !skipped.has(`${p.plugin}:${entry.uiHash}`)) {
@@ -82,7 +83,9 @@ function FrameView({ plugin, contribution, entry, params, context, height: initi
   // A block one of the host's renderers draws over a rectangle of the frame (render.show).
   const [block, setBlock] = useState<{ fence: string; source: string; rect: { x: number; y: number; width: number; height: number } } | null>(null);
   const fenceRenderer = useFenceRenderer();
-  const src = useMemo(() => pluginFileUrl(plugin, entry), [plugin, entry]);
+  // A plugin folder loaded in the app changed on disk: the frame loads again (dev-watch.ts).
+  const epoch = useData((s) => s.pluginEpochs[plugin] ?? 0);
+  const src = useMemo(() => `${pluginFileUrl(plugin, entry)}${epoch ? `?v=${epoch}` : ''}`, [plugin, entry, epoch]);
   const post = (m: unknown) => ref.current?.contentWindow?.postMessage(m, '*');
 
   useEffect(() => {
@@ -185,6 +188,7 @@ function FrameView({ plugin, contribution, entry, params, context, height: initi
     <div className={`relative ${fill ? 'h-full' : ''} ${className ?? ''}`} data-plugin-frame={plugin}>
       {!loaded && <div className="absolute inset-0 flex items-center justify-center text-hx-muted"><Spinner /></div>}
       <iframe
+        key={epoch}
         ref={ref}
         src={src}
         title={title ?? `${plugin} ${contribution}`}

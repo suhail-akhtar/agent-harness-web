@@ -9,6 +9,7 @@ import type { Engine } from './engine-host';
 import type { PrefsStore } from './store';
 import type { ProductProfile } from '../shared/product';
 import type { DevPlugins } from './dev-plugins';
+import type { DevWatch } from './dev-watch';
 import { appFrameAllowed } from './policy';
 
 export interface DesktopPaths { dataDir: string; /** The engine's data (in the harness home). */ readonly engineData: string; /** The home's tmp folder: scratch conversations get a folder each in it. */ readonly scratch: string; /** The harness home (~/.harness). */ readonly home: string; rendererDir: string; sdkDir: string; repoRoot: string | null }
@@ -20,6 +21,8 @@ export interface DesktopContext {
   product: ProductProfile;
   paths: DesktopPaths;
   devPlugins: DevPlugins;
+  /** Watches the plugin folders loaded in the app (pages refresh, server code reloads in the engine). */
+  devWatch?: DevWatch;
   emit(channel: string, payload?: unknown): void;
   handle<A extends unknown[], R>(channel: string, fn: (...args: A) => R | Promise<R>): void;
   reveal(): void;

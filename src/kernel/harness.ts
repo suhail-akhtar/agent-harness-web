@@ -23,6 +23,7 @@ import { sandboxCredentials as sandboxCredentials_ } from '../runtime/credential
 import { BUILTIN_TOOLS } from '../tools/index.ts';
 import { BUILTIN_SEARCH, makeSearchService, setKimiTools, type SearchService } from '../research/search.ts';
 import { Registry, type LoadedPlugin, type PluginParts } from './registry.ts';
+import type { Tool } from '../tools/types.ts';
 import { VaultStore } from '../vault/store.ts';
 import { createBridge, type PluginBridge } from '../plugins/host.ts';
 import { type PluginUi, readPluginUi } from '../plugins/ui.ts';
@@ -208,6 +209,14 @@ export interface PluginManager {
    * (<data>/plugin-data/<name>) is kept unless `deleteData`.
    */
   uninstall(name: string, o?: { deleteData?: boolean }): Promise<void>;
+  /**
+   * Loads a plugin's folder again while the server runs (its code changed): the new version's
+   * tools, routes, skills, agents and workflows replace the old ones, then the old version is
+   * closed. Open sessions keep their tool lists (the cached prefix is unchanged) and run the new
+   * code for a tool of the same name. A version that fails to load leaves the old one running.
+   * A plugin the server does not have yet (a folder named in `dir`) loads for the first time.
+   */
+  reload(name: string, dir?: string): Promise<PluginEntry>;
 }
 
 export function builtinRegistry(): Registry {
@@ -371,6 +380,54 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       pluginsChanged(name, enabled ? 'enabled' : 'disabled');
       // Workflow runs that paused at a step needing it carry on from that step.
       if (enabled) await resumePaused(name);
+      return entries.get(name)!;
+    },
+    async reload(name, dir) {
+      const e = entries.get(name);
+      if (!e) {
+        if (!dir) throw new PluginStateError(404, `No plugin "${name}".`);
+        try { await load(path.resolve(dir)); } catch (err) { throw new PluginStateError(409, `${name} could not be loaded: ${(err as Error).message}`); }
+        log(`plugin ${name} loaded from ${dir}`);
+        pluginsChanged(name, 'reloaded');
+        return entries.get(name)!;
+      }
+      if (!e.enabled) throw new PluginStateError(409, `${name} is switched off; switch it on to load it again.`);
+      const old = parts.get(name);
+      const oldLoaded = e.loaded;
+      const at = registry.plugins.findIndex((p) => p.name === name);
+      if (old) registry.detach(old);
+      if (at >= 0) registry.plugins.splice(at, 1);
+      const before = registry.closers.length;
+      let fresh: PluginParts;
+      try {
+        const signature = await admit(e.dir);
+        fresh = await loadPlugin(registry, e.dir, log, { dataDir: opts.dataDir, fresh: true });
+        const p = registry.plugins.at(-1)!;
+        p.signature = signature;
+        p.source = sourceOf(e.dir);
+        parts.set(name, fresh);
+        registry.claim(name, fresh);
+        await describe(e.dir, (await readManifest(e.dir))!, signature, true, p);
+      } catch (err) {
+        // The old version keeps running.
+        registry.closers.splice(before);
+        if (old) registry.attach(old);
+        if (oldLoaded) registry.plugins.push(oldLoaded);
+        throw new PluginStateError(409, `${name} did not load again (the version before keeps running): ${(err as Error).message}`);
+      }
+      // Sessions hold the old tool objects (their tool lists stay as they were): they run the new code.
+      for (const o of old?.maps ?? []) {
+        if (o.map !== registry.tools) continue;
+        const now = registry.tools.get(o.key) as Tool | undefined;
+        if (now && now !== o.value && registry.ownerOf(now) === name) (o.value as Tool).run = (input, ctx) => now.run(input, ctx);
+      }
+      for (const c of old?.closers ?? []) {
+        await Promise.resolve(c()).catch((x: Error) => log(`plugin ${name}: closing the version before: ${x.message}`));
+        const i = registry.closers.indexOf(c);
+        if (i >= 0) registry.closers.splice(i, 1);
+      }
+      log(`plugin ${name} loaded again`);
+      pluginsChanged(name, 'reloaded');
       return entries.get(name)!;
     },
     async uninstall(name, o = {}) {

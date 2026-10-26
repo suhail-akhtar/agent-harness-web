@@ -41,6 +41,8 @@ export interface DataState {
   approvals: Approval[];
   serverPlugins: PluginInfo[];
   devPlugins: DevPluginInfo[];
+  /** Bumped when a plugin folder loaded in the app changes on disk: its frames load again. */
+  pluginEpochs: Record<string, number>;
   grants: Grants;
   registry: Registry;
   eventsMode: GlobalEvents['mode'];
@@ -53,7 +55,7 @@ export interface DataState {
 }
 
 export const useData = create<DataState>((set, get) => ({
-  me: null, config: null, models: [], providers: null, sessions: [], sessionsLoaded: false, approvals: [], serverPlugins: [], devPlugins: [], grants: {},
+  me: null, config: null, models: [], providers: null, sessions: [], sessionsLoaded: false, approvals: [], serverPlugins: [], devPlugins: [], pluginEpochs: {}, grants: {},
   registry: buildRegistry([]),
   eventsMode: 'stopped',
   async refreshModels() {

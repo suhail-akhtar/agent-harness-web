@@ -104,6 +104,14 @@ async function boot() {
     if (JSON.stringify(before.keybindings) !== JSON.stringify(p.keybindings) || JSON.stringify(before.disabledPlugins) !== JSON.stringify(p.disabledPlugins) || JSON.stringify(before.menus?.order) !== JSON.stringify(p.menus?.order)) useData.getState().rebuild();
     reapplyTheme();
   });
+  // A plugin folder loaded in the app changed: its pages load again; its server code was reloaded in the engine.
+  on<{ plugin: string; server?: { ok: boolean; error?: string } }>('plugins:devChanged', (r) => {
+    const d = useData.getState();
+    useData.setState({ pluginEpochs: { ...d.pluginEpochs, [r.plugin]: (d.pluginEpochs[r.plugin] ?? 0) + 1 } });
+    void d.refreshPlugins();
+    if (r.server && !r.server.ok) toast(`${r.plugin}: ${r.server.error}`, { kind: 'error' });
+    else if (r.server) toast(`${r.plugin}: server code reloaded`, { kind: 'success' });
+  });
   on<{ id: string }>('command:run', (c) => void runCommand(c.id));
   on<{ text: string }>('engine:notice', (n) => toast(n.text));
   on<boolean>('win:focus', (f) => useApp.setState({ focused: f }));

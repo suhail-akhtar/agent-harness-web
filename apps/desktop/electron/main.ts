@@ -17,6 +17,7 @@ import { PrefsStore } from './store';
 import { makeHandle, type DesktopContext } from './context';
 import { registerIpc, serverToken } from './ipc';
 import { DevPlugins } from './dev-plugins';
+import { DevWatch } from './dev-watch';
 import { normaliseProduct, type ProductProfile } from '../shared/product';
 import { projectName } from '../shared/prefs';
 import { desktopRoots, engineLogFile, migrateEngineData, registerHomeIpc, resolveDesktopHome } from './home';
@@ -87,6 +88,7 @@ const ctx: DesktopContext = {
   product,
   paths: { dataDir, get engineData() { return home.dataDir; }, get scratch() { return home.layout.tmp; }, get home() { return home.layout.home; }, rendererDir: path.join(distDir, 'renderer'), sdkDir: path.join(distDir, 'sdk'), repoRoot },
   devPlugins,
+  devWatch: undefined,
   emit(channel, payload) { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload); },
   handle: makeHandle(),
   quiet,
@@ -248,6 +250,14 @@ app.whenReady().then(async () => {
   createWindow();
   createTray();
   handleDeepLink(process.argv);
+  // Plugin folders loaded in the app: an edit refreshes the plugin's pages and reloads its server code.
+  ctx.devWatch = new DevWatch({
+    dirs: devPluginDirs,
+    nameOf: (dir) => devPlugins.load().find((p) => p.dir === dir)?.name,
+    engine: () => engine.ready(30_000).catch(() => null),
+    changed: (r) => ctx.emit('plugins:devChanged', r),
+  });
+  ctx.devWatch.sync();
   // npm run desktop:dev rebuilds the interface on change; the window reloads when it lands.
   if (process.env.HARNESS_DESKTOP_DEV_RELOAD && !app.isPackaged) {
     let timer: NodeJS.Timeout | undefined;

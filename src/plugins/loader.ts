@@ -15,6 +15,7 @@ import type { VaultService } from '../vault/store.ts';
 import { defineTool, type PluginAPI, type PluginDefinition, type PluginManifest, type PluginSessions } from './api.ts';
 import { ChangeJournal } from '../ops/changes.ts';
 import { ROUTE_PATH } from './host.ts';
+import { freshImport } from './fresh-import.ts';
 
 // Plugins are folders with a harness-plugin.json. The operator lists plugin
 // directories (HARNESS_PLUGINS); those are TRUSTED: their code runs in the
@@ -51,12 +52,12 @@ export async function findPluginDirs(root: string): Promise<string[]> {
  * Loads one plugin, all or nothing: a plugin that fails partway through (a bad
  * workflow, a throwing setup) leaves no tools, agents, gates or hooks behind.
  */
-export async function loadPlugin(reg: Registry, dir: string, log: (m: string) => void = () => {}, opts: { dataDir?: string } = {}): Promise<PluginParts> {
+export async function loadPlugin(reg: Registry, dir: string, log: (m: string) => void = () => {}, opts: { dataDir?: string; /** Import its code again, not Node's cached copy (a live reload). */ fresh?: boolean } = {}): Promise<PluginParts> {
   const restore = reg.snapshot();
   // What it adds is recorded, so it can be switched off and on again while the server runs.
   const added = reg.record();
   try {
-    await loadInto(reg, dir, log, opts.dataDir);
+    await loadInto(reg, dir, log, opts.dataDir, opts.fresh);
     return added();
   } catch (e) {
     restore();
@@ -67,7 +68,7 @@ export async function loadPlugin(reg: Registry, dir: string, log: (m: string) =>
 /** The plugin's UI section, validated (see src/plugins/ui.ts); a bad one is reported, never fatal. */
 export { readPluginUi } from './ui.ts';
 
-async function loadInto(reg: Registry, dir: string, log: (m: string) => void, dataRoot?: string): Promise<void> {
+async function loadInto(reg: Registry, dir: string, log: (m: string) => void, dataRoot?: string, fresh?: boolean): Promise<void> {
   const m = await readManifest(dir);
   if (!m) throw new Error(`no ${MANIFEST} in ${dir}`);
   if (reg.plugins.some((p) => p.name === m.name)) throw new Error(`plugin ${m.name} is loaded twice`);
@@ -116,7 +117,7 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void, da
   }
 
   if (m.main) {
-    const mod = await import(pathToFileURL(within(m.main)).href) as { default?: PluginDefinition };
+    const mod = (fresh ? await freshImport(within(m.main), dir) : await import(pathToFileURL(within(m.main)).href)) as { default?: PluginDefinition };
     const def = mod.default;
     if (!def || typeof def.setup !== 'function') throw new Error(`${m.name}: ${m.main} must default-export definePlugin({...})`);
     const undeclared = (what: string, key: string) => () => { throw new Error(`${m.name}: ${what} needs "permissions": {"${key}": true} in harness-plugin.json`); };
@@ -176,7 +177,7 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void, da
         if (r.auth !== 'token' && r.auth !== 'none' && r.auth !== 'user') throw new Error(`${m.name}: a route's auth is "token", "user" or "none"`);
         if (typeof r.path !== 'string' || !ROUTE_PATH.test(r.path) || r.path.split('/').some((x) => x === '.' || x === '..')) throw new Error(`${m.name}: route path "${r.path}" must be letters, digits, . _ - and / (no leading slash)`);
         // The server's own paths under /api/plugins/<name>/: the UI files, enable and disable.
-        if (/^(ui(\/|$)|enable$|disable$)/.test(r.path)) throw new Error(`${m.name}: route path "${r.path}" is reserved (ui/..., enable, disable)`);
+        if (/^(ui(\/|$)|enable$|disable$|reload$)/.test(r.path)) throw new Error(`${m.name}: route path "${r.path}" is reserved (ui/..., enable, disable, reload)`);
         if (typeof r.handler !== 'function') throw new Error(`${m.name}: a route needs a handler`);
         if (reg.routes.some((x) => x.plugin === m.name && x.path === r.path && x.method === r.method)) throw new Error(`${m.name}: ${r.method} ${r.path} is registered twice`);
         reg.routes.push({ ...r, plugin: m.name });

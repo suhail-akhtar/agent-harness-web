@@ -21,6 +21,7 @@ import path from 'node:path';
 import type { DesktopContext } from './context';
 import { JsonFile } from './store';
 import { registerPreviewHtml, RUNTIME_URL } from './preview';
+import { reloadInEngine } from './dev-watch';
 import type { Grants, GrantRecord } from '../shared/grants';
 import type { RemoteServer } from '../shared/prefs';
 
@@ -129,11 +130,17 @@ export function registerIpc(ctx: DesktopContext): { grants: JsonFile<Grants> } {
     if (!fs.existsSync(path.join(dir, 'harness-plugin.json'))) throw new Error('That folder has no harness-plugin.json.');
     const p = ctx.prefs.get();
     if (!p.devPlugins.includes(dir)) ctx.prefs.set({ devPlugins: [...p.devPlugins, dir] });
-    // Server code (tools, routes): the engine loads it on its next start, so it restarts now.
-    if (hasServerCode(dir)) await ctx.engine().restart();
-    return ctx.devPlugins.load();
+    const list = ctx.devPlugins.load();
+    // Server code (tools, routes): the engine loads it now, without a restart (and at every start after).
+    if (hasServerCode(dir)) {
+      const name = list.find((x) => x.dir === dir)?.name ?? path.basename(dir);
+      const r = await reloadInEngine(await ctx.engine().ready(30_000).catch(() => null), name, dir);
+      if (!r.ok) throw new Error(`The plugin's pages are loaded, but its server code did not load: ${r.error}`);
+    }
+    ctx.devWatch?.sync();
+    return list;
   });
-  h('plugins:devRemove', async (dir: string) => { ctx.prefs.set({ devPlugins: ctx.prefs.get().devPlugins.filter((d) => d !== dir) }); if (hasServerCode(dir)) await ctx.engine().restart(); return ctx.devPlugins.load(); });
+  h('plugins:devRemove', async (dir: string) => { ctx.prefs.set({ devPlugins: ctx.prefs.get().devPlugins.filter((d) => d !== dir) }); ctx.devWatch?.sync(); if (hasServerCode(dir)) await ctx.engine().restart(); return ctx.devPlugins.load(); });
   h('plugins:devToggle', (name: string, on: boolean) => {
     const d = new Set(ctx.prefs.get().disabledPlugins);
     if (on) d.delete(name); else d.add(name);

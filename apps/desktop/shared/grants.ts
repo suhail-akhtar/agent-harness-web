@@ -19,8 +19,12 @@ export type GrantDecision =
  * What a frame plugin may do now. `declared` are the manifest's capabilities; a grant only ever
  * covers capabilities the manifest still declares (a new version declaring more asks again).
  */
-export function decide(record: GrantRecord | undefined, uiHash: string | undefined, declared: readonly Capability[]): GrantDecision {
-  if (!record || !uiHash || record.uiHash !== uiHash) return { state: 'ask', capabilities: [...declared], changed: !!record && !!uiHash && record.uiHash !== uiHash };
+/**
+ * `acrossEdits`: a plugin folder the person loaded in the app themselves (they are its author): a grant
+ * holds while they edit it, and is asked again only when it declares a capability not granted.
+ */
+export function decide(record: GrantRecord | undefined, uiHash: string | undefined, declared: readonly Capability[], o: { acrossEdits?: boolean } = {}): GrantDecision {
+  if (!record || !uiHash || (record.uiHash !== uiHash && !o.acrossEdits)) return { state: 'ask', capabilities: [...declared], changed: !!record && !!uiHash && record.uiHash !== uiHash };
   if (record.denied) return { state: 'denied' };
   const missing = declared.filter((c) => !record.capabilities.includes(c));
   if (missing.length) return { state: 'ask', capabilities: [...declared], changed: true };

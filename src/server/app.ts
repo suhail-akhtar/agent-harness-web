@@ -711,9 +711,9 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     }
 
     // ---- plugin routes: /api/plugins/<plugin>/<path> (webhooks: alerts, chat, CI/CD) ----
-    // (The server's own paths there - ui/..., enable, disable - are signed-in routes below; no plugin may register them.)
+    // (The server's own paths there - ui/..., enable, disable, reload - are signed-in routes below; no plugin may register them.)
     const pr = /^\/api\/plugins\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/(.+)$/.exec(p);
-    if (pr && !/^(ui\/|enable$|disable$)/.test(pr[2]!)) return pluginRoute(req, res, url, pr[1]!, pr[2]!, method);
+    if (pr && !/^(ui\/|enable$|disable$|reload$)/.test(pr[2]!)) return pluginRoute(req, res, url, pr[1]!, pr[2]!, method);
 
     // ---- published dashboards (/p/<slug>): their own share token, or a signed-in account they are shared with ----
     if (p.startsWith('/p/') && await publishedRoutes(dataHttp, req, res, url)) return;
@@ -873,6 +873,16 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         ...(e.uiHash ? { etag: `"${e.uiHash.slice(0, 32)}"` } : {}),
       });
       return void res.end(data);
+    }
+    // A plugin's code changed: load it again without restarting (the desktop app does this for a folder it loaded).
+    // `dir` (a plugin the server does not have yet) only on a loopback server: the person's own computer.
+    const prl = /^\/api\/plugins\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/reload$/.exec(p);
+    if (prl && method === 'POST') {
+      if (!admin) throw new HttpError(403, 'administrators only: plugins change what every session can do');
+      const b = await readJson(req, 8192).catch(() => ({})) as { dir?: unknown };
+      const dir = typeof b?.dir === 'string' && b.dir ? b.dir : undefined;
+      if (dir && !o.loopback) throw new HttpError(403, 'loading a plugin from a folder is only for a server on this computer');
+      try { return send(res, 200, pluginView(await harness.plugins.reload(prl[1]!, dir))); } catch (e) { if (e instanceof PluginStateError) throw new HttpError(e.status, e.message); throw e; }
     }
     const pst = /^\/api\/plugins\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})(?:\/(enable|disable))?$/.exec(p);
     if (pst && ((method === 'POST' && pst[2]) || (method === 'DELETE' && !pst[2])) && pst[1] !== 'install' && pst[1] !== 'catalogue') {
