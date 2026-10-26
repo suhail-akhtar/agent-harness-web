@@ -16,6 +16,7 @@ import { defineTool, type PluginAPI, type PluginDefinition, type PluginManifest,
 import { ChangeJournal } from '../ops/changes.ts';
 import { ROUTE_PATH } from './host.ts';
 import { freshImport } from './fresh-import.ts';
+import { makeStore } from './store.ts';
 
 // Plugins are folders with a harness-plugin.json. The operator lists plugin
 // directories (HARNESS_PLUGINS); those are TRUSTED: their code runs in the
@@ -131,12 +132,14 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void, da
       respond: (id, requestId, d) => bridgeOrThrow().sessionsFor(m.name).respond(id, requestId, d),
       get: (id) => reg.bridge?.sessionsFor(m.name).get(id),
     } : { start: async () => undeclared('api.sessions', 'sessions')(), send: async () => undeclared('api.sessions', 'sessions')(), respond: async () => undeclared('api.sessions', 'sessions')(), get: undeclared('api.sessions', 'sessions') } as PluginSessions;
+    const pluginData = path.resolve(dataRoot ?? path.join(os.tmpdir(), 'harness-plugin-data'), 'plugin-data', m.name);
     const localChanges = new ChangeJournal(path.resolve(dataRoot ?? path.join(os.tmpdir(), 'harness-plugin-data')));
     const api: PluginAPI = {
       pluginName: m.name,
       pluginDir: dir,
       // The server's data folder when there is one; a temporary folder otherwise (a plugin loaded on its own, in a test).
-      dataDir: path.resolve(dataRoot ?? path.join(os.tmpdir(), 'harness-plugin-data'), 'plugin-data', m.name),
+      dataDir: pluginData,
+      store: (name, so) => makeStore(m.name, pluginData, name, so),
       registerTool: (t) => {
         const tool = limitVault('spec' in t ? t : defineTool(t), m.name, declared.vault);
         // A plugin that may reach the network (declared hosts) can send what its tools are given there.

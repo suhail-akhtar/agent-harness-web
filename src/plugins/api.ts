@@ -77,6 +77,16 @@ export interface PluginAPI {
   readonly pluginDir: string;
   /** A folder for the plugin's own state on this server (created on first use): outside every workspace, so no agent can edit it. */
   readonly dataDir: string;
+  /**
+   * A JSON document of the plugin's own, kept in dataDir and versioned: `version` is the shape this
+   * code uses, `migrations[n]` turns version n-1 into n (run once, when old data is first read; the
+   * old file is kept as <name>.v<old>.json). Writes are atomic and locked; update() is read-change-write.
+   *   const db = api.store('habits', { version: 2, initial: () => ({ habits: [] }),
+   *     migrations: { 2: (v1) => ({ habits: v1.habits.map((h) => ({ ...h, archived: false })) }) } });
+   *   await db.update((d) => { d.habits.push(h); });
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  store<T = any>(name: string, o: import('./store.ts').StoreOptions<T>): import('./store.ts').PluginStore<T>;
   /** A Tool, or a plain definition ({ name, description, parameters, kind?, run }): plugins need no imports. */
   registerTool(tool: Tool | ToolDefinition): void;
   /** Resolves a path inside the session's workspace (symlink-safe); throws if it leaves it. */
