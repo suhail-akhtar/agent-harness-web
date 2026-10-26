@@ -69,7 +69,7 @@ export function Home(): React.ReactElement {
     if (!model) { toast('Choose a model first (add a key in Settings > Models & providers).', { kind: 'warning' }); return false; }
     try {
       const spec = useData.getState().models.find((m) => m.id === model);
-      const s = await client.sessions.create({ title: text.replace(/\s+/g, ' ').slice(0, 60) || 'New conversation', model, effort: effortFor({ ...value, model }, spec?.efforts), mode: value.mode, runtime: 'local', ...(path ? { path } : {}), client: clientInfo() });
+      const s = await client.sessions.create({ title: text.replace(/\s+/g, ' ').slice(0, 60) || 'New conversation', model, effort: effortFor({ ...value, model }, spec?.efforts), mode: value.mode, runtime: 'local', ...(path ? { path } : {}), ...(useApp.getState().prefs.commandSandbox === 'docker' ? { sandbox: 'docker' } : {}), client: clientInfo() });
       useData.getState().upsertSession(s);
       notePluginsTold(s.id);
       openSession(s.id);

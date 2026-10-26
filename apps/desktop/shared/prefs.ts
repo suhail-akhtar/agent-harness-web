@@ -39,6 +39,8 @@ export interface DesktopPrefs {
   defaultModel: string;
   defaultEffort: string;
   defaultMode: string;
+  /** Where a new conversation's commands run: on this computer, or in a Docker sandbox where only its folder exists. */
+  commandSandbox: 'off' | 'docker';
   /** Command id -> key chord; overrides the contributed defaults ("" unbinds). */
   keybindings: Record<string, string>;
   servers: { active: string; remote: RemoteServer[] };
@@ -78,6 +80,7 @@ export const DEFAULT_PREFS: DesktopPrefs = {
   defaultModel: '',
   defaultEffort: '',
   defaultMode: 'default',
+  commandSandbox: 'off',
   keybindings: {},
   servers: { active: 'local', remote: [] },
   devPlugins: [],

@@ -69,6 +69,7 @@ export function General(): React.ReactElement {
       </Section>
       <Section title="New conversations">
         <Field label="Default model" inline><Select value={prefs.defaultModel} onChange={(v) => set({ defaultModel: v })} options={[{ value: '', label: 'The first with a key' }, ...models.map((m) => ({ value: m.id, label: `${m.label}${m.available ? '' : ' (no key)'}`, disabled: !m.available }))]} className="w-64" /></Field>
+        <Field label="Run commands" help="In a sandbox, an agent's shell commands run in a Docker container that holds only the conversation's folder: it cannot read or change anything else on this computer (Docker must be running). File tools are always kept to the folder." inline><Select value={prefs.commandSandbox} onChange={(v) => set({ commandSandbox: v as DesktopPrefs['commandSandbox'] })} options={[{ value: 'off', label: 'On this computer' }, { value: 'docker', label: 'In a Docker sandbox' }]} className="w-64" data-command-sandbox /></Field>
         <Field label="Default permission mode" inline><Select value={prefs.defaultMode} onChange={(v) => set({ defaultMode: v })} options={[{ value: 'default', label: 'Ask first' }, { value: 'acceptEdits', label: 'Accept edits' }, { value: 'plan', label: 'Plan first' }, { value: 'auto', label: 'Auto' }, { value: 'dontAsk', label: "Don't ask" }]} className="w-64" /></Field>
       </Section>
       <Section title="Notifications">

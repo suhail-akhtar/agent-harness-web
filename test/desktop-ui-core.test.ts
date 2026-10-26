@@ -120,6 +120,9 @@ test('desktop prefs: a bad file or patch cannot break them', () => {
   assert.deepEqual(mergePrefs(DEFAULT_PREFS, 'garbage'), DEFAULT_PREFS);
   // The spend limit for the app's own engine: null (its default), an amount, or 0 (no limit); nothing else.
   assert.equal(DEFAULT_PREFS.spendLimitUsd, null);
+  // Commands on this computer unless the person chose the Docker sandbox.
+  assert.equal(DEFAULT_PREFS.commandSandbox, 'off');
+  assert.equal(mergePrefs(DEFAULT_PREFS, { commandSandbox: 'docker' }).commandSandbox, 'docker');
   assert.equal(mergePrefs(DEFAULT_PREFS, { spendLimitUsd: 50 }).spendLimitUsd, 50);
   assert.equal(mergePrefs(DEFAULT_PREFS, { spendLimitUsd: 0 }).spendLimitUsd, 0);
   assert.equal(mergePrefs({ ...DEFAULT_PREFS, spendLimitUsd: 50 }, { spendLimitUsd: null }).spendLimitUsd, null);

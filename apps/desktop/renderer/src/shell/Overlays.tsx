@@ -233,7 +233,7 @@ export function WorkflowDialog(): React.ReactElement | null {
       if (!chosen) throw new Error('Choose a model first (add a key in Settings > Models & providers).');
       const first = Object.values(input).find((v) => v.trim()) ?? '';
       const path = where || await scratchFolder(info?.scratch);
-      const s = await client.sessions.create({ title: `${name}: ${first.replace(/\s+/g, ' ')}`.slice(0, 60), model: chosen.id, ...(prefs.defaultEffort ? { effort: prefs.defaultEffort as Effort } : {}), mode: (prefs.defaultMode || 'default') as Mode, runtime: 'local', ...(path ? { path } : {}), client: clientInfo() });
+      const s = await client.sessions.create({ title: `${name}: ${first.replace(/\s+/g, ' ')}`.slice(0, 60), model: chosen.id, ...(prefs.defaultEffort ? { effort: prefs.defaultEffort as Effort } : {}), mode: (prefs.defaultMode || 'default') as Mode, runtime: 'local', ...(path ? { path } : {}), ...(prefs.commandSandbox === 'docker' ? { sandbox: 'docker' } : {}), client: clientInfo() });
       made = s.id;
       const wf = (await client.sessions.workflows(s.id)).workflows.find((x) => x.name === name);
       if (!wf) throw new Error(`There is no workflow "${name}" in that folder.`);
