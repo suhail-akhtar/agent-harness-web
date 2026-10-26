@@ -1622,6 +1622,8 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       out = await r.handler({ method, path: rel, query, headers, body: Buffer.concat(chunks), ip: req.socket.remoteAddress ?? '', ...(user ? { user } : {}) });
     } catch (e) {
       console.error(`plugin route ${plugin}/${rel} failed:`, e);
+      // A signed-in caller (its own pages, its author) sees why; anyone else, that it failed.
+      if (user || who(req)) return send(res, 500, { error: `${harness.plugins.get(plugin)?.ui?.displayName ?? plugin}'s route ${method} ${rel} failed: ${(e as Error)?.message ?? String(e)}` });
       return send(res, 500, { error: 'the plugin could not handle this request' });
     }
     const status = Number.isInteger(out?.status) && out.status >= 100 && out.status <= 599 ? out.status : 200;

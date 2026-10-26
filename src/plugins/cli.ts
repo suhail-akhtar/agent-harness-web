@@ -3,7 +3,10 @@
 //                   verify <plugin-dir> --keys <pub.pem or folder>
 //                   pack <plugin-dir> [--out file.tgz]   an archive for a remote catalogue (sign first)
 //                   index <folder of .tgz> [--base url]   writes index.json for those archives
-//                   check <plugin-dir>                    loads it as the server would and lists what it adds (exit 1 on a problem)
+//                   check <plugin-dir> [--deep] [--json]  loads it as the server would and lists what it adds (exit 1 on a problem);
+//                                                         --deep reviews it all (src/plugins/review.ts): tools called, routes served, pages, permissions, its tests
+//                   new <name> [--dir <folder>] [--js]    writes a complete plugin to change into yours (src/plugins/scaffold.ts)
+//                   test <plugin-dir> [-- node --test args]  runs the plugin's tests (test/**/*.test.*) with @harness/plugin-sdk importable
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -14,6 +17,8 @@ import { createHarness } from '../kernel/harness.ts';
 import { validateWorkflow } from '../graph/validate.ts';
 import { skillsIn } from '../skills/skills.ts';
 import { generateKeyPair, loadTrustedKeys, signPlugin, verifyPlugin } from './signing.ts';
+import { runPluginTests } from './run-tests.ts';
+import { fileURLToPath } from 'node:url';
 
 const arg = (n: string) => { const i = process.argv.indexOf(`--${n}`); return i > 0 ? process.argv[i + 1] : undefined; };
 const [cmd, target] = process.argv.slice(2);
@@ -55,10 +60,23 @@ if (cmd === 'keygen' && target) {
   }
   await fs.writeFile(path.join(dir, 'index.json'), JSON.stringify({ plugins }, null, 2));
   console.log(`index.json: ${plugins.length} plugin(s)`);
+} else if (cmd === 'check' && target && process.argv.includes('--deep')) {
+  const { reviewPlugin, formatReview } = await import('./review.ts');
+  const r = await reviewPlugin(path.resolve(target), { runTests: !process.argv.includes('--no-tests') });
+  console.log(process.argv.includes('--json') ? JSON.stringify(r, null, 2) : formatReview(r));
+  process.exit(r.ok ? 0 : 1);
 } else if (cmd === 'check' && target) {
   process.exit(await check(path.resolve(target)));
+} else if (cmd === 'new' && target) {
+  const { scaffold } = await import('./scaffold.ts');
+  const dir = path.resolve(arg('dir') ?? target);
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const files = await scaffold(dir, target, { js: process.argv.includes('--js'), repoRoot });
+  console.log([`${target}: ${files.length} files in ${dir}`, ...files.map((f) => `  ${f}`), '', 'Next:', `  npm run plugin -- test ${dir}`, `  npm run plugin -- check ${dir} --deep`, `  Desktop app: Plugins > Developer > Load a plugin folder... (${dir})`].join('\n'));
+} else if (cmd === 'test' && target) {
+  process.exit(await runPluginTests(path.resolve(target), process.argv.slice(process.argv.indexOf(target) + 1).filter((a) => a !== '--')) as number);
 } else {
-  console.error('usage: npm run plugin -- check <dir> | keygen <name> [--out dir] | sign <dir> --key <x.key.pem> | verify <dir> --keys <pub.pem|dir> | pack <dir> [--out f.tgz] | index <dir> [--base url]');
+  console.error('usage: npm run plugin -- new <name> [--dir d] [--js] | check <dir> [--deep] [--json] | test <dir> | keygen <name> [--out dir] | sign <dir> --key <x.key.pem> | verify <dir> --keys <pub.pem|dir> | pack <dir> [--out f.tgz] | index <dir> [--base url]');
   process.exit(2);
 }
 

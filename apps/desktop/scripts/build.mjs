@@ -2,7 +2,8 @@
  * Builds Harness Desktop into apps/desktop/dist:
  *   dist/main.cjs, dist/preload.cjs   Electron main and preload (esbuild, CommonJS)
  *   dist/renderer/                    the interface (Vite) and artifact-runtime.js (React + sucrase for previews)
- *   dist/sdk/plugin-ui.js             the plugin SDK frames load (window.HarnessPluginUI.connect)
+ *   dist/sdk/plugin-ui.js             the plugin SDK frames load (window.HarnessPluginUI.connect, .ui)
+ *   dist/sdk/plugin-ui.css            the UI kit's stylesheet for plugin pages
  *
  *   node scripts/build.mjs [--no-renderer] [--dev]
  * The engine is not bundled: it runs the harness server from source (see package.mjs).
@@ -26,6 +27,8 @@ await build({ entryPoints: [path.join(desktop, 'electron/main.ts')], outfile: pa
 await build({ entryPoints: [path.join(desktop, 'electron/preload.ts')], outfile: path.join(dist, 'preload.cjs'), bundle: true, platform: 'node', format: 'cjs', target: 'node22', external: ['electron'], logLevel: 'warning' });
 // The SDK as a classic script (frames are opaque origins: a module script would need CORS).
 await build({ entryPoints: [path.join(repo, 'packages/plugin-ui/src/sdk.ts')], outfile: path.join(dist, 'sdk/plugin-ui.js'), bundle: true, format: 'iife', globalName: 'HarnessPluginUI', target: 'es2020', minify: !dev, logLevel: 'warning' });
+// The UI kit's stylesheet (harness://app/sdk/plugin-ui.css): the app's look for plugin pages (HarnessPluginUI.ui builds the markup).
+fs.copyFileSync(path.join(repo, 'packages/plugin-ui/src/kit.css'), path.join(dist, 'sdk/plugin-ui.css'));
 
 if (!args.has('--no-renderer')) {
   const { build: viteBuild } = await import('vite');

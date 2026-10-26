@@ -42,7 +42,7 @@ export function pluginCsp(plugin: string): string {
   return [
     "default-src 'none'",
     `script-src 'unsafe-inline' ${own} ${sdk}`,
-    `style-src 'unsafe-inline' ${own}`,
+    `style-src 'unsafe-inline' ${own} ${sdk}`,
     `img-src ${own} data: blob: https:`,
     `font-src ${own} data:`,
     `media-src ${own} data: blob:`,

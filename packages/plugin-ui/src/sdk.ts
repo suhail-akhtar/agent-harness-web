@@ -9,6 +9,8 @@
  * Calls the frame was not granted fail with the host's reason; nothing here grants anything.
  */
 
+export { ui } from './kit.ts';
+export type { Column, Field, Tone } from './kit.ts';
 import { type CallMessage, type EventMessage, type HostMessage, type InitMessage, PROTOCOL, type RegistryKind, type RegistryQuery, type ThemeVars } from './rpc.ts';
 
 export interface HostLike { postMessage(message: unknown, targetOrigin: string): void }
