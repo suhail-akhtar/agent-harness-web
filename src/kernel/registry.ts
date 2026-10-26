@@ -203,7 +203,7 @@ export class Registry {
    * Plugins switched off (or uninstalled) while the server runs, with what they had added: what an
    * open session still holds of theirs answers with the reason instead of running.
    */
-  readonly off = new Map<string, { parts: PluginParts; title: string; uninstalled?: boolean }>();
+  readonly off = new Map<string, { parts: PluginParts; title: string; uninstalled?: boolean; /** A shipped solution not installed here. */ notInstalled?: boolean }>();
 
   /** Marks every part a plugin's load added as that plugin's (see switchedOff). */
   claim(plugin: string, parts: PluginParts): void {
@@ -225,6 +225,7 @@ export class Registry {
   offReason(plugin: string, what: string): string | undefined {
     const o = this.off.get(plugin);
     if (!o) return undefined;
+    if (o.notInstalled) return `${o.title} is not installed on this server; install it (Plugins > Catalogue) to use ${what}.`;
     return o.uninstalled ? `${o.title} was uninstalled from this server; install it again to use ${what}.` : `${o.title} is switched off on this server; switch it on to use ${what}.`;
   }
 

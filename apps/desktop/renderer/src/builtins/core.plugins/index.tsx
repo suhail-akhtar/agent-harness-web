@@ -130,19 +130,72 @@ function PluginCard({ p }: { p: PluginEntry }) {
 function Catalogue() {
   const [list, setList] = useState<CatalogueEntry[] | null>(null);
   const [err, setErr] = useState('');
-  useEffect(() => { client.plugins.catalogue().then(setList).catch((e: Error) => setErr(isMissing(e) ? 'This server has no catalogue.' : e.message)); }, []);
+  const [busy, setBusy] = useState<string | null>(null);
+  const me = useData((s) => s.me);
+  const load = () => client.plugins.catalogue().then(setList).catch((e: Error) => setErr(isMissing(e) ? 'This server has no catalogue.' : e.message));
+  useEffect(() => { void load(); }, []);
   if (err) return <InfoNote>{err}</InfoNote>;
   if (!list) return <Spinner />;
-  if (!list.length) return <EmptyState icon="box" title="The catalogue is empty">The operator names one with HARNESS_PLUGIN_CATALOGUE (signed plugins).</EmptyState>;
+  const solutions = list.filter((c) => c.solution);
+  const others = list.filter((c) => !c.solution);
+  const titleOf = (n: string) => list.find((c) => c.name === n)?.solution?.title ?? n;
+  const act = async (c: CatalogueEntry, install: boolean) => {
+    setBusy(c.name);
+    try {
+      if (install) await client.plugins.install(c.name); else await client.plugins.uninstall(c.name);
+      toast(install ? `${c.solution?.title ?? c.name} is installed` : `${c.solution?.title ?? c.name} was removed (its data is kept)`, { kind: 'success' });
+      await useData.getState().refreshPlugins();
+      await load();
+    } catch (e) { toast((e as Error).message, { kind: 'error' }); } finally { setBusy(null); }
+  };
   return (
-    <div className="space-y-2" data-catalogue>
-      {list.map((c) => (
-        <div key={c.name} className="flex items-center gap-3 rounded-xl border border-hx-border-subtle bg-hx-elevated p-3">
-          <Icon name="box" size={18} className="text-hx-muted" />
-          <span className="min-w-0 flex-1"><span className="block text-[13.5px] font-medium">{c.name} <span className="text-[11.5px] font-normal text-hx-muted">{c.version}</span></span><span className="block truncate text-[12px] text-hx-muted">{c.description}</span></span>
-          {c.installed ? <Badge tone="success">Installed</Badge> : <Button size="sm" variant="primary" onClick={() => void client.plugins.install(c.name).then(() => { toast(`Installed ${c.name}`, { kind: 'success' }); void useData.getState().refreshPlugins(); }).catch((e: Error) => toast(e.message, { kind: 'error' }))}>Install</Button>}
-        </div>
-      ))}
+    <div className="space-y-6" data-catalogue>
+      {solutions.length > 0 && (
+        <section data-solutions>
+          <h2 className="mb-1 text-[14px] font-semibold">Solutions</h2>
+          <p className="mb-3 text-[12.5px] text-hx-secondary">Complete solutions on top of the core: install the ones this {me?.role === 'admin' ? 'server' : 'workspace'} needs, in any mix. Removing one keeps its data, so installing it again picks up where it left off.</p>
+          <div className="grid gap-2 md:grid-cols-2">
+            {solutions.map((c) => (
+              <div key={c.name} data-solution={c.name} data-installed={c.installed ? '1' : '0'} className="flex flex-col gap-2 rounded-xl border border-hx-border-subtle bg-hx-elevated p-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-[14px] font-medium">{c.solution!.title}</span>
+                  <span className="text-[11.5px] text-hx-muted">{c.name} {c.version}</span>
+                  <span className="flex-1" />
+                  {c.installed && <Badge tone="success">Installed</Badge>}
+                </div>
+                <p className="line-clamp-3 text-[12.5px] text-hx-secondary">{c.description}</p>
+                {(c.solution!.requires.length > 0 || c.solution!.requiredBy.length > 0) && (
+                  <div className="text-[12px] text-hx-muted">
+                    {c.solution!.requires.length > 0 && <div>Needs {c.solution!.requires.map(titleOf).join(', ')} (installed with it)</div>}
+                    {c.solution!.requiredBy.length > 0 && <div>Needed by {c.solution!.requiredBy.map(titleOf).join(', ')}</div>}
+                  </div>
+                )}
+                {me?.role === 'admin' && (
+                  <div className="flex justify-end">
+                    {c.installed
+                      ? <Button size="sm" variant="ghost" icon="trash" data-remove-solution={c.name} disabled={busy !== null || c.solution!.requiredBy.length > 0} loading={busy === c.name} onClick={() => void act(c, false)}>Remove</Button>
+                      : <Button size="sm" variant="primary" data-install-solution={c.name} disabled={busy !== null} loading={busy === c.name} onClick={() => void act(c, true)}>Install</Button>}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+      <section>
+        {solutions.length > 0 && <h2 className="mb-2 text-[14px] font-semibold">Plugins</h2>}
+        {!others.length ? <EmptyState icon="box" title="No other plugins in the catalogue">The operator names a catalogue of signed plugins with HARNESS_PLUGIN_CATALOGUE.</EmptyState> : (
+          <div className="space-y-2">
+            {others.map((c) => (
+              <div key={c.name} className="flex items-center gap-3 rounded-xl border border-hx-border-subtle bg-hx-elevated p-3">
+                <Icon name="box" size={18} className="text-hx-muted" />
+                <span className="min-w-0 flex-1"><span className="block text-[13.5px] font-medium">{c.name} <span className="text-[11.5px] font-normal text-hx-muted">{c.version}</span></span><span className="block truncate text-[12px] text-hx-muted">{c.description}</span></span>
+                {c.installed ? <Badge tone="success">Installed</Badge> : <Button size="sm" variant="primary" onClick={() => void act(c, true)}>Install</Button>}
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }

@@ -29,6 +29,8 @@
 | `outputStyles` | a folder of output styles (`<name>.md`: how to reply) |
 | `mcpServers` | MCP servers, Claude Code's format (`command`/`args`/`env`, or `{ "type": "http", "url", "headers" }`) |
 | `hooks` | per event, a list of `{ type: command \| http \| prompt, matcher?, command?, url?, headers?, prompt? }` (an HTTP hook only to declared hosts, `${VAR}` in headers only for declared secrets) |
+| `requires` | plugins it needs loaded first (it imports from them or uses their tools): loaded before it; installing it installs them; refused with the reason when one is missing |
+| `solution` | `{ "title": "Studio" }`: a standalone solution shipped with the harness (Studio, Operations, Engineering, DevOps); on a server that installs solutions one by one it loads only once installed |
 | `permissions` | what its code may reach (below) |
 | `ui` | its desktop UI (below) |
 

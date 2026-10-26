@@ -2,6 +2,8 @@
   "name": "engine-godot",
   "version": "1.0.0",
   "description": "Godot 4 for Studio: the godot tool (detect; install the official build and export templates into the harness's engines folder, SHA-512 checked, after asking; 2D, 2.5D and 3D project templates; check, run, describe, GDScript; asset import and glTF export; capture, render; build and package for Windows, the Web and Linux; GDScript tests with structured results; play with an input timeline, frames and metrics; a step mode for the AI player; the live bridge to an open editor), the godot-project, godot-selftest and godot-export gates, the godot-engineer agent and the godot-essentials, godot-2d and godot-gdscript-testing skills. Godot runs where the session's commands run.",
+  "solution": { "title": "Studio: Godot" },
+  "requires": ["games3d"],
   "main": "index.mjs",
   "agents": "agents",
   "skills": "skills",

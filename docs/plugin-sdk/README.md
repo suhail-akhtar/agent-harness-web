@@ -37,6 +37,24 @@ my-plugin/
   test/*.test.ts          tests on the test kit
 ```
 
+## Core and solutions
+
+The core (chat, projects, agents, dashboards, documents, research, quality gates, integrations, the
+desktop app) is always there. On top of it, **solutions** are complete standalone plugins shipped with
+the harness: **Studio** (games and 3D, with its Blender, Godot, Unity and Unreal engines), **Operations**,
+**Engineering** and **DevOps**. A server installs the ones it needs, in any mix (DevOps + Operations,
+Studio only, Operations only...), from **Plugins > Catalogue > Solutions**; removing one keeps its data.
+
+- A new server or desktop starts with the core only, or with `HARNESS_SOLUTIONS=aiops,devops` (or `all`,
+  `none`) on its first start; a product edition sets the same with `"server": { "solutions": [...] }`.
+- A setup that was in use before keeps every solution: nothing changes for it.
+- `HARNESS_SOLUTIONS_MODE=all` loads every shipped plugin as before; a folder named in `HARNESS_PLUGINS`
+  always loads.
+- A solution needing another says so (`"requires": ["games3d"]`): installing it installs that one, and
+  that one cannot be removed while it is needed.
+- Your own plugin is built the same way: it uses the core's API (and other plugins' tools) and adds
+  what the core does not have.
+
 ## The reference
 
 The reference lives with the `build-a-plugin` skill, so agents and people read the same text:

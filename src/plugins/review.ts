@@ -40,7 +40,7 @@ export interface Review {
   durationMs: number;
 }
 
-const KNOWN_KEYS = new Set(['name', 'version', 'description', 'main', 'skills', 'agents', 'outputStyles', 'mcpServers', 'hooks', 'workflows', 'permissions', 'ui', 'author', 'license', 'homepage', 'repository', 'keywords', '$schema']);
+const KNOWN_KEYS = new Set(['name', 'version', 'description', 'main', 'skills', 'agents', 'outputStyles', 'mcpServers', 'hooks', 'workflows', 'permissions', 'ui', 'author', 'license', 'homepage', 'repository', 'keywords', 'solution', 'requires', '$schema']);
 const KNOWN_PERMISSIONS = new Set(['network', 'secrets', 'vault', 'sessions', 'routes']);
 const SECRET_PATTERNS: Array<[RegExp, string]> = [
   [/-----BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY-----/, 'a private key'],

@@ -325,4 +325,12 @@ export interface PluginManifest {
    * loads; a bad section is reported (uiError) and never stops the server half.
    */
   ui?: unknown;
+  /**
+   * A standalone solution shipped with the harness (Studio, Operations, Engineering, DevOps): on a server
+   * that installs solutions one by one (HarnessOptions.solutions = 'installed'), it loads only once
+   * installed (the Catalogue), in any mix; the core never needs it. `title`: its name in the catalogue.
+   */
+  solution?: { title?: string; summary?: string } | true;
+  /** Plugins it needs loaded first (it imports from them or uses their tools): installing it installs them. */
+  requires?: string[];
 }

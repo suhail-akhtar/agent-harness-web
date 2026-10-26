@@ -71,6 +71,14 @@ export interface HarnessOptions {
   catalogue?: string;
   /** Where catalogue installs go. Default: <dataDir>/plugins (loaded on the next start too). */
   installDir?: string;
+  /**
+   * The shipped solutions (plugins whose manifest says "solution": Studio, Operations, Engineering, DevOps):
+   * 'all' (default) loads them like any shipped plugin; 'installed' loads only the ones installed on this
+   * server (kept in <data>/plugins-state.json; installed and removed from the catalogue). On the first start
+   * with 'installed': HARNESS_SOLUTIONS ("all", "none" or names), else every solution when the data folder
+   * was in use before (nothing changes for an existing setup), else none (the core only).
+   */
+  solutions?: 'all' | 'installed';
   /** OTLP/HTTP endpoint for trace spans. Default: HARNESS_OTEL_ENDPOINT. */
   otelEndpoint?: string;
   /**
@@ -117,7 +125,10 @@ export interface HarnessOptions {
   log?: (message: string) => void;
 }
 
-export interface CatalogueEntry { name: string; version: string; description: string; signature: string; verified: boolean; installed: boolean; remote?: boolean }
+export interface CatalogueEntry { name: string; version: string; description: string; signature: string; verified: boolean; installed: boolean; remote?: boolean; /** A solution shipped with the harness: its title, what it needs, what needs it. */ solution?: { title: string; requires: string[]; requiredBy: string[] } }
+
+/** A solution shipped with the harness, installed here or not. */
+export interface SolutionInfo { name: string; title: string; version: string; description: string; installed: boolean; requires: string[]; requiredBy: string[] }
 
 /** One plugin in a remote catalogue's index.json. */
 export interface RemoteCatalogueEntry { name: string; version?: string; description?: string; url: string; sha256: string }
@@ -217,6 +228,12 @@ export interface PluginManager {
    * A plugin the server does not have yet (a folder named in `dir`) loads for the first time.
    */
   reload(name: string, dir?: string): Promise<PluginEntry>;
+  /** The solutions shipped with the harness, installed or not (none listed when the server loads them all). */
+  solutions(): SolutionInfo[];
+  /** Installs a shipped solution (and what it requires): it loads now and at every start. */
+  installSolution(name: string): Promise<PluginEntry>;
+  /** Removes an installed solution: unloaded, its data kept; refused while an installed solution requires it. */
+  removeSolution(name: string): Promise<void>;
 }
 
 export function builtinRegistry(): Registry {
@@ -260,7 +277,26 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   const parts = new Map<string, PluginParts>();
   const required = new Set((process.env.HARNESS_REQUIRED_PLUGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean));
   const stateFile = path.join(opts.dataDir, 'plugins-state.json');
-  const disabledAtStart = new Set((await readJson<{ disabled?: string[] }>(stateFile, {})).disabled ?? []);
+  const savedState = await readJson<{ disabled?: string[]; solutions?: string[] }>(stateFile, {});
+  const disabledAtStart = new Set(savedState.disabled ?? []);
+  // Shipped solutions: which are installed here ('installed' mode); the rest are only offered.
+  const solutionMode = opts.solutions ?? 'all';
+  const exists = (p: string) => fs.stat(p).then(() => true, () => false);
+  let solutionsInstalled: Set<string> | 'every' | undefined;
+  if (solutionMode === 'installed') {
+    if (Array.isArray(savedState.solutions)) solutionsInstalled = new Set(savedState.solutions.map(String));
+    else {
+      const preset = process.env.HARNESS_SOLUTIONS?.trim();
+      const inUse = await exists(stateFile) || await exists(path.join(opts.dataDir, 'sessions')) || await exists(path.join(opts.dataDir, 'plugin-data'));
+      solutionsInstalled = preset ? (preset === 'all' ? 'every' : new Set(preset === 'none' ? [] : preset.split(',').map((x) => x.trim()).filter(Boolean))) : inUse ? 'every' : new Set();
+    }
+  }
+  /** Shipped solutions found but not installed: name -> folder and manifest. */
+  const available = new Map<string, { dir: string; m: PluginManifest }>();
+  const isSolution = (dir: string, m: PluginManifest) => !!m.solution && isShipped(dir);
+  const solutionTitle = (m: PluginManifest) => (typeof m.solution === 'object' && m.solution.title) || ((m.ui as { displayName?: string } | undefined)?.displayName) || m.name;
+  /** Solution manifests seen (installed or not), for what requires what. */
+  const solutionManifests = new Map<string, { dir: string; m: PluginManifest }>();
   /** Native UI only for what ships with the harness or is signed by a trusted key. */
   const trustOf = (signature: string | undefined) => (signature === 'shipped with the harness' || /^signed by /.test(signature ?? '') ? 'native' as const : 'frame' as const);
   async function describe(dir: string, m: PluginManifest, signature: string | undefined, enabled: boolean, loaded?: LoadedPlugin, error?: string): Promise<PluginEntry> {
@@ -277,6 +313,9 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     return e;
   }
   async function load(dir: string): Promise<LoadedPlugin> {
+    const m0 = await readManifest(dir);
+    const missing = (m0?.requires ?? []).filter((r) => !registry.plugins.some((p) => p.name === r));
+    if (m0 && missing.length) throw new Error(`${m0.name} needs ${missing.join(', ')}, which ${missing.length > 1 ? 'are' : 'is'} not installed or not on`);
     const signature = await admit(dir);
     const added = await loadPlugin(registry, dir, log, { dataDir: opts.dataDir });
     const p = registry.plugins.at(-1)!;
@@ -291,7 +330,8 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     await fs.mkdir(opts.dataDir, { recursive: true });
     await withFileLock(stateFile, async () => {
       const off = [...entries.values()].filter((e) => !e.enabled).map((e) => e.name).sort();
-      await writeFileAtomic(stateFile, JSON.stringify({ disabled: off }, null, 1));
+      const solutions = solutionMode === 'installed' ? [...solutionManifests.keys()].filter((n) => !available.has(n)).sort() : undefined;
+      await writeFileAtomic(stateFile, JSON.stringify({ disabled: off, ...(solutions ? { solutions } : {}) }, null, 1));
     });
   }
   const events = new EventHub();
@@ -310,9 +350,37 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     signalled.set(k, now);
     events.publish('plugins', { type: 'signal', plugin, name }, { all: true });
   };
+  // Every plugin folder, the ones a plugin requires before it (the order found otherwise).
+  // `explicit`: named on its own (HARNESS_PLUGINS=path/to/plugin), not found in a folder of plugins: the operator chose it.
+  const found: Array<{ dir: string; m: PluginManifest | undefined; explicit: boolean }> = [];
   for (const root of [...(opts.plugins ?? []), installDir]) {
-    for (const dir of await findPluginDirs(path.resolve(root))) {
-      const m = await readManifest(dir).catch(() => undefined);
+    for (const dir of await findPluginDirs(path.resolve(root))) found.push({ dir, m: await readManifest(dir).catch(() => undefined), explicit: dir === path.resolve(root) });
+  }
+  const explicitNames = new Set(found.filter((f) => f.explicit && f.m).map((f) => f.m!.name));
+  const ordered: typeof found = [];
+  const placing = new Set<(typeof found)[number]>();
+  const place = (f: (typeof found)[number]) => {
+    if (placing.has(f)) return;
+    placing.add(f);
+    for (const r of f.m?.requires ?? []) { const dep = found.find((x) => x.m?.name === r); if (dep) place(dep); }
+    ordered.push(f);
+  };
+  for (const f of found) place(f);
+  const wanted = (name: string) => solutionsInstalled === 'every' || !!solutionsInstalled?.has(name);
+  // A solution held back holds back what requires it (an engine of Studio without Studio).
+  const heldBack = (m: PluginManifest): boolean => (m.requires ?? []).some((r) => available.has(r));
+  {
+    for (const { dir, m, explicit } of ordered) {
+      // A solution the operator also named on its own loads from there (once).
+      if (m && solutionMode === 'installed' && isSolution(dir, m) && !explicit && explicitNames.has(m.name)) continue;
+      if (m && isSolution(dir, m) && !explicit) solutionManifests.set(m.name, { dir, m });
+      if (m && solutionMode === 'installed' && isSolution(dir, m) && !explicit && (!wanted(m.name) || heldBack(m)) && !required.has(m.name)) {
+        available.set(m.name, { dir, m });
+        // What names it (a schedule, a paused workflow run) hears that it is not installed.
+        registry.off.set(m.name, { parts: { maps: [], lists: [], shell: [], closers: [] }, title: solutionTitle(m), notInstalled: true });
+        log(`solution not installed: ${m.name}`);
+        continue;
+      }
       // Switched off by an administrator: listed, not loaded (no code of it runs) until switched on.
       if (m && disabledAtStart.has(m.name) && !required.has(m.name) && !entries.has(m.name)) {
         let signature: string | undefined, error: string | undefined;
@@ -331,6 +399,8 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       }
     }
   }
+  // The first start that installs solutions one by one: what was decided is kept.
+  if (solutionMode === 'installed' && !Array.isArray(savedState.solutions)) await saveState();
   // Workflow runs waiting for a plugin to be switched on (src/graph/paused.ts).
   const pausedRuns = new PausedRuns(path.join(opts.dataDir, 'paused-runs.json'));
   async function resumePaused(plugin: string): Promise<void> {
@@ -381,6 +451,59 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       // Workflow runs that paused at a step needing it carry on from that step.
       if (enabled) await resumePaused(name);
       return entries.get(name)!;
+    },
+    solutions() {
+      const requiredBy = (n: string) => [...solutionManifests.values()].filter((x) => (x.m.requires ?? []).includes(n) && !available.has(x.m.name)).map((x) => x.m.name);
+      return [...solutionManifests.values()].map(({ m }) => ({
+        name: m.name, title: solutionTitle(m), version: m.version ?? '0.0.0', description: m.description ?? '',
+        installed: !available.has(m.name), requires: m.requires ?? [], requiredBy: requiredBy(m.name),
+      })).sort((a, b) => a.title.localeCompare(b.title));
+    },
+    async installSolution(name) {
+      const had = entries.get(name);
+      if (had && !available.has(name)) return had;
+      const a = available.get(name);
+      if (!a) throw new PluginStateError(404, solutionManifests.has(name) ? `${name} is installed.` : `No solution "${name}" ships with this harness.`);
+      // What it requires first (a Studio engine installs Studio).
+      for (const r of a.m.requires ?? []) {
+        if (available.has(r)) await plugins.installSolution(r);
+        else if (!registry.plugins.some((p) => p.name === r)) throw new PluginStateError(409, `${name} needs ${r}, which is not on this server.`);
+      }
+      try { await load(a.dir); } catch (err) { throw new PluginStateError(409, `${name} could not be installed: ${(err as Error).message}`); }
+      available.delete(name);
+      registry.off.delete(name);
+      await saveState();
+      log(`solution ${name} installed`);
+      pluginsChanged(name, 'installed');
+      await resumePaused(name);
+      return entries.get(name)!;
+    },
+    async removeSolution(name) {
+      const sol = solutionManifests.get(name);
+      if (!sol) throw new PluginStateError(404, `No solution "${name}" ships with this harness.`);
+      if (available.has(name)) return;
+      if (required.has(name)) throw new PluginStateError(409, `${name} is required on this server (HARNESS_REQUIRED_PLUGINS).`);
+      const dependents = [...solutionManifests.values()].filter((x) => (x.m.requires ?? []).includes(name) && !available.has(x.m.name)).map((x) => solutionTitle(x.m));
+      if (dependents.length) throw new PluginStateError(409, `${solutionTitle(sol.m)} is needed by ${dependents.join(', ')}: remove ${dependents.length > 1 ? 'them' : 'it'} first.`);
+      const got = parts.get(name);
+      if (got) {
+        registry.detach(got);
+        for (const c of got.closers) {
+          await Promise.resolve(c()).catch(() => {});
+          const i = registry.closers.indexOf(c);
+          if (i >= 0) registry.closers.splice(i, 1);
+        }
+      }
+      const i = registry.plugins.findIndex((p) => p.name === name);
+      if (i >= 0) registry.plugins.splice(i, 1);
+      entries.delete(name);
+      parts.delete(name);
+      available.set(name, sol);
+      // What open sessions still hold of it answers that it is not installed; its data (plugin-data/<name>) stays.
+      registry.off.set(name, { parts: got ?? { maps: [], lists: [], shell: [], closers: [] }, title: solutionTitle(sol.m), notInstalled: true });
+      await saveState();
+      log(`solution ${name} removed (its data kept)`);
+      pluginsChanged(name, 'removed');
     },
     async reload(name, dir) {
       const e = entries.get(name);
@@ -433,6 +556,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     async uninstall(name, o = {}) {
       const e = entries.get(name);
       if (!e) throw new PluginStateError(404, `No plugin "${name}".`);
+      if (solutionMode === 'installed' && solutionManifests.has(name)) return plugins.removeSolution(name);
       if (e.source !== 'installed') throw new PluginStateError(409, `${name} was not installed from the catalogue (it is ${e.source === 'bundled' ? 'shipped with the harness' : 'listed by the operator in HARNESS_PLUGINS'}): switch it off instead.`);
       if (e.required) throw new PluginStateError(409, `${name} is required on this server (HARNESS_REQUIRED_PLUGINS).`);
       if (!within(installDir, e.dir) || path.resolve(e.dir) === installDir) throw new PluginStateError(409, `${e.dir} is not under ${installDir}`);
@@ -638,7 +762,10 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       },
     },
     async catalogue() {
-      const out: CatalogueEntry[] = [];
+      const out: CatalogueEntry[] = solutionMode === 'installed' ? plugins.solutions().map((x) => ({
+        name: x.name, version: x.version, description: x.description, signature: 'shipped with the harness', verified: true, installed: x.installed,
+        solution: { title: x.title, requires: x.requires, requiredBy: x.requiredBy },
+      })) : [];
       if (remoteCatalogue) {
         // Listed as the index says; each one is verified against the trust list when installed.
         for (const p of await remoteIndex(cataloguePath!)) {
@@ -659,6 +786,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       return out;
     },
     async install(name) {
+      if (solutionMode === 'installed' && solutionManifests.has(name)) return (await plugins.installSolution(name)).loaded!;
       const p = await installFromCatalogue(name);
       pluginsChanged(p.name, 'installed');
       return p;

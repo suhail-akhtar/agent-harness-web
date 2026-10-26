@@ -14,7 +14,8 @@ export interface ProductProfile {
   home: { cards: string[]; greeting?: string };
   trustedKeys?: string[];
   policy?: { lock?: Record<string, unknown>; defaults?: Record<string, unknown> };
-  server: { mode: 'local' | 'remote'; url?: string };
+  /** solutions: the shipped solutions a new local engine starts with ("aiops", "devops", ... or "all"); people install others later. */
+  server: { mode: 'local' | 'remote'; url?: string; solutions?: string[] };
 }
 
 export const FALLBACK_PRODUCT: ProductProfile = {

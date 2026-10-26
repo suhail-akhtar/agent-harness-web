@@ -2,6 +2,7 @@
   "name": "devops",
   "version": "1.0.0",
   "description": "DevOps (the AIOps pack's DevOps half): Terraform/OpenTofu plan and approved-plan apply, Kubernetes validate/diff/apply/rollout/undo, GitHub Actions runs, failing logs, re-runs and local reproduction, container lint/scan/build, compose deploys with health checks and automatic rollback; gates for IaC, manifests, Dockerfiles, shell, workflows, IaC security and secrets; ship-change, pipeline-fix and k8s-rollout workflows. Tools run in the ops sandbox image (docker/Dockerfile.sandbox-ops); credentials come from the Key Vault.",
+  "solution": { "title": "DevOps" },
   "main": "index.mjs",
   "agents": "agents",
   "skills": "skills",

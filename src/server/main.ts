@@ -47,6 +47,8 @@ async function main() {
     dataDir: DATA_DIR,
     plugins: PLUGIN_DIRS,
     shippedPlugins: [path.join(appRoot, 'plugins')],
+    // Studio, Operations, Engineering, DevOps: only the ones installed here (HARNESS_SOLUTIONS_MODE=all loads every one, as before).
+    solutions: process.env.HARNESS_SOLUTIONS_MODE === 'all' ? 'all' : 'installed',
     installDir: PATHS.installDir,
     mcp: process.env.HARNESS_MCP_CONFIG || undefined,
     spend,

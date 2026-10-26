@@ -73,7 +73,9 @@ const local = new EngineHost({
     // A plugin folder loaded in the app with server code (tools, routes) runs in this engine too: its page can call its routes.
     const withCode = devPluginDirs().filter((d) => { try { return !!JSON.parse(fs.readFileSync(path.join(d, 'harness-plugin.json'), 'utf8')).main; } catch { return false; } });
     const plugins = [...(process.env.HARNESS_PLUGINS ?? '').split(path.delimiter).filter(Boolean), ...withCode].join(path.delimiter);
-    return { ...(plugins ? { HARNESS_PLUGINS: plugins } : {}), HARNESS_HOME: home.layout.home, HARNESS_DATA: home.dataDir, HARNESS_LOCAL_ROOTS: localRoots().join(path.delimiter), HARNESS_DESKTOP: '1', ...(typeof limit === 'number' && limit >= 0 ? { HARNESS_MAX_COST_USD: String(limit) } : {}) };
+    // The product's edition: the solutions a new engine starts with (an existing one keeps what is installed).
+    const solutions: Record<string, string> = !process.env.HARNESS_SOLUTIONS && product.server.solutions?.length ? { HARNESS_SOLUTIONS: product.server.solutions.join(',') } : {};
+    return { ...solutions, ...(plugins ? { HARNESS_PLUGINS: plugins } : {}), HARNESS_HOME: home.layout.home, HARNESS_DATA: home.dataDir, HARNESS_LOCAL_ROOTS: localRoots().join(path.delimiter), HARNESS_DESKTOP: '1', ...(typeof limit === 'number' && limit >= 0 ? { HARNESS_MAX_COST_USD: String(limit) } : {}) };
   },
 });
 let engine: Engine = local;

@@ -89,6 +89,8 @@ async function main() {
     releaseHosts: true,
     plugins: [path.join(appRoot, 'plugins'), ...(process.env.HARNESS_PLUGINS || '').split(path.delimiter).filter(Boolean)],
     shippedPlugins: [path.join(appRoot, 'plugins')],
+    // Studio, Operations, Engineering, DevOps: only the ones installed here (HARNESS_SOLUTIONS_MODE=all loads every one, as before).
+    solutions: process.env.HARNESS_SOLUTIONS_MODE === 'all' ? 'all' : 'installed',
     installDir: paths.installDir,
     mcp: process.env.HARNESS_MCP_CONFIG || undefined,
     // One task from the command line: no plugin loops (an alert watch loop) alongside it.
