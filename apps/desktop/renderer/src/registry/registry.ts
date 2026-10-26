@@ -124,6 +124,8 @@ export interface RegistryOptions {
   required?: string[];
   /** The person's order of the sidebar's groups (plugin names); others follow by their menu's order. */
   menuOrder?: string[];
+  /** A window focused on one plugin (open as its own app): its menu is the first group, out of Custom. */
+  focus?: string;
 }
 
 const GROUP_ORDER = ['app', 'agent', 'integrations', 'plugins', 'admin'];
@@ -196,7 +198,7 @@ export function buildRegistry(entries: PluginEntry[], o: RegistryOptions = {}): 
   r.settings.sort((a, b) => GROUP_ORDER.indexOf(a.group ?? 'plugins') - GROUP_ORDER.indexOf(b.group ?? 'plugins') || byOrder(a, b));
   r.statusItems.sort(byOrder);
   r.onboarding.sort(byOrder);
-  buildMenus(r, o.menuOrder ?? []);
+  buildMenus(r, o.menuOrder ?? [], o.focus);
   // Two commands on one chord: the first keeps it, both are reported (Settings > Shortcuts shows them).
   // The core's commands come first (built-ins load first), so the core always keeps its keys; a later
   // command on a taken chord loses it (it can still be run from the palette or rebound) and the clash is reported.
@@ -223,8 +225,13 @@ export function buildRegistry(entries: PluginEntry[], o: RegistryOptions = {}): 
  * only (the first that names it). Groups follow the person's order, then their menu's, then title.
  * Every active plugin gets a home: its declared view, else the page the shell draws from its manifest.
  */
-function buildMenus(r: Registry, personOrder: string[]): void {
+function buildMenus(r: Registry, personOrder: string[], focus?: string): void {
   const claimed = new Set<string>();
+  // Plugins the person added (installed, loaded from a folder, the operator's) go under one "Custom" group,
+  // like Studio's or Dashboards': a plugin with a menu of its own as an entry with its pages under it.
+  // In a window focused on one plugin (focus), that plugin is a group of its own, first.
+  const added = new Set(r.plugins.filter((p) => !isBuiltin(p) && p.source !== 'bundled' && p.name !== focus).map((p) => p.name));
+  const custom: MenuEntry[] = [];
   for (const p of r.active) {
     const ui = p.ui!;
     const declared = ui.home ? qualify(p.name, ui.home) : undefined;
@@ -233,7 +240,8 @@ function buildMenus(r: Registry, personOrder: string[]): void {
     let refs: MenuItemRef[] | undefined = ui.menu?.items;
     if (!refs && !isBuiltin(p)) {
       const own = r.navItems.filter((n) => n.plugin === p.name && n.placement !== 'footer');
-      if (own.length >= 2) refs = own.map((n) => n.id);
+      // Two pages or more make a menu; in a window focused on it, even one page is its group.
+      if (own.length >= 2 || (p.name === focus && own.length)) refs = own.map((n) => n.id);
     }
     if (!refs) continue;
     const entry = (it: MenuItemRef, parent?: string): MenuEntry | undefined => {
@@ -256,18 +264,25 @@ function buildMenus(r: Registry, personOrder: string[]): void {
     };
     const items = refs.map((it) => entry(it)).filter((x): x is MenuEntry => !!x);
     if (!items.length) continue;
-    r.groups.push({ plugin: p.name, title: ui.menu?.title ?? ui.displayName ?? p.name, icon: ui.menu?.icon ?? ui.icon ?? 'puzzle', order: ui.menu?.order ?? 100, collapsed: !!ui.menu?.collapsed, home, homeDeclared: !!declared && home.view === declared, items });
+    const title = ui.menu?.title ?? ui.displayName ?? p.name;
+    const icon = ui.menu?.icon ?? ui.icon ?? 'puzzle';
+    if (added.has(p.name)) {
+      // Under Custom: the plugin (opening its home), its pages one level under it.
+      const pages = items.flatMap((e) => [{ ...e, children: [] }, ...e.children]);
+      for (const e of pages) { const n = r.navItems.find((x) => x.qid === e.qid); if (n) { n.group = CUSTOM_GROUP; n.parent = `${p.name}:menu`; } }
+      custom.push({ qid: `${p.name}:menu`, plugin: p.name, title, icon, view: home.view, ...(home.params ? { params: home.params } : {}), children: pages });
+      continue;
+    }
+    r.groups.push({ plugin: p.name, title, icon, order: p.name === focus ? -1 : ui.menu?.order ?? 100, collapsed: p.name === focus ? false : !!ui.menu?.collapsed, home, homeDeclared: !!declared && home.view === declared, items });
   }
-  // Plugins the person added (installed, loaded from a folder, the operator's) without a menu of their own:
-  // their pages go in one "Custom" group, like Studio's or Dashboards', instead of crowding the top level.
-  const added = new Set(r.plugins.filter((p) => !isBuiltin(p) && p.source !== 'bundled').map((p) => p.name));
+  // Added plugins without a menu of their own: each page an entry of Custom.
   const loose = r.navItems.filter((n) => !n.group && added.has(n.plugin) && n.placement !== 'footer');
-  if (loose.length) {
-    for (const n of loose) n.group = CUSTOM_GROUP;
-    r.groups.push({ plugin: CUSTOM_GROUP, title: 'Custom', icon: 'puzzle', order: 900, collapsed: false, home: { view: 'core.plugins:plugins' }, homeDeclared: true,
-      items: loose.map((n) => ({ qid: n.qid, plugin: n.plugin, title: n.title, ...(n.icon ? { icon: n.icon } : {}), view: n.view, ...(n.params ? { params: n.params } : {}), ...(n.badge ? { badge: n.badge } : {}), children: [] })) });
+  for (const n of loose) {
+    n.group = CUSTOM_GROUP;
+    custom.push({ qid: n.qid, plugin: n.plugin, title: n.title, ...(n.icon ? { icon: n.icon } : {}), view: n.view, ...(n.params ? { params: n.params } : {}), ...(n.badge ? { badge: n.badge } : {}), children: [] });
   }
-  const rank = (n: string) => { const i = personOrder.indexOf(n); return i < 0 ? 1e6 : i; };
+  if (custom.length) r.groups.push({ plugin: CUSTOM_GROUP, title: 'Custom', icon: 'puzzle', order: 900, collapsed: false, home: { view: 'core.plugins:plugins' }, homeDeclared: true, items: custom });
+  const rank = (n: string) => (n === focus ? -2 : (() => { const i = personOrder.indexOf(n); return i < 0 ? 1e6 : i; })());
   r.groups.sort((a, b) => rank(a.plugin) - rank(b.plugin) || a.order - b.order || a.title.localeCompare(b.title));
 }
 

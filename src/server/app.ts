@@ -874,6 +874,18 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       });
       return void res.end(data);
     }
+    // A deep review of a plugin (src/plugins/review.ts), in a child process: one the server has (name), or a
+    // folder on a loopback server (dir: the desktop app reviews a folder before and after it loads it).
+    if (p === '/api/plugins/review' && method === 'POST') {
+      if (!admin) throw new HttpError(403, "administrators only: a review runs the plugin's code");
+      const b = await readJson(req, 8192).catch(() => ({})) as { dir?: unknown; name?: unknown; tests?: unknown };
+      let dir = typeof b?.dir === 'string' && b.dir ? b.dir : undefined;
+      if (dir && !o.loopback) throw new HttpError(403, 'reviewing a folder is only for a server on this computer');
+      if (!dir && typeof b?.name === 'string') dir = harness.plugins.get(b.name)?.dir;
+      if (!dir) throw new HttpError(400, 'name a plugin the server has ({"name"}) or a folder ({"dir"})');
+      const { reviewInChild } = await import('../plugins/review.ts');
+      return send(res, 200, await reviewInChild(path.resolve(dir), { runTests: b?.tests !== false }));
+    }
     // A plugin's code changed: load it again without restarting (the desktop app does this for a folder it loaded).
     // `dir` (a plugin the server does not have yet) only on a loopback server: the person's own computer.
     const prl = /^\/api\/plugins\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/reload$/.exec(p);

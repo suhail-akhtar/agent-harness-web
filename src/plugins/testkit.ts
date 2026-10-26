@@ -152,7 +152,12 @@ export async function loadPlugin(dir: string | URL, o: { env?: Record<string, st
   const host = new LocalHost(workspace);
   const ctx = (): ToolContext => {
     let todos: never[] = [];
-    return { host, signal: AbortSignal.timeout(10 * 60_000), readFiles: new Map<string, FileStamp>(), todos, setTodos: (t) => { todos = t as never[]; }, emit: () => {} };
+    return {
+      host, signal: AbortSignal.timeout(10 * 60_000), readFiles: new Map<string, FileStamp>(), todos, setTodos: (t) => { todos = t as never[]; }, emit: () => {},
+      // A tool that calls another (ctx.callTool): here straight to it, schema-checked (no permission prompts in a test).
+      callTool: async (name, input) => { const r = await kit.tool(name, input); return { content: r.content, ...(r.isError ? { is_error: true } : {}) }; },
+      toolNames: () => [...reg.tools.keys()],
+    };
   };
 
   const kit: PluginTestKit = {

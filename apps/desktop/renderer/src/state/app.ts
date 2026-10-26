@@ -56,6 +56,11 @@ export interface AppState {
 }
 
 export const HOME: Route = { view: 'core.chat:home' };
+/**
+ * A window focused on one plugin (the plugin opened as its own app: ?focus=<name>): its menu is the first
+ * group, it opens on the plugin's home and carries its name; every other plugin and core service is there too.
+ */
+export const FOCUS: string | undefined = (() => { try { return new URLSearchParams(location.search).get('focus') || undefined; } catch { return undefined; } })();
 /** Below this width the sidebar is a rail that floats open over the page. */
 export const NARROW_PX = 760;
 const same = (a: Route, b: Route) => a.view === b.view && JSON.stringify(a.params ?? {}) === JSON.stringify(b.params ?? {});

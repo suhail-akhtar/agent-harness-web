@@ -30,6 +30,9 @@ export interface DesktopContext {
   quiet: boolean;
   /** The product's icon (its profile's, else the app's), as a data URL for the window to show; undefined when there is none. */
   iconDataUrl(): string | undefined;
+  /** Opens a plugin as its own app (a window focused on it), and a shortcut that starts the app so. */
+  openPluginWindow(name: string): void;
+  pluginShortcut(name: string, title: string): { ok: boolean; path?: string; reason?: string };
   /** Switch between the local engine and a remote server. */
   useServer(id: string): Promise<void>;
   quit(): void;

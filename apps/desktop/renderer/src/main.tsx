@@ -10,7 +10,7 @@ import { setArtifactHost, toast } from '@harness/ui';
 import { App } from './shell/App';
 // The resizable panes keep their sizes in the prefs (and are known to agents) from the start.
 import './state/layout';
-import { useApp, navigate, openSession, prefill, HOME } from './state/app';
+import { useApp, navigate, openSession, prefill, HOME, FOCUS } from './state/app';
 import { reconcile } from './registry/reconcile';
 import { describeRegistry } from './registry/registry';
 import { useData, setBuiltins, client, applyGlobal, setClientCallHandler, globalBus } from './state/data';
@@ -79,8 +79,21 @@ async function boot() {
   useData.getState().rebuild();
   reapplyTheme();
   theme.watchSystem(() => { if (useApp.getState().prefs.theme === 'system') reapplyTheme(); });
+  // A window focused on one plugin: it opens on the plugin's home, once the plugin is there, and carries its name.
+  let landed = false;
+  const focusLanding = () => {
+    if (!FOCUS) return;
+    const r = useData.getState().registry;
+    const p = r.plugins.find((x) => x.name === FOCUS);
+    if (!p) return;
+    document.title = `${p.ui?.displayName ?? p.name} - ${info?.product.name ?? 'Harness'}`;
+    const home = r.homes.get(FOCUS);
+    if (!landed && home) { landed = true; navigate(home, { replace: true }); }
+  };
+  focusLanding();
   useData.subscribe((s, prev) => {
     if (s.registry === prev.registry) return;
+    focusLanding();
     // A plugin switched on or off live: nothing of it may linger (reconcile.ts).
     const app = useApp.getState();
     const r = reconcile(prev.registry, s.registry, { route: app.route, panel: app.panel, settingsSection: app.settingsSection, badges: app.badges });

@@ -7,14 +7,14 @@
 
 import React from 'react';
 import { Badge, Button, EmptyState, Icon, Markdown, cx, Page } from '@harness/ui';
-import { navigate, prefill, showFullWindow, useApp } from '../state/app';
+import { FOCUS, navigate, prefill, showFullWindow, useApp } from '../state/app';
 import { useData } from '../state/data';
 import { HomeCardHost } from '../registry/PluginView';
 import { runCommand } from '../registry/actions';
 import { interpolate } from '../registry/registry';
 import { guideFor, homeModel, type HomeModel } from '../registry/modules';
 import { formatChord } from '../registry/keybindings';
-import { platform } from '../bridge';
+import { desktop, platform } from '../bridge';
 
 /** The page around a plugin's home: its title, what it is, "Ask the agent" and "Guide for agents". */
 export function ModuleHeader({ model, children }: { model: Pick<HomeModel, 'plugin' | 'title' | 'icon' | 'description' | 'purpose' | 'ask'>; children?: React.ReactNode }): React.ReactElement {
@@ -28,6 +28,7 @@ export function ModuleHeader({ model, children }: { model: Pick<HomeModel, 'plug
       </div>
       <div className="flex flex-wrap items-center gap-2">
         {children}
+        {FOCUS !== model.plugin && !registry.plugins.find((x) => x.name === model.plugin && x.source === 'builtin') && <Button size="sm" variant="ghost" icon="external" data-open-app={model.plugin} onClick={() => void desktop.openPluginWindow(model.plugin)}>Open as app</Button>}
         <Button size="sm" variant="ghost" icon="book" data-module-guide={model.plugin} onClick={() => showFullWindow(`${model.title}: guide for agents`, <Page><Markdown text={guideFor(registry, model.plugin) ?? ''} /></Page>)}>Guide for agents</Button>
         <Button size="sm" variant="primary" icon="sparkles" data-home-ask={model.plugin} onClick={() => prefill(model.ask, true)}>Ask the agent about {model.title}</Button>
       </div>

@@ -69,6 +69,9 @@ export function registerIpc(ctx: DesktopContext): { grants: JsonFile<Grants> } {
   h('prefs:get', () => ctx.prefs.get());
   h('prefs:set', (patch: Record<string, unknown>) => ctx.prefs.set(patch));
 
+  h('win:openPlugin', (name: string) => ctx.openPluginWindow(String(name)));
+  h('win:revealMain', () => ctx.reveal());
+  h('plugins:shortcut', (name: string, title: string) => ctx.pluginShortcut(String(name), String(title ?? name)));
   h('win:minimize', () => ctx.window()?.minimize());
   h('win:toggleMaximize', () => { const w = ctx.window(); if (!w || ctx.quiet) return false; if (w.isMaximized()) w.unmaximize(); else w.maximize(); return w.isMaximized(); });
   h('win:close', () => ctx.window()?.close());
@@ -122,10 +125,18 @@ export function registerIpc(ctx: DesktopContext): { grants: JsonFile<Grants> } {
   });
 
   h('plugins:dev', () => ctx.devPlugins.load());
-  h('plugins:devAdd', async () => {
+  // Picks a plugin folder (the window reviews it before it is loaded: plugins:devAdd with the folder).
+  h('plugins:pickFolder', async () => {
     const w = ctx.window();
     const r = w ? await dialog.showOpenDialog(w, { title: 'Load a plugin folder', properties: ['openDirectory'] }) : null;
     const dir = r && !r.canceled ? r.filePaths[0] : undefined;
+    if (dir && !fs.existsSync(path.join(dir, 'harness-plugin.json'))) throw new Error('That folder has no harness-plugin.json.');
+    return dir ?? null;
+  });
+  h('plugins:devAdd', async (picked?: string) => {
+    const w = ctx.window();
+    const r = picked ? null : w ? await dialog.showOpenDialog(w, { title: 'Load a plugin folder', properties: ['openDirectory'] }) : null;
+    const dir = picked ?? (r && !r.canceled ? r.filePaths[0] : undefined);
     if (!dir) return null;
     if (!fs.existsSync(path.join(dir, 'harness-plugin.json'))) throw new Error('That folder has no harness-plugin.json.');
     const p = ctx.prefs.get();

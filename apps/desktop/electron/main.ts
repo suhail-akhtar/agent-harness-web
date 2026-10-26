@@ -82,14 +82,15 @@ let tray: Tray | null = null;
 let quitting = false;
 
 const ctx: DesktopContext = {
-  window: () => mainWindow,
+  // The window a request came from when it is one of ours (a plugin's own window's buttons act on it), else the main one.
+  window: () => { const f = BrowserWindow.getFocusedWindow(); return f && (f === mainWindow || [...pluginWindows.values()].includes(f)) ? f : mainWindow; },
   prefs,
   engine: () => engine,
   product,
   paths: { dataDir, get engineData() { return home.dataDir; }, get scratch() { return home.layout.tmp; }, get home() { return home.layout.home; }, rendererDir: path.join(distDir, 'renderer'), sdkDir: path.join(distDir, 'sdk'), repoRoot },
   devPlugins,
   devWatch: undefined,
-  emit(channel, payload) { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload); },
+  emit(channel, payload) { for (const w of [mainWindow, ...pluginWindows.values()]) if (w && !w.isDestroyed()) w.webContents.send(channel, payload); },
   handle: makeHandle(),
   quiet,
   reveal() { if (!mainWindow) { createWindow(); return; } if (quiet) return; if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); },
@@ -113,6 +114,8 @@ const ctx: DesktopContext = {
     if (current !== id) prefs.set({ servers: { ...prefs.get().servers, active: id } });
     ctx.emit('engine:state', engine.state);
   },
+  openPluginWindow: (name) => openPluginWindow(name),
+  pluginShortcut: (name, title) => pluginShortcut(name, title),
   quit() { quitting = true; app.quit(); },
 };
 
@@ -165,7 +168,7 @@ function createWindow(): void {
   // Under the tests the window is shown without focus, off every display: it renders and lays out like a
   // visible window (a hidden one lets plugin frames' layout go stale, so clicks land on the old layout),
   // yet nobody sees it and it never takes focus or a taskbar entry.
-  mainWindow.once('ready-to-show', () => { if (quiet) { mainWindow?.setPosition(offscreen(b.width).x, offscreen(b.width).y); mainWindow?.showInactive(); } else if (!process.env.HARNESS_DESKTOP_HIDDEN) mainWindow?.show(); });
+  mainWindow.once('ready-to-show', () => { if (quiet) { mainWindow?.setPosition(offscreen(b.width).x, offscreen(b.width).y); mainWindow?.showInactive(); } else if (!process.env.HARNESS_DESKTOP_HIDDEN && !focusArg(process.argv)) mainWindow?.show(); });
   void mainWindow.loadURL(`${APP_ORIGIN}/`);
   const save = () => {
     if (!mainWindow || mainWindow.isDestroyed() || quiet) return;
@@ -180,16 +183,83 @@ function createWindow(): void {
   mainWindow.on('blur', () => ctx.emit('win:focus', false));
   mainWindow.on('close', (e) => { if (!quitting && prefs.get().keepInTray && tray) { e.preventDefault(); mainWindow?.hide(); } });
   mainWindow.on('closed', () => { mainWindow = null; });
-  // Links leave the app; the app never navigates away from itself.
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => { if (/^(https?:|mailto:)/i.test(url)) void shell.openExternal(url); return { action: 'deny' }; });
-  mainWindow.webContents.on('will-navigate', (e, url) => { if (!url.startsWith(`${APP_ORIGIN}/`)) { e.preventDefault(); if (/^https?:/i.test(url)) void shell.openExternal(url); } });
-  mainWindow.webContents.on('will-frame-navigate', (e) => {
-    // Plugin frames stay on their own files; previews on theirs. Nothing navigates a frame to the API or elsewhere.
+  guardWindow(mainWindow, `${APP_ORIGIN}/`);
+}
+
+/** Links leave the app; the app never navigates away from itself; plugin frames stay on their own files. */
+function guardWindow(w: BrowserWindow, home: string): void {
+  w.webContents.setWindowOpenHandler(({ url }) => { if (/^(https?:|mailto:)/i.test(url)) void shell.openExternal(url); return { action: 'deny' }; });
+  w.webContents.on('will-navigate', (e, url) => { if (!url.startsWith(`${APP_ORIGIN}/`)) { e.preventDefault(); if (/^https?:/i.test(url)) void shell.openExternal(url); } });
+  w.webContents.on('will-frame-navigate', (e) => {
     if (e.isMainFrame) return;
     const to = e.url;
     if (!(to.startsWith(`${APP_ORIGIN}/plugins/`) || to.startsWith(`${PREVIEW_ORIGIN}/`) || to === 'about:srcdoc' || to.startsWith('about:blank'))) e.preventDefault();
   });
-  mainWindow.webContents.on('render-process-gone', (_e, d) => { if (d.reason !== 'clean-exit') void mainWindow?.loadURL(`${APP_ORIGIN}/`); });
+  w.webContents.on('render-process-gone', (_e, d) => { if (d.reason !== 'clean-exit') void w.loadURL(home); });
+}
+
+/**
+ * A plugin opened as its own app: a window focused on it (renderer ?focus=<name>: its menu first, its home,
+ * its name), with every core service and every other plugin still there. One window per plugin.
+ */
+const pluginWindows = new Map<string, BrowserWindow>();
+function openPluginWindow(name: string): void {
+  if (!/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(name)) return;
+  const open = pluginWindows.get(name);
+  if (open && !open.isDestroyed()) { if (open.isMinimized()) open.restore(); open.show(); open.focus(); return; }
+  const p = prefs.get();
+  const dark = p.theme === 'dark' || (p.theme === 'system' && nativeTheme.shouldUseDarkColors);
+  const bg = dark ? '#1d1c1a' : '#faf9f6';
+  const w = new BrowserWindow({
+    width: Math.min(1320, p.window.width), height: Math.min(900, p.window.height), ...(quiet ? offscreen(1200) : {}),
+    minWidth: 480, minHeight: 480, show: false, title: name, icon: appIcon(), backgroundColor: bg,
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
+    titleBarOverlay: process.platform === 'darwin' ? undefined : { color: bg, symbolColor: dark ? '#ecebe6' : '#1f1e1c', height: 40 },
+    ...(quiet ? { paintWhenInitiallyHidden: true, skipTaskbar: true } : {}),
+    webPreferences: { preload: path.join(distDir, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false, nodeIntegrationInSubFrames: false, webviewTag: false, spellcheck: true, ...(quiet ? { backgroundThrottling: false } : {}) },
+  });
+  const home = `${APP_ORIGIN}/?focus=${encodeURIComponent(name)}`;
+  pluginWindows.set(name, w);
+  guardWindow(w, home);
+  w.once('ready-to-show', () => { if (quiet) w.showInactive(); else if (!process.env.HARNESS_DESKTOP_HIDDEN) w.show(); });
+  w.on('focus', () => w.webContents.send('win:focus', true));
+  w.on('blur', () => w.webContents.send('win:focus', false));
+  w.on('maximize', () => w.webContents.send('win:maximized', true));
+  w.on('unmaximize', () => w.webContents.send('win:maximized', false));
+  w.on('closed', () => {
+    pluginWindows.delete(name);
+    // Started focused on plugins (a shortcut): the last of their windows closing ends the app, unless it lives in the tray.
+    if (!pluginWindows.size && mainWindow && !mainWindow.isVisible() && !quitting && !(prefs.get().keepInTray && tray)) app.quit();
+  });
+  void w.loadURL(home);
+}
+
+/** --plugin=<name> on the command line (a shortcut made from the Plugins page): open that plugin as its own app. */
+const focusArg = (argv: string[]) => argv.map((a) => /^--plugin=(.+)$/.exec(a)?.[1]).find((x): x is string => !!x);
+
+/**
+ * A shortcut that starts the app focused on one plugin: on the desktop (and the Start menu) on Windows,
+ * a .desktop entry on Linux. macOS has no such shortcut for an app's argument: the window opens from the Plugins page.
+ */
+function pluginShortcut(name: string, title: string): { ok: boolean; path?: string; reason?: string } {
+  const safe = title.replace(/[\\/:*?"<>|]/g, '').slice(0, 60) || name;
+  const args = [...(app.isPackaged ? [] : [app.getAppPath()]), `--plugin=${name}`];
+  const argText = args.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ');
+  if (process.platform === 'win32') {
+    const link = { target: process.execPath, args: argText, description: `${title} (${product.name})`, icon: process.execPath, iconIndex: 0 };
+    const target = path.join(app.getPath('desktop'), `${safe}.lnk`);
+    const ok = shell.writeShortcutLink(target, 'create', link);
+    if (ok) { try { shell.writeShortcutLink(path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', `${safe}.lnk`), 'create', link); } catch { /* the desktop one is enough */ } }
+    return ok ? { ok, path: target } : { ok: false, reason: 'Windows did not create the shortcut.' };
+  }
+  if (process.platform === 'linux') {
+    const dir = path.join(app.getPath('home'), '.local', 'share', 'applications');
+    const file = path.join(dir, `harness-${name}.desktop`);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(file, ['[Desktop Entry]', 'Type=Application', `Name=${safe}`, `Comment=${title} (${product.name})`, `Exec=${[process.execPath, ...args].map((a) => `"${a}"`).join(' ')}`, 'Terminal=false', ''].join('\n'));
+    return { ok: true, path: file };
+  }
+  return { ok: false, reason: 'On macOS, open it from the Plugins page (Open as app), then keep it in the Dock.' };
 }
 
 function createTray(): void {
@@ -222,7 +292,7 @@ function handleDeepLink(argv: string[]): void {
   if (link) { ctx.reveal(); ctx.emit('deeplink:open', link); }
 }
 
-app.on('second-instance', (_e, argv) => { ctx.reveal(); handleDeepLink(argv); });
+app.on('second-instance', (_e, argv) => { const f = focusArg(argv); if (f) { openPluginWindow(f); return; } ctx.reveal(); handleDeepLink(argv); });
 
 app.whenReady().then(async () => {
   nativeTheme.themeSource = prefs.get().theme === 'dark' ? 'dark' : prefs.get().theme === 'light' ? 'light' : 'system';
@@ -250,6 +320,8 @@ app.whenReady().then(async () => {
   createWindow();
   createTray();
   handleDeepLink(process.argv);
+  const startFocused = focusArg(process.argv);
+  if (startFocused) openPluginWindow(startFocused);
   // Plugin folders loaded in the app: an edit refreshes the plugin's pages and reloads its server code.
   ctx.devWatch = new DevWatch({
     dirs: devPluginDirs,
@@ -264,7 +336,7 @@ app.whenReady().then(async () => {
     try {
       fs.watch(ctx.paths.rendererDir, { recursive: true }, () => {
         clearTimeout(timer);
-        timer = setTimeout(() => mainWindow?.webContents.reloadIgnoringCache(), 300);
+        timer = setTimeout(() => { for (const w of [mainWindow, ...pluginWindows.values()]) if (w && !w.isDestroyed()) w.webContents.reloadIgnoringCache(); }, 300);
       });
     } catch { /* no recursive watch here: reload by hand (Ctrl+R) */ }
   }

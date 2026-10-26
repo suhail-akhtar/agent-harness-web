@@ -11,7 +11,7 @@
 
 import { GlobalEvents, sessionEvents, type Fetch } from './events.ts';
 import {
-  isPending, PENDING_KINDS, type Approval, type FileTree, type SearchHit, type Attachment, type CatalogueEntry, type Config, type Capabilities, type ContextBreakdown, type LiveProviderModels, type EffectiveSetting, type Effort, type FileContent, type FileEntry,
+  isPending, PENDING_KINDS, type Approval, type FileTree, type SearchHit, type Attachment, type CatalogueEntry, type PluginReview, type Config, type Capabilities, type ContextBreakdown, type LiveProviderModels, type EffectiveSetting, type Effort, type FileContent, type FileEntry,
   type GitLogEntry, type GitStatus, type Health, type HarnessEvent, type HistoryPage, type McpBundle, type Me, type Mode, type ModelInfo, type PendingRequest, type PluginInfo,
   type ProviderInfo, type ProviderTest, type Schedule, type SessionDetail, type SessionMeta, type SessionsPage, type TaskView, type VaultEntry, type VersionInfo, type WorkflowInfo, type WorkflowRunView,
   type ArtifactContent, type ArtifactMeta, type Proposal, type TraceSpan,
@@ -272,6 +272,10 @@ export class HarnessClient {
     uninstall: (name: string, o: { deleteData?: boolean } = {}) => this.request<{ ok: boolean; dataKept?: boolean }>('DELETE', `/api/plugins/${encodeURIComponent(name)}`, { deleteData: o.deleteData === true }),
     catalogue: () => this.get<CatalogueEntry[] | { plugins: CatalogueEntry[] }>('/api/plugins/catalogue').then((r) => (Array.isArray(r) ? r : r.plugins ?? [])),
     install: (name: string) => this.post<{ name: string; version: string }>('/api/plugins/install', { name }),
+    /** A deep review: one the server has (`name`), or a folder (`dir`, a server on this computer only). Runs its code and tests in a child process. */
+    review: (o: { name?: string; dir?: string; tests?: boolean }) => this.post<PluginReview>('/api/plugins/review', o),
+    /** Loads a plugin's code again (it changed), or a folder for the first time (`dir`, a server on this computer only). */
+    reload: (name: string, dir?: string) => this.post<PluginInfo>(`/api/plugins/${encodeURIComponent(name)}/reload`, dir ? { dir } : {}),
     /** The URL of a plugin's UI file on the engine (main proxies harness://app/plugins/<name>/<path> to it). */
     uiFile: (name: string, file: string) => `${this.base}/api/plugins/${encodeURIComponent(name)}/ui/${file.split('/').map(encodeURIComponent).join('/')}`,
     /** A plugin's own server route. */

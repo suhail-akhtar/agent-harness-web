@@ -175,16 +175,28 @@ test('keybindings: parse, match, record and show chords; Mod is Ctrl or Cmd', ()
   assert.deepEqual(conflicts([{ id: 'a', keys: 'Ctrl+K' }, { id: 'b', keys: 'Mod+K' }, { id: 'c', keys: 'Ctrl+J' }], 'win32').map((c) => c.ids), [['a', 'b']]);
 });
 
-test('registry: an added plugin without a menu of its own lands in the Custom group; built-ins and menu-owning plugins do not', () => {
+test('registry: plugins the person added go under Custom (a menu of their own nested), built-ins and shipped ones keep their place; a focused window puts its plugin first', () => {
   const chat = native('core.chat', { navItems: [{ id: 'new', title: 'New chat', view: 'home' }], views: [{ id: 'home', title: 'Home', kind: 'native', component: 'Home' }] });
   const habits = third('habits', { contributes: { navItems: [{ id: 'today', title: 'Habits', view: 'today' }], views: [{ id: 'today', title: 'Habits', kind: 'markdown', markdown: '# h' }] } }, { source: 'dev' });
-  const studio = third('studio', { menu: { title: 'Studio', items: ['a', 'b'] }, contributes: { navItems: [{ id: 'a', title: 'A', view: 'a' }, { id: 'b', title: 'B', view: 'a' }], views: [{ id: 'a', title: 'A', kind: 'markdown', markdown: 'a' }] } });
-  const r = buildRegistry([chat, habits, studio]);
+  const desk = third('desk', { displayName: 'Desk', menu: { items: ['tickets', { id: 'people', title: 'People', view: 'people' }] }, contributes: { navItems: [{ id: 'tickets', title: 'Tickets', view: 'tickets' }], views: [{ id: 'tickets', title: 'Tickets', kind: 'markdown', markdown: 't' }, { id: 'people', title: 'People', kind: 'markdown', markdown: 'p' }] } });
+  const studio = third('studio', { menu: { title: 'Studio', items: ['a', 'b'] }, contributes: { navItems: [{ id: 'a', title: 'A', view: 'a' }, { id: 'b', title: 'B', view: 'a' }], views: [{ id: 'a', title: 'A', kind: 'markdown', markdown: 'a' }] } }, { source: 'bundled' });
+  const r = buildRegistry([chat, habits, desk, studio]);
   const custom = r.groups.find((g) => g.plugin === 'custom');
   assert.ok(custom, 'a Custom group');
   assert.equal(custom.title, 'Custom');
-  assert.deepEqual(custom.items.map((e) => e.qid), ['habits:today']);
+  assert.deepEqual(custom.items.map((e) => e.qid).sort(), ['desk:menu', 'habits:today']);
+  const deskEntry = custom.items.find((e) => e.qid === 'desk:menu')!;
+  assert.deepEqual([deskEntry.title, deskEntry.children.map((c) => c.qid)], ['Desk', ['desk:tickets', 'desk:people']], 'its pages under it');
+  assert.equal(r.navItems.find((n) => n.qid === 'desk:people')!.group, 'custom');
+  assert.equal(r.groups.some((g) => g.plugin === 'desk'), false, 'not a group of its own');
   assert.equal(r.navItems.find((n) => n.qid === 'core.chat:new')!.group, undefined, 'built-ins stay at the top');
-  assert.equal(r.navItems.find((n) => n.qid === 'studio:a')!.group, 'studio', 'a plugin with its own menu keeps it');
+  assert.equal(r.navItems.find((n) => n.qid === 'studio:a')!.group, 'studio', 'a shipped plugin keeps its own group');
   assert.equal(buildRegistry([chat]).groups.some((g) => g.plugin === 'custom'), false, 'no Custom group with nothing added');
+
+  const focused = buildRegistry([chat, habits, desk, studio], { focus: 'desk' });
+  assert.equal(focused.groups[0]!.plugin, 'desk', 'the focused plugin is the first group');
+  assert.deepEqual(focused.groups[0]!.items.map((e) => e.qid), ['desk:tickets', 'desk:people']);
+  assert.deepEqual(focused.groups.find((g) => g.plugin === 'custom')!.items.map((e) => e.qid), ['habits:today'], 'the others stay under Custom');
+  const single = buildRegistry([chat, habits, desk], { focus: 'habits' });
+  assert.deepEqual([single.groups[0]!.plugin, single.groups[0]!.items.map((e) => e.qid)], ['habits', ['habits:today']], 'one page is a group too, when focused');
 });

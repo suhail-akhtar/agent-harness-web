@@ -62,7 +62,14 @@ export const desktop = {
   /** force: shown even while the window is in front (an agent's desktop_notify). */
   notify: (n: { title: string; body?: string; route?: string; force?: boolean }) => invoke<boolean>('notify:show', n).catch(() => false),
   devPlugins: () => invoke<DevPluginInfo[]>('plugins:dev').catch(() => [] as DevPluginInfo[]),
-  addDevPlugin: () => invoke<DevPluginInfo[] | null>('plugins:devAdd'),
+  pickPluginFolder: () => invoke<string | null>('plugins:pickFolder'),
+  /** Opens a plugin as its own app: a window focused on it (every core service and plugin still there). */
+  openPluginWindow: (name: string) => invoke<void>('win:openPlugin', name),
+  /** Shows the main window (from a window focused on a plugin). */
+  revealMain: () => invoke<void>('win:revealMain'),
+  /** A shortcut on the desktop (and the Start menu on Windows) that opens the app focused on the plugin. */
+  pluginShortcut: (name: string, title: string) => invoke<{ ok: boolean; path?: string; reason?: string }>('plugins:shortcut', name, title),
+  addDevPlugin: (dir?: string) => invoke<DevPluginInfo[] | null>('plugins:devAdd', ...(dir ? [dir] : [])),
   removeDevPlugin: (dir: string) => invoke<DevPluginInfo[]>('plugins:devRemove', dir),
   toggleDevPlugin: (name: string, on: boolean) => invoke<DevPluginInfo[]>('plugins:devToggle', name, on),
   grants: () => invoke<Grants>('grants:get').catch(() => ({} as Grants)),

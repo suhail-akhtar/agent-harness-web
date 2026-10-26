@@ -15,6 +15,7 @@ import { useApp } from '../../state/app';
 import { desktop } from '../../bridge';
 import { CAPABILITY_TEXT, decide } from '@desk/grants';
 import type { PluginEntry } from '../../registry/registry';
+import { ReviewModal } from './Review';
 
 function PluginsPage() {
   const plugins = useData((s) => s.registry.plugins);
@@ -42,6 +43,7 @@ function PluginCard({ p }: { p: PluginEntry }) {
   const conflicts = useData((s) => s.registry.conflicts).filter((c) => c.ids.slice(1).some((id) => id === p.name || id.startsWith(`${p.name}:`)));
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
   const builtin = p.source === 'builtin';
   const required = !!p.required || (useApp.getState().info?.product.plugins.required ?? []).includes(p.name);
   const declared = (p.ui?.capabilities ?? []) as Capability[];
@@ -100,8 +102,12 @@ function PluginCard({ p }: { p: PluginEntry }) {
         <button type="button" className="text-[12px] text-hx-muted hover:text-hx-primary" onClick={() => setOpen(!open)}>{open ? 'Less' : 'Details'}</button>
         <div className="flex-1" />
         {decision?.state === 'granted' && <Button size="sm" variant="ghost" onClick={() => void desktop.revokeGrant(p.name).then(() => useData.getState().refreshPlugins())}>Revoke access</Button>}
+        {p.enabled && !builtin && (p.ui?.contributes.views.length ?? 0) > 0 && <Button size="sm" variant="ghost" icon="external" data-open-app={p.name} onClick={() => void desktop.openPluginWindow(p.name)}>Open as app</Button>}
+        {p.enabled && !builtin && (p.ui?.contributes.views.length ?? 0) > 0 && <Button size="sm" variant="ghost" icon="pin" data-shortcut={p.name} onClick={() => void desktop.pluginShortcut(p.name, p.ui?.displayName ?? p.name).then((r) => toast(r.ok ? `A shortcut to ${p.ui?.displayName ?? p.name} is on your desktop` : r.reason ?? 'No shortcut', { kind: r.ok ? 'success' : 'info' }))}>Desktop shortcut</Button>}
+        {!builtin && p.source !== 'bundled' && me?.role === 'admin' && <Button size="sm" variant="ghost" icon="shield" data-review={p.name} onClick={() => setReviewing(true)}>Review</Button>}
         {p.source === 'installed' && me?.role === 'admin' && <Button size="sm" variant="ghost" icon="trash" data-uninstall={p.name} onClick={() => { setDeleteData(false); setRemoving(true); }}>Uninstall</Button>}
       </div>
+      {reviewing && <ReviewModal target={p.source === 'dev' ? { dir: (useData.getState().devPlugins.find((d) => d.name === p.name)?.dir) ?? '', title: p.ui?.displayName ?? p.name } : { name: p.name, title: p.ui?.displayName ?? p.name }} onClose={() => setReviewing(false)} />}
       <Modal open={removing} onClose={() => setRemoving(false)} title={`Uninstall ${p.ui?.displayName ?? p.name}?`} size="sm" label="Uninstall plugin"
         footer={<><Button variant="ghost" onClick={() => setRemoving(false)}>Cancel</Button><Button variant="danger" data-confirm-uninstall onClick={() => void uninstall()}>Uninstall</Button></>}>
         <div className="space-y-3 text-[13px] text-hx-secondary" data-uninstall-dialog={p.name}>
@@ -143,16 +149,21 @@ function Catalogue() {
 
 function Developer() {
   const dev = useData((s) => s.devPlugins);
-  const add = () => void desktop.addDevPlugin().then(() => useData.getState().refreshPlugins()).catch((e: Error) => toast(e.message, { kind: 'error' }));
+  const [reviewing, setReviewing] = useState<{ dir?: string; name?: string; title: string; load?: boolean } | null>(null);
+  // A folder is reviewed before it is loaded: the person sees what it adds and what is wrong with it, then loads it (or not).
+  const add = () => void desktop.pickPluginFolder().then((dir) => { if (dir) setReviewing({ dir, title: dir.split(/[\/]/).pop() ?? dir, load: true }); }).catch((e: Error) => toast(e.message, { kind: 'error' }));
+  const load = async (dir: string) => { await desktop.addDevPlugin(dir); await useData.getState().refreshPlugins(); toast('Plugin loaded: it is under Custom in the sidebar', { kind: 'success' }); };
   return (
     <div data-dev-plugins>
-      <p className="mb-3 text-[13px] text-hx-secondary">Load a plugin from a folder on this computer while you build it: its pages run in sandboxed frames (asking for access like any other), and its server code (tools, routes, skills) runs in this app's engine, which restarts to load it.</p>
-      <Button icon="folder-plus" onClick={add}>Load a plugin folder…</Button>
+      <p className="mb-3 text-[13px] text-hx-secondary">Load a plugin from a folder on this computer: it is reviewed first (its manifest, tools, routes, pages, permissions, code and tests), then loaded whole. Its pages run in sandboxed frames (asking for access like any other); its server code (tools, routes, skills) runs in this app's engine. Edits reload as you save. New plugin: <code>npm run plugin -- new my-plugin</code>, or ask an agent to build one (the build-a-plugin skill).</p>
+      <Button icon="folder-plus" onClick={add} data-load-plugin-folder>Load a plugin folder…</Button>
+      {reviewing && <ReviewModal target={reviewing} onClose={() => setReviewing(null)} {...(reviewing.load && reviewing.dir ? { onLoad: () => load(reviewing.dir!) } : {})} />}
       <div className="mt-3 space-y-2">
         {dev.map((d) => (
           <div key={d.dir} className="flex items-center gap-2 rounded-lg border border-hx-border-subtle p-2.5 text-[13px]">
             <Icon name="code" size={15} className="text-hx-muted" /><span className="font-medium">{d.name}</span><span className="min-w-0 flex-1 truncate text-[11.5px] text-hx-muted">{d.dir}</span>
             {d.uiError && <Badge tone="danger">UI error</Badge>}
+            <Button size="sm" variant="ghost" icon="shield" onClick={() => setReviewing({ dir: d.dir, title: d.name })}>Review</Button>
             <Button size="sm" variant="ghost" onClick={() => void desktop.removeDevPlugin(d.dir).then(() => useData.getState().refreshPlugins())}>Remove</Button>
           </div>
         ))}

@@ -190,6 +190,15 @@ export interface PluginInfo {
   guide?: { purpose: string };
 }
 export interface CatalogueEntry { name: string; version: string; description?: string; installed?: boolean; url?: string }
+/** A deep review of a plugin (POST /api/plugins/review; src/plugins/review.ts). */
+export interface PluginReviewFinding { level: 'error' | 'warning' | 'info'; area: string; message: string; fix?: string }
+export interface PluginReview {
+  ok: boolean; score: number; plugin: string; version: string; dir: string;
+  adds: { tools: string[]; skills: string[]; agents: string[]; workflows: string[]; gates: string[]; routes: string[]; pages: number };
+  findings: PluginReviewFinding[];
+  tests?: { files: number; passed: boolean; output: string };
+  durationMs: number;
+}
 
 export interface FileEntry { name?: string; path: string; size?: number; mtime?: number; type?: 'file' | 'dir'; heavy?: boolean; symlink?: boolean; children?: FileEntry[] }
 export interface FileTree { path: string; entries: FileEntry[]; truncated?: boolean }

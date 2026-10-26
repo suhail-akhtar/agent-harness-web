@@ -4,14 +4,15 @@
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
+import { create } from 'zustand';
 import { cx, Icon, IconButton, Menu, ResizeHandle, Tooltip, toast, Input, useResizable } from '@harness/ui';
 import type { SessionMeta } from '@harness/client';
-import { useApp, navigate, openSession } from '../state/app';
+import { useApp, navigate, openSession, FOCUS } from '../state/app';
 import { useData, client } from '../state/data';
 import { interpolate, isHomeRoute, type MenuGroup, type NavItem } from '../registry/registry';
 import { formatChord } from '../registry/keybindings';
 import { runCommand } from '../registry/actions';
-import { platform } from '../bridge';
+import { desktop, platform } from '../bridge';
 import { ProductMark } from '../components/ProductMark';
 import { SIDEBAR_PANE } from '../state/layout';
 
@@ -23,6 +24,7 @@ export function Sidebar({ collapsed: forced, onToggle }: { collapsed?: boolean; 
   const collapsed = pane.collapsed;
   const registry = useData((s) => s.registry);
   const info = useApp((s) => s.info);
+  const focused = FOCUS ? registry.plugins.find((p) => p.name === FOCUS) : undefined;
   const [moreOpen, setMoreOpen] = useState(false);
   // Items a plugin's menu shows are drawn in its group, not at the top level.
   const top = registry.navItems.filter((n) => !n.group);
@@ -33,7 +35,15 @@ export function Sidebar({ collapsed: forced, onToggle }: { collapsed?: boolean; 
   return (
     <aside ref={pane.paneRef} id={pane.paneId} data-sidebar data-collapsed={collapsed ? '1' : '0'} className="relative flex h-full shrink-0 flex-col border-r border-hx-border-subtle bg-hx-sidebar" style={pane.paneStyle}>
       <div className="app-drag flex h-10 shrink-0 items-center gap-2 px-3">
-        {!collapsed && <span className="flex items-center gap-2 text-[14px] font-semibold tracking-tight text-hx-primary"><Logo />{info?.product.brand.wordmark ?? info?.product.name ?? 'Harness'}</span>}
+        {!collapsed && !focused && <span className="flex items-center gap-2 text-[14px] font-semibold tracking-tight text-hx-primary"><Logo />{info?.product.brand.wordmark ?? info?.product.name ?? 'Harness'}</span>}
+        {!collapsed && focused && (
+          // A window focused on one plugin: its name and icon; the full app is a click away.
+          <span data-focus-header={FOCUS} className="flex min-w-0 items-center gap-2 text-[14px] font-semibold tracking-tight text-hx-primary">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-hx-accent-soft text-hx-accent-text"><Icon name={focused.ui?.icon ?? 'puzzle'} size={14} /></span>
+            <span className="truncate">{focused.ui?.displayName ?? focused.name}</span>
+          </span>
+        )}
+        {!collapsed && focused && <IconButton className="app-no-drag" icon="apps" size="sm" label={`Open ${info?.product.name ?? 'Harness'}: everything, not only ${focused.ui?.displayName ?? focused.name}`} onClick={() => void desktop.revealMain()} />}
         <div className="flex-1" />
         <IconButton className="app-no-drag" icon="sidebar" size="sm" label={collapsed ? 'Expand the sidebar' : 'Collapse the sidebar'} onClick={onToggle ?? (() => useApp.getState().setPrefs({ sidebar: { ...prefs.sidebar, collapsed: !collapsed } }))} />
       </div>
@@ -86,6 +96,7 @@ function NavRow({ item, collapsed, indent, depth = 0 }: { item: NavItem; collaps
 
 /** Folds or unfolds a group; remembered on this computer. */
 function setFolded(plugin: string, folded: boolean) {
+  if (FOCUS) { useFocusFolds.setState((s) => ({ folded: { ...s.folded, [plugin]: folded } })); return; }
   const p = useApp.getState().prefs;
   useApp.getState().setPrefs({ menus: { ...p.menus, collapsed: { ...p.menus.collapsed, [plugin]: folded } } });
 }
@@ -105,8 +116,13 @@ export function moveGroup(plugin: string, to: -1 | 1 | { before: string }) {
 
 function useFolded(g: MenuGroup): boolean {
   const mine = useApp((s) => s.prefs.menus?.collapsed?.[g.plugin]);
+  // A window focused on one plugin: its group open, the others folded (until the person unfolds them here).
+  const here = useFocusFolds((s) => s.folded[g.plugin]);
+  if (FOCUS) return g.plugin === FOCUS ? here ?? false : here ?? true;
   return mine ?? g.collapsed;
 }
+/** Folds chosen in a focused window: this window's own (the main window keeps the person's). */
+const useFocusFolds = create<{ folded: Record<string, boolean> }>(() => ({ folded: {} }));
 
 /** The numbers of a folded group's items, added up (a folded group still says something is waiting). */
 function groupCount(g: MenuGroup, badges: Record<string, unknown>): number {

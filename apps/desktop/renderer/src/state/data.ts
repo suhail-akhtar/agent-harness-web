@@ -11,7 +11,7 @@ import { validateUiManifest } from '@harness/plugin-ui';
 import { toast, DECLARED_FENCES } from '@harness/ui';
 import { buildRegistry, type PluginEntry, type Registry } from '../registry/registry';
 import { desktop, platform, type DevPluginInfo } from '../bridge';
-import { useApp } from './app';
+import { FOCUS, useApp } from './app';
 import type { Grants } from '@desk/grants';
 
 /** The engine through the harness:// proxy (main adds the token). */
@@ -81,7 +81,7 @@ export const useData = create<DataState>((set, get) => ({
     const product = info?.product;
     const server: PluginEntry[] = get().serverPlugins.filter((p) => !builtins.some((b) => b.name === p.name)).map((p) => ({ name: p.name, version: p.version, description: p.description, source: p.source ?? 'bundled', enabled: p.enabled, required: p.required, ui: p.ui, uiError: p.uiError, uiHash: p.uiHash, ...(p.guide ? { guideInfo: p.guide } : {}), ...(p.contributes ? { contributes: p.contributes } : {}) }));
     const dev: PluginEntry[] = get().devPlugins.filter((d) => !server.some((s) => s.name === d.name)).map((d) => ({ name: d.name, version: d.version, description: d.description, source: 'dev', enabled: d.enabled, ui: d.ui, uiError: d.uiError, uiHash: d.uiHash }));
-    const registry = buildRegistry([...builtinEntries(), ...server, ...dev], { navOrder: product?.nav.order, homeCards: product?.home.cards, keybindings: prefs.keybindings, required: product?.plugins.required, platform, menuOrder: prefs.menus?.order });
+    const registry = buildRegistry([...builtinEntries(), ...server, ...dev], { navOrder: product?.nav.order, homeCards: product?.home.cards, keybindings: prefs.keybindings, required: product?.plugins.required, platform, menuOrder: prefs.menus?.order, ...(FOCUS ? { focus: FOCUS } : {}) });
     set({ registry });
   },
   upsertSession(m) {
