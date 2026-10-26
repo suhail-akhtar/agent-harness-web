@@ -146,7 +146,7 @@ function Developer() {
   const add = () => void desktop.addDevPlugin().then(() => useData.getState().refreshPlugins()).catch((e: Error) => toast(e.message, { kind: 'error' }));
   return (
     <div data-dev-plugins>
-      <p className="mb-3 text-[13px] text-hx-secondary">Load a plugin's UI from a folder on this computer while you build it. Only its UI half runs here (in a sandboxed frame, asking for access like any other); install it on the server for its tools and routes.</p>
+      <p className="mb-3 text-[13px] text-hx-secondary">Load a plugin from a folder on this computer while you build it: its pages run in sandboxed frames (asking for access like any other), and its server code (tools, routes, skills) runs in this app's engine, which restarts to load it.</p>
       <Button icon="folder-plus" onClick={add}>Load a plugin folder…</Button>
       <div className="mt-3 space-y-2">
         {dev.map((d) => (

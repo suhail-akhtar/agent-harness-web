@@ -69,7 +69,10 @@ const local = new EngineHost({
   env: () => {
     // The person is this engine's operator: their spend limit (Settings > Application) is the engine's.
     const limit = prefs.get().spendLimitUsd;
-    return { HARNESS_HOME: home.layout.home, HARNESS_DATA: home.dataDir, HARNESS_LOCAL_ROOTS: localRoots().join(path.delimiter), HARNESS_DESKTOP: '1', ...(typeof limit === 'number' && limit >= 0 ? { HARNESS_MAX_COST_USD: String(limit) } : {}) };
+    // A plugin folder loaded in the app with server code (tools, routes) runs in this engine too: its page can call its routes.
+    const withCode = devPluginDirs().filter((d) => { try { return !!JSON.parse(fs.readFileSync(path.join(d, 'harness-plugin.json'), 'utf8')).main; } catch { return false; } });
+    const plugins = [...(process.env.HARNESS_PLUGINS ?? '').split(path.delimiter).filter(Boolean), ...withCode].join(path.delimiter);
+    return { ...(plugins ? { HARNESS_PLUGINS: plugins } : {}), HARNESS_HOME: home.layout.home, HARNESS_DATA: home.dataDir, HARNESS_LOCAL_ROOTS: localRoots().join(path.delimiter), HARNESS_DESKTOP: '1', ...(typeof limit === 'number' && limit >= 0 ? { HARNESS_MAX_COST_USD: String(limit) } : {}) };
   },
 });
 let engine: Engine = local;

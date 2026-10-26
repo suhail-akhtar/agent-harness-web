@@ -26,6 +26,11 @@ import type { RemoteServer } from '../shared/prefs';
 
 const SAFE_EXTERNAL = /^(https?:\/\/|mailto:)/i;
 
+/** The plugin folder has server code (a "main"): its tools and routes run in the engine. */
+function hasServerCode(dir: string): boolean {
+  try { return !!JSON.parse(fs.readFileSync(path.join(dir, 'harness-plugin.json'), 'utf8')).main; } catch { return false; }
+}
+
 export function registerIpc(ctx: DesktopContext): { grants: JsonFile<Grants> } {
   const h = ctx.handle;
 
@@ -118,15 +123,17 @@ export function registerIpc(ctx: DesktopContext): { grants: JsonFile<Grants> } {
   h('plugins:dev', () => ctx.devPlugins.load());
   h('plugins:devAdd', async () => {
     const w = ctx.window();
-    const r = w ? await dialog.showOpenDialog(w, { title: 'Load a plugin folder (UI only)', properties: ['openDirectory'] }) : null;
+    const r = w ? await dialog.showOpenDialog(w, { title: 'Load a plugin folder', properties: ['openDirectory'] }) : null;
     const dir = r && !r.canceled ? r.filePaths[0] : undefined;
     if (!dir) return null;
     if (!fs.existsSync(path.join(dir, 'harness-plugin.json'))) throw new Error('That folder has no harness-plugin.json.');
     const p = ctx.prefs.get();
     if (!p.devPlugins.includes(dir)) ctx.prefs.set({ devPlugins: [...p.devPlugins, dir] });
+    // Server code (tools, routes): the engine loads it on its next start, so it restarts now.
+    if (hasServerCode(dir)) await ctx.engine().restart();
     return ctx.devPlugins.load();
   });
-  h('plugins:devRemove', (dir: string) => { ctx.prefs.set({ devPlugins: ctx.prefs.get().devPlugins.filter((d) => d !== dir) }); return ctx.devPlugins.load(); });
+  h('plugins:devRemove', async (dir: string) => { ctx.prefs.set({ devPlugins: ctx.prefs.get().devPlugins.filter((d) => d !== dir) }); if (hasServerCode(dir)) await ctx.engine().restart(); return ctx.devPlugins.load(); });
   h('plugins:devToggle', (name: string, on: boolean) => {
     const d = new Set(ctx.prefs.get().disabledPlugins);
     if (on) d.delete(name); else d.add(name);

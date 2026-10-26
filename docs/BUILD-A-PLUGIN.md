@@ -250,9 +250,10 @@ HarnessPluginUI.connect().then(async (harness) => {
   settings sections from a JSON Schema, renderers for a code-fence language, home cards, status
   items, themes and prompts. See DESIGN.md section 4.
 
-While you work on the page, **Plugins > Load a plugin folder…** in the desktop app loads only its
-UI half from your folder and reloads it as you edit. The server half (tools, routes) still comes
-from `~/.harness/plugins` or `HARNESS_PLUGINS`.
+The quickest way to try it in the desktop app: **Plugins > Developer > Load a plugin folder…**. The
+app loads the whole plugin from your folder: its pages (reloaded as you edit) and its server code
+(tools, routes, skills), for which its engine restarts. To share it, copy the folder to
+`~/.harness/plugins` (or point `HARNESS_PLUGINS` at it on a server).
 
 ## 6. More you can add
 
