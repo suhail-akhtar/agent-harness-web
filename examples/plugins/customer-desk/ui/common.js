@@ -40,8 +40,8 @@ function newTicketDialog(harness) {
           try {
             const r = await harness.routes.call('tickets', { method: 'POST', body: v });
             void harness.notify.toast(`Opened ${r.ticket.id}`, { kind: 'success' });
+            resolve(r.ticket);   // before close(): closing resolves with nothing (a cancel)
             d.close();
-            resolve(r.ticket);
           } catch (e) { void harness.notify.toast(e.message, { kind: 'error' }); }
         },
       }),

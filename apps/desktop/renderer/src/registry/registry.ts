@@ -313,7 +313,7 @@ export function groupOf(r: Registry, view: string): MenuGroup | undefined {
   const plugin = view.slice(0, Math.max(0, view.indexOf(':')));
   const flat = (g: MenuGroup) => g.items.flatMap((e) => [e, ...e.children]);
   const g = r.groups.find((x) => flat(x).some((e) => e.view === view)) ?? r.groups.find((x) => x.plugin === plugin);
-  return g?.plugin === CUSTOM_GROUP ? menuOf(r, plugin) : g;
+  return g && g.plugin !== CUSTOM_GROUP ? g : menuOf(r, plugin);
 }
 
 /** Whether a route is a plugin's home (the generated one names its plugin in params). */

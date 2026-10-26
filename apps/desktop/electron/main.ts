@@ -221,7 +221,12 @@ function openPluginWindow(name: string): void {
   const home = `${APP_ORIGIN}/?focus=${encodeURIComponent(name)}`;
   pluginWindows.set(name, w);
   guardWindow(w, home);
-  w.once('ready-to-show', () => { if (quiet) w.showInactive(); else if (!process.env.HARNESS_DESKTOP_HIDDEN) w.show(); });
+  // In front when it opens (from a shortcut the app may be in the background: Windows lets it take focus only so).
+  w.once('ready-to-show', () => { if (quiet) w.showInactive(); else if (!process.env.HARNESS_DESKTOP_HIDDEN) {
+    w.show(); app.focus({ steal: true }); w.focus();
+    // Windows keeps a window a background process opens behind the others: on top for a moment brings it forward.
+    if (!w.isFocused()) { w.setAlwaysOnTop(true); w.focus(); setTimeout(() => { if (!w.isDestroyed()) w.setAlwaysOnTop(false); }, 300); }
+  } });
   w.on('focus', () => w.webContents.send('win:focus', true));
   w.on('blur', () => w.webContents.send('win:focus', false));
   w.on('maximize', () => w.webContents.send('win:maximized', true));

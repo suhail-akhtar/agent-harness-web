@@ -188,6 +188,9 @@ test('breadcrumbs read Plugin > Page (the plugin links to its home); the palette
   // Under Custom: "Plugin › Page", never "Custom › ...".
   assert.equal(paletteTitle(r, nav('acme-notes:board')), 'Acme Notes › Board');
   assert.equal(paletteTitle(r, nav('quick-links:links')), 'quick-links › Links');
+  // A page of an added plugin that no item opens (a ticket of a list): Plugin > Page, its menu's title.
+  const archive = crumbsFor(r, { view: 'acme-notes:archive' }, null);
+  assert.equal(archive.parent?.label, 'Acme Notes');
 });
 
 test('prefs: the groups\' order and folded state are remembered, cleaned', () => {
