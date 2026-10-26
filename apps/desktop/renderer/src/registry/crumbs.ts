@@ -7,7 +7,7 @@
  */
 
 import { GENERATED_HOME_VIEW } from '@harness/plugin-ui';
-import { groupOf, isHomeRoute, type Registry } from './registry.ts';
+import { groupOf, isHomeRoute, menuOf, type Registry } from './registry.ts';
 
 export interface CrumbRoute { view: string; params?: Record<string, string> }
 export interface CrumbHint { view: string; title?: string; parent?: { label: string; route?: CrumbRoute } }
@@ -21,7 +21,7 @@ export function crumbsFor(registry: Registry, route: CrumbRoute, crumb: CrumbHin
   const own = crumb && crumb.view === route.view ? crumb : null;
   if (route.view === GENERATED_HOME_VIEW) {
     const plugin = route.params?.plugin ?? '';
-    const g = registry.groups.find((x) => x.plugin === plugin);
+    const g = menuOf(registry, plugin);
     return { title: title ?? g?.title ?? registry.active.find((p) => p.name === plugin)?.ui?.displayName ?? plugin };
   }
   const group = view ? groupOf(registry, view.qid) : undefined;

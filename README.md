@@ -275,7 +275,7 @@ The UI's **Memory** panel shows, edits and deletes what is remembered. `HARNESS_
 
 ## Plugins
 
-A plugin is a folder with `harness-plugin.json`. New to it? [Build your first plugin](docs/BUILD-A-PLUGIN.md) walks through one end to end (tools, a skill, a route and a page), and `npm run plugin -- check <dir>` loads a plugin as the server would and lists what it adds. See `examples/plugins/acme` for a working one that the test suite loads.
+A plugin is a folder with `harness-plugin.json`. **[The plugin SDK](docs/plugin-sdk/README.md)** has everything to build one, from a tool to a complete app in the desktop app: `npm run plugin -- new <name>` (a complete working plugin), `npm run plugin -- test <dir>` (its tests, on the test kit), `npm run plugin -- check <dir> --deep` (a deep review, each finding with what to do), the API, manifest, pages and UI kit references, and `examples/plugins/customer-desk` (a full app). Agents build plugins with the shipped `plugin-dev` plugin (`plugin_new`, `plugin_test`, `plugin_review`) and its `build-a-plugin` skill. New to it? [Build your first plugin](docs/BUILD-A-PLUGIN.md) walks through one end to end (tools, a skill, a route and a page). See `examples/plugins/acme` for a small one that the test suite loads.
 
 ```json
 {

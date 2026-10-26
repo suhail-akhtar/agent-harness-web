@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="harness://app/sdk/plugin-ui.css">
+<script src="harness://app/sdk/plugin-ui.js"></script>
+<script src="common.js"></script>
+<title>Tickets</title>
+</head>
+<body class="hx">
+<div id="root"></div>
+<script>
+// Every ticket: a search, the status tabs, a sortable table; a row opens the ticket. The search box is
+// drawn once (it keeps focus while typing); only the list under it is drawn again.
+deskPage(async (harness, root, onChange) => {
+  const pageSize = (await harness.settings.get('pageSize').catch(() => undefined)) || 50;
+  let q = '';
+  let timer;
+  const search = ui.h('input', { class: 'hx-input', type: 'search', 'aria-label': 'Search tickets', placeholder: 'Search tickets (words in the title, details, replies, customer)', onInput: (e) => { q = e.target.value; clearTimeout(timer); timer = setTimeout(load, 250); } });
+  const listRoot = ui.h('div');
+  ui.mount(root, ui.page({ title: 'Tickets', wide: true, actions: [ui.button('New ticket', { kind: 'primary', onClick: async () => { if (await newTicketDialog(harness)) await load(); } })] },
+    ui.h('div', { style: 'margin-bottom:12px' }, search), listRoot));
+
+  const order = ['urgent', 'high', 'normal', 'low'];
+  const view = ui.view(listRoot, { tab: 'open', data: null, error: null }, (s, set) => {
+    if (s.error) return ui.error(s.error, load);
+    if (!s.data) return ui.loading();
+    const all = s.data.tickets;
+    const contacts = new Map(s.data.contacts.map((c) => [c.id, c]));
+    const count = (st) => all.filter((t) => st === 'all' || t.status === st).length;
+    const shown = all.filter((t) => s.tab === 'all' || t.status === s.tab).slice(0, pageSize);
+    return [
+      ui.tabs([{ id: 'open', label: 'Open', count: count('open') }, { id: 'waiting', label: 'Waiting', count: count('waiting') }, { id: 'closed', label: 'Closed', count: count('closed') }, { id: 'all', label: 'All', count: all.length }], s.tab, (tab) => set({ tab })),
+      ui.table({
+        columns: [
+          { key: 'id', label: 'Id', width: '80px', sort: true, render: (t) => ui.h('span', { class: 'hx-mono' }, t.id) },
+          { key: 'title', label: 'Ticket', sort: true, render: (t) => { const c = contacts.get(t.contactId); return ui.h('div', null, ui.h('div', null, t.title), c ? ui.h('div', { class: 'hx-muted hx-small' }, `${c.name} <${c.email}>`) : null); } },
+          { key: 'priority', label: 'Priority', width: '100px', sort: (a, b) => order.indexOf(a.priority) - order.indexOf(b.priority), render: (t) => priorityBadge(t.priority) },
+          { key: 'status', label: 'Status', width: '100px', render: (t) => statusBadge(t.status) },
+          { key: 'updatedAt', label: 'Updated', width: '130px', sort: true, render: (t) => ui.h('span', { class: 'hx-muted', title: t.updatedAt }, ui.relTime(t.updatedAt)) },
+        ],
+        rows: shown,
+        onRowClick: (t) => harness.view.open('ticket', { id: t.id }),
+        empty: q ? 'No ticket matches that search.' : 'No tickets here.',
+      }),
+    ];
+  });
+  async function load() {
+    try { view.set({ data: await harness.routes.call('tickets', { query: { q } }), error: null }); } catch (e) { view.set({ error: e }); }
+  }
+  onChange(load);
+  await load();
+  // Opened from the "New support ticket" command: the form at once.
+  if (harness.params.new === '1' && await newTicketDialog(harness)) await load();
+});
+</script>
+</body>
+</html>

@@ -137,10 +137,13 @@ export async function reviewPlugin(dir: string, o: { runTests?: boolean; testTim
     if (nothing && !kit.error) add('error', 'load', 'It adds nothing: no tools, skills, agents, workflows, gates, routes, MCP servers or pages.');
 
     // ---- tools ----
+    // Named after the plugin (its whole name, or a word of it: desk_ for customer-desk), so they do not clash with other plugins'.
+    const prefixes = [m.name.replace(/[-.]/g, '_'), ...m.name.split(/[-_.]/).filter((w) => w.length > 2)].map((p) => `${p}_`);
+    const unprefixed = adds.tools.filter((n) => !prefixes.some((p) => n.startsWith(p)));
+    if (unprefixed.length) add('info', 'tools', `Tool name${unprefixed.length > 1 ? 's' : ''} not named after the plugin: ${unprefixed.join(', ')}.`, `Start them with ${prefixes[0]} (or a word of the name): it keeps them from clashing with other plugins' tools and tells the agent where they come from.`);
     for (const name of adds.tools) {
       const t = reg.tools.get(name)!;
       const where = `tool ${name}`;
-      if (!name.startsWith(m.name.replace(/-/g, '_').split(/[._]/)[0]!)) add('info', where, `Its name does not start with the plugin's (${m.name.replace(/-/g, '_')}_...).`, 'A shared prefix keeps it from clashing with other plugins\' tools and tells the agent where it comes from.');
       const d = t.spec.description ?? '';
       if (d.length < 40) add('warning', where, 'Its description is very short. The description is all an agent knows about the tool.', 'Say what it does and when to use it, in one or two sentences.');
       else if (!/\b(use|when|call|for)\b/i.test(d)) add('info', where, 'Its description does not say when to use it.', 'Add "Use when ..." so the agent picks it at the right moment.');

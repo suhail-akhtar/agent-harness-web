@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="harness://app/sdk/plugin-ui.css">
+<script src="harness://app/sdk/plugin-ui.js"></script>
+<script src="common.js"></script>
+<title>Desk queue</title>
+</head>
+<body class="hx">
+<div id="root" style="padding:12px"></div>
+<script>
+// A side panel beside a conversation or a page: the open tickets, most urgent first; one click puts a
+// ticket into the composer so the agent in this conversation can work on it.
+deskPage(async (harness, root, onChange) => {
+  const view = ui.view(root, { tickets: null, error: null }, (s) => {
+    if (s.error) return ui.error(s.error, load);
+    if (!s.tickets) return ui.loading();
+    return [
+      ui.h('div', { class: 'hx-h3' }, `Open tickets (${s.tickets.length})`),
+      ui.list(s.tickets.slice(0, 15), {
+        title: (t) => `${t.id}  ${t.title}`,
+        detail: (t) => `${t.priority} · ${ui.relTime(t.createdAt)}`,
+        right: (t) => ui.button('Ask', { size: 'sm', title: 'Put this ticket in the composer', onClick: (e) => { e.stopPropagation(); void harness.composer.prefill(`Look at support ticket ${t.id} (${t.title}) and suggest a reply.`); } }),
+        onClick: (t) => harness.view.open('ticket', { id: t.id }),
+        empty: 'Nothing open.',
+      }),
+    ];
+  });
+  async function load() {
+    try { view.set({ tickets: (await harness.routes.call('tickets', { query: { status: 'open' } })).tickets, error: null }); } catch (e) { view.set({ error: e }); }
+  }
+  onChange(load);
+  await load();
+});
+</script>
+</body>
+</html>

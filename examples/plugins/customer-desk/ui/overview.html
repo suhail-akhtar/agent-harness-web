@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="harness://app/sdk/plugin-ui.css">
+<script src="harness://app/sdk/plugin-ui.js"></script>
+<script src="common.js"></script>
+<title>Customer desk</title>
+</head>
+<body class="hx">
+<div id="root"></div>
+<script>
+// The desk's home: the counts, the most urgent open tickets, and the work handed to an agent.
+deskPage(async (harness, root, onChange) => {
+  const view = ui.view(root, { data: null, error: null }, (s) => {
+    const actions = [
+      ui.button('Triage with an agent', { onClick: () => harness.composer.prefill('Triage the open tickets on the customer desk: set priorities, and draft replies to the ones you can answer.', { newChat: true }) }),
+      ui.button('New ticket', { kind: 'primary', onClick: async () => { const t = await newTicketDialog(harness); if (t) await harness.view.open('ticket', { id: t.id }); } }),
+    ];
+    if (s.error) return ui.page({ title: 'Customer desk', actions }, ui.error(s.error, load));
+    if (!s.data) return ui.page({ title: 'Customer desk', actions }, ui.loading());
+    const { counts, recent, contacts } = s.data;
+    return ui.page({ title: 'Customer desk', subtitle: 'Tickets you and the agent work on together.', actions },
+      ui.grid({ min: 150 },
+        ui.stat({ label: 'Open', value: counts.open }),
+        ui.stat({ label: 'Urgent', value: counts.urgent, tone: counts.urgent ? 'danger' : undefined, delta: counts.urgent ? 'needs someone now' : 'none' }),
+        ui.stat({ label: 'Waiting on customers', value: counts.waiting, tone: 'warning' }),
+        ui.stat({ label: 'Closed', value: counts.closed, tone: 'success' }),
+        ui.stat({ label: 'Contacts', value: contacts })),
+      ui.section('Needs attention',
+        ui.list(recent, {
+          title: (t) => `${t.id}  ${t.title}`,
+          detail: (t) => `Opened ${ui.relTime(t.createdAt)}${t.replies.length ? ` · ${t.replies.length} repl${t.replies.length === 1 ? 'y' : 'ies'}` : ''} · from ${t.source}`,
+          right: (t) => ui.row(priorityBadge(t.priority), statusBadge(t.status)),
+          onClick: (t) => harness.view.open('ticket', { id: t.id }),
+          empty: 'Nothing open. New tickets show up here.',
+        })),
+    );
+  });
+  async function load() {
+    try { view.set({ data: await harness.routes.call('overview'), error: null }); } catch (e) { view.set({ error: e }); }
+  }
+  onChange(load);
+  await load();
+});
+</script>
+</body>
+</html>

@@ -188,10 +188,15 @@ test('registry: plugins the person added go under Custom (a menu of their own ne
   const deskEntry = custom.items.find((e) => e.qid === 'desk:menu')!;
   assert.deepEqual([deskEntry.title, deskEntry.children.map((c) => c.qid)], ['Desk', ['desk:tickets', 'desk:people']], 'its pages under it');
   assert.equal(r.navItems.find((n) => n.qid === 'desk:people')!.group, 'custom');
+  assert.deepEqual([r.navItems.find((n) => n.qid === 'desk:menu')?.group, r.navItems.find((n) => n.qid === 'desk:menu')?.title], ['custom', 'Desk'], 'the entry is a row of the sidebar too');
   assert.equal(r.groups.some((g) => g.plugin === 'desk'), false, 'not a group of its own');
   assert.equal(r.navItems.find((n) => n.qid === 'core.chat:new')!.group, undefined, 'built-ins stay at the top');
   assert.equal(r.navItems.find((n) => n.qid === 'studio:a')!.group, 'studio', 'a shipped plugin keeps its own group');
   assert.equal(buildRegistry([chat]).groups.some((g) => g.plugin === 'custom'), false, 'no Custom group with nothing added');
+  // The operator's plugins (HARNESS_PLUGINS) keep their place; one the person loaded here is theirs (Custom).
+  const ops = third('ops', { contributes: { navItems: [{ id: 'o', title: 'Ops', view: 'o' }], views: [{ id: 'o', title: 'Ops', kind: 'markdown', markdown: 'o' }] } }, { source: 'env' });
+  assert.equal(buildRegistry([chat, ops]).navItems.find((n) => n.qid === 'ops:o')!.group, undefined);
+  assert.equal(buildRegistry([chat, { ...ops, loadedHere: true }]).navItems.find((n) => n.qid === 'ops:o')!.group, 'custom');
 
   const focused = buildRegistry([chat, habits, desk, studio], { focus: 'desk' });
   assert.equal(focused.groups[0]!.plugin, 'desk', 'the focused plugin is the first group');

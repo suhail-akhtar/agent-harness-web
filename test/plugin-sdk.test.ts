@@ -122,3 +122,23 @@ HarnessPluginUI.connect().then(async (h) => { await h.routes.call('nothing-here'
   has('error', /page ui\/index\.html/, /calls the route "nothing-here", which the plugin does not register/);
   assert.equal(r.ok, false);
 });
+
+test('plugin-dev (for agents): plugin_new writes a plugin in the workspace, plugin_test runs its tests, plugin_review reviews it; the skill carries the whole reference', async () => {
+  const kit = await loadPlugin(path.join(repoRoot, 'plugins', 'plugin-dev'));
+  try {
+    assert.deepEqual(kit.adds.tools.sort(), ['plugin_new', 'plugin_review', 'plugin_test']);
+    assert.deepEqual(kit.adds.skills, ['build-a-plugin']);
+    const skill = kit.harness.registry.skillDirs.find((d) => d.source === 'plugin-dev')!;
+    for (const f of ['SKILL.md', 'API.md', 'MANIFEST.md', 'PAGES.md', 'TESTING.md', 'PATTERNS.md']) assert.ok((await fs.stat(path.join(skill.dir, 'build-a-plugin', f))).size > 1000, f);
+    const made = await kit.tool('plugin_new', { name: 'mood-log' });
+    assert.equal(made.isError, false, made.content);
+    assert.match(made.content, /Wrote \d+ files in plugins\/mood-log/);
+    assert.equal((await kit.tool('plugin_new', { name: 'mood-log' })).isError, true, 'not over an existing folder');
+    assert.equal((await kit.tool('plugin_new', { name: 'Bad Name' })).isError, true);
+    const tested = await kit.tool('plugin_test', { folder: 'plugins/mood-log' });
+    assert.match(tested.content, /^PASS .*# pass 4/, tested.content);
+    const reviewed = await kit.tool('plugin_review', { folder: 'plugins/mood-log', tests: false });
+    assert.match(reviewed.content, /^mood-log 0\.1\.0: OK \(score 100\/100/, reviewed.content);
+    assert.equal((await kit.tool('plugin_review', { folder: '../outside' })).isError, true, 'only inside the workspace');
+  } finally { await kit.close(); }
+});

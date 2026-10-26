@@ -35,7 +35,12 @@ export interface PluginEntry {
   guideInfo?: { purpose: string };
   /** Server plugins: what the loaded plugin added ("tool:name", "workflow:name" ...). */
   contributes?: string[];
+  /** A plugin folder the person loaded in this app (its server half runs in the engine, listed there as the operator's). */
+  loadedHere?: boolean;
 }
+
+/** Added by the person (installed from the catalogue, or loaded from a folder here): these go under Custom. */
+const addedByPerson = (p: PluginEntry) => p.source === 'installed' || p.source === 'dev' || !!p.loadedHere;
 
 type Q<T> = T & { qid: string; plugin: string };
 /** `group`: the plugin whose menu shows it (it is drawn there, not at the top level); `parent`: the item it is a sub-item of. */
@@ -227,10 +232,10 @@ export function buildRegistry(entries: PluginEntry[], o: RegistryOptions = {}): 
  */
 function buildMenus(r: Registry, personOrder: string[], focus?: string): void {
   const claimed = new Set<string>();
-  // Plugins the person added (installed, loaded from a folder, the operator's) go under one "Custom" group,
+  // Plugins the person added (installed from the catalogue, loaded from a folder here) go under one "Custom" group,
   // like Studio's or Dashboards': a plugin with a menu of its own as an entry with its pages under it.
   // In a window focused on one plugin (focus), that plugin is a group of its own, first.
-  const added = new Set(r.plugins.filter((p) => !isBuiltin(p) && p.source !== 'bundled' && p.name !== focus).map((p) => p.name));
+  const added = new Set(r.plugins.filter((p) => addedByPerson(p) && p.name !== focus).map((p) => p.name));
   const custom: MenuEntry[] = [];
   for (const p of r.active) {
     const ui = p.ui!;
@@ -271,6 +276,8 @@ function buildMenus(r: Registry, personOrder: string[], focus?: string): void {
       const pages = items.flatMap((e) => [{ ...e, children: [] }, ...e.children]);
       for (const e of pages) { const n = r.navItems.find((x) => x.qid === e.qid); if (n) { n.group = CUSTOM_GROUP; n.parent = `${p.name}:menu`; } }
       custom.push({ qid: `${p.name}:menu`, plugin: p.name, title, icon, view: home.view, ...(home.params ? { params: home.params } : {}), children: pages });
+      // The entry is a row of the sidebar like any page (it opens the plugin's home).
+      r.navItems.push({ id: 'menu', qid: `${p.name}:menu`, plugin: p.name, title, icon: icon as NavItem['icon'], view: home.view, ...(home.params ? { params: home.params } : {}), group: CUSTOM_GROUP });
       continue;
     }
     r.groups.push({ plugin: p.name, title, icon, order: p.name === focus ? -1 : ui.menu?.order ?? 100, collapsed: p.name === focus ? false : !!ui.menu?.collapsed, home, homeDeclared: !!declared && home.view === declared, items });
@@ -286,11 +293,27 @@ function buildMenus(r: Registry, personOrder: string[], focus?: string): void {
   r.groups.sort((a, b) => rank(a.plugin) - rank(b.plugin) || a.order - b.order || a.title.localeCompare(b.title));
 }
 
-/** The group a page belongs to: its plugin's, or the one whose items open it. */
+/**
+ * A plugin's menu as a group, wherever it sits: its own group, or its entry under Custom (an added
+ * plugin with a menu), its pages as the items. Undefined for a plugin without a menu.
+ */
+export function menuOf(r: Registry, plugin: string): MenuGroup | undefined {
+  const own = r.groups.find((g) => g.plugin === plugin);
+  if (own) return own;
+  const entry = r.groups.find((g) => g.plugin === CUSTOM_GROUP)?.items.find((e) => e.qid === `${plugin}:menu`);
+  if (!entry) return undefined;
+  const p = r.active.find((x) => x.name === plugin);
+  const home = r.homes.get(plugin) ?? { view: entry.view, ...(entry.params ? { params: entry.params } : {}) };
+  const declared = p?.ui?.home ? qualify(plugin, p.ui.home) : undefined;
+  return { plugin, title: entry.title, icon: entry.icon ?? 'puzzle', order: 900, collapsed: false, home, homeDeclared: !!declared && home.view === declared, items: entry.children.map((c) => ({ ...c, children: [] })) };
+}
+
+/** The group a page belongs to: its plugin's, or the one whose items open it (for a page under Custom, its plugin's menu). */
 export function groupOf(r: Registry, view: string): MenuGroup | undefined {
   const plugin = view.slice(0, Math.max(0, view.indexOf(':')));
   const flat = (g: MenuGroup) => g.items.flatMap((e) => [e, ...e.children]);
-  return r.groups.find((g) => flat(g).some((e) => e.view === view)) ?? r.groups.find((g) => g.plugin === plugin);
+  const g = r.groups.find((x) => flat(x).some((e) => e.view === view)) ?? r.groups.find((x) => x.plugin === plugin);
+  return g?.plugin === CUSTOM_GROUP ? menuOf(r, plugin) : g;
 }
 
 /** Whether a route is a plugin's home (the generated one names its plugin in params). */

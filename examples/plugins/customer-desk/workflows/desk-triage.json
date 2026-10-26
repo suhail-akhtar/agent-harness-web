@@ -1,0 +1,32 @@
+{
+  "name": "desk-triage",
+  "description": "Triage the open support tickets: set priorities and draft replies, a person approves, then the drafts are added to the tickets.",
+  "inputs": {
+    "focus": { "description": "Which tickets (e.g. \"urgent ones\", \"from acme.com\"); empty for every open ticket", "default": "" }
+  },
+  "start": "triage",
+  "maxAgentRuns": 4,
+  "nodes": {
+    "triage": {
+      "type": "agent",
+      "title": "Triage and draft",
+      "agent": "desk-triager",
+      "prompt": "Triage the open tickets on the customer desk (which ones, if it says: {{input.focus}}). Set priorities now, but do not add any reply yet: for each ticket that can be answered, include the draft reply in your report under its id.\nFeedback from the reviewer, if any: {{feedback}}",
+      "next": "approve"
+    },
+    "approve": {
+      "type": "approval",
+      "title": "Check the drafts",
+      "message": "Add these replies to their tickets?\n\n{{state.triage}}",
+      "next": { "on": { "approve": "add", "reject": "triage" } }
+    },
+    "add": {
+      "type": "agent",
+      "title": "Add the replies",
+      "agent": "desk-triager",
+      "prompt": "Add each approved draft reply below to its ticket with desk_ticket_update (reply, status \"waiting\"), exactly as written.\n\n{{state.triage}}",
+      "next": "done"
+    },
+    "done": { "type": "end", "title": "Triaged" }
+  }
+}

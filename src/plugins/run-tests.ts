@@ -31,8 +31,11 @@ export async function runPluginTests(dir: string, extra: string[] = [], o: { cap
     return 1;
   }
   const hook = pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), 'sdk-resolve.mjs')).href;
-  const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', '--import', hook, '--test', '--test-concurrency=1', ...extra, ...files], {
-    cwd: dir, stdio: o.capture ? ['ignore', 'pipe', 'pipe'] : 'inherit', env: { ...process.env },
+  // Its own run, whatever runs it (a test runner's NODE_TEST_CONTEXT would make it report to that one instead).
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', '--import', hook, '--test', '--test-concurrency=1', ...(o.capture ? ['--test-reporter=tap'] : []), ...extra, ...files], {
+    cwd: dir, stdio: o.capture ? ['ignore', 'pipe', 'pipe'] : 'inherit', env,
   });
   let output = '';
   child.stdout?.on('data', (c) => { output += c; });

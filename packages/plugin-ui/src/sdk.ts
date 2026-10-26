@@ -54,7 +54,8 @@ export interface Harness {
   };
   events: { subscribe(topic: string, fn: (payload: unknown) => void, filter?: Record<string, string>): Promise<() => void> };
   approvals: { list(): Promise<unknown[]>; respond(sessionId: string, requestId: string, decision: string, feedback?: string): Promise<boolean> };
-  routes: { call<T = unknown>(path: string, opts?: { method?: 'GET' | 'POST'; body?: unknown }): Promise<T> };
+  /** The plugin's own routes, as the signed-in person; `query` becomes the query string (req.query on the server). */
+  routes: { call<T = unknown>(path: string, opts?: { method?: 'GET' | 'POST'; body?: unknown; query?: Record<string, string | number | boolean> }): Promise<T> };
   files: { list(opts: { session?: string; path?: string }): Promise<unknown>; read(opts: { session?: string; path: string }): Promise<unknown> };
   workflows: { list(): Promise<unknown[]>; start(name: string, input?: Record<string, string>): Promise<unknown> };
   settings: { get<T = unknown>(key?: string): Promise<T>; set(key: string, value: unknown): Promise<void> };

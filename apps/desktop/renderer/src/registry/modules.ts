@@ -6,7 +6,7 @@
  */
 
 import { composeGuide, guideSkillName, purposeOf, qualify, type GuideSource, type IconName, type UiAction } from '@harness/plugin-ui';
-import type { MenuEntry, NavItem, PluginEntry, Registry, Route } from './registry.ts';
+import { CUSTOM_GROUP, menuOf, type MenuEntry, type NavItem, type PluginEntry, type Registry, type Route } from './registry.ts';
 
 export interface HomeAction { id: string; title: string; icon: IconName | string; kind: 'command' | 'slash' | 'prompt'; /** A command id, "/name", or a prompt's text. */ run: string; hint?: string; agent?: boolean }
 export interface HomeModel {
@@ -37,12 +37,13 @@ export function homeModel(r: Registry, plugin: string): HomeModel | undefined {
   const p = r.active.find((x) => x.name === plugin);
   if (!p?.ui) return undefined;
   const c = p.ui.contributes;
-  const group = r.groups.find((g) => g.plugin === plugin);
+  const group = menuOf(r, plugin);
   const title = group?.title ?? titleOf(p, plugin);
   const viewDesc = (qid: string) => { const v = r.views.get(qid); return v?.description; };
   const flat = (es: MenuEntry[]): MenuEntry[] => es.flatMap((e) => [e, ...e.children]);
   const fromGroup = group ? flat(group.items).map((e) => ({ id: e.qid, title: e.title, ...(e.icon ? { icon: e.icon } : {}), route: { view: e.view, ...(e.params ? { params: e.params } : {}) }, ...(viewDesc(e.view) ? { description: viewDesc(e.view) } : {}), ...(e.badge ? { badge: e.badge } : {}) })) : [];
-  const fromNav = r.navItems.filter((n) => n.plugin === plugin).map((n) => ({ id: n.qid, title: n.title, ...(n.icon ? { icon: n.icon } : {}), route: { view: n.view, ...(n.params ? { params: n.params } : {}) }, ...(viewDesc(n.view) ? { description: viewDesc(n.view) } : {}), ...(n.badge ? { badge: n.badge } : {}) }));
+  // Its entry under Custom (which opens this home) is not a page of it.
+  const fromNav = r.navItems.filter((n) => n.plugin === plugin && n.qid !== `${plugin}:menu`).map((n) => ({ id: n.qid, title: n.title, ...(n.icon ? { icon: n.icon } : {}), route: { view: n.view, ...(n.params ? { params: n.params } : {}) }, ...(viewDesc(n.view) ? { description: viewDesc(n.view) } : {}), ...(n.badge ? { badge: n.badge } : {}) }));
   const shown = new Set([...fromGroup, ...fromNav].map((x) => x.route.view));
   // Pages a person can open on their own: views no menu or nav item reaches, that take no params (not onboarding steps).
   const fromViews = c.views.filter((v) => !shown.has(`${plugin}:${v.id}`) && !/^onboard/.test(v.id) && `${plugin}:${v.id}` !== r.homes.get(plugin)?.view && v.kind !== 'native')
@@ -72,6 +73,13 @@ export function homeModel(r: Registry, plugin: string): HomeModel | undefined {
 /** How the palette names a nav item: "Plugin › Item" for an item of a group. */
 export function paletteTitle(r: Registry, n: NavItem): string {
   if (!n.group) return n.title;
+  // Under Custom: "Plugin › Page" (its menu's title), not "Custom › ...".
+  if (n.group === CUSTOM_GROUP) {
+    const m = menuOf(r, n.plugin);
+    if (n.qid === `${n.plugin}:menu`) return n.title;
+    const title = m?.title ?? r.active.find((p) => p.name === n.plugin)?.ui?.displayName ?? n.plugin;
+    return title.toLowerCase() === n.title.toLowerCase() ? n.title : `${title} › ${n.title}`;
+  }
   const g = r.groups.find((x) => x.plugin === n.group);
   if (!g) return n.title;
   const parent = n.parent ? r.navItems.find((x) => x.qid === n.parent) : undefined;

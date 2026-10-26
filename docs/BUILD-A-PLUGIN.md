@@ -8,9 +8,12 @@ This guide builds one plugin end to end, **`reading-list`**: a tool that saves l
 tool that lists them, a skill that tells the agent when to use them, and a page in the desktop app
 that shows the list. Each step says how to check it before going on.
 
-The full reference is in the [README's Plugins section](../README.md#plugins) and, for pages,
-[docs/desktop/DESIGN.md](desktop/DESIGN.md) section 4. Working examples: `examples/plugins/acme`
-(tool, gate, hook, agent, skill) and `examples/plugins/hello-frame` (route and pages).
+The quickest start is the template: `npm run plugin -- new my-plugin --dir ../my-plugin` writes a
+complete working plugin (tools, versioned data, routes, a skill, a guide, a page, tests) to change into
+yours. This guide builds one by hand so each part is clear. The whole SDK (every API, the manifest,
+pages, the test kit, patterns) is in [docs/plugin-sdk](plugin-sdk/README.md); a complete app is in
+`examples/plugins/customer-desk`. Agents build plugins with the `plugin-dev` plugin (`plugin_new`,
+`plugin_test`, `plugin_review`) and its `build-a-plugin` skill.
 
 ## 1. The folder and the manifest
 
@@ -44,19 +47,19 @@ reading-list/
 ## 2. A tool
 
 `index.mjs` exports the plugin. It imports nothing from the harness: the `api` object passed to
-`setup` has everything, so the plugin works wherever it is installed.
+`setup` has everything, so the plugin works wherever it is installed. (In TypeScript, `index.ts`, with
+`import type { PluginAPI } from '@harness/plugin-sdk'`: Node runs it as written.)
 
 ```js
-import fs from 'node:fs/promises';
-import path from 'node:path';
-
 export default {
   name: 'reading-list',
   setup(api) {
-    // The plugin's own folder on the server, outside every workspace: no agent can edit it.
-    const file = path.join(api.dataDir, 'links.json');
-    const load = async () => JSON.parse(await fs.readFile(file, 'utf8').catch(() => '[]'));
-    const save = async (links) => { await fs.mkdir(api.dataDir, { recursive: true }); await fs.writeFile(file, JSON.stringify(links, null, 2)); };
+    // The plugin's own data: a JSON document in its folder on the server (outside every workspace, so no
+    // agent can edit it), written atomically. `version` is its shape: when that changes, raise it and add
+    // a migration (migrations[2] turns version 1 into 2); old data is upgraded when first read.
+    const db = api.store('links', { version: 1, initial: () => ({ links: [] }) });
+    const load = async () => (await db.read()).links;
+    const save = async (links) => db.write({ links });
 
     api.registerTool({
       name: 'reading_list_add',
@@ -121,10 +124,13 @@ What matters in a tool:
 
 ```bash
 npm run plugin -- check path/to/reading-list
+npm run plugin -- check path/to/reading-list --deep
 ```
 
-It loads the plugin the way the server does and lists what it adds, or the problem (a manifest
-error, code that throws, a broken workflow, a bad `ui` section). Exit code 1 on a problem.
+The first loads the plugin the way the server does and lists what it adds, or the problem (a manifest
+error, code that throws, a broken workflow, a bad `ui` section). `--deep` reviews it all: tool
+descriptions and schemas, its read tools called, its routes served, its pages, permissions declared
+against used, its code and files, its tests; each finding says what to do. Exit code 1 on a problem.
 
 ## 3. A skill
 
@@ -147,10 +153,11 @@ description: Keep and recall the person's reading list. Use when they share a li
 
 ## 4. Try it in a conversation
 
-**On the desktop app:** copy the folder into `~/.harness/plugins/` (Windows:
-`%USERPROFILE%\.harness\plugins\reading-list`), then restart the engine (Settings > Application > Engine >
-Restart). The plugin appears under **Plugins**. Ask in a new chat: "save
-https://example.com/article, it explains caching well".
+**On the desktop app:** **Plugins > Developer > Load a plugin folder…** and pick the folder. It is
+reviewed first (the findings, then Load it), then loaded whole and shown under **Custom** in the
+sidebar. Ask in a new chat: "save https://example.com/article, it explains caching well". To install
+it for good, copy the folder into `~/.harness/plugins/` (Windows:
+`%USERPROFILE%\.harness\plugins\reading-list`).
 
 **On a server or from the command line:** point `HARNESS_PLUGINS` at the folder (several:
 separated by `;` on Windows, `:` elsewhere):
@@ -203,16 +210,15 @@ Add the `ui` section to `harness-plugin.json`:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="harness://app/sdk/plugin-ui.css">
 <script src="harness://app/sdk/plugin-ui.js"></script>
-<style>
-  body { font: 14px/1.5 system-ui, sans-serif; margin: 24px; background: var(--hx-bg); color: var(--hx-text-primary); }
-  a { color: var(--hx-accent-text); } .muted { color: var(--hx-text-muted); }
-  li { margin: 6px 0; }
-</style>
+<style>li { margin: 6px 0; }</style>
 </head>
-<body>
-<h1>Reading list</h1>
-<ul id="list"><li class="muted">Loading…</li></ul>
+<body class="hx">
+<main class="hx-page">
+<h1 class="hx-h1">Reading list</h1>
+<ul id="list"><li class="hx-muted">Loading…</li></ul>
+</main>
 <script>
 HarnessPluginUI.connect().then(async (harness) => {
   const list = document.getElementById('list');
@@ -220,7 +226,7 @@ HarnessPluginUI.connect().then(async (harness) => {
     const { links } = await harness.routes.call('links');
     list.replaceChildren(...(links.length ? links : [null]).map((l) => {
       const li = document.createElement('li');
-      if (!l) { li.className = 'muted'; li.textContent = 'Nothing saved yet. Ask the agent to save a link.'; return li; }
+      if (!l) { li.className = 'hx-muted'; li.textContent = 'Nothing saved yet. Ask the agent to save a link.'; return li; }
       const a = Object.assign(document.createElement('a'), { href: '#', textContent: l.url });
       a.onclick = (e) => { e.preventDefault(); harness.browser.open(l.url); };
       li.append(a, l.note ? ` - ${l.note}` : '');
@@ -237,8 +243,11 @@ HarnessPluginUI.connect().then(async (harness) => {
 ```
 
 - Icons (`icon` on the plugin, nav items, views, commands) are names from the app's set: `activity`, `alert`, `apps`, `archive`, `arrow-down`, `arrow-left`, `arrow-right`, `arrow-up`, `atom`, `bell`, `bolt`, `book`, `bookmark`, `bot`, `box`, `brain`, `bug`, `calculator`, `calendar`, `chart`, `chat`, `check`, `clock`, `cloud`, `code`, `command`, `compass`, `copy`, `cpu`, `database`, `dollar`, `download`, `edit`, `external`, `eye`, `file`, `file-text`, `files`, `filter`, `flask`, `folder`, `folder-open`, `folder-plus`, `function`, `git`, `git-branch`, `git-pr`, `globe`, `grid`, `heart`, `help`, `history`, `home`, `image`, `inbox`, `info`, `key`, `keyboard`, `layers`, `library`, `link`, `list`, `lock`, `mail`, `map`, `memory`, `monitor`, `moon`, `palette`, `panel-right`, `paperclip`, `pause`, `pin`, `play`, `plug`, `plus`, `puzzle`, `refresh`, `robot`, `rocket`, `save`, `search`, `server`, `settings`, `share`, `shield`, `sidebar`, `sparkles`, `stack`, `star`, `stop`, `sun`, `table`, `tag`, `terminal`, `trash`, `upload`, `user`, `users`, `vault`, `warning`, `workflow`, `wrench`, `x`, `zap`. An unknown name is shown as `puzzle`, and `npm run plugin -- check` warns with the nearest names.
-- The theme's colours are CSS variables (`--hx-bg`, `--hx-text-primary`, `--hx-text-muted`,
-  `--hx-accent`, `--hx-border`, ...): use them and the page follows light and dark.
+- `plugin-ui.css` is the UI kit: the app's look as classes (`hx-page`, `hx-h1`, `hx-card`, `hx-btn`,
+  `hx-table`...), and `HarnessPluginUI.ui` builds pages from components (`ui.page`, `ui.table`,
+  `ui.form`, `ui.dialog`, `ui.stat`, `ui.empty`...): see [PAGES.md](../plugins/plugin-dev/skills/build-a-plugin/PAGES.md).
+  The theme's colours are CSS variables (`--hx-bg`, `--hx-text-primary`, `--hx-accent`...): the page
+  follows light, dark and the person's accent.
 - `harness.browser.open` needs the `browser.open` capability, `events.subscribe` needs
   `events.subscribe`: add each one you call to `capabilities`.
 - What the SDK offers: `routes.call`, `sessions.list/get/start/send`, `events.subscribe`,
@@ -250,10 +259,10 @@ HarnessPluginUI.connect().then(async (harness) => {
   settings sections from a JSON Schema, renderers for a code-fence language, home cards, status
   items, themes and prompts. See DESIGN.md section 4.
 
-The quickest way to try it in the desktop app: **Plugins > Developer > Load a plugin folder…**. The
-app loads the whole plugin from your folder: its pages (reloaded as you edit) and its server code
-(tools, routes, skills), for which its engine restarts. To share it, copy the folder to
-`~/.harness/plugins` (or point `HARNESS_PLUGINS` at it on a server).
+While the folder is loaded in the desktop app, saving a file reloads it: a page edit reloads the
+page, a code edit reloads the plugin in the engine (no restart; a version that fails to load leaves the
+one before running and says why). **Open as app** on its card opens it in a window of its own. To
+share it, copy the folder to `~/.harness/plugins` (or point `HARNESS_PLUGINS` at it on a server).
 
 ## 6. More you can add
 
@@ -268,7 +277,10 @@ app loads the whole plugin from your folder: its pages (reloaded as you edit) an
 
 ## 7. Before you share it
 
-- `npm run plugin -- check <dir>` says OK.
+- Tests on the test kit (`import { loadPlugin } from '@harness/plugin-sdk/testing'`: its tools, routes
+  over HTTP, a scripted conversation), run with `npm run plugin -- test <dir>`. See
+  [TESTING.md](../plugins/plugin-dev/skills/build-a-plugin/TESTING.md).
+- `npm run plugin -- check <dir> --deep` says OK, with the findings you can fix fixed.
 - Every tool's description says when to use it; every parameter is described.
 - Errors tell the agent what to do next.
 - The plugin declares only the permissions it uses.

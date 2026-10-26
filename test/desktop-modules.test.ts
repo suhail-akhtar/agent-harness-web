@@ -4,7 +4,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { composeGuide, GENERATED_HOME_VIEW, GENERATED_MARKER, generateGuideSections, guideIndexLine, ManifestError, parseGuideMarkdown, validateUiManifest, type UiManifest } from '../packages/plugin-ui/src/index.ts';
-import { buildRegistry, type PluginEntry, type Registry } from '../apps/desktop/renderer/src/registry/registry.ts';
+import { buildRegistry, menuOf, type PluginEntry, type Registry } from '../apps/desktop/renderer/src/registry/registry.ts';
 import { crumbsFor, pageTitle } from '../apps/desktop/renderer/src/registry/crumbs.ts';
 import { describeForAgent, describePlugin, resolveOpen } from '../apps/desktop/renderer/src/registry/agent-surface.ts';
 import { guideFor, guideIndex, homeModel, paletteTitle } from '../apps/desktop/renderer/src/registry/modules.ts';
@@ -108,10 +108,11 @@ test('ui.menu: nav item refs (own or "<plugin>:<id>"), inline items with sub-ite
 
 test('registry: a plugin with a menu is a group (its items, another plugin\'s by name, sub-items), a third party\'s several nav items too; plain plugins and the core stay at the top; order: the person\'s, then the menu\'s', () => {
   const r = fullRegistry();
-  assert.deepEqual(r.groups.map((g) => g.plugin), ['core.agents', 'core.dashboards', 'sdlc', 'aiops', 'acme-notes'], 'by the menus\' order, then title');
+  assert.deepEqual(r.groups.map((g) => g.plugin), ['core.agents', 'core.dashboards', 'sdlc', 'aiops', 'custom'], 'by the menus\' order, then title; the plugins the person added under Custom, last');
   const top = r.navItems.filter((n) => !n.group).map((n) => n.qid);
   assert.deepEqual(top.slice(0, 3), ['core.chat:new', 'core.chat:search', 'core.inbox:inbox'], 'the core\'s items stay at the top level');
-  assert.ok(top.includes('quick-links:links') && top.includes('research:research'), 'a plugin with one nav item stays a single item');
+  assert.ok(top.includes('research:research'), 'a shipped plugin with one nav item stays a single item');
+  assert.deepEqual(r.groups.find((g) => g.plugin === 'custom')!.items.map((e) => e.qid), ['acme-notes:menu', 'quick-links:links'], 'added plugins: one with several pages as an entry with them under it, one page as an entry');
   const agents = r.groups.find((g) => g.plugin === 'core.agents')!;
   assert.deepEqual(agents.items.map((e) => e.qid), ['core.agents:agents', 'core.artifacts:library'], 'the Library of core.artifacts sits in the Agents module');
   assert.equal(r.navItems.find((n) => n.qid === 'core.artifacts:library')!.group, 'core.agents');
@@ -124,16 +125,16 @@ test('registry: a plugin with a menu is a group (its items, another plugin\'s by
   assert.ok(r.navItems.some((n) => n.qid === 'aiops:alerts' && n.group === 'aiops' && n.view === 'aiops:alerts'), 'inline items are nav items too (palette, desktop_open)');
   assert.deepEqual(r.groups.find((g) => g.plugin === 'sdlc')!.items.map((e) => e.view), ['sdlc:delivery', 'sdlc:start-feature', 'sdlc:quality']);
   assert.deepEqual(r.groups.find((g) => g.plugin === 'core.dashboards')!.items.map((e) => e.qid), ['core.dashboards:dashboards', 'core.dashboards:reports', 'core.dashboards:data']);
-  const acme = r.groups.find((g) => g.plugin === 'acme-notes')!;
+  const acme = menuOf(r, 'acme-notes')!;
   assert.equal(acme.title, 'Acme Notes');
   assert.deepEqual(acme.items.map((e) => e.qid), ['acme-notes:list', 'acme-notes:board', 'acme-notes:tags'], 'a third party\'s nav items become its group, in their sidebar order');
   assert.deepEqual(acme.home, { view: GENERATED_HOME_VIEW, params: { plugin: 'acme-notes' } }, 'no home declared: the shell draws one');
   assert.equal(acme.homeDeclared, false);
   assert.deepEqual(r.homes.get('quick-links'), { view: GENERATED_HOME_VIEW, params: { plugin: 'quick-links' } }, 'every plugin has a home');
   // The person's order first.
-  assert.deepEqual(fullRegistry({ menuOrder: ['aiops', 'acme-notes'] }).groups.map((g) => g.plugin), ['aiops', 'acme-notes', 'core.agents', 'core.dashboards', 'sdlc']);
+  assert.deepEqual(fullRegistry({ menuOrder: ['aiops', 'custom'] }).groups.map((g) => g.plugin), ['aiops', 'custom', 'core.agents', 'core.dashboards', 'sdlc']);
   // Sub-items, one level deep.
-  const sub = buildRegistry([shell, third('deep', { trust: 'frame', menu: { items: [{ id: 'p', title: 'Parent', view: 'a', children: ['n', { id: 'c', title: 'Child', view: 'a', params: { k: 'v' } }] }] }, contributes: { navItems: [{ id: 'n', title: 'Nav child', view: 'a' }], views: [{ id: 'a', title: 'A', kind: 'frame', entry: 'ui/a.html' }] } })]);
+  const sub = buildRegistry([shell, { ...third('deep', { trust: 'frame', menu: { items: [{ id: 'p', title: 'Parent', view: 'a', children: ['n', { id: 'c', title: 'Child', view: 'a', params: { k: 'v' } }] }] }, contributes: { navItems: [{ id: 'n', title: 'Nav child', view: 'a' }], views: [{ id: 'a', title: 'A', kind: 'frame', entry: 'ui/a.html' }] } }), source: 'bundled' }]);
   const g = sub.groups[0]!;
   assert.deepEqual(g.items.map((e) => [e.qid, e.children.map((c) => c.qid)]), [['deep:p', ['deep:n', 'deep:c']]]);
   assert.deepEqual(sub.navItems.filter((n) => n.parent === 'deep:p').map((n) => n.qid).sort(), ['deep:c', 'deep:n']);
@@ -182,8 +183,11 @@ test('breadcrumbs read Plugin > Page (the plugin links to its home); the palette
   assert.equal(paletteTitle(r, nav('aiops:alerts')), 'Operations › Alerts');
   assert.equal(paletteTitle(r, nav('core.artifacts:library')), 'Agents › Library');
   assert.equal(paletteTitle(r, nav('core.chat:new')), 'New chat', 'top-level items as they are');
-  const sub = buildRegistry([third('deep', { trust: 'frame', menu: { items: [{ id: 'p', title: 'Parent', view: 'a', children: [{ id: 'c', title: 'Child', view: 'a' }] }] }, contributes: { views: [{ id: 'a', title: 'A', kind: 'frame', entry: 'ui/a.html' }] } })]);
+  const sub = buildRegistry([{ ...third('deep', { trust: 'frame', menu: { items: [{ id: 'p', title: 'Parent', view: 'a', children: [{ id: 'c', title: 'Child', view: 'a' }] }] }, contributes: { views: [{ id: 'a', title: 'A', kind: 'frame', entry: 'ui/a.html' }] } }), source: 'bundled' }]);
   assert.equal(paletteTitle(sub, sub.navItems.find((n) => n.qid === 'deep:c')!), 'deep › Parent › Child');
+  // Under Custom: "Plugin › Page", never "Custom › ...".
+  assert.equal(paletteTitle(r, nav('acme-notes:board')), 'Acme Notes › Board');
+  assert.equal(paletteTitle(r, nav('quick-links:links')), 'quick-links › Links');
 });
 
 test('prefs: the groups\' order and folded state are remembered, cleaned', () => {

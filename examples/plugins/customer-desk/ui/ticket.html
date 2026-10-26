@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="harness://app/sdk/plugin-ui.css">
+<script src="harness://app/sdk/plugin-ui.js"></script>
+<script src="common.js"></script>
+<title>Ticket</title>
+</head>
+<body class="hx">
+<div id="root"></div>
+<script>
+// One ticket (params.id): its thread, its customer, status and priority, a reply box, and a hand-off to an
+// agent (a new conversation that starts on this ticket: the person confirms it).
+deskPage(async (harness, root, onChange) => {
+  const id = harness.params.id;
+  if (!id) { ui.mount(root, ui.page({ title: 'Ticket' }, ui.empty({ title: 'No ticket chosen', detail: 'Open one from the Tickets page.', action: ui.button('Tickets', { onClick: () => harness.view.open('tickets') }) }))); return; }
+  const signature = await harness.settings.get('signature').catch(() => '');
+  let draft = '';
+  const view = ui.view(root, { data: null, error: null }, (s) => {
+    if (s.error) return ui.page({ title: id }, ui.error(s.error, load));
+    if (!s.data) return ui.page({ title: id }, ui.loading());
+    const { ticket: t, contact: c } = s.data;
+    const set = (patch) => act({ id: t.id, ...patch });
+    const select = (value, options, onChange, label) => ui.h('select', { class: 'hx-select', 'aria-label': label, style: 'width:auto', onChange: (e) => onChange(e.target.value) }, options.map((o) => ui.h('option', { value: o, selected: o === value }, o)));
+    const reply = ui.h('textarea', { class: 'hx-textarea', placeholder: 'Write a reply…', 'aria-label': 'Reply', onInput: (e) => { draft = e.target.value; } });
+    reply.value = draft;
+    return ui.page({
+      title: `${t.id}  ${t.title}`,
+      subtitle: `Opened ${ui.relTime(t.createdAt)} from ${t.source} · updated ${ui.relTime(t.updatedAt)}`,
+      actions: [
+        ui.button('Work on it with an agent', { onClick: () => harness.sessions.start({ title: `Ticket ${t.id}: ${t.title.slice(0, 60)}`, prompt: `Work on support ticket ${t.id} with the customer-desk skill: read it with desk_ticket_get, find what the customer needs, and draft a reply with desk_reply_draft for me to check.` }).catch((e) => harness.notify.toast(e.message, { kind: 'error' })) }),
+        ui.button('Tickets', { kind: 'ghost', onClick: () => harness.view.open('tickets') }),
+      ],
+    },
+      ui.row(statusBadge(t.status), priorityBadge(t.priority),
+        ui.h('span', { class: 'hx-spacer' }),
+        ui.h('label', { class: 'hx-small hx-muted' }, 'Status '), select(t.status, ['open', 'waiting', 'closed'], (v) => set({ status: v }), 'Status'),
+        ui.h('label', { class: 'hx-small hx-muted' }, 'Priority '), select(t.priority, ['low', 'normal', 'high', 'urgent'], (v) => set({ priority: v }), 'Priority')),
+      ui.section('Customer', c ? ui.card(null, ui.h('div', { class: 'hx-list-title' }, `${c.name} <${c.email}>`), c.company ? ui.h('div', { class: 'hx-muted' }, c.company) : null, c.notes ? ui.h('div', { class: 'hx-small', style: 'margin-top:6px' }, c.notes) : null) : ui.callout('No customer linked yet.')),
+      ui.section('Thread',
+        ui.card({ title: 'Reported' }, ui.h('div', { style: 'white-space:pre-wrap' }, t.body || '(no details)')),
+        ...t.replies.map((r) => ui.h('div', { style: 'margin-top:8px' }, ui.card({ title: `${r.by} · ${ui.relTime(r.at)}` }, ui.h('div', { style: 'white-space:pre-wrap' }, r.text))))),
+      ui.section('Reply',
+        reply,
+        ui.h('div', { class: 'hx-row', style: 'justify-content:flex-end;margin-top:8px' },
+          ui.button('Add reply', { kind: 'primary', onClick: async () => { if (!draft.trim()) return; await act({ id: t.id, reply: signature ? `${draft}\n\n${signature}` : draft }); draft = ''; } }))),
+    );
+  });
+  async function load() {
+    try { view.set({ data: await harness.routes.call('ticket', { query: { id } }), error: null }); } catch (e) { view.set({ error: e }); }
+  }
+  async function act(body) {
+    try { await harness.routes.call('tickets/update', { method: 'POST', body }); await load(); } catch (e) { void harness.notify.toast(e.message, { kind: 'error' }); }
+  }
+  onChange(load);
+  await load();
+});
+</script>
+</body>
+</html>

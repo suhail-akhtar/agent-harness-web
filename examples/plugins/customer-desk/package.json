@@ -1,0 +1,7 @@
+{
+  "name": "customer-desk",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A harness plugin (see harness-plugin.json)."
+}

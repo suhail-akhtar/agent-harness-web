@@ -129,7 +129,10 @@ function FrameView({ plugin, contribution, entry, params, context, height: initi
       'events.unsubscribe': (x) => { subs.current.delete(String(x.topic)); },
       'approvals.list': () => client.approvals(),
       'approvals.respond': async (x) => (await client.sessions.respond(String(x.sessionId), { requestId: String(x.requestId), decision: String(x.decision), ...(typeof x.feedback === 'string' ? { feedback: x.feedback } : {}) })).ok,
-      'routes.call': (x) => client.plugins.route(plugin, String(x.path), x.method === 'POST' ? 'POST' : 'GET', x.body),
+      'routes.call': (x) => {
+        const q = x.query && typeof x.query === 'object' ? new URLSearchParams(Object.entries(x.query as Record<string, unknown>).map(([k, v]) => [k, String(v)])).toString() : '';
+        return client.plugins.route(plugin, `${String(x.path)}${q ? `?${q}` : ''}`, x.method === 'POST' ? 'POST' : 'GET', x.body);
+      },
       'files.list': (x) => { const sid = typeof x.session === 'string' ? x.session : currentSession(); if (!sid) throw new Error('no conversation is open'); return client.files.tree(sid, typeof x.path === 'string' ? x.path : ''); },
       'files.read': (x) => { const sid = typeof x.session === 'string' ? x.session : currentSession(); if (!sid) throw new Error('no conversation is open'); return client.files.read(sid, String(x.path)); },
       'workflows.list': async () => { const sid = currentSession(); return sid ? (await client.sessions.workflows(sid)).workflows : []; },

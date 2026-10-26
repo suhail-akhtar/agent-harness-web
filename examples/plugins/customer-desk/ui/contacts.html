@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="harness://app/sdk/plugin-ui.css">
+<script src="harness://app/sdk/plugin-ui.js"></script>
+<script src="common.js"></script>
+<title>Contacts</title>
+</head>
+<body class="hx">
+<div id="root"></div>
+<script>
+// The customers: each with their open tickets; add or update one (by email).
+deskPage(async (harness, root, onChange) => {
+  const view = ui.view(root, { data: null, error: null }, (s) => {
+    const actions = [ui.button('Add contact', { kind: 'primary', onClick: add })];
+    if (s.error) return ui.page({ title: 'Contacts', actions }, ui.error(s.error, load));
+    if (!s.data) return ui.page({ title: 'Contacts', actions }, ui.loading());
+    const contacts = s.data.contacts;
+    return ui.page({ title: 'Contacts', subtitle: 'Customers the desk knows. The agent adds them as tickets come in.', actions },
+      contacts.length ? ui.table({
+        columns: [
+          { key: 'name', label: 'Name', sort: true },
+          { key: 'email', label: 'Email', sort: true, render: (c) => ui.h('span', { class: 'hx-mono' }, c.email) },
+          { key: 'company', label: 'Company', sort: true },
+          { key: 'open', label: 'Open tickets', num: true, sort: true, render: (c) => c.open ? ui.badge(String(c.open), 'info') : ui.h('span', { class: 'hx-muted' }, '0') },
+        ],
+        rows: contacts,
+        sortBy: { key: 'name', dir: 'asc' },
+        onRowClick: (c) => edit(c),
+      }) : ui.empty({ title: 'No contacts yet', detail: 'They are added as tickets come in, or here.', action: ui.button('Add contact', { kind: 'primary', onClick: add }) }));
+  });
+  function form(c) {
+    const d = ui.dialog({
+      title: c ? `Edit ${c.name}` : 'Add a contact',
+      body: ui.form({
+        fields: [
+          { name: 'name', label: 'Name', required: true, value: c?.name },
+          { name: 'email', label: 'Email', type: 'email', required: true, value: c?.email, validate: (v) => (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v)) ? undefined : 'Not an email address.') },
+          { name: 'company', label: 'Company', value: c?.company },
+          { name: 'notes', label: 'Notes', type: 'textarea', value: c?.notes, help: 'What is worth remembering about them: the agent reads it.' },
+        ],
+        submitLabel: c ? 'Save' : 'Add',
+        onCancel: () => d.close(),
+        onSubmit: async (v) => {
+          try { await harness.routes.call('contacts', { method: 'POST', body: v }); d.close(); await load(); }
+          catch (e) { void harness.notify.toast(e.message, { kind: 'error' }); }
+        },
+      }),
+    });
+  }
+  const add = () => form();
+  const edit = (c) => form(c);
+  async function load() {
+    try { view.set({ data: await harness.routes.call('contacts'), error: null }); } catch (e) { view.set({ error: e }); }
+  }
+  onChange(load);
+  await load();
+});
+</script>
+</body>
+</html>

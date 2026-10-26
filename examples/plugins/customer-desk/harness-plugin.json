@@ -1,0 +1,56 @@
+{
+  "name": "customer-desk",
+  "version": "2.0.0",
+  "description": "A support desk the agent and the team work in together: tickets and contacts, triage of tickets that come in from outside, reply drafts by a sub-agent, a live sidebar count and a dashboard data source.",
+  "main": "index.ts",
+  "skills": "skills",
+  "agents": "agents",
+  "workflows": "workflows",
+  "permissions": { "routes": true, "sessions": true },
+  "ui": {
+    "apiVersion": 1,
+    "displayName": "Customer desk",
+    "icon": "inbox",
+    "guide": "GUIDE.md",
+    "capabilities": ["routes.call", "events.subscribe", "sessions.start", "settings.read"],
+    "home": "overview",
+    "menu": { "title": "Customer desk", "icon": "inbox", "items": ["overview", "tickets", "contacts"] },
+    "badges": [{ "name": "open", "route": "badge", "every": 120, "signal": true }],
+    "tools": ["desk_ticket_create", "desk_ticket_search", "desk_ticket_get", "desk_ticket_update", "desk_contact_upsert", "desk_reply_draft"],
+    "contributes": {
+      "navItems": [
+        { "id": "overview", "title": "Overview", "icon": "home", "view": "overview" },
+        { "id": "tickets", "title": "Tickets", "icon": "inbox", "view": "tickets", "badge": "customer-desk.open" },
+        { "id": "contacts", "title": "Contacts", "icon": "users", "view": "contacts" }
+      ],
+      "views": [
+        { "id": "overview", "title": "Customer desk", "icon": "inbox", "kind": "frame", "entry": "ui/overview.html", "description": "Open, waiting and urgent tickets at a glance" },
+        { "id": "tickets", "title": "Tickets", "icon": "inbox", "kind": "frame", "entry": "ui/tickets.html", "description": "Every ticket: search, filter by status, open one" },
+        { "id": "ticket", "title": "Ticket", "icon": "file-text", "kind": "frame", "entry": "ui/ticket.html", "description": "One ticket, its thread and its customer" },
+        { "id": "contacts", "title": "Contacts", "icon": "users", "kind": "frame", "entry": "ui/contacts.html", "description": "Customers and their open tickets" }
+      ],
+      "panels": [
+        { "id": "queue", "title": "Desk queue", "icon": "inbox", "kind": "frame", "entry": "ui/panel.html", "where": "any" }
+      ],
+      "commands": [
+        { "id": "new-ticket", "title": "New support ticket", "category": "Customer desk", "icon": "plus", "action": { "type": "open-view", "view": "tickets", "params": { "new": "1" } } },
+        { "id": "triage", "title": "Triage the open tickets", "category": "Customer desk", "icon": "sparkles", "action": { "type": "prompt", "prompt": "Triage the open tickets on the customer desk: set priorities, and draft replies to the ones you can answer.", "newChat": true }, "agent": { "description": "Starts a triage of the open support tickets in a new chat." } }
+      ],
+      "slashCommands": [
+        { "name": "ticket", "description": "Open a support ticket from what follows", "action": { "type": "prompt", "prompt": "Open a support ticket on the customer desk: {args}" } }
+      ],
+      "settings": [
+        { "id": "desk", "title": "Customer desk", "icon": "inbox", "scope": "account", "schema": { "type": "object", "properties": {
+          "signature": { "type": "string", "title": "Reply signature", "description": "Added under replies you type on the ticket page" },
+          "pageSize": { "type": "integer", "title": "Tickets per page", "minimum": 10, "maximum": 200, "default": 50 }
+        } } }
+      ],
+      "dataSources": [
+        { "id": "tickets", "title": "Support tickets", "icon": "inbox", "description": "Tickets by status and priority", "route": "rows" }
+      ],
+      "prompts": [
+        { "id": "summary", "title": "Summarize the support queue", "prompt": "Summarize the customer desk: what is open, what is urgent, and who has been waiting longest.", "icon": "inbox" }
+      ]
+    }
+  }
+}

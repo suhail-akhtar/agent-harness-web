@@ -5,7 +5,7 @@
  */
 
 import { GENERATED_HOME_VIEW, guideSkillName, validateValue, type JsonSchema } from '@harness/plugin-ui';
-import type { Registry } from './registry.ts';
+import { menuOf, type Registry } from './registry.ts';
 import { guideFor, guideIndex, pluginTools } from './modules.ts';
 
 export interface WindowNow { view: string; panel?: string | null; split?: string | null; sessionId?: string }
@@ -20,7 +20,7 @@ export function describeForAgent(r: Registry, now: WindowNow, app?: { name: stri
   const titleOf = (name: string) => r.active.find((p) => p.name === name)?.ui?.displayName ?? name;
   const index = new Map(guideIndex(r).map((g) => [g.name, g]));
   const home = (name: string) => { const h = r.homes.get(name); return h ? (h.view === GENERATED_HOME_VIEW ? 'generated' : h.view) : undefined; };
-  const menu = (name: string) => { const g = r.groups.find((x) => x.plugin === name); return g ? g.items.flatMap((e) => [e, ...e.children]).map((e) => `${e.title}=${e.view}`) : undefined; };
+  const menu = (name: string) => { const g = menuOf(r, name); return g ? g.items.flatMap((e) => [e, ...e.children]).map((e) => `${e.title}=${e.view}`) : undefined; };
   const extra = [...index.values()].filter((g) => !r.active.some((p) => p.name === g.name));
   return {
     ...(app ? { app: `${app.name} ${app.version}` } : {}),
@@ -56,7 +56,7 @@ export function describePlugin(r: Registry, name: string, o: { guide?: boolean }
   const active = r.active.includes(p);
   const g = guideIndex(r).find((x) => x.name === p.name);
   const own = <T extends { plugin: string }>(list: T[]) => list.filter((x) => x.plugin === p.name);
-  const group = r.groups.find((x) => x.plugin === p.name);
+  const group = menuOf(r, p.name);
   const out = {
     name: p.name, title: p.ui?.displayName ?? p.name, enabled: active || !!g, source: p.source,
     ...(p.description ? { description: p.description } : {}),

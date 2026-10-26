@@ -64,6 +64,7 @@ export function badParams(method: string, p: Record<string, unknown>): string | 
     case 'routes.call': {
       if (typeof p.path !== 'string' || !/^[a-z0-9][a-z0-9/_.-]{0,127}$/i.test(p.path) || p.path.includes('..')) return 'path must be one of this plugin\'s own route paths';
       if (p.method !== undefined && p.method !== 'GET' && p.method !== 'POST') return 'method is GET or POST';
+      if (p.query !== undefined && (typeof p.query !== 'object' || p.query === null || Array.isArray(p.query) || Object.entries(p.query as Record<string, unknown>).some(([k, v]) => !/^[a-zA-Z0-9_.-]{1,64}$/.test(k) || !['string', 'number', 'boolean'].includes(typeof v) || String(v).length > 2000))) return 'query is an object of short names and string, number or boolean values';
       return undefined;
     }
     case 'sessions.get': case 'sessions.history': return typeof p.id === 'string' && /^[a-f0-9]{16}$/.test(p.id) ? undefined : 'not a session id';

@@ -80,8 +80,12 @@ export interface PluginTestKit {
    * (an auth "user" route sees `user`), `as: 'anonymous'` for none, `token` for an auth "token" route.
    */
   route(method: 'GET' | 'POST', routePath: string, o?: { body?: unknown; query?: Record<string, string>; headers?: Record<string, string>; as?: 'operator' | 'anonymous'; token?: string }): Promise<RouteResult>;
+  /** A token for one of its auth "token" routes (what an administrator reads at GET /api/plugin-routes), for route(..., { token }). */
+  routeToken(routePath: string): Promise<string>;
   /** A conversation with the plugin loaded: scripted (`script`), or a real model (`model`, keys from the environment). */
   chat(prompt: string, o?: { script?: ScriptedTurn[]; model?: string; mode?: PermissionMode; timeoutMs?: number }): Promise<ChatResult>;
+  /** Waits for a session (one the plugin started with api.sessions.start) to finish its turn; its history. */
+  idle(sessionId: string, timeoutMs?: number): Promise<Message[]>;
   /** Its api.signal() calls so far, and its api.log() lines. */
   signals: string[];
   logs: string[];
@@ -108,7 +112,7 @@ class ScriptedProvider implements Provider {
 
 const TOKEN = 'plugin-testkit-operator-token';
 
-export async function loadPlugin(dir: string | URL, o: { env?: Record<string, string>; workspaceFiles?: Record<string, string> } = {}): Promise<PluginTestKit> {
+export async function loadPlugin(dir: string | URL, o: { env?: Record<string, string>; workspaceFiles?: Record<string, string>; /** Let conversations call real models (default: none is ever called; chat({ model }) without a script turns them on for that call). */ realModels?: boolean } = {}): Promise<PluginTestKit> {
   const root = path.resolve(dir instanceof URL ? fileURLToPath(dir) : dir);
   const m = await readManifest(root);
   if (!m) throw new Error(`no harness-plugin.json in ${root}`);
@@ -129,6 +133,10 @@ export async function loadPlugin(dir: string | URL, o: { env?: Record<string, st
   const prevSignal = harness.bridge.signal;
   harness.bridge.signal = (plugin, name) => { if (plugin === m.name) signals.push(name); prevSignal?.(plugin, name); };
   const reg = harness.registry;
+  // No real model is called from a test unless it asks: conversations the plugin starts (api.sessions) get a
+  // model that answers "done" (chat() with a script, or with realModels, brings its own).
+  const quiet = () => { if (!o.realModels) for (const id of reg.providers.keys()) reg.setProviderInstance(id, new ScriptedProvider([])); };
+  quiet();
   const entry = harness.plugins.get(m.name);
   const mine = <T>(map: Map<string, T>) => [...map.entries()].filter(([, v]) => reg.ownerOf(v) === m.name).map(([k]) => k);
   const adds = {
@@ -188,11 +196,12 @@ export async function loadPlugin(dir: string | URL, o: { env?: Record<string, st
       try { parsed = JSON.parse(text); } catch { /* not JSON */ }
       return { status: res.status, body: parsed, text, headers: Object.fromEntries(res.headers.entries()) };
     },
+    routeToken: (routePath) => harness.bridge.routeTokens.issue(`${m.name}/${routePath.replace(/^\//, '')}`),
     async chat(prompt, co = {}) {
       const model = co.model ?? 'deepseek-flash';
       const scripted = co.script ? new ScriptedProvider(co.script) : undefined;
       const providerId = reg.models.get(model)?.provider;
-      if (scripted && providerId) reg.setProviderInstance(providerId, scripted);
+      if (providerId) reg.setProviderInstance(providerId, scripted);
       try {
         const s = await harness.sessions.create({ model, runtime: { kind: 'local', network: 'none', path: workspace }, mode: co.mode ?? 'bypass' });
         await s.send(prompt);
@@ -211,7 +220,16 @@ export async function loadPlugin(dir: string | URL, o: { env?: Record<string, st
         });
         const text = history.filter((x) => x.role === 'assistant').flatMap((x) => x.content).filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n');
         return { text, calls, cost: scripted ? 0 : s.meta.cost ?? 0, history };
-      } finally { if (scripted && providerId) reg.setProviderInstance(providerId, undefined); }
+      } finally { if (providerId) { reg.setProviderInstance(providerId, undefined); quiet(); } }
+    },
+    async idle(id, ms = 60_000) {
+      const end = Date.now() + ms;
+      await new Promise((r) => setTimeout(r, 20));
+      while (harness.sessions.statusOf(id) !== 'idle') {
+        if (Date.now() > end) throw new Error(`session ${id} was still working after ${ms / 1000} s`);
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      return harness.sessions.get(id)!.history;
     },
     async close() {
       if (server) await new Promise<void>((r) => server!.close(() => r()));

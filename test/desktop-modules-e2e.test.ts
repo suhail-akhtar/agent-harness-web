@@ -152,7 +152,8 @@ test('plugins as modules: groups, fold and reorder, the rail, homes, palette and
       await invoke('prefs:set', { onboardingDone: true, defaultMode: 'default' });
       for (const p of ['sdlc', 'aiops', 'research']) { const r = await api('POST', `/api/plugins/${p}/enable`); assert.ok(r.status === 200 || r.status === 409, `${p}: ${r.status}`); }
       await page.waitForSelector('[data-group="aiops"]', { timeout: 30_000 });
-      await page.waitForSelector('[data-group="field-notes"]', { timeout: 30_000 });
+      // A plugin folder loaded in the app is the person's: under Custom, its pages under it.
+      await page.waitForSelector('[data-group="custom"] [data-nav="field-notes:menu"]', { timeout: 30_000 });
     });
 
     await step('1. the sidebar: the core\'s items at the top, every module a group with its items and badges', async () => {
@@ -160,13 +161,13 @@ test('plugins as modules: groups, fold and reorder, the rail, homes, palette and
       assert.deepEqual(top.slice(0, 2), ['core.chat:new', 'core.chat:search']);
       for (const id of ['core.inbox:inbox', 'core.activity:activity', 'core.projects:projects', 'core.plugins:plugins']) assert.ok(top.includes(id), `${id} stays at the top`);
       assert.ok(!top.some((x) => /^(aiops|sdlc|core\.dashboards|core\.agents|core\.artifacts):/.test(x)), 'nothing of a module at the top level');
-      assert.deepEqual(await groups(), ['core.agents', 'core.dashboards', 'sdlc', 'aiops', 'field-notes']);
+      assert.deepEqual(await groups(), ['core.agents', 'core.dashboards', 'sdlc', 'aiops', 'custom']);
       const items = (g: string) => page.$$eval(`[data-group="${g}"] [data-nav]`, (els) => els.map((e) => e.getAttribute('data-nav')!));
       assert.deepEqual(await items('aiops'), ['aiops:incidents', 'aiops:alerts', 'aiops:services', 'aiops:topology', 'aiops:changes']);
       assert.deepEqual(await items('sdlc'), ['sdlc:delivery', 'sdlc:start', 'sdlc:quality']);
       assert.deepEqual(await items('core.agents'), ['core.agents:agents', 'core.artifacts:library']);
       assert.deepEqual(await items('core.dashboards'), ['core.dashboards:dashboards', 'core.dashboards:reports', 'core.dashboards:data']);
-      assert.deepEqual(await items('field-notes'), ['field-notes:today', 'field-notes:guides', 'field-notes:safety'], 'sub-items under their item');
+      assert.deepEqual(await items('custom'), ['field-notes:menu', 'field-notes:today', 'field-notes:guides', 'field-notes:safety'], 'an added plugin with a menu: an entry, its pages under it');
       await page.click('[data-nav="aiops:alerts"]');
       await page.waitForSelector('[data-view="aiops:alerts"]');
       await grant();
@@ -188,18 +189,18 @@ test('plugins as modules: groups, fold and reorder, the rail, homes, palette and
       await page.hover('[data-group-home="aiops"]');
       await page.click('[data-group-menu="aiops"]');
       await page.click('[role="menuitem"]:has-text("Move up")');
-      await page.waitForFunction(() => [...document.querySelectorAll('[data-modules] [data-group]')].map((e) => e.getAttribute('data-group')).join(',') === 'core.agents,core.dashboards,aiops,sdlc,field-notes');
+      await page.waitForFunction(() => [...document.querySelectorAll('[data-modules] [data-group]')].map((e) => e.getAttribute('data-group')).join(',') === 'core.agents,core.dashboards,aiops,sdlc,custom');
       await page.focus('[data-group-home="aiops"]');
       await page.keyboard.press('Alt+Shift+ArrowUp');
-      await page.waitForFunction(() => [...document.querySelectorAll('[data-modules] [data-group]')].map((e) => e.getAttribute('data-group')).join(',') === 'core.agents,aiops,core.dashboards,sdlc,field-notes');
-      await page.locator('[data-group-home="field-notes"]').dragTo(page.locator('[data-group-home="core.agents"]'));
-      await page.waitForFunction(() => [...document.querySelectorAll('[data-modules] [data-group]')].map((e) => e.getAttribute('data-group'))[0] === 'field-notes', null, { timeout: 5_000 }).catch(async () => {
+      await page.waitForFunction(() => [...document.querySelectorAll('[data-modules] [data-group]')].map((e) => e.getAttribute('data-group')).join(',') === 'core.agents,aiops,core.dashboards,sdlc,custom');
+      await page.locator('[data-group-home="custom"]').dragTo(page.locator('[data-group-home="core.agents"]'));
+      await page.waitForFunction(() => [...document.querySelectorAll('[data-modules] [data-group]')].map((e) => e.getAttribute('data-group'))[0] === 'custom', null, { timeout: 5_000 }).catch(async () => {
         // Some platforms do not deliver HTML drag events to a playwright drag: the menu does the same.
-        await page.hover('[data-group-home="field-notes"]');
-        for (let i = 0; i < 4; i++) { await page.click('[data-group-menu="field-notes"]'); await page.click('[role="menuitem"]:has-text("Move up")'); }
+        await page.hover('[data-group-home="custom"]');
+        for (let i = 0; i < 4; i++) { await page.click('[data-group-menu="custom"]'); await page.click('[role="menuitem"]:has-text("Move up")'); }
       });
       const order = await groups();
-      assert.deepEqual(order, ['field-notes', 'core.agents', 'aiops', 'core.dashboards', 'sdlc']);
+      assert.deepEqual(order, ['custom', 'core.agents', 'aiops', 'core.dashboards', 'sdlc']);
       await shot('sidebar-folded-reordered', page.locator('[data-sidebar]'));
       const prefs = await invoke('prefs:get') as { menus: { order: string[]; collapsed: Record<string, boolean> } };
       assert.deepEqual(prefs.menus.order, order, 'the order is a preference');
@@ -211,13 +212,13 @@ test('plugins as modules: groups, fold and reorder, the rail, homes, palette and
       assert.equal(await page.locator('[data-group="core.dashboards"]').getAttribute('data-folded'), '1');
       // Back to the menus' own order for the rest.
       await invoke('prefs:set', { menus: { order: [], collapsed: {} } });
-      await page.waitForFunction(() => [...document.querySelectorAll('[data-modules] [data-group]')].map((e) => e.getAttribute('data-group')).join(',') === 'core.agents,core.dashboards,sdlc,aiops,field-notes', null, { timeout: 10_000 });
+      await page.waitForFunction(() => [...document.querySelectorAll('[data-modules] [data-group]')].map((e) => e.getAttribute('data-group')).join(',') === 'core.agents,core.dashboards,sdlc,aiops,custom', null, { timeout: 10_000 });
     });
 
     await step('3. the narrow rail: one icon per group, its items in a flyout', async () => {
       await page.click('[data-sidebar] button[aria-label="Collapse the sidebar"]');
       await page.waitForSelector('[data-sidebar][data-collapsed="1"]');
-      for (const g of ['core.agents', 'core.dashboards', 'sdlc', 'aiops', 'field-notes']) assert.equal(await page.locator(`[data-group-rail="${g}"]`).count(), 1, g);
+      for (const g of ['core.agents', 'core.dashboards', 'sdlc', 'aiops', 'custom']) assert.equal(await page.locator(`[data-group-rail="${g}"]`).count(), 1, g);
       await page.click('[data-group-rail="aiops"]');
       const menu = page.locator('[role="menu"]');
       await menu.waitFor();
@@ -274,7 +275,8 @@ test('plugins as modules: groups, fold and reorder, the rail, homes, palette and
       for (const k of ['open', 'firing', 'slo', 'services']) assert.equal(await opsHome.locator(`[data-kpi="${k}"]`).count(), 1, k);
       await opsHome.locator('[data-home-service]').first().waitFor({ timeout: 20_000 });
       await shot('home-operations');
-      await page.click('[data-group-home="field-notes"]');
+      // Its entry under Custom opens the home the shell draws for it.
+      await page.click('[data-nav="field-notes:menu"]');
       await page.waitForSelector('[data-plugin-home="field-notes"]');
       assert.deepEqual(await page.$$eval('[data-home-page]', (els) => els.map((e) => e.getAttribute('data-home-page'))), ['field-notes:today', 'field-notes:guides', 'field-notes:safety']);
       assert.deepEqual(await page.$$eval('[data-home-action]', (els) => els.map((e) => e.getAttribute('data-home-action'))), ['field-notes:log', '/observe']);
