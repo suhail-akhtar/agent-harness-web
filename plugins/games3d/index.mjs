@@ -45,7 +45,7 @@ export default {
     api.registerTool(defineTool({
       name: 'model_info',
       description: 'Inspect a glTF model (.glb/.gltf) in the workspace: valid or not, meshes, triangles, materials, textures, animations and approximate size in metres (glTF units are metres).',
-      parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+      parameters: { type: 'object', properties: { path: { type: 'string', description: 'The model file in the workspace, e.g. "assets/models/barrel.glb"' } }, required: ['path'] },
       kind: 'read',
       // Reads a local file: the plugin's declared hosts (image and text-to-3D services) are not its concern.
       sendsOut: false,

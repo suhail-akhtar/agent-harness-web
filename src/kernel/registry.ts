@@ -20,7 +20,7 @@ export interface LoadedPlugin {
   /** "shipped with the harness", "signed by <key>", "unsigned", ... */
   signature?: string;
   /** What it declared it needs (harness-plugin.json permissions). */
-  permissions?: { network?: string[]; secrets?: string[]; vault?: string[]; sessions?: boolean; routes?: boolean };
+  permissions?: { network?: string[]; secrets?: string[]; vault?: string[]; sessions?: boolean; routes?: boolean; processes?: boolean };
   /** Where it came from: shipped with the harness, installed from the catalogue, or listed by the operator (HARNESS_PLUGINS). */
   source?: 'bundled' | 'installed' | 'env';
 }

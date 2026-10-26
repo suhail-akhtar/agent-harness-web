@@ -5,6 +5,7 @@
   "solution": { "title": "Studio: Unreal Engine" },
   "requires": ["games3d"],
   "main": "index.mjs",
+  "permissions": { "processes": true },
   "agents": "agents",
   "skills": "skills",
   "ui": {

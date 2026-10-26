@@ -15,7 +15,8 @@
       "ops-*"
     ],
     "sessions": true,
-    "routes": true
+    "routes": true,
+    "processes": true
   },
   "ui": {
     "apiVersion": 1,
@@ -24,12 +25,9 @@
     "category": "Operations",
     "trust": "frame",
     "capabilities": [
-      "sessions.read",
-      "sessions.start",
       "events.subscribe",
       "approvals.respond",
       "routes.call",
-      "files.read",
       "workflows.start",
       "settings.read"
     ],

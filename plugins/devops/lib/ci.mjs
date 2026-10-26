@@ -326,7 +326,7 @@ export const CI_CHANGES = new Set(['rerun-failed', 'dispatch']);
 export const ciParameters = {
   type: 'object',
   properties: {
-    action: { type: 'string', enum: ['runs', 'jobs', 'logs', 'watch', 'rerun-failed', 'dispatch', 'lint', 'run-local'] },
+    action: { type: 'string', enum: ['runs', 'jobs', 'logs', 'watch', 'rerun-failed', 'dispatch', 'lint', 'run-local'], description: 'What to do with GitHub Actions (see the tool description)' },
     repo: { type: 'string', description: 'owner/name (default: the workspace\'s GitHub origin remote)' },
     workflow: { type: 'string', description: 'Workflow file name (ci.yml) or id: filters runs; dispatch and run-local need it' },
     job: { type: 'string', description: 'run-local: job id in the workflow (default the first)' },
@@ -334,8 +334,8 @@ export const ciParameters = {
     sha: { type: 'string', description: 'watch: the commit whose run to wait for' },
     status: { type: 'string', description: 'runs: e.g. failure, success, in_progress' },
     limit: { type: 'number', description: 'runs: how many (default 10)' },
-    runId: { type: 'number' },
-    jobId: { type: 'number' },
+    runId: { type: 'number', description: 'jobs/logs/watch/rerun-failed: the workflow run id (from runs)' },
+    jobId: { type: 'number', description: 'jobs/logs: one job id instead of a whole run' },
     ref: { type: 'string', description: 'dispatch: branch or tag' },
     inputs: { type: 'object', additionalProperties: { type: ['string', 'number', 'boolean'] }, description: 'dispatch: workflow_dispatch inputs' },
     paths: { type: 'array', items: { type: 'string' }, description: 'lint: workflow files (default all of .github/workflows)' },

@@ -8,6 +8,7 @@ import { validateWorkflow } from '../graph/validate.ts';
 import { readManifest } from './loader.ts';
 import { loadPlugin } from './testkit.ts';
 import { pluginTestFiles, runPluginTests } from './run-tests.ts';
+import { scrubbedEnv } from '../runtime/host.ts';
 
 // A deep review of a plugin folder, before it is trusted with a person's data: `npm run plugin --
 // check <dir> --deep`, the desktop app when a plugin is added, and agents (the plugin_review tool).
@@ -41,7 +42,9 @@ export interface Review {
 }
 
 const KNOWN_KEYS = new Set(['name', 'version', 'description', 'main', 'skills', 'agents', 'outputStyles', 'mcpServers', 'hooks', 'workflows', 'permissions', 'ui', 'author', 'license', 'homepage', 'repository', 'keywords', 'solution', 'requires', '$schema']);
-const KNOWN_PERMISSIONS = new Set(['network', 'secrets', 'vault', 'sessions', 'routes']);
+/** Ordinary methods of arrays, maps, strings and promises (a page's `files.map(...)` is not an SDK call). */
+const JS_METHODS = new Set(['map', 'filter', 'find', 'findIndex', 'forEach', 'some', 'every', 'reduce', 'flatMap', 'includes', 'indexOf', 'join', 'slice', 'splice', 'sort', 'push', 'pop', 'shift', 'unshift', 'concat', 'at', 'keys', 'values', 'entries', 'get', 'set', 'has', 'delete', 'clear', 'add', 'then', 'catch', 'finally', 'toString', 'trim', 'split', 'replace', 'startsWith', 'endsWith', 'length']);
+const KNOWN_PERMISSIONS = new Set(['network', 'secrets', 'vault', 'sessions', 'routes', 'processes']);
 const SECRET_PATTERNS: Array<[RegExp, string]> = [
   [/-----BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY-----/, 'a private key'],
   [/\bsk-(ant-|proj-)?[A-Za-z0-9_-]{24,}/, 'an API key (sk-...)'],
@@ -87,32 +90,69 @@ export async function reviewPlugin(dir: string, o: { runTests?: boolean; testTim
   const files = await listFiles(dir);
   const size = (await Promise.all(files.map((f) => fs.stat(path.join(dir, f)).then((s) => s.size).catch(() => 0)))).reduce((a, b) => a + b, 0);
   if (size > 20 * 1024 * 1024) add('warning', 'files', `The folder is ${(size / 1024 / 1024).toFixed(0)} MB.`, 'Leave out build output, recordings and node_modules; large plugins are slow to install and review.');
-  const codeFiles = files.filter((f) => /\.(m?js|cjs|ts|mts)$/.test(f) && !/(^|\/)(test|tests|ui)\//.test(f) && !f.endsWith('.d.ts'));
+  // The server code: what `main` imports, and what that imports (page scripts, templates and fixtures it ships as data are not it).
+  const IMPORT = /(?:from\s+|import\s*\(\s*)['"](\.{1,2}\/[^'"]+)['"]/g;
   const code = new Map<string, string>();
-  for (const f of codeFiles) code.set(f, await fs.readFile(path.join(dir, f), 'utf8').catch(() => ''));
+  const pending = typeof m.main === 'string' ? [path.posix.normalize(m.main.replace(/\\/g, '/'))] : [];
+  while (pending.length) {
+    const f = pending.shift()!;
+    if (code.has(f) || !/\.(m?js|cjs|ts|mts)$/.test(f)) continue;
+    const text = await fs.readFile(path.join(dir, f), 'utf8').catch(() => undefined);
+    if (text === undefined) continue;
+    code.set(f, text);
+    for (const x of text.matchAll(IMPORT)) {
+      const rel = path.posix.normalize(path.posix.join(path.posix.dirname(f), x[1]!));
+      if (!rel.startsWith('../')) pending.push(rel);
+    }
+  }
   const allCode = [...code.values()].join('\n');
   for (const f of files.filter((x) => /\.(m?js|cjs|ts|mts|json|md|html|css|txt|env|ya?ml|toml)$/i.test(x) || !x.includes('.'))) {
     const text = await fs.readFile(path.join(dir, f), 'utf8').catch(() => '');
     for (const [re, what] of SECRET_PATTERNS) if (re.test(text)) add('error', 'security', `${f} holds what looks like ${what}.`, 'Never ship a secret in a plugin: declare it in permissions.secrets and read it with api.secret(NAME), or use the key vault (permissions.vault).');
   }
   if (files.some((f) => f === '.env' || f.endsWith('/.env'))) add('error', 'security', 'The plugin ships a .env file.', 'Remove it: secrets come from the server (api.secret) or the key vault.');
+  const declaredSecretNames = ((perms.secrets as unknown[]) ?? []).map(String);
+  const startsPrograms: string[] = [];
   for (const [f, text] of code) {
     // Portable: nothing reached by relative path outside the plugin's own folder (it breaks once installed elsewhere).
-    const outside = [...text.matchAll(/(?:from\s+|import\s*\(\s*)['"](\.{1,2}\/[^'"]+)['"]/g)].map((x) => x[1]!).filter((sp) => { const abs = path.resolve(dir, path.dirname(f), sp); return abs !== path.resolve(dir) && !abs.startsWith(path.resolve(dir) + path.sep); });
+    const outside = [...text.matchAll(IMPORT)].map((x) => x[1]!).filter((sp) => { const abs = path.resolve(dir, path.dirname(f), sp); return abs !== path.resolve(dir) && !abs.startsWith(path.resolve(dir) + path.sep); });
     if (outside.length) add('error', 'portable', `${f} imports ${outside.join(', ')} from outside the plugin's folder: it breaks wherever the plugin is installed on its own.`, "The harness's abilities come from '@harness/plugin-sdk/runtime' (defineTool, resolveIn, writeFileAtomic, findBinary, withBrowser, ...); another plugin's module from '@harness/plugins/<name>/<file>' (and \"requires\": [\"<name>\"] when that plugin must be on).");
-    if (/\bfrom\s+['"](node:)?child_process['"]|require\(['"](node:)?child_process['"]\)/.test(text)) add('warning', 'security', `${f} starts processes on the server (child_process).`, 'Tools run commands where the session runs with ctx.host.exec (sandboxed when the session is); child_process runs them on the server itself, outside any sandbox.');
+    if (/\bfrom\s+['"](node:)?child_process['"]|require\(['"](node:)?child_process['"]\)/.test(text)) startsPrograms.push(f);
     if (/\beval\(|new Function\(/.test(text)) add('warning', 'security', `${f} runs code from strings (eval / new Function).`);
-    if (/process\.env\b/.test(text)) add('warning', 'security', `${f} reads the server's environment directly (process.env).`, 'Declare what it needs in permissions.secrets and read it with api.secret(NAME): undeclared reads bypass what the operator approved.');
+    // The server's environment: a credential read without declaring it bypasses what the operator approved.
+    const secretReads = [...new Set([...text.matchAll(/process\.env(?:\.([A-Za-z_][A-Za-z0-9_]*)|\[\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"]\s*\])/g)].map((x) => x[1] ?? x[2]!))]
+      .filter((n) => /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL/i.test(n) && !declaredSecretNames.includes(n));
+    if (secretReads.length) add('warning', 'security', `${f} reads the credential${secretReads.length > 1 ? 's' : ''} ${secretReads.join(', ')} from the server's environment without declaring ${secretReads.length > 1 ? 'them' : 'it'}.`, 'Declare it in permissions.secrets and read it with api.secret(NAME): people see what it reads, and the operator controls it.');
+    if (/env:\s*process\.env\b|\{\s*\.\.\.process\.env\b/.test(text)) add('info', 'security', `${f} passes the server's whole environment to a program.`, "Pass scrubbedEnv() (from '@harness/plugin-sdk/runtime') instead: the server's credentials stay out of programs it starts.");
     if (/os\.homedir\(\)|process\.cwd\(\)/.test(text)) add('info', 'files', `${f} works with the home or current folder.`, 'Keep the plugin\'s own data in api.dataDir (or api.store); the current folder is the server\'s, not a session\'s.');
-    if (/\bfetch\(/.test(text.replace(/api\.fetch\(/g, ''))) add('warning', 'permissions', `${f} calls fetch directly.`, 'Use api.fetch: it reaches only the hosts in permissions.network and refuses private addresses.');
+    // A `fetch` handed in as a parameter (the caller passes api.fetch) is not the global one.
+    const injectedFetch = /(?:\(|,)\s*fetch\s*(?:,|\)|=)/.test(text);
+    if (!injectedFetch) {
+      // A direct fetch the author vouched for (an address the operator configures, e.g. an internal Loki):
+      // "harness-review: fetch-ok <why>" on that line or the one above makes it a note with the reason.
+      const lines = text.split('\n');
+      const direct = lines.map((l, i) => ({ l, i })).filter(({ l }) => /\bfetch\(/.test(l.replace(/api\.fetch\(/g, '').replace(/\.fetch\(/g, '')) && !/^\s*(\/\/|\*)/.test(l));
+      const why = (i: number) => /harness-review:\s*fetch-ok\s*(.*)$/m.exec(`${lines[i - 1] ?? ''}\n${lines[i]}`)?.[1]?.trim();
+      const vouched = direct.filter(({ i }) => why(i) !== undefined);
+      if (direct.length > vouched.length) add('warning', 'permissions', `${f} calls fetch directly.`, 'Use api.fetch: it reaches only the hosts in permissions.network and refuses private addresses. For an address the operator configures (an internal service), mark the call "harness-review: fetch-ok <why>".');
+      for (const { i } of vouched) add('info', 'permissions', `${f}:${i + 1} calls fetch directly: ${why(i) || 'vouched for by its author'}.`);
+    }
   }
+  // Programs on the server itself (not where the session runs): declared, so people see it before they add the plugin.
+  if (startsPrograms.length && perms.processes !== true) add('warning', 'permissions', `It starts programs on the server itself (${startsPrograms.join(', ')}) without declaring it.`, 'Declare "permissions": {"processes": true} (people see it before adding the plugin), or run commands where the session runs with ctx.host.exec (sandboxed when the session is).');
+  if (perms.processes === true && !startsPrograms.length && !/\brun\(|scrubbedEnv/.test(allCode)) add('warning', 'permissions', 'It declares "processes" but its code starts no program.', 'Declare only what it uses.');
   const network = ((perms.network as unknown[]) ?? []).map(String);
   if (network.length && !/api\.fetch\(|registerMcpServer|mcpServers/.test(allCode + JSON.stringify(m.mcpServers ?? {}) + JSON.stringify(m.hooks ?? {}))) add('warning', 'permissions', `It declares network hosts (${network.join(', ')}) but its code never calls api.fetch.`, 'Declare only what it uses: people are shown every permission before they add it.');
   if (!network.length && /api\.fetch\(/.test(allCode)) add('error', 'permissions', 'Its code calls api.fetch but it declares no network hosts: every call will be refused.', 'List the hosts in permissions.network, e.g. ["api.example.com"].');
-  const usedSecrets = [...allCode.matchAll(/api\.secret\(\s*['"]([A-Za-z0-9_]+)['"]/g)].map((x) => x[1]!);
+  const usedSecrets = [...allCode.matchAll(/api\.secret(?:\?\.)?\(\s*['"]([A-Za-z0-9_]+)['"]/g)].map((x) => x[1]!);
+  // api.secret called with a computed name (a helper, a table of providers): a declared name written in its code counts as read.
+  if (/api\.secret(?:\?\.)?\(\s*[^'"\s)]/.test(allCode)) for (const n of ((perms.secrets as unknown[]) ?? []).map(String)) if (new RegExp(`['"]${n}['"]`).test(allCode)) usedSecrets.push(n);
   const declaredSecrets = ((perms.secrets as unknown[]) ?? []).map(String);
   for (const s of usedSecrets.filter((x) => !declaredSecrets.includes(x))) add('error', 'permissions', `Its code reads the secret ${s} but permissions.secrets does not declare it: api.secret will throw.`, `Add "${s}" to permissions.secrets.`);
-  for (const s of declaredSecrets.filter((x) => !usedSecrets.includes(x) && !JSON.stringify(m.mcpServers ?? {}).includes(x) && !JSON.stringify(m.hooks ?? {}).includes(x))) add('warning', 'permissions', `It declares the secret ${s} but never reads it.`);
+  for (const s of declaredSecrets.filter((x) => !usedSecrets.includes(x) && !JSON.stringify(m.mcpServers ?? {}).includes(x) && !JSON.stringify(m.hooks ?? {}).includes(x))) {
+    if (new RegExp(`process\.env(\.${s}\b|\[\s*['"]${s}['"])`).test(allCode)) add('warning', 'permissions', `It reads the declared secret ${s} from process.env instead of api.secret.`, `Read it with api.secret('${s}'): the harness then knows the plugin uses it (and refuses an undeclared one).`);
+    else add('warning', 'permissions', `It declares the secret ${s} but never reads it.`);
+  }
   if (perms.sessions === true && !/api\.(sessions|events)\b/.test(allCode)) add('warning', 'permissions', 'It declares "sessions" (start and drive conversations, see every session\'s events) but never uses api.sessions or api.events.', 'Remove it: it is one of the strongest permissions.');
   if (/api\.(sessions\.start|sessions\.send|events\.subscribe)/.test(allCode) && perms.sessions !== true) add('error', 'permissions', 'Its code uses api.sessions or api.events without "permissions": {"sessions": true}: those calls will throw.');
 
@@ -220,7 +260,8 @@ export async function reviewPlugin(dir: string, o: { runTests?: boolean; testTim
         if (!/var\(--hx-|plugin-ui\.css|hx-page|class="hx|\.theme\b|theme\.(vars|onChange)/.test(text)) add('warning', where, 'It does not use the theme (the --hx-* variables or the UI kit): it will look out of place, and wrong in dark mode.', 'Load harness://app/sdk/plugin-ui.css and build with HarnessPluginUI.ui, or use var(--hx-bg), var(--hx-text-primary)...');
         for (const x of text.matchAll(/\.\s*(sessions|events|approvals|routes|files|workflows|settings|clipboard|browser|external)\s*\.\s*(\w+)\s*\(/g)) {
           const method = `${x[1]}.${x[2]}`;
-          if (!Object.hasOwn(CALLS, method)) { if (x[1] !== 'settings' || !['get', 'set'].includes(x[2]!)) add('warning', where, `${method}() is not an SDK call.`); continue; }
+          // A variable that happens to be named files, events... with an ordinary method: not the SDK.
+          if (!Object.hasOwn(CALLS, method)) { if (!JS_METHODS.has(x[2]!) && (x[1] !== 'settings' || !['get', 'set'].includes(x[2]!))) add('warning', where, `${method}() is not an SDK call.`); continue; }
           const cap = CALLS[method]!.capability;
           if (cap) { used.add(cap); if (!declared.has(cap)) add('error', where, `It calls ${method}, which needs the "${cap}" capability; the manifest does not declare it, so the call will fail.`, `Add "${cap}" to ui.capabilities.`); }
         }
@@ -316,7 +357,8 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 
 function runCapture(cmd: string, args: string[], cwd: string, timeoutMs: number, env: Record<string, string> = {}): Promise<{ code: number; stdout: string; output: string }> {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { cwd, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+    // The plugin under review is not trusted yet: none of the server's credentials (API keys, tokens) reach it.
+    const child = spawn(cmd, args, { cwd, env: { ...scrubbedEnv(), ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '', output = '';
     child.stdout.on('data', (c) => { stdout += c; output += c; });
     child.stderr.on('data', (c) => { output += c; });

@@ -74,7 +74,8 @@ if (cmd === 'keygen' && target) {
   const files = await scaffold(dir, target, { js: process.argv.includes('--js'), repoRoot });
   console.log([`${target}: ${files.length} files in ${dir}`, ...files.map((f) => `  ${f}`), '', 'Next:', `  npm run plugin -- test ${dir}`, `  npm run plugin -- check ${dir} --deep`, `  Desktop app: Plugins > Developer > Load a plugin folder... (${dir})`].join('\n'));
 } else if (cmd === 'test' && target) {
-  process.exit(await runPluginTests(path.resolve(target), process.argv.slice(process.argv.indexOf(target) + 1).filter((a) => a !== '--')) as number);
+  // --keys: the environment's API keys reach the tests (for tests on real models); without it they are removed.
+  process.exit(await runPluginTests(path.resolve(target), process.argv.slice(process.argv.indexOf(target) + 1).filter((a) => a !== '--' && a !== '--keys'), { keys: process.argv.includes('--keys') }) as number);
 } else {
   console.error('usage: npm run plugin -- new <name> [--dir d] [--js] | check <dir> [--deep] [--json] | test <dir> | keygen <name> [--out dir] | sign <dir> --key <x.key.pem> | verify <dir> --keys <pub.pem|dir> | pack <dir> [--out f.tgz] | index <dir> [--base url]');
   process.exit(2);

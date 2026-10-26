@@ -100,3 +100,39 @@ test('solutions: the real ones are marked, and an engine of Studio requires Stud
   for (const n of ['engine-blender', 'engine-godot', 'engine-unity', 'engine-unreal']) assert.deepEqual((await m(n)).requires, ['games3d'], n);
   for (const n of ['quality-gates', 'research', 'documents', 'integrations', 'visual', 'computer', 'plugin-dev']) assert.equal((await m(n)).solution, undefined, `${n} stays core`);
 });
+
+test('solutions over the API: the catalogue lists them, an administrator installs and removes one, a member may not; an installed solution\'s tool runs in a conversation', async () => {
+  const { createApp } = await import('../src/server/app.ts');
+  const { UserStore } = await import('../src/server/users.ts');
+  const { FakeProvider } = await import('./helpers.ts');
+  const root = await shipped();
+  const data = await tempDir();
+  const h = await start(root, data);
+  const users = await new UserStore(data).load();
+  const member = await users.add('Mia');
+  const { server } = createApp({ harness: h, token: 'op-token', loopback: true, localRoots: [data], uiDir: data, appRoot: data, users });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const call = async (method: string, p: string, body?: unknown, token = 'op-token') => {
+    const r = await fetch(base + p, { method, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', 'x-harness': '1' }, body: body === undefined ? undefined : JSON.stringify(body) });
+    return { status: r.status, body: await r.json().catch(() => null) as any };
+  };
+  try {
+    const cat = await call('GET', '/api/plugins/catalogue');
+    assert.deepEqual(cat.body.filter((c: { solution?: unknown }) => c.solution).map((c: { name: string; installed: boolean }) => [c.name, c.installed]), [['ops', false], ['studio', false], ['engine-x', false]]);
+    assert.equal((await call('POST', '/api/plugins/install', { name: 'ops' }, member.token)).status, 403, 'a member may not install');
+    assert.equal((await call('POST', '/api/plugins/install', { name: 'ops' })).status, 201);
+    assert.ok((await call('GET', '/api/plugins')).body.some((p: { name: string; tier?: string }) => p.name === 'ops' && p.tier === 'official'));
+    // A conversation uses it (a scripted model calls its tool).
+    const fake = new FakeProvider([{ calls: [{ name: 'ops_check' }] }, { text: 'checked' }]);
+    for (const id of h.registry.providers.keys()) h.registry.setProviderInstance(id, fake);
+    const s = await h.sessions.create({ model: 'deepseek-flash', runtime: { kind: 'local', network: 'none', path: data }, mode: 'bypass' });
+    await s.send('check ops');
+    for (let i = 0; i < 400 && h.sessions.statusOf(s.meta.id) !== 'idle'; i++) await new Promise((r) => setTimeout(r, 25));
+    const result = s.history.flatMap((m) => m.content).find((b) => b.type === 'tool_result') as { content: string; is_error?: boolean } | undefined;
+    assert.deepEqual([result?.content, result?.is_error], ['ok', undefined]);
+    assert.equal((await call('DELETE', '/api/plugins/ops', {})).status, 200);
+    assert.equal(h.registry.tools.has('ops_check'), false);
+    assert.equal((await call('GET', '/api/plugins/catalogue')).body.find((c: { name: string }) => c.name === 'ops').installed, false);
+  } finally { await new Promise<void>((r) => server.close(() => r())); await h.close(); }
+});

@@ -43,6 +43,7 @@
 | `network: ["host", "*.domain"]` | `api.fetch` and HTTP hooks to those hosts | every `api.fetch` is refused |
 | `secrets: ["NAME"]` | `api.secret(NAME)`, `${NAME}` in its MCP servers and hooks | `api.secret` throws, `${NAME}` is empty |
 | `vault: ["glob-*"]` | key-vault entries its tools and `api.vault` may read (an administrator still grants each) | no vault access |
+| `processes: true` | says its code starts programs on the server itself (`child_process`, `run` from the runtime), outside any session's sandbox | the review warns; people are not told |
 
 People see every permission before they add the plugin; the review flags declared ones that are not
 used, and used ones that are not declared.

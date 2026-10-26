@@ -347,7 +347,7 @@ export const K8S_CHANGES = new Set(['apply', 'rollout-undo']);
 export const k8sParameters = {
   type: 'object',
   properties: {
-    action: { type: 'string', enum: ['validate', 'template', 'lint', 'diff', 'apply', 'rollout-status', 'rollout-undo', 'get', 'describe', 'logs', 'events'] },
+    action: { type: 'string', enum: ['validate', 'template', 'lint', 'diff', 'apply', 'rollout-status', 'rollout-undo', 'get', 'describe', 'logs', 'events'], description: 'What to do: validate, template and lint offline; the rest against a cluster' },
     paths: { type: 'array', items: { type: 'string' }, description: 'validate/diff/apply: manifest files or folders (validate default: every manifest and chart in the workspace)' },
     chart: { type: 'string', description: 'template/lint: chart folder' },
     release: { type: 'string', description: 'template: release name (default "release")' },
@@ -357,7 +357,7 @@ export const k8sParameters = {
     kubernetesVersion: { type: 'string', description: 'validate: target version for schemas, e.g. 1.31.0 (default: the cached master schemas)' },
     resource: { type: 'string', description: 'kind/name, e.g. deployment/web (rollout-*, describe, logs; get also takes a kind like pods)' },
     selector: { type: 'string', description: 'get: label selector' },
-    namespace: { type: 'string' },
+    namespace: { type: 'string', description: 'Kubernetes namespace for kubectl and helm (default: the context\'s namespace)' },
     context: { type: 'string', description: 'kubeconfig context' },
     kubeconfig: { type: 'string', description: 'Key Vault secret name holding the kubeconfig (written to a private temporary file for the call). Default: the runtime\'s own kubeconfig.' },
     wait: { type: 'boolean', description: 'apply: wait for changed workloads to roll out (default true)' },

@@ -186,7 +186,7 @@ export const templateTool = {
   parameters: {
     type: 'object',
     properties: {
-      action: { type: 'string', enum: ['list', 'info', 'create', 'build'] },
+      action: { type: 'string', enum: ['list', 'info', 'create', 'build'], description: 'What to do: list, info, create or build (default list)' },
       template: { type: 'string', description: 'create/info: the template id' },
       project: { type: 'string', description: 'The game folder (default the workspace root)' },
       title: { type: 'string', description: 'create: the game\'s title (game.json and project.json)' },

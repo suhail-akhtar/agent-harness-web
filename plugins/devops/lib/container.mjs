@@ -156,7 +156,7 @@ export async function runContainer(input, ctx) {
 export const containerParameters = {
   type: 'object',
   properties: {
-    action: { type: 'string', enum: ['lint', 'scan', 'build'] },
+    action: { type: 'string', enum: ['lint', 'scan', 'build'], description: 'What to do: lint a Dockerfile, scan with trivy, or build an image' },
     dockerfile: { type: 'string', description: 'lint/build: the Dockerfile (default Dockerfile)' },
     path: { type: 'string', description: 'scan: folder or file to scan (default the workspace)' },
     mode: { type: 'string', enum: ['fs', 'config'], description: 'scan: fs (secrets, misconfigurations, vulnerabilities in lock files) or config (IaC misconfigurations only). Default fs.' },
@@ -168,7 +168,7 @@ export const containerParameters = {
     buildArgs: { type: 'object', additionalProperties: { type: 'string' }, description: 'build: --build-arg values (not secrets)' },
     scan: { type: 'boolean', description: 'build: scan the built image (default true)' },
     dockerHost: { type: 'string', description: 'build: Key Vault secret holding the DOCKER_HOST to build on' },
-    timeoutSec: { type: 'number' },
+    timeoutSec: { type: 'number', description: 'build: docker build time limit in seconds (default 1200, max 3600)' },
   },
   required: ['action'],
   additionalProperties: false,

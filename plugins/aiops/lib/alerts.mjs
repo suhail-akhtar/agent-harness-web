@@ -634,10 +634,10 @@ export function register(api, shared) {
 
   shared.register({
     name: 'alerts',
-    description: 'Incidents the harness opened from alerts (webhooks from Alertmanager, Grafana, PagerDuty, Datadog, or the server\'s own watch loop), kept on the server: "list" (open ones, or status resolved / all), "show" (one: its alerts, why they were grouped, the timeline, the changes before it, its investigation session), "history" (resolved incidents over the last days, per service). Grouping is deterministic: one incident per service and env.',
+    description: 'Incidents the harness opened from alerts (webhooks from Alertmanager, Grafana, PagerDuty, Datadog, or the server\'s own watch loop), kept on the server: "list" (open ones, or status resolved / all), "show" (one: its alerts, why they were grouped, the timeline, the changes before it, its investigation session), "history" (the incidents opened over the last days, resolved or not, per service, with the mean time to resolve the resolved ones). Grouping is deterministic: one incident per service and env.',
     parameters: {
       type: 'object',
-      properties: { action: { type: 'string', enum: ['list', 'show', 'history'] }, id: { type: 'string' }, status: { type: 'string', enum: ['open', 'resolved', 'all'] }, days: { type: 'number' } },
+      properties: { action: { type: 'string', enum: ['list', 'show', 'history'], description: 'list incidents, show one, or the history per service' }, id: { type: 'string', description: 'show: the alert incident id (alr-...)' }, status: { type: 'string', enum: ['open', 'resolved', 'all'], description: 'list: which incidents (default open)' }, days: { type: 'number', description: 'history: how far back in days (default 7, max 90)' } },
       required: ['action'], additionalProperties: false,
     },
     kind: 'read', parallelSafe: true, untrusted: true,

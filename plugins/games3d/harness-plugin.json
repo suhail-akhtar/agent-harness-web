@@ -29,7 +29,8 @@
       "MESHY_API_KEY",
       "TRIPO_API_KEY"
     ],
-    "routes": true
+    "routes": true,
+    "processes": true
   },
   "ui": {
     "apiVersion": 1,

@@ -31,7 +31,7 @@ export default {
     api.registerTool({
       name: 'sources',
       description: 'The pages read with web_fetch in this session (any agent\'s): "list" them, or "read" one by URL without fetching it again.',
-      parameters: { type: 'object', properties: { command: { type: 'string', enum: ['list', 'read'] }, url: { type: 'string' }, offset: { type: 'number' }, max_chars: { type: 'number' } }, required: ['command'] },
+      parameters: { type: 'object', properties: { command: { type: 'string', enum: ['list', 'read'], description: 'list the pages read in this session, or read one' }, url: { type: 'string', description: 'read: the URL of a page already read with web_fetch' }, offset: { type: 'number', description: 'read: the character to start at (default 0)' }, max_chars: { type: 'number', description: 'read: how many characters to return (default 20000, 1000 to 60000)' } }, required: ['command'] },
       kind: 'read', parallelSafe: true, untrusted: true,
       summarize: (i) => `sources ${i.command}${i.url ? ` ${i.url}` : ''}`,
       async run(input, ctx) {

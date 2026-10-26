@@ -270,8 +270,8 @@ export function register(api, shared) {
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['dashboards', 'dashboard', 'panel', 'alerts', 'annotations', 'annotate', 'link', 'coverage'] },
-        query: { type: 'string', description: 'dashboards: text to search' }, tag: { type: 'string' }, folder: { type: 'string', description: 'folder uid' },
+        action: { type: 'string', enum: ['dashboards', 'dashboard', 'panel', 'alerts', 'annotations', 'annotate', 'link', 'coverage'], description: 'what to read or do (annotate writes to Grafana)' },
+        query: { type: 'string', description: 'dashboards: text to search' }, tag: { type: 'string', description: 'dashboards: only dashboards with this tag' }, folder: { type: 'string', description: 'folder uid' },
         uid: { type: 'string', description: 'dashboard uid' }, panel: { type: 'number', description: 'panel id' },
         vars: { type: 'object', description: 'dashboard variables, e.g. {"job": "api"}', additionalProperties: { type: 'string' } },
         from: { type: 'string', description: 'default now-1h' }, to: { type: 'string', description: 'default now' },
@@ -280,7 +280,7 @@ export function register(api, shared) {
         text: { type: 'string', description: 'annotate: the text' }, time: { type: 'string', description: 'annotate: when (default now)' }, time_end: { type: 'string', description: 'annotate: the end, for a region' },
         expr: { type: 'string', description: 'link: a PromQL expression for an Explore link' },
         service: { type: 'string', description: 'dashboards: search for this inventory service' },
-        limit: { type: 'number' },
+        limit: { type: 'number', description: 'dashboards, annotations: most results returned (default 100, max 500)' },
       },
       required: ['action'], additionalProperties: false,
     },

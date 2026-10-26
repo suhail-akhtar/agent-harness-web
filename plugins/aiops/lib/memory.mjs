@@ -283,11 +283,11 @@ export function register(api, shared) {
       type: 'object',
       properties: {
         text: { type: 'string', description: 'the symptom: alert text, error messages, log templates' },
-        services: { type: 'array', items: { type: 'string' } },
+        services: { type: 'array', items: { type: 'string' }, description: 'affected services, e.g. checkout (shared ones rank higher)' },
         alerts: { type: 'array', items: { type: 'string' }, description: 'alert names, e.g. ShopOrdersLatencyHigh' },
         exclude: { type: 'string', description: 'an incident id to leave out (the current one)' },
         include_open: { type: 'boolean', description: 'also unresolved incidents (default false)' },
-        top: { type: 'number' },
+        top: { type: 'number', description: 'matches shown (default 5, max 10)' },
       },
       additionalProperties: false,
     },
@@ -320,10 +320,10 @@ export function register(api, shared) {
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['list', 'show', 'check'] },
-        ids: { type: 'array', items: { type: 'string' } },
+        action: { type: 'string', enum: ['list', 'show', 'check'], description: 'list records, show some by id, or check the citations in a text' },
+        ids: { type: 'array', items: { type: 'string' }, description: 'show: evidence ids, e.g. ev-a1b2c3 (default: those cited in text)' },
         text: { type: 'string', description: 'check: the text whose citations to check' },
-        tool: { type: 'string' }, filter: { type: 'string' }, since: { type: 'string', description: 'list: ISO time or e.g. 2h' }, limit: { type: 'number' },
+        tool: { type: 'string', description: 'list: only records of this tool, e.g. prometheus_query' }, filter: { type: 'string', description: 'list: case-insensitive substring of the input or excerpt' }, since: { type: 'string', description: 'list: ISO time or e.g. 2h' }, limit: { type: 'number', description: 'list: records shown, newest first (default 40, max 200)' },
       },
       required: ['action'], additionalProperties: false,
     },

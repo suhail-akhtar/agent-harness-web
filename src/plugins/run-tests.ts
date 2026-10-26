@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { scrubbedEnv } from '../runtime/host.ts';
 
 /** A plugin's test files: *.test.{ts,mjs,js} under it (not node_modules). */
 export async function pluginTestFiles(dir: string): Promise<string[]> {
@@ -22,7 +23,7 @@ export async function pluginTestFiles(dir: string): Promise<string[]> {
  * Runs a plugin's tests with node --test, '@harness/plugin-sdk' importable from anywhere on the disk
  * (sdk-resolve.mjs). Its output goes to ours (or is captured); the exit code is node's.
  */
-export async function runPluginTests(dir: string, extra: string[] = [], o: { capture?: boolean; timeoutMs?: number } = {}): Promise<number | { code: number; output: string }> {
+export async function runPluginTests(dir: string, extra: string[] = [], o: { capture?: boolean; timeoutMs?: number; /** Pass the environment's credentials (API keys) through: tests that call real models. Default: removed. */ keys?: boolean } = {}): Promise<number | { code: number; output: string }> {
   const files = await pluginTestFiles(dir);
   if (!files.length) {
     const msg = `No tests in ${dir} (files named *.test.ts, *.test.mjs or *.test.js). npm run plugin -- new <name> writes an example.`;
@@ -32,7 +33,8 @@ export async function runPluginTests(dir: string, extra: string[] = [], o: { cap
   }
   const hook = pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), 'sdk-resolve.mjs')).href;
   // Its own run, whatever runs it (a test runner's NODE_TEST_CONTEXT would make it report to that one instead).
-  const env = { ...process.env };
+  // The plugin's code runs here before anyone trusted it: the server's credentials are not passed unless asked.
+  const env = o.keys ? { ...process.env } : scrubbedEnv();
   delete env.NODE_TEST_CONTEXT;
   const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', '--import', hook, '--test', '--test-concurrency=1', ...(o.capture ? ['--test-reporter=tap'] : []), ...extra, ...files], {
     cwd: dir, stdio: o.capture ? ['ignore', 'pipe', 'pipe'] : 'inherit', env,

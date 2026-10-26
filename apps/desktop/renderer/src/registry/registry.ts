@@ -39,6 +39,8 @@ export interface PluginEntry {
   loadedHere?: boolean;
   /** official: shipped with the harness or signed by an official publisher; custom: everything else. */
   tier?: 'official' | 'custom';
+  /** What its server code may reach (network hosts, secrets, the vault, sessions, routes, programs on the server). */
+  permissions?: Record<string, unknown>;
 }
 
 /** Added by the person (installed from the catalogue, or loaded from a folder here): these go under Custom. */

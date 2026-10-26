@@ -9,12 +9,11 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { scaffold } from '../../src/plugins/scaffold.ts';
-import { reviewInChild, formatReview } from '../../src/plugins/review.ts';
-import { runPluginTests } from '../../src/plugins/run-tests.ts';
+import { HARNESS_ROOT, scaffold } from '@harness/plugin-sdk/runtime';
+import { reviewInChild, formatReview } from '@harness/plugin-sdk/runtime';
+import { runPluginTests } from '@harness/plugin-sdk/runtime';
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const repoRoot = HARNESS_ROOT;
 
 const UNSANDBOXED_ONLY = 'This runs the plugin\'s code on the computer the harness runs on, so it is only for a session that works on this computer without a sandbox (this one runs in a sandbox or on another computer). Ask the person to review it from the desktop app (Plugins > Developer > Load a plugin folder, which reviews it), or to run `npm run plugin -- check <folder> --deep` in the harness checkout.';
 const runsHere = (host) => host.kind === 'local' && !host.sandboxed;

@@ -97,26 +97,26 @@ export const procgenTool = {
   parameters: {
     type: 'object',
     properties: {
-      action: { type: 'string', enum: ACTIONS },
-      seed: { type: ['number', 'string'] },
-      width: { type: 'number' }, height: { type: 'number' }, size: { type: 'number', description: 'heightmap side, noise size' },
+      action: { type: 'string', enum: ACTIONS, description: 'What to generate: noise, heightmap, dungeon, cave, maze, platformer, topdown, wfc, lsystem, names or solve' },
+      seed: { type: ['number', 'string'], description: 'Same seed, same result (default 1)' },
+      width: { type: 'number', description: 'Width in px (noise, default 256) or in tiles (dungeon 48, cave 64, maze cells 16, topdown 64, wfc 24)' }, height: { type: 'number', description: 'Height in px (noise, default the width) or in tiles (dungeon 32, cave 40, maze cells 12, topdown 48, platformer 18, wfc 16)' }, size: { type: 'number', description: 'heightmap side, noise size' },
       type: { type: 'string', description: 'noise: value|perlin|simplex|worley|ridged; solve: the level type' },
-      scale: { type: 'number' }, octaves: { type: 'number' }, tileable: { type: 'boolean' }, warp: { type: 'number' },
+      scale: { type: 'number', description: 'noise/heightmap: feature size in px, larger is smoother (default a quarter of the width for noise, a third of the size for heightmap)' }, octaves: { type: 'number', description: 'noise/heightmap: layers of detail, 1-10 (default 4 for noise, 6 for heightmap)' }, tileable: { type: 'boolean', description: 'noise/heightmap: make the result wrap seamlessly at its edges (default false)' }, warp: { type: 'number', description: 'noise/heightmap: domain-warp amount that swirls the pattern (default 0 for noise, 0.6 for heightmap)' },
       stops: { type: 'array', description: 'noise: colour stops [[0,"#000"],[1,"#fff"]]' },
-      ridges: { type: 'number' }, island: { type: 'boolean' }, erosion: { type: 'number' }, heightM: { type: 'number', description: 'heightmap: metres between black and white (recorded for engines)' },
-      minRoom: { type: 'number' }, maxRoom: { type: 'number' }, fill: { type: 'number' },
-      cols: { type: 'number' }, rows: { type: ['number', 'array'], description: 'maze: cell rows; solve: the level rows' },
-      algorithm: { type: 'string' }, braid: { type: 'number' },
-      length: { type: 'number', description: 'platformer: columns' }, difficulty: { type: 'number' },
-      jumpHeight: { type: 'number' }, runSpeed: { type: 'number' }, gravity: { type: 'number' },
-      towns: { type: 'number' },
-      model: { type: 'string', enum: ['tiled', 'overlapping'] }, tiles: { type: ['string', 'array'] }, sample: { type: ['string', 'array'] }, n: { type: 'number' }, symmetry: { type: 'number' }, periodic: { type: 'boolean' },
-      preset: { type: 'string' }, axiom: { type: 'string' }, rules: { type: 'object' }, iterations: { type: 'number' }, angle: { type: 'number' },
-      style: { type: 'string' }, count: { type: 'number' },
+      ridges: { type: 'number', description: 'heightmap: how much ridged mountain noise is mixed in, 0-1 (default 0.3)' }, island: { type: 'boolean', description: 'heightmap: fall off to low ground at the edges, making an island (default false)' }, erosion: { type: 'number', description: 'heightmap: thermal erosion passes, 0-200 (default 20)' }, heightM: { type: 'number', description: 'heightmap: metres between black and white (recorded for engines)' },
+      minRoom: { type: 'number', description: 'dungeon: smallest room side in tiles (default 4)' }, maxRoom: { type: 'number', description: 'dungeon: largest room side in tiles (default 10)' }, fill: { type: 'number', description: 'cave: share of cells that start as rock before smoothing, 0.3-0.6 (default 0.46)' },
+      cols: { type: 'number', description: 'maze: cell columns (default the width, else 16)' }, rows: { type: ['number', 'array'], description: 'maze: cell rows; solve: the level rows' },
+      algorithm: { type: 'string', description: 'maze: backtracker, prim, kruskal or binary (default backtracker)' }, braid: { type: 'number', description: 'maze: share of dead ends opened into loops, 0-1 (default 0)' },
+      length: { type: 'number', description: 'platformer: columns' }, difficulty: { type: 'number', description: 'platformer: 0 (easy) to 1 (hard), default 0.5' },
+      jumpHeight: { type: 'number', description: 'platformer/solve: the player\'s jump height in tiles (default 3.2)' }, runSpeed: { type: 'number', description: 'platformer/solve: the player\'s run speed in tiles per second (default 6)' }, gravity: { type: 'number', description: 'platformer/solve: gravity in tiles per second squared (default 40)' },
+      towns: { type: 'number', description: 'topdown: how many towns, 2-20 (default 4)' },
+      model: { type: 'string', enum: ['tiled', 'overlapping'], description: 'wfc: tiled (tiles with edge sockets) or overlapping (patterns from a sample); default overlapping when a sample is given, else tiled' }, tiles: { type: ['string', 'array'], description: 'wfc tiled: a built-in set (roads or coast, default roads) or a list of tiles like {"name":"road","sockets":["grg","ggg","grg","ggg"],"weight":2,"rotate":true}' }, sample: { type: ['string', 'array'], description: 'wfc overlapping: the example map as rows of characters (a list, or one string with newlines), e.g. ["##..", "#..."]' }, n: { type: 'number', description: 'wfc overlapping: pattern size N for NxN patterns, 2-4 (default 3)' }, symmetry: { type: 'number', description: 'wfc overlapping: how many rotations and reflections of each pattern to learn, 1-8 (default 8)' }, periodic: { type: 'boolean', description: 'wfc: the output wraps around at its edges (default false)' },
+      preset: { type: 'string', description: 'lsystem: tree, bush, pine, fern or weed (default tree)' }, axiom: { type: 'string', description: 'lsystem: a start string replacing the preset\'s, e.g. "FA"' }, rules: { type: 'object', description: 'lsystem: rewrite rules replacing the preset\'s, e.g. {"F":"F[+F]F[-F]F"}' }, iterations: { type: 'number', description: 'lsystem: rewrite passes, 1-8 (default the preset\'s)' }, angle: { type: 'number', description: 'lsystem: turn angle in degrees (default the preset\'s)' },
+      style: { type: 'string', description: 'names: fantasy, elven, dwarven, orcish, scifi, place, tavern or item (default fantasy); also a style label for saved assets' }, count: { type: 'number', description: 'names: how many names, 1-200 (default 12)' },
       level: { type: 'string', description: 'solve: a level.json in the workspace' },
       tileSize: { type: 'number', description: 'Tile size in px for previews and Tiled maps (16)' },
       showPath: { type: 'boolean', description: 'Draw the solution path on the preview' },
-      id: { type: 'string' }, name: { type: 'string', description: 'What the asset is called on the Assets page (default from the id)' }, project: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, export: { type: 'string' },
+      id: { type: 'string', description: 'Asset id (default from the action and seed, e.g. "level-dungeon-1")' }, name: { type: 'string', description: 'What the asset is called on the Assets page (default from the id)' }, project: { type: 'string', description: 'Project folder (with .studio/project.json); default found' }, tags: { type: 'array', items: { type: 'string' }, description: 'Extra library tags for the asset, e.g. ["act1"]' }, export: { type: 'string', description: 'Also copy the files into this workspace folder (an engine project\'s assets)' },
     },
     required: ['action'],
   },
@@ -180,7 +180,7 @@ export const procgenTool = {
       return { content: `${r.lines.join('\n')}\n${res.tiles.length} tile variants (with rotations), ${res.attempts} attempt(s). map.json has the tile id per cell ("name@90" = rotated 90 degrees clockwise). Built-in sets: ${Object.keys(TILESETS).join(', ')}.`, images: [preview(img)] };
     }
     if (a === 'lsystem') {
-      const p = { ...(PRESETS[input.preset ?? 'tree'] ?? PRESETS.tree), ...(input.axiom ? { axiom: input.axiom } : {}), ...(input.rules ? { rules: input.rules } : {}), ...(input.iterations ? { iterations: int(input.iterations, 4, 1, 8) } : {}), ...(input.angle ? { angle: num(input.angle, 25) } : {}) };
+      const p = { ...(PRESETS[input.preset ?? 'tree'] ?? PRESETS.tree), ...(input.axiom ? { axiom: input.axiom } : {}), ...(input.rules ? { rules: input.rules } : {}), ...(input.iterations != null ? { iterations: int(input.iterations, 4, 1, 8) } : {}), ...(input.angle != null ? { angle: num(input.angle, 25) } : {}) };
       const str = expand({ ...p, seed });
       const size = int(input.size, 64, 16, 512);
       const img = drawLsystem(str, { ...p, seed }, { width: size, height: size });

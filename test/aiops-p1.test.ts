@@ -550,6 +550,8 @@ test('aiops P1 tools: grafana, traces (Tempo and Jaeger) against fake APIs - que
     const js = await run('traces', { action: 'search', backend: 'jaeger', service: 'orders', status: 'error' });
     assert.match(js.content, /1 ERROR span\(s\)/);
     assert.ok(jaeger.seen.some((x) => /tags=%7B%22error%22%3A%22true%22%7D/.test(x)));
+    // Status ok on Jaeger: the only trace has an error span, so none are left.
+    assert.match((await run('traces', { action: 'search', backend: 'jaeger', service: 'orders', status: 'ok' })).content, /No traces for orders without errors/);
     assert.match((await run('traces', { action: 'dependencies', backend: 'jaeger' })).content, /frontend -> orders: 42 calls/);
     assert.match((await run('traces', { action: 'trace', id: 'nope' })).content, /hex trace id/);
   } finally {

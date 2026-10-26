@@ -326,7 +326,7 @@ export function register(api, shared) {
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['graph', 'dependents', 'dependencies', 'spof', 'mermaid'] },
+        action: { type: 'string', enum: ['graph', 'dependents', 'dependencies', 'spof', 'mermaid'], description: 'which view of the dependency graph to return' },
         service: { type: 'string', description: 'dependents / dependencies / mermaid: the node' },
         depth: { type: 'number', description: 'levels to walk (default 5)' },
         sources: { type: 'array', items: { type: 'string', enum: ['inventory', 'traces', 'k8s', 'prometheus'] }, description: 'default: all that are configured' },

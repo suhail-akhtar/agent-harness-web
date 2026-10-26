@@ -8,7 +8,7 @@
 //   on an outside service, refused when nobody can be asked, and what comes
 //   back is untrusted (the screen can show anything).
 
-import { looksSecret } from '../../src/memory/store.ts';
+import { looksSecret } from '@harness/plugin-sdk/runtime';
 import { callScript, desktopRequest, desktopSize, MAX_SHOT, NO_DESKTOP, parseOutput, plan, pngSize, shotSize, toShot, ACTIONS } from './lib.mjs';
 
 const NO_COMPANION_DESKTOP = "The companion on the user's computer does not allow desktop control. The user can restart it with --allow-desktop: the agent may then see their screen and use the mouse and keyboard, each action approved by them.";
@@ -89,11 +89,11 @@ export default {
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ACTIONS },
+          action: { type: 'string', enum: ACTIONS, description: 'What to do (see the tool description for each action and the fields it uses)' },
           coordinate: { type: 'array', items: { type: 'number' }, description: '[x, y] in screenshot pixels' },
           start_coordinate: { type: 'array', items: { type: 'number' }, description: 'left_click_drag: where the drag starts' },
           text: { type: 'string', description: 'type: the text; key: key names; launch: the command' },
-          scroll_direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] },
+          scroll_direction: { type: 'string', enum: ['up', 'down', 'left', 'right'], description: 'scroll: which way' },
           scroll_amount: { type: 'number', description: 'scroll: wheel clicks (default 3)' },
           duration: { type: 'number', description: 'wait: seconds (at most 30)' },
           region: { type: 'array', items: { type: 'number' }, description: 'zoom: [x1, y1, x2, y2] in screenshot pixels' },

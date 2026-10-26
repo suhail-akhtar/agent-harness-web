@@ -77,8 +77,8 @@ HarnessPluginUI.connect().then(async (h) => { await h.routes.call('nothing-here'
   has('warning', /manifest/, /Unknown field "permisions"/);
   has('warning', /manifest/, /"version" "1" is not a version/);
   has('error', /security/, /secrets\.txt holds what looks like an API key/);
-  has('warning', /security/, /starts processes on the server/);
-  has('warning', /security/, /reads the server's environment directly/);
+  has('warning', /permissions/, /starts programs on the server itself \(index\.mjs\) without declaring it/);
+  has('warning', /security/, /reads the credential SOME_KEY from the server's environment without declaring it/);
   has('warning', /permissions/, /declares network hosts .* never calls api\.fetch/);
   has('error', /permissions/, /reads the secret OTHER_KEY but permissions\.secrets does not declare it/);
   has('warning', /permissions/, /declares the secret UNUSED_KEY but never reads it/);
@@ -121,6 +121,24 @@ HarnessPluginUI.connect().then(async (h) => { await h.routes.call('nothing-here'
   has('error', /route POST save/, /empty body makes it fail \(500\)/);
   has('error', /page ui\/index\.html/, /calls the route "nothing-here", which the plugin does not register/);
   assert.equal(r.ok, false);
+});
+
+test('the review: a direct fetch the author vouches for is a note with the reason; an unmarked one still warns; api.secret?.() counts as reading the secret', async () => {
+  const dir = path.join(await tempDir(), 'vouched');
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, 'harness-plugin.json'), JSON.stringify({ name: 'vouched', version: '1.0.0', description: 'Reads an internal service the operator configures.', main: 'index.mjs', permissions: { secrets: ['VOUCHED_URL'] } }));
+  await fs.writeFile(path.join(dir, 'index.mjs'), `export default { name: 'vouched', setup(api) {
+  const url = api.secret?.('VOUCHED_URL');
+  // harness-review: fetch-ok the address is the operator's internal service
+  const a = () => fetch(url);
+  const b = () => fetch('https://example.com');
+} };
+`);
+  const r = await reviewPlugin(dir, { runTests: false });
+  const list = r.findings.map((f) => `${f.level} [${f.area}] ${f.message}`).join('\n');
+  assert.ok(r.findings.some((f) => f.level === 'info' && /index\.mjs:4 calls fetch directly: the address is the operator's internal service/.test(f.message)), list);
+  assert.ok(r.findings.some((f) => f.level === 'warning' && /index\.mjs calls fetch directly/.test(f.message)), list);
+  assert.ok(!/never reads it/.test(list), list);
 });
 
 test('plugin-dev (for agents): plugin_new writes a plugin in the workspace, plugin_test runs its tests, plugin_review reviews it; the skill carries the whole reference', async () => {

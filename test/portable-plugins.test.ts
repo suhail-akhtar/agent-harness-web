@@ -48,6 +48,7 @@ test('portable: names resolve to where a plugin is (registered), the SDK to the 
   assert.equal((await import('@harness/plugins/probe-plugin/sdk/probe.mjs' as string)).where, 'elsewhere');
   assert.equal(import.meta.resolve('@harness/plugin-sdk/runtime'), pathToFileURL(path.join(repo, 'packages', 'plugin-sdk', 'src', 'runtime.ts')).href);
   await assert.rejects(import('@harness/plugins/not-a-plugin/x.mjs' as string), /The plugin "not-a-plugin" is not on this server/);
+  await assert.rejects(import('@harness/plugins/probe-plugin/../../escape.mjs' as string), /may not leave its folder/);
 });
 
 test('portable: a solution packed and unpacked into another server\'s install folder loads and works there; Studio\'s engine finds Studio\'s copy', async () => {

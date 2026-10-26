@@ -36,19 +36,19 @@ export function sourceTool(api) {
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ACTIONS },
-        source: { type: 'string', enum: SOURCE_IDS },
-        query: { type: 'string' }, type: { type: 'string' }, limit: { type: 'number' },
+        action: { type: 'string', enum: ACTIONS, description: 'What to do: status, search, download, image, text3d or spend' },
+        source: { type: 'string', enum: SOURCE_IDS, description: 'search/download: the library, polyhaven, ambientcg or kenney' },
+        query: { type: 'string', description: 'search: words to look for, e.g. "wooden crate"' }, type: { type: 'string', description: 'search: polyhaven models, textures or hdris (default models); ambientcg an asset type (default Material)' }, limit: { type: 'number', description: 'search: most results, 1-100 (default 20)' },
         id: { type: 'string', description: 'download: the library\'s asset id; otherwise the Studio asset id to save as' },
-        resolution: { type: 'string' }, format: { type: 'string' }, include: { type: 'string', description: 'kenney: a regex of the files to keep' },
+        resolution: { type: 'string', description: 'download: polyhaven e.g. "1k", "2k" (default 1k); ambientcg e.g. "1K-PNG", "2K-JPG" (default 1K-PNG)' }, format: { type: 'string', description: 'download polyhaven: file format, e.g. "hdr" or "exr" for HDRIs, "png" or "jpg" for texture maps (default hdr for HDRIs, else chosen per map)' }, include: { type: 'string', description: 'kenney: a regex of the files to keep' },
         library: { type: 'boolean', description: 'download: also publish to the shared library' },
-        prompt: { type: 'string' }, model: { type: 'string' }, quality: { type: 'string', enum: ['low', 'medium', 'high'] }, size: { type: ['string', 'number'] },
-        purpose: { type: 'string', enum: ['texture', 'sprite', 'concept'] }, palette: { type: ['string', 'array'] }, colors: { type: 'number' },
-        textureSize: { type: 'number' }, tileable: { type: 'boolean' }, normal: { type: 'boolean' }, spriteSize: { type: 'number' }, cols: { type: 'number' }, rows: { type: 'number' },
-        provider: { type: 'string', enum: ['meshy', 'tripo'] }, task: { type: 'string' }, wait: { type: 'number' },
-        targetHeight: { type: 'number' }, maxTriangles: { type: 'number' }, artStyle: { type: 'string' },
+        prompt: { type: 'string', description: 'image/text3d: what to make, e.g. "mossy cobblestone" or "a wooden treasure chest"' }, model: { type: 'string', description: 'image: the OpenAI image model (default gpt-image-1)' }, quality: { type: 'string', enum: ['low', 'medium', 'high'], description: 'image: generation quality, higher costs more (default low)' }, size: { type: ['string', 'number'], description: 'image: 1024x1024, 1024x1536 or 1536x1024 (default 1024x1024)' },
+        purpose: { type: 'string', enum: ['texture', 'sprite', 'concept'], description: 'image: how to post-process it: texture, sprite, or concept (kept as generated); default texture' }, palette: { type: ['string', 'array'], description: 'image sprite: quantize onto a named palette (e.g. "db32") or a colour list' }, colors: { type: 'number', description: 'image sprite: quantize to this many colours (24 when only a palette is given)' },
+        textureSize: { type: 'number', description: 'image texture: output size in px, 16-4096 (default 512)' }, tileable: { type: 'boolean', description: 'image texture: make it seamless (default true)' }, normal: { type: 'boolean', description: 'image texture: also make a normal map (default false)' }, spriteSize: { type: 'number', description: 'image sprite: sprite (or frame) size in px, 8-1024 (default 64)' }, cols: { type: 'number', description: 'image sprite: frame columns to slice the image into (default 1)' }, rows: { type: 'number', description: 'image sprite: frame rows to slice the image into (default 1)' },
+        provider: { type: 'string', enum: ['meshy', 'tripo'], description: 'text3d: the text-to-3D service (default meshy)' }, task: { type: 'string', description: 'text3d: a task id from an earlier call, to resume waiting for it' }, wait: { type: 'number', description: 'text3d: seconds to wait for the task, 0-1800 (default 600)' },
+        targetHeight: { type: 'number', description: 'text3d: scale the model to this height in metres (default 1)' }, maxTriangles: { type: 'number', description: 'text3d: triangle budget, 500-100000 (default 10000)' }, artStyle: { type: 'string', description: 'text3d meshy: the art style, e.g. "realistic" (default) or "sculpture"' },
         assetId: { type: 'string', description: 'The Studio asset id to save as (download/text3d)' },
-        project: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, export: { type: 'string' },
+        project: { type: 'string', description: 'Project folder (with .studio/project.json); default found' }, tags: { type: 'array', items: { type: 'string' }, description: 'Extra library tags for the saved asset, e.g. ["forest"]' }, export: { type: 'string', description: 'Also copy the files into this workspace folder (an engine project\'s assets)' },
       },
       required: ['action'],
     },
@@ -176,7 +176,7 @@ export function sourceTool(api) {
         const assetId = input.assetId ?? slug(`gen3d-${String(input.prompt ?? task).slice(0, 30)}`);
         const source = { type: 'generated', provider: prov.id, task, prompt: input.prompt, url: st.modelUrl, cleaned: 'studio_model cleanup' };
         try {
-          const out = await modelTool.run({ action: 'cleanup', file: tmp, targetHeight: input.targetHeight ?? 1, maxTriangles: int(input.maxTriangles, 10000, 500, 100000), id: assetId, project: input.project, license: prov.license, source, tags: ['generated', prov.id], export: input.export }, ctx);
+          const out = await modelTool.run({ action: 'cleanup', file: tmp, targetHeight: input.targetHeight ?? 1, maxTriangles: int(input.maxTriangles, 10000, 500, 100000), id: assetId, project: input.project, license: prov.license, source, tags: ['generated', prov.id, ...[].concat(input.tags ?? [])], export: input.export }, ctx);
           if (/Blender is not installed/.test(out.content)) {
             const saved = await save(ctx, { ...input, id: assetId }, { id: assetId, name: String(input.prompt ?? task).slice(0, 60), kind: 'model', dimension: '3d', files: [{ path: 'model.glb', role: 'main', data: glb }], license: prov.license, source: { ...source, cleaned: 'not cleaned: Blender missing' }, tags: ['generated', prov.id, 'raw'] });
             return { content: `${saved.lines.join('\n')}\nSaved the raw model: Blender is not here to clean it (scale, origin, normals, triangle budget). Run the asset-3d and asset-budget gates before using it.`, is_error: false };

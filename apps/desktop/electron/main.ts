@@ -249,6 +249,7 @@ const focusArg = (argv: string[]) => argv.map((a) => /^--plugin=(.+)$/.exec(a)?.
  * a .desktop entry on Linux. macOS has no such shortcut for an app's argument: the window opens from the Plugins page.
  */
 function pluginShortcut(name: string, title: string): { ok: boolean; path?: string; reason?: string } {
+  if (!/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(name)) return { ok: false, reason: 'Not a plugin name.' };
   const safe = title.replace(/[\\/:*?"<>|]/g, '').slice(0, 60) || name;
   const args = [...(app.isPackaged ? [] : [app.getAppPath()]), `--plugin=${name}`];
   const argText = args.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ');

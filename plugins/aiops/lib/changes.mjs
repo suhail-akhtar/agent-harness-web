@@ -144,9 +144,9 @@ export function register(api, shared) {
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['timeline', 'import-git'] }, service: { type: 'string' }, env: { type: 'string' }, target: { type: 'string' },
+        action: { type: 'string', enum: ['timeline', 'import-git'], description: 'timeline: list the changes (default); import-git: record a repository\'s commits' }, service: { type: 'string', description: 'timeline: only this service\'s changes (plus those with no service); import-git: the service to tag commits with' }, env: { type: 'string', description: 'timeline: only this environment, e.g. prod; import-git: the environment to tag commits with' }, target: { type: 'string', description: 'timeline: only changes whose target contains this text (case-insensitive), e.g. checkout' },
         around: { type: 'string', description: 'ISO time (default now)' }, before: { type: 'string', description: 'duration before (default 2h)' }, after: { type: 'string', description: 'duration after (default 30m)' },
-        limit: { type: 'number' }, path: { type: 'string', description: 'import-git: the repository folder in the workspace' },
+        limit: { type: 'number', description: 'timeline: changes shown, nearest first (default 30, max 200)' }, path: { type: 'string', description: 'import-git: the repository folder in the workspace' },
       },
       additionalProperties: false,
     },

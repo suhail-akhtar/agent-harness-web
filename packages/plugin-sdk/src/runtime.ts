@@ -10,6 +10,11 @@
  * `ctx` in a tool. This module holds what is the same for every plugin.
  */
 
+import path from 'node:path';
+
+/** Where the harness itself is (its checkout, or the engine of the desktop app): for paths to its SDK and tools. */
+export const HARNESS_ROOT: string = path.resolve(import.meta.dirname, '..', '..', '..');
+
 /** A Tool object from a plain definition (what api.registerTool does with one; for code that builds tools ahead). */
 export { defineTool } from '../../../src/plugins/api.ts';
 export type { ToolDefinition } from '../../../src/plugins/api.ts';
@@ -37,3 +42,14 @@ export { addLibrary, LIBRARIES } from '../../../plugins/visual/lib/libraries.mjs
 export { parseCron } from '../../../src/core/scheduler.ts';
 /** The kinds of change the journal records (api.changes), and its error. */
 export { CHANGE_KINDS, ChangeError } from '../../../src/ops/changes.ts';
+
+// ---- privacy ----
+/** Whether text looks like a credential (a key, a token, a password): never store or show it. */
+export { looksSecret } from '../../../src/memory/store.ts';
+
+// ---- building plugins (the plugin-dev plugin, and any tool that makes or checks plugins) ----
+/** A complete plugin written from the template; the deep review (in a child process: the plugin cannot reach the caller); its tests. */
+export { scaffold, scaffoldFiles } from '../../../src/plugins/scaffold.ts';
+export { reviewInChild, formatReview } from '../../../src/plugins/review.ts';
+export type { Review, Finding } from '../../../src/plugins/review.ts';
+export { runPluginTests, pluginTestFiles } from '../../../src/plugins/run-tests.ts';

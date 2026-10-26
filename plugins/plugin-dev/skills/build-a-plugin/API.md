@@ -300,7 +300,9 @@ a web search backend.
 
 - `api.fetch(url, init)`: only to `permissions.network` hosts (`"api.example.com"`, `"*.example.com"`);
   redirects re-checked; private addresses only when declared exactly. Plain `fetch` bypasses this:
-  the review flags it.
+  the review flags it. Where the address is the operator's own (an internal service named in its
+  configuration, not by the model), put `// harness-review: fetch-ok <why>` on the line above the
+  call: the review shows it as a note with that reason instead of a warning.
 - `api.secret('NAME')`: a server environment variable named in `permissions.secrets` (throws otherwise).
 - `api.vault.reveal(name, purpose)`: an operator-scope vault entry an administrator granted
   `plugin:<name>`, matched by `permissions.vault` globs; audited; values are hidden in transcripts.

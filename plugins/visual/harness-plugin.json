@@ -3,5 +3,6 @@
   "version": "1.0.0",
   "description": "Look at what was made: render documents, decks and pages to images with fit checks; drive web pages, games and 3D scenes in an offline headless browser; vendor libraries offline. Gates: documents-render, web-console, playtest.",
   "main": "index.mjs",
-  "skills": "skills"
+  "skills": "skills",
+  "permissions": { "processes": true }
 }

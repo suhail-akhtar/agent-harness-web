@@ -606,7 +606,7 @@ export default {
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ACTIONS },
+          action: { type: 'string', enum: ACTIONS, description: 'What to do (each action is explained in the tool description)' },
           project: { type: 'string', description: 'Folder with project.godot (default the workspace root; project.create: the new folder, default "game")' },
           template: { type: 'string', enum: ['2d', '2.5d', '3d'], description: 'project.create' },
           name: { type: 'string', description: 'project.create: the game\'s name; package: the zip\'s base name' },

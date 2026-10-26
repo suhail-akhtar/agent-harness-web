@@ -28,6 +28,8 @@ function ensure(): void {
       if (sdk) return { url: SDK + sdk, shortCircuit: true };
       const m = /^@harness\/plugins\/([a-z0-9][a-z0-9._-]{0,63})\/(.+)$/i.exec(specifier);
       if (m) {
+        // Only files inside that plugin's folder.
+        if (m[2]!.split(/[\\/]/).includes('..')) throw new Error(`${specifier}: a plugin's module path may not leave its folder`);
         const dir = dirs.get(m[1]!) ?? roots.map((r) => `${r}${m[1]}/`).find((u) => existsSync(fileURLToPath(u)));
         if (dir) return next(new URL(m[2]!, dir).href, context);
         try { return next(specifier, context); } catch {

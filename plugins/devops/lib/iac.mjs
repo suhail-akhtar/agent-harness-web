@@ -278,7 +278,7 @@ export function describeApply(input) {
 export const iacParameters = {
   type: 'object',
   properties: {
-    action: { type: 'string', enum: ['fmt', 'validate', 'plan', 'apply'] },
+    action: { type: 'string', enum: ['fmt', 'validate', 'plan', 'apply'], description: 'What to do: fmt, validate, plan, or apply a plan this tool made' },
     dir: { type: 'string', description: 'The module directory (default: the workspace root; validate without dir checks every root module)' },
     binary: { type: 'string', enum: ['auto', 'tofu', 'terraform'], description: 'Default auto: tofu, else terraform' },
     write: { type: 'boolean', description: 'fmt: rewrite the files instead of checking' },
@@ -290,7 +290,7 @@ export const iacParameters = {
     refresh: { type: 'boolean', description: 'plan: false skips refreshing state' },
     planHash: { type: 'string', description: 'apply: the sha256 the plan printed - the plan the user approved' },
     allowDestroy: { type: 'boolean', description: 'apply: required when the plan destroys or replaces resources' },
-    timeoutSec: { type: 'number' },
+    timeoutSec: { type: 'number', description: 'plan/apply: time limit in seconds (plan default 900, max 3600; apply default 1800, max 7200)' },
   },
   required: ['action'],
   additionalProperties: false,

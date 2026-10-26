@@ -10,8 +10,8 @@
 
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { defineTool } from '../../src/plugins/api.ts';
-import { resolveIn } from '../../src/tools/paths.ts';
+import { defineTool } from '@harness/plugin-sdk/runtime';
+import { resolveIn } from '@harness/plugin-sdk/runtime';
 import { closeBrowser, describePage, runPage } from './lib/browser.mjs';
 import { addLibrary, LIBRARIES } from './lib/libraries.mjs';
 import { describeRender, OFFICE, RENDERABLE, renderFile, saveRenders } from './lib/render.mjs';
@@ -166,13 +166,13 @@ export default {
         properties: {
           path: { type: 'string', description: 'HTML file in the workspace (default index.html)' },
           query: { type: 'string', description: 'Query string, e.g. "?seed=1&debug=1"' },
-          width: { type: 'number' },
-          height: { type: 'number' },
-          actions: { type: 'array', items: { type: 'object' } },
+          width: { type: 'number', description: 'Viewport width in pixels, 320-1920 (default 1280)' },
+          height: { type: 'number', description: 'Viewport height in pixels, 240-1200 (default 720)' },
+          actions: { type: 'array', items: { type: 'object' }, description: 'Steps run in order, each one object as listed above, e.g. [{"press": "ArrowRight", "hold": 500}, {"screenshot": "after"}]' },
           eval: { type: 'string', description: 'JavaScript expression read at the end, e.g. "window.game.state" (JSON result)' },
           screenshot: { type: 'boolean', description: 'Final screenshot (default true)' },
           save: { type: 'object', description: 'Write what a page expression returns into the workspace: {"path": "model.glb", "js": "window.exportGLB()"}. The expression may return a Promise, Blob, ArrayBuffer/typed array, data: URL, or text. For exports that need a browser (GLTFExporter, canvas.toDataURL).', properties: { path: { type: 'string' }, js: { type: 'string' } } },
-          fullPage: { type: 'boolean' },
+          fullPage: { type: 'boolean', description: 'Screenshot the whole page, not only the viewport (default false)' },
         },
       },
       kind: 'exec',
@@ -206,7 +206,7 @@ export default {
     api.registerTool(defineTool({
       name: 'add_library',
       description: `Copy a library into the workspace from the server's install (works offline, pinned versions). ${Object.entries(LIBRARIES).map(([k, v]) => `${k}: ${v.description}`).join(' ')}`,
-      parameters: { type: 'object', properties: { name: { type: 'string', enum: Object.keys(LIBRARIES) } }, required: ['name'] },
+      parameters: { type: 'object', properties: { name: { type: 'string', enum: Object.keys(LIBRARIES), description: 'The library to add to the workspace' } }, required: ['name'] },
       kind: 'edit',
       summarize: (i) => String(i.name),
       async run(input, { host, beforeWrite }) {

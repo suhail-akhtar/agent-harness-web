@@ -120,12 +120,28 @@ function PluginCard({ p }: { p: PluginEntry }) {
       {open && (
         <div className="mt-2 rounded-lg bg-hx-bg p-3 text-[12px] text-hx-secondary">
           <div><b>Contributes:</b> {points.join(', ') || 'no UI (server half only)'}</div>
+          {p.permissions && Object.keys(p.permissions).length > 0 && (
+            <div className="mt-1" data-server-permissions={p.name}><b>Its server code may:</b><ul className="ml-4 list-disc">{serverPermissions(p.permissions).map((t) => <li key={t}>{t}</li>)}</ul></div>
+          )}
           {declared.length > 0 && <div className="mt-1"><b>May ask for:</b><ul className="ml-4 list-disc">{declared.map((c) => <li key={c}>{CAPABILITY_TEXT[c] ?? c}</li>)}</ul></div>}
           {p.uiHash && <div className="mt-1 font-mono text-[11px] text-hx-muted">uiHash {p.uiHash}</div>}
         </div>
       )}
     </div>
   );
+}
+
+/** A plugin's server permissions in plain words (what people see before trusting it). */
+function serverPermissions(p: Record<string, unknown>): string[] {
+  const list = (k: string) => (Array.isArray(p[k]) ? (p[k] as unknown[]).map(String) : []);
+  return [
+    ...(list('network').length ? [`Reach ${list('network').join(', ')}`] : []),
+    ...(list('secrets').length ? [`Read the server settings ${list('secrets').join(', ')}`] : []),
+    ...(list('vault').length ? [`Ask for key vault entries ${list('vault').join(', ')} (an administrator grants each)`] : []),
+    ...(p.sessions === true ? ["Start and drive conversations, and see every conversation's events"] : []),
+    ...(p.routes === true ? ['Serve its own web endpoints'] : []),
+    ...(p.processes === true ? ['Run programs on this computer itself (outside any sandbox)'] : []),
+  ];
 }
 
 function Catalogue() {

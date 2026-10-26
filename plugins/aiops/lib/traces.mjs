@@ -199,6 +199,7 @@ async function getJson(base, pathname, query, { token, signal, timeoutMs = 30_00
   for (const [k, v] of Object.entries(query ?? {})) if (v !== undefined && v !== null && v !== '') u.searchParams.set(k, String(v));
   const sig = signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
   let res;
+  // harness-review: fetch-ok the Tempo / Jaeger address is the operator's (inventory monitoring), usually internal; the model gives only the search
   try { res = await fetch(u, { headers: { accept: 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, signal: sig }); } catch (e) {
     throw new Error(`${what} at ${base} did not answer (${e.name === 'TimeoutError' ? 'timed out' : e.cause?.code ?? e.message})`);
   }
@@ -287,14 +288,14 @@ export function register(api, shared) {
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['search', 'trace', 'services', 'dependencies'] },
+        action: { type: 'string', enum: ['search', 'trace', 'services', 'dependencies'], description: 'search traces, summarise one trace, list the services, or list who calls whom (Jaeger)' },
         backend: { type: 'string', enum: ['tempo', 'jaeger'], description: 'default: tempo if configured, else jaeger' },
         id: { type: 'string', description: 'trace: the trace id (hex)' },
-        service: { type: 'string' }, operation: { type: 'string' },
-        min_duration: { type: 'string', description: 'e.g. 500ms, 2s' }, max_duration: { type: 'string' },
-        status: { type: 'string', enum: ['error', 'ok', 'any'] },
+        service: { type: 'string', description: 'search: the traced service name, e.g. checkout (required on Jaeger)' }, operation: { type: 'string', description: 'search: the span (operation) name, e.g. GET /orders' },
+        min_duration: { type: 'string', description: 'e.g. 500ms, 2s' }, max_duration: { type: 'string', description: 'search: at most this long, e.g. 5s' },
+        status: { type: 'string', enum: ['error', 'ok', 'any'], description: 'search: error for traces with errors, ok for those without, any (default)' },
         traceql: { type: 'string', description: 'Tempo: a TraceQL query instead of the fields' },
-        since: { type: 'string', description: 'window, e.g. 15m, 1h (default 1h)' }, start: { type: 'string' }, end: { type: 'string' },
+        since: { type: 'string', description: 'window, e.g. 15m, 1h (default 1h)' }, start: { type: 'string', description: 'window start instead of since: now-2h, an ISO time or unix seconds' }, end: { type: 'string', description: 'window end: now (default), now-1h, an ISO time or unix seconds' },
         limit: { type: 'number', description: 'search: traces (default 20, at most 100)' },
       },
       required: ['action'], additionalProperties: false,
@@ -362,8 +363,10 @@ export function register(api, shared) {
           if (!input.service) return err('Jaeger searches need a service (traces services lists them).');
           const p = { service: str(input.service), operation: input.operation ? str(input.operation) : undefined, minDuration: input.min_duration ? str(input.min_duration) : undefined, maxDuration: input.max_duration ? str(input.max_duration) : undefined, start: Math.round(startS * 1e6), end: Math.round(endS * 1e6), limit, tags: str(input.status) === 'error' ? JSON.stringify({ error: 'true' }) : undefined };
           const r = await jaegerClient({ url: cfg.url, token }).search(p, ctx.signal);
-          const ts = (r.data ?? []).map((t) => ({ id: t.traceID, spans: normalizeJaeger(t) })).filter((t) => t.spans.length);
-          if (!ts.length) return `No traces for ${p.service}${p.operation ? ` ${p.operation}` : ''}${p.minDuration ? ` >= ${p.minDuration}` : ''}${p.tags ? ' with errors' : ''} in the window (Jaeger ${cfg.url}).`;
+          const ts = (r.data ?? []).map((t) => ({ id: t.traceID, spans: normalizeJaeger(t) }))
+            // Jaeger has no "without errors" search: status ok drops the traces that have an error span.
+            .filter((t) => t.spans.length && (str(input.status) !== 'ok' || !t.spans.some((s) => s.error)));
+          if (!ts.length) return `No traces for ${p.service}${p.operation ? ` ${p.operation}` : ''}${p.minDuration ? ` >= ${p.minDuration}` : ''}${p.tags ? ' with errors' : str(input.status) === 'ok' ? ' without errors' : ''} in the window (Jaeger ${cfg.url}).`;
           const rows = ts.map((t) => { const st = Math.min(...t.spans.map((s) => s.start)); const en = Math.max(...t.spans.map((s) => s.end)); const root = t.spans.find((s) => !s.parent || !t.spans.some((x) => x.id === s.parent)) ?? t.spans[0]; return { id: t.id, d: en - st, st, root, n: t.spans.length, e: t.spans.filter((s) => s.error).length, svc: new Set(t.spans.map((s) => s.service)).size }; }).sort((a, b) => b.d - a.d);
           return clip(redact(`${rows.length} trace(s) (Jaeger ${cfg.url}), slowest first:\n${rows.map((x) => `- ${x.id}: ${x.root.service} ${x.root.name} ${fmt(x.d)} ms at ${new Date(x.st).toISOString()}, ${x.n} spans, ${x.svc} service(s)${x.e ? `, ${x.e} ERROR span(s)` : ''}\n    ${cfg.url}/trace/${x.id}`).join('\n')}\nLook at one with traces action trace (id).`, seen));
         }

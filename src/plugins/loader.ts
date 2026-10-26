@@ -215,8 +215,9 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void, da
     if (typeof def.close === 'function') reg.closers.push(() => def.close!());
   }
   const { vault, ...rest } = declared;
-  const extra = { ...(mayDrive ? { sessions: true } : {}), ...(mayServe ? { routes: true } : {}) };
-  reg.plugins.push({ name: m.name, version: m.version ?? '0.0.0', description: m.description ?? '', dir, trusted: true, contributes: [...new Set(contributes)], ...(declared.network.length || declared.secrets.length || vault.length || mayDrive || mayServe ? { permissions: { ...rest, ...(vault.length ? { vault } : {}), ...extra } } : {}) });
+  const runsPrograms = m.permissions?.processes === true;
+  const extra = { ...(mayDrive ? { sessions: true } : {}), ...(mayServe ? { routes: true } : {}), ...(runsPrograms ? { processes: true } : {}) };
+  reg.plugins.push({ name: m.name, version: m.version ?? '0.0.0', description: m.description ?? '', dir, trusted: true, contributes: [...new Set(contributes)], ...(declared.network.length || declared.secrets.length || vault.length || mayDrive || mayServe || runsPrograms ? { permissions: { ...rest, ...(vault.length ? { vault } : {}), ...extra } } : {}) });
 }
 
 /**

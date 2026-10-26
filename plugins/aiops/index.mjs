@@ -203,10 +203,10 @@ export default {
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ['list', 'show', 'validate'] },
+          action: { type: 'string', enum: ['list', 'show', 'validate'], description: 'list items, show one item in full, or validate the inventory files and credentials' },
           kind: { type: 'string', enum: ['all', 'hosts', 'clusters', 'services', 'environments', 'maintenance', 'alerts'], description: 'list: what to list (default all)' },
           name: { type: 'string', description: 'show: the item; list: a name substring' },
-          tag: { type: 'string' }, env: { type: 'string' }, role: { type: 'string' },
+          tag: { type: 'string', description: 'list: only hosts, clusters and services with this tag, e.g. web' }, env: { type: 'string', description: 'list: only hosts, clusters and services in this environment, e.g. prod' }, role: { type: 'string', description: 'list: only hosts, clusters and services with this role, e.g. db' },
         },
         required: ['action'], additionalProperties: false,
       },
@@ -276,14 +276,14 @@ export default {
         type: 'object',
         properties: {
           query: { type: 'string', description: 'PromQL' },
-          mode: { type: 'string', enum: ['instant', 'range'] },
+          mode: { type: 'string', enum: ['instant', 'range'], description: 'query type (default: range when start or step is given, else instant)' },
           time: { type: 'string', description: 'instant: evaluation time (default now)' },
           start: { type: 'string', description: 'range: default now-1h' },
           end: { type: 'string', description: 'range: default now' },
           step: { type: 'string', description: 'range: e.g. 30s, 5m (default: range/300, at least 15s)' },
           top: { type: 'number', description: 'series shown (default 10, at most 50)' },
-          sort: { type: 'string', enum: ['last', 'max', 'avg', 'min'] },
-          order: { type: 'string', enum: ['desc', 'asc'] },
+          sort: { type: 'string', enum: ['last', 'max', 'avg', 'min'], description: 'the per-series value to sort by (default last)' },
+          order: { type: 'string', enum: ['desc', 'asc'], description: 'sort order (default desc: highest first)' },
           unit: { type: 'string', description: 'unit to print after values, e.g. "s" or "bytes"' },
         },
         required: ['query'], additionalProperties: false,
@@ -345,6 +345,7 @@ export default {
         u.searchParams.set('end', String(BigInt(end) * 1_000_000n));
         u.searchParams.set('limit', String(limitScan));
         u.searchParams.set('direction', 'backward');
+        // harness-review: fetch-ok the Loki address is the operator's (inventory monitoring.loki), usually internal; the model gives only the query
         const res = await fetch(u, { headers: token ? { authorization: `Bearer ${token}` } : {}, signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(30_000)]) });
         const body = await res.json().catch(() => ({}));
         if (body.status !== 'success') throw new Error(`Loki: ${body.error ?? `HTTP ${res.status}`}`);
@@ -382,11 +383,11 @@ export default {
       parameters: {
         type: 'object',
         properties: {
-          service: { type: 'string' }, container: { type: 'string' }, query: { type: 'string', description: 'LogQL (Loki)' },
-          host: { type: 'string' }, file: { type: 'string', description: 'absolute path on the host' },
+          service: { type: 'string', description: 'an inventory service: read its log source' }, container: { type: 'string', description: 'a Docker container name (on host, else on the server)' }, query: { type: 'string', description: 'LogQL (Loki)' },
+          host: { type: 'string', description: 'inventory host for container or file (default: the service\'s host)' }, file: { type: 'string', description: 'absolute path on the host' },
           since: { type: 'string', description: 'e.g. 15m, 2h, 1d' },
           filter: { type: 'string', description: 'regular expression (case-insensitive)' },
-          limit: { type: 'number' }, dedupe: { type: 'boolean' },
+          limit: { type: 'number', description: 'lines shown, newest kept (default 100, max 1000)' }, dedupe: { type: 'boolean', description: 'collapse repeated lines with a count (default true)' },
         },
         additionalProperties: false,
       },
@@ -422,14 +423,14 @@ export default {
       parameters: {
         type: 'object',
         properties: {
-          type: { type: 'string', enum: ['http', 'https', 'tcp', 'dns', 'tls'] },
-          url: { type: 'string' }, target: { type: 'string', description: 'tcp/tls: host:port; dns: the name' },
+          type: { type: 'string', enum: ['http', 'https', 'tcp', 'dns', 'tls'], description: 'the check to run (https is the same as http; omit with service)' },
+          url: { type: 'string', description: 'http: the URL, e.g. https://shop.example.com/healthz' }, target: { type: 'string', description: 'tcp/tls: host:port; dns: the name' },
           service: { type: 'string', description: 'an inventory service: probe its health URL (and TLS)' },
-          method: { type: 'string', enum: ['GET', 'HEAD'] },
+          method: { type: 'string', enum: ['GET', 'HEAD'], description: 'http: request method (default GET)' },
           expect_status: { type: 'string', description: 'e.g. "200", "2xx", "200,204"' },
           expect_body: { type: 'string', description: 'substring, or /regex/' },
-          record: { type: 'string', enum: ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS'] },
-          timeout_ms: { type: 'number' }, warn_days: { type: 'number' },
+          record: { type: 'string', enum: ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS'], description: 'dns: record type to resolve (default A)' },
+          timeout_ms: { type: 'number', description: 'milliseconds before giving up, 200 to 60000 (default per type: http 10000, tls 8000, tcp 5000)' }, warn_days: { type: 'number', description: 'tls: warn when the certificate expires within this many days (default 21)' },
           insecure: { type: 'boolean', description: 'http: do not verify the certificate' },
         },
         additionalProperties: false,
@@ -439,7 +440,8 @@ export default {
       summarize: (i) => `probe ${str(i.type) || 'service'} ${str(i.url || i.target || i.service)}`,
       async run(input, ctx) {
         const specs = [];
-        const timeout_ms = int(input.timeout_ms, 10_000, 200, 60_000);
+        // Given: clamped; not given: each probe type's own default (http 10 s, tls 8 s, tcp 5 s).
+        const timeout_ms = input.timeout_ms != null ? int(input.timeout_ms, 10_000, 200, 60_000) : undefined;
         if (input.service && !input.type) {
           const { inv, error } = await invOrError(ctx);
           if (error) return error;
@@ -501,7 +503,7 @@ export default {
         type: 'object',
         properties: {
           name: { type: 'string', description: 'name substring' }, project: { type: 'string', description: 'compose project' }, label: { type: 'string', description: 'k=v' },
-          host: { type: 'string', description: 'inventory host (default: the server\'s engine)' }, all: { type: 'boolean' }, limit: { type: 'number' },
+          host: { type: 'string', description: 'inventory host (default: the server\'s engine)' }, all: { type: 'boolean', description: 'include stopped containers (default true; false: running only)' }, limit: { type: 'number', description: 'containers shown (default 40, max 200)' },
         },
         additionalProperties: false,
       },
@@ -641,7 +643,7 @@ export default {
       description: 'Restart, start or stop an inventory service (its docker container, or its systemd unit over ssh), or read its status. A change is asked about first; after it, the tool waits (wait_sec, default 60) for the service to be running and healthy and probes its health URL, and reports before/after - check the result before going on.',
       parameters: {
         type: 'object',
-        properties: { service: { type: 'string' }, action: { type: 'string', enum: ['status', 'restart', 'start', 'stop'] }, wait_sec: { type: 'number' } },
+        properties: { service: { type: 'string', description: 'inventory service with a container or systemd unit, e.g. checkout' }, action: { type: 'string', enum: ['status', 'restart', 'start', 'stop'], description: 'read the status, or the change to make' }, wait_sec: { type: 'number', description: 'restart/start: seconds to wait for it to be running and healthy (default 60, max 600)' } },
         required: ['service', 'action'], additionalProperties: false,
       },
       kind: 'external', parallelSafe: false, untrusted: true, sendsOut: true,
@@ -772,8 +774,8 @@ export default {
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ['run', 'history'] }, service: { type: 'string' },
-          severity: { type: 'string', enum: ['critical', 'warning', 'info'] }, include_ok: { type: 'boolean' },
+          action: { type: 'string', enum: ['run', 'history'], description: 'run: evaluate the rules now (default); history: state changes per alert over the last days' }, service: { type: 'string', description: 'run: only this inventory service\'s rules' },
+          severity: { type: 'string', enum: ['critical', 'warning', 'info'], description: 'run: only rules of this severity' }, include_ok: { type: 'boolean', description: 'run: also list the rules that are ok (default false)' },
           days: { type: 'number', description: 'history: how far back (default 7)' },
         },
         additionalProperties: false,
@@ -809,7 +811,7 @@ export default {
     register({
       name: 'slo_status',
       description: 'For the inventory\'s SLOs: the error ratio over the SLO window, the error budget left, and the burn rate over 5m, 30m, 1h, 2h, 6h, 1d and 3d with the multi-window alerts (14.4x over 1h and 5m, 6x over 6h and 30m: page; 3x over 1d and 2h, 1x over 3d and 6h: ticket). Each SLO defines errors and total as PromQL rates with [{{window}}].',
-      parameters: { type: 'object', properties: { service: { type: 'string' }, slo: { type: 'string' } }, additionalProperties: false },
+      parameters: { type: 'object', properties: { service: { type: 'string', description: 'only this inventory service\'s SLOs (default: all services)' }, slo: { type: 'string', description: 'only the SLO with this name, e.g. availability' } }, additionalProperties: false },
       kind: 'network', parallelSafe: true, untrusted: true, sendsOut: () => !opProm(), kindsFor: () => [opProm() ? 'read' : 'network'],
       availableIn: configured,
       summarize: (i) => `slo status${i.service ? ` ${i.service}` : ''}${i.slo ? `/${i.slo}` : ''}`,
@@ -849,8 +851,8 @@ export default {
       parameters: {
         type: 'object',
         properties: {
-          query: { type: 'string' }, range: { type: 'string', description: 'history to fit (default 7d)' }, step: { type: 'string' },
-          threshold: { type: 'number' }, horizon: { type: 'string', description: 'how far ahead (default 30d)' }, top: { type: 'number' },
+          query: { type: 'string', description: 'PromQL for the gauge, e.g. 100 * (1 - node_filesystem_avail_bytes / node_filesystem_size_bytes)' }, range: { type: 'string', description: 'history to fit (default 7d)' }, step: { type: 'string', description: 'resolution, e.g. 5m, 1h (default: range/300, at least 15s)' },
+          threshold: { type: 'number', description: 'value whose crossing time is forecast, e.g. 90' }, horizon: { type: 'string', description: 'how far ahead (default 30d)' }, top: { type: 'number', description: 'series shown, highest last value first (default 5, max 20)' },
         },
         required: ['query'], additionalProperties: false,
       },
@@ -915,17 +917,17 @@ export default {
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ['open', 'update', 'resolve', 'list', 'show', 'postmortem'] },
-          id: { type: 'string' }, title: { type: 'string' }, severity: { type: 'string', enum: ['sev1', 'sev2', 'sev3', 'sev4'] },
-          services: { type: 'array', items: { type: 'string' } }, summary: { type: 'string' },
-          status: { type: 'string', enum: ['investigating', 'identified', 'mitigating', 'monitoring', 'resolved'] },
-          note: { type: 'string' }, kind: { type: 'string', enum: ['note', 'evidence', 'hypothesis', 'action', 'change', 'detection'] }, at: { type: 'string' },
-          root_cause: { type: 'string' }, resolution: { type: 'string' },
-          impact: { type: 'array', items: { type: 'string' } }, detection: { type: 'array', items: { type: 'string' } },
-          contributing_factors: { type: 'array', items: { type: 'string' } }, went_well: { type: 'array', items: { type: 'string' } },
-          went_wrong: { type: 'array', items: { type: 'string' } }, lucky: { type: 'array', items: { type: 'string' } },
-          evidence: { type: 'array', items: { type: 'string' } },
-          action_items: { type: 'array', items: { type: 'object', properties: { action: { type: 'string' }, type: { type: 'string', enum: ['prevent', 'detect', 'mitigate', 'process'] }, owner: { type: 'string' }, priority: { type: 'string' }, due: { type: 'string' } }, required: ['action'] } },
+          action: { type: 'string', enum: ['open', 'update', 'resolve', 'list', 'show', 'postmortem'], description: 'what to do with the incident records' },
+          id: { type: 'string', description: 'update, resolve, show, postmortem: the incident id, e.g. inc-20260101-checkout-errors' }, title: { type: 'string', description: 'open: a short title (required)' }, severity: { type: 'string', enum: ['sev1', 'sev2', 'sev3', 'sev4'], description: 'open (default sev3) or update: severity, sev1 the worst' },
+          services: { type: 'array', items: { type: 'string' }, description: 'open or update: affected services (update adds to them)' }, summary: { type: 'string', description: 'open: what is happening; postmortem: the summary (default the incident\'s)' },
+          status: { type: 'string', enum: ['investigating', 'identified', 'mitigating', 'monitoring', 'resolved'], description: 'update: the new status' },
+          note: { type: 'string', description: 'update: a timeline entry' }, kind: { type: 'string', enum: ['note', 'evidence', 'hypothesis', 'action', 'change', 'detection'], description: 'update: the kind of the timeline note (default note)' }, at: { type: 'string', description: 'update, resolve: when it happened, an ISO time (default now)' },
+          root_cause: { type: 'string', description: 'resolve (required) or postmortem: one sentence naming the technical cause' }, resolution: { type: 'string', description: 'resolve or postmortem: what fixed it' },
+          impact: { type: 'array', items: { type: 'string' }, description: 'postmortem: who and what was affected, one point each' }, detection: { type: 'array', items: { type: 'string' }, description: 'postmortem: how and when it was noticed' },
+          contributing_factors: { type: 'array', items: { type: 'string' }, description: 'postmortem: conditions that made it possible or worse' }, went_well: { type: 'array', items: { type: 'string' }, description: 'postmortem: what went well' },
+          went_wrong: { type: 'array', items: { type: 'string' }, description: 'postmortem: what went wrong' }, lucky: { type: 'array', items: { type: 'string' }, description: 'postmortem: where we got lucky' },
+          evidence: { type: 'array', items: { type: 'string' }, description: 'postmortem: the evidence behind the findings (e.g. evidence ids, queries, links), one point each' },
+          action_items: { type: 'array', description: 'postmortem: follow-up actions, each with action, type, owner, priority and due', items: { type: 'object', properties: { action: { type: 'string' }, type: { type: 'string', enum: ['prevent', 'detect', 'mitigate', 'process'] }, owner: { type: 'string' }, priority: { type: 'string' }, due: { type: 'string' } }, required: ['action'] } },
         },
         required: ['action'], additionalProperties: false,
       },
@@ -1007,7 +1009,7 @@ export default {
     register({
       name: 'runbook',
       description: 'Runbooks: markdown runbooks in .harness/ops/runbooks/<name>.md (tagged steps [check] [approval] [change] [verify]; see the runbook-writing skill) and runbook workflows (the built-in runbook-* workflows, and the workspace\'s .harness/workflows). "list" them, "show" one, "check" one or all against the runbook-safe rules (every change approved first and verified after). Run a runbook workflow with the workflow tool.',
-      parameters: { type: 'object', properties: { action: { type: 'string', enum: ['list', 'show', 'check'] }, name: { type: 'string' } }, required: ['action'], additionalProperties: false },
+      parameters: { type: 'object', properties: { action: { type: 'string', enum: ['list', 'show', 'check'], description: 'list the runbooks, show one, or check one (or all) against the runbook-safe rules' }, name: { type: 'string', description: 'the runbook name without extension, e.g. disk-full (check: default all)' } }, required: ['action'], additionalProperties: false },
       kind: 'read', parallelSafe: true,
       availableIn: configured,
       summarize: (i) => `runbook ${str(i.action)} ${str(i.name)}`.trim(),

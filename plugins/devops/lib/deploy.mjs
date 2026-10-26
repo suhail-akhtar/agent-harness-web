@@ -162,7 +162,7 @@ export const DEPLOY_CHANGES = new Set(['up', 'down', 'rollback']);
 export const deployParameters = {
   type: 'object',
   properties: {
-    action: { type: 'string', enum: ['ps', 'up', 'down', 'rollback'] },
+    action: { type: 'string', enum: ['ps', 'up', 'down', 'rollback'], description: 'What to do: ps, up (deploy and verify health), down, or rollback to the last healthy deploy' },
     project: { type: 'string', description: 'Compose project name' },
     file: { type: 'string', description: 'Compose file in the workspace (default compose.yaml)' },
     service: { type: 'string', description: 'up: the service whose image changes' },

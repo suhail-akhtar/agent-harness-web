@@ -323,7 +323,11 @@ export interface PluginManifest {
    * sessions: api.sessions and api.events (start, drive and answer sessions; see every
    * session's events). routes: api.registerRoute (HTTP endpoints under /api/plugins/<name>/).
    */
-  permissions?: { network?: string[]; secrets?: string[]; vault?: string[]; sessions?: boolean; routes?: boolean };
+  /**
+   * processes: its code starts programs on the server itself (not where the session runs): shown to people
+   * before they add it, and the review flags code that does so without declaring it.
+   */
+  permissions?: { network?: string[]; secrets?: string[]; vault?: string[]; sessions?: boolean; routes?: boolean; processes?: boolean };
   /**
    * The plugin's UI half (navigation entries, pages, panels, commands, settings sections,
    * renderers...): see packages/plugin-ui. Validated with validateUiManifest when the plugin

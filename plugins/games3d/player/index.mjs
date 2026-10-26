@@ -349,7 +349,7 @@ async function studioGame(root) {
   try { return /__game/.test(await fsp.readFile(path.join(root, entry), 'utf8')); } catch { return false; }
 }
 
-const gameInput = { engine: { type: 'string', enum: ['auto', ...PLAY_ENGINES], description: 'Default: from .studio/project.json or the files' }, game: { type: 'string', description: 'The page (web) or project to play (default: index.html / the project)' }, query: { type: 'string', description: 'URL query for web games, e.g. "?autostart=1"' }, seed: { type: 'number', description: 'Seeds Math.random (and is passed on); same seed + same inputs = same game' }, width: { type: 'number' }, height: { type: 'number' } };
+const gameInput = { engine: { type: 'string', enum: ['auto', ...PLAY_ENGINES], description: 'Default: from .studio/project.json or the files' }, game: { type: 'string', description: 'The page (web) or project to play (default: index.html / the project)' }, query: { type: 'string', description: 'URL query for web games, e.g. "?autostart=1"' }, seed: { type: 'number', description: 'Seeds Math.random (and is passed on); same seed + same inputs = same game' }, width: { type: 'number', description: 'Game viewport width in pixels, 320-1920 (default 960)' }, height: { type: 'number', description: 'Game viewport height in pixels, 240-1200 (default 600)' } };
 const checkSchema = { type: 'object', properties: { path: { type: 'string' }, op: { type: 'string' }, value: {}, when: { type: 'string', enum: ['ever', 'end', 'always', 'never'] } }, required: ['path'] };
 
 export function setupPlayer(api) {
@@ -359,13 +359,13 @@ export function setupPlayer(api) {
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['start', 'step', 'act', 'observe', 'check', 'verdict', 'stop', 'list'] },
-        session: { type: 'string' }, ...gameInput,
+        action: { type: 'string', enum: ['start', 'step', 'act', 'observe', 'check', 'verdict', 'stop', 'list'], description: 'What to do: start, step, act, observe, check, verdict, stop or list (default observe)' },
+        session: { type: 'string', description: 'The play session id from start, e.g. "play-lx2k9a-1" (default the only open one)' }, ...gameInput,
         clock: { type: 'string', enum: ['fixed', 'real'], description: 'fixed (default): the game only runs during steps; real: it runs on its own' },
-        inputs: { type: 'array', items: { type: 'object' } }, ms: { type: 'number', description: 'Game time a step runs (default: until its inputs end; max 10000)' },
+        inputs: { type: 'array', items: { type: 'object' }, description: 'step/act: inputs, each with key, action or mouse, e.g. [{"key":"ArrowRight","ms":400}, {"action":"jump"}]' }, ms: { type: 'number', description: 'Game time a step runs (default: until its inputs end; max 10000)' },
         frame: { type: 'boolean', description: 'Return a frame (default true for step and observe)' }, frameWidth: { type: 'number', description: 'Frame width in pixels (default 512)' },
-        checks: { type: 'array', items: checkSchema }, claim: { type: 'string' }, pass: { type: 'boolean' }, goal: { type: 'boolean', description: 'verdict: this claim is the goal being reached' },
-        goalReached: { type: 'boolean' }, note: { type: 'string' },
+        checks: { type: 'array', items: checkSchema, description: 'check: state claims over the session so far, e.g. [{"path":"coins","op":">=","value":5,"when":"ever"}]' }, claim: { type: 'string', description: 'verdict: what you judged from the frame, e.g. "the door opens after the switch"' }, pass: { type: 'boolean', description: 'verdict: whether the claim holds' }, goal: { type: ['string', 'boolean'], description: 'start: what a player must achieve, in words (e.g. "reach the flag"); verdict: true when this claim is the goal being reached' },
+        goalReached: { type: 'boolean', description: 'stop: you reached the game\'s goal (recorded in the summary)' }, note: { type: 'string', description: 'verdict: a detail for the judgement (up to 300 characters); stop: a note saved with the recording' },
       },
       required: ['action'],
     },
@@ -381,11 +381,11 @@ export function setupPlayer(api) {
     parameters: {
       type: 'object',
       properties: {
-        mode: { type: 'string', enum: BOT_MODES }, seconds: { type: 'number', description: 'Game seconds (default 30, max 900)' }, ...gameInput,
+        mode: { type: 'string', enum: BOT_MODES, description: 'The bot: random, explore, goal, monkey or scripted (a replay)' }, seconds: { type: 'number', description: 'Game seconds (default 30, max 900)' }, ...gameInput,
         recording: { type: 'string', description: 'scripted: the recording or regression file' }, steps: { type: 'array', items: { type: 'object' }, description: 'scripted: [{"inputs": [...], "ms": 300}]' },
         expect: { type: 'array', items: checkSchema, description: 'State checks for this run, e.g. [{"path":"won","op":"==","value":true,"when":"end"}]' },
-        saveAs: { type: 'string', description: 'Save the run as .studio/regressions/<saveAs>.json with expect' }, note: { type: 'string' },
-        macroMs: { type: 'number' }, stuckSeconds: { type: 'number' }, softlockSeconds: { type: 'number' }, stopOnGoal: { type: 'boolean' }, clock: { type: 'string', enum: ['fixed', 'real'] },
+        saveAs: { type: 'string', description: 'Save the run as .studio/regressions/<saveAs>.json with expect' }, note: { type: 'string', description: 'saveAs: a note stored in the regression file' },
+        macroMs: { type: 'number', description: 'How long the bot holds each input in ms, 20-2000 (default 150)' }, stuckSeconds: { type: 'number', description: 'Seconds of nothing changing that count as a stuck moment (default 3)' }, softlockSeconds: { type: 'number', description: 'Seconds stuck, with every input tried, that count as a softlock (default 8)' }, stopOnGoal: { type: 'boolean', description: 'Stop when the goal is reached (default true)' }, clock: { type: 'string', enum: ['fixed', 'real'], description: 'fixed (default): the game runs only as the bot steps it; real: it runs on its own' },
       },
       required: ['mode'],
     },
@@ -401,12 +401,12 @@ export function setupPlayer(api) {
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['run', 'report', 'verdict', 'judge', 'regress'] }, id: { type: 'string' }, ...gameInput,
+        action: { type: 'string', enum: ['run', 'report', 'verdict', 'judge', 'regress'], description: 'What to do: run, report, verdict, judge or regress (default run)' }, id: { type: 'string', description: 'report/verdict/judge: the playtest id, e.g. "pt-20260101-1" (default the latest)' }, ...gameInput,
         goal: { type: 'string', description: 'What a player must achieve, in words (the result fails when no player reaches it; the game\'s won/done state says it is reached)' },
-        checks: { type: 'array', items: checkSchema }, bots: { type: 'array', items: {}, description: 'Bot modes or {mode, seconds} (default goal, explore, monkey)' },
+        checks: { type: 'array', items: checkSchema, description: 'run: state claims judged over the playtest, e.g. [{"path":"lives","op":">","value":0,"when":"always"}]' }, bots: { type: 'array', items: {}, description: 'Bot modes or {mode, seconds} (default goal, explore, monkey)' },
         seconds: { type: 'number', description: 'Game seconds per bot (default 120; give the goal bot enough to finish the whole game, not less than the default)' }, sessions: { type: 'array', items: { type: 'string' }, description: 'game_play session ids to include' },
-        fpsBudget: { type: 'number' }, boot: { type: 'boolean', description: 'The real-clock boot segment (default true)' }, bootSeconds: { type: 'number' }, regressions: { type: 'boolean' }, build: { type: 'string' },
-        claim: { type: 'string' }, claims: { type: 'array', items: { type: 'string' } }, pass: { type: 'boolean' }, evidence: { type: 'string' }, frames: { type: 'array', items: { type: 'string' } }, note: { type: 'string' },
+        fpsBudget: { type: 'number', description: 'Lowest acceptable average fps (default the project\'s budgets.fps, else 30)' }, boot: { type: 'boolean', description: 'The real-clock boot segment (default true)' }, bootSeconds: { type: 'number', description: 'Length of the boot segment in seconds, 1-20 (default 4)' }, regressions: { type: 'boolean', description: 'Replay the .studio/regressions files too (default true)' }, build: { type: 'string', description: 'A build label recorded in the report, e.g. "v0.3" or a commit' },
+        claim: { type: 'string', description: 'verdict: what you judged from the frame; judge: one claim (or use claims)' }, claims: { type: 'array', items: { type: 'string' }, description: 'judge: up to 5 claims the frames should show, e.g. ["the HUD shows the score"]' }, pass: { type: 'boolean', description: 'verdict: whether the claim holds' }, evidence: { type: 'string', description: 'verdict: the frame you judged, relative to the playtest folder, e.g. "frames/0012.png"' }, frames: { type: 'array', items: { type: 'string' }, description: 'judge: up to 4 frames to judge, e.g. ["frames/0003.png"] (default picked from the events and spread over the run)' }, note: { type: 'string', description: 'verdict: a detail for the judgement (up to 300 characters)' },
       },
     },
     kind: 'exec',
