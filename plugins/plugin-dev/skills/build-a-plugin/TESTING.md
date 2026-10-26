@@ -8,7 +8,12 @@ server does, with a throwaway data folder and workspace, and calls what it adds 
 npm run plugin -- test <plugin folder>        # from the harness checkout; agents: plugin_test
 ```
 
-`@harness/plugin-sdk` is importable from any folder there (nothing to install).
+`@harness/plugin-sdk` is importable from any folder there (nothing to install). Keep the tests in the
+plugin's own `test/` folder: they travel with it (Export, `pack`) and run wherever it is installed. A test
+that needs the harness itself (a whole server, its helpers) imports it by name, `@harness/core/src/...`
+(the harness's own files, wherever it is installed), and another plugin's module as
+`@harness/plugins/<name>/...`; the plugin's own files by relative path (`../lib/x.mjs`). The shipped
+solutions do the same: `plugins/aiops/test`, `plugins/games3d/test`, and the harness's suite runs them too.
 
 ```ts
 import assert from 'node:assert/strict';

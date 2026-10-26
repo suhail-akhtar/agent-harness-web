@@ -2,14 +2,55 @@
   "name": "devops",
   "version": "1.0.0",
   "description": "DevOps (the AIOps pack's DevOps half): Terraform/OpenTofu plan and approved-plan apply, Kubernetes validate/diff/apply/rollout/undo, GitHub Actions runs, failing logs, re-runs and local reproduction, container lint/scan/build, compose deploys with health checks and automatic rollback; gates for IaC, manifests, Dockerfiles, shell, workflows, IaC security and secrets; ship-change, pipeline-fix and k8s-rollout workflows. Tools run in the ops sandbox image (docker/Dockerfile.sandbox-ops); credentials come from the Key Vault.",
-  "solution": { "title": "DevOps" },
+  "displayName": "DevOps",
+  "icon": "server",
+  "category": "DevOps",
+  "tags": [
+    "devops",
+    "ci/cd",
+    "containers",
+    "kubernetes",
+    "infrastructure as code",
+    "deploy"
+  ],
+  "publisher": {
+    "name": "Harness",
+    "url": "https://github.com/suhail-akhtar/agent-harness-web"
+  },
+  "links": {
+    "repository": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/plugins/devops",
+    "docs": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/docs",
+    "support": "https://github.com/suhail-akhtar/agent-harness-web/issues"
+  },
+  "engines": {
+    "harness": ">=0.1.0"
+  },
+  "changelog": "CHANGELOG.md",
+  "solution": {
+    "title": "DevOps"
+  },
   "main": "index.mjs",
   "agents": "agents",
   "skills": "skills",
   "workflows": "workflows",
   "permissions": {
-    "network": ["api.github.com", "*.actions.githubusercontent.com", "*.blob.core.windows.net"],
-    "secrets": ["HARNESS_GITHUB_TOKEN"],
-    "vault": ["github-token", "kubeconfig", "kubeconfig-*", "cloud-*", "tf-*", "docker-host-*", "ssh-*", "registry-*"]
+    "network": [
+      "api.github.com",
+      "*.actions.githubusercontent.com",
+      "*.blob.core.windows.net"
+    ],
+    "secrets": [
+      "HARNESS_GITHUB_TOKEN"
+    ],
+    "vault": [
+      "github-token",
+      "kubeconfig",
+      "kubeconfig-*",
+      "cloud-*",
+      "tf-*",
+      "docker-host-*",
+      "ssh-*",
+      "registry-*"
+    ]
   }
 }

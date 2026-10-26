@@ -96,7 +96,7 @@ async function check(dir: string): Promise<number> {
   try {
     const e = h.plugins.list().find((x) => x.name === m.name);
     if (!e) problems.push(`it did not load: ${logs.filter((l) => l.includes(m.name) || /plugin/i.test(l)).join(' | ') || 'no reason given'}`);
-    if (e?.error) problems.push(`it failed to load: ${e.error}`);
+    if (e?.error) problems.push(`it did not load: ${e.error}`);
     if (e?.uiError) problems.push(`its ui section is not used: ${e.uiError}`);
     const reg = h.registry;
     const mine = <T>(map: Map<string, T>) => [...map.entries()].filter(([, v]) => reg.ownerOf(v) === m.name).map(([k]) => k);

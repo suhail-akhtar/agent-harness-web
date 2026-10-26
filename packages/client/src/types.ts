@@ -190,7 +190,20 @@ export interface PluginInfo {
   guide?: { purpose: string };
   /** official: shipped with the harness or signed by an official publisher; custom: everything else. */
   tier?: 'official' | 'custom';
+  /** The bundle: how it is shown, who publishes it, its links, licence and changelog, which harness versions it runs on. */
+  info?: PluginBundleInfo;
+  /** A newer version found by the last update check. */
+  update?: PluginUpdateInfo;
+  error?: string;
 }
+export interface PluginBundleInfo {
+  displayName: string; icon?: string; /** data: URL of its icon image */ iconData?: string; tags: string[]; category?: string;
+  author?: { name: string; email?: string; url?: string }; publisher?: { name: string; url?: string; email?: string }; license?: string;
+  links: { homepage?: string; docs?: string; support?: string; privacy?: string; terms?: string; repository?: string };
+  changelog?: string; compat: { harness?: string; ok: boolean; reason?: string }; updatesUrl?: string;
+}
+export interface PluginUpdateInfo { name: string; version: string; latest: string; from: string }
+export interface PluginRevisionInfo { id: string; version: string; at: number }
 export interface CatalogueEntry { name: string; version: string; description?: string; installed?: boolean; url?: string; /** A solution shipped with the harness (Studio, Operations, ...): installed one by one, in any mix. */ solution?: { title: string; requires: string[]; requiredBy: string[] } }
 /** A deep review of a plugin (POST /api/plugins/review; src/plugins/review.ts). */
 export interface PluginReviewFinding { level: 'error' | 'warning' | 'info'; area: string; message: string; fix?: string }

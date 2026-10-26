@@ -7,11 +7,14 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 // folder, <data>/plugins, a folder loaded in the desktop app, a packaged app without node_modules):
 //   import { defineTool, resolveIn } from '@harness/plugin-sdk/runtime';   the harness's abilities
 //   import { runJob } from '@harness/plugins/games3d/sdk/jobs.mjs';        another plugin's module, by name
+//   import { createHarness } from '@harness/core/src/kernel/harness.ts';   the harness's own files (tests only:
+//                                                                          internals change between versions)
 // A synchronous hook in this thread (module.registerHooks): a plugin registered a moment ago resolves at once.
 // In the harness checkout the same names also resolve without it (npm workspaces), so tests can import plugin
 // files directly.
 
 const SDK = pathToFileURL(path.join(import.meta.dirname, '..', '..', 'packages', 'plugin-sdk', 'src') + path.sep).href;
+const CORE = pathToFileURL(path.join(import.meta.dirname, '..', '..') + path.sep).href;
 const SDK_FILES: Record<string, string> = { '@harness/plugin-sdk': 'index.ts', '@harness/plugin-sdk/runtime': 'runtime.ts', '@harness/plugin-sdk/testing': 'testing.ts', '@harness/plugin-sdk/ui': 'ui.ts' };
 /** Plugin name -> its folder (a file URL ending in /). */
 const dirs = new Map<string, string>();
@@ -26,6 +29,11 @@ function ensure(): void {
     resolve(specifier, context, next) {
       const sdk = SDK_FILES[specifier];
       if (sdk) return { url: SDK + sdk, shortCircuit: true };
+      const c = /^@harness\/core\/(.+)$/.exec(specifier);
+      if (c) {
+        if (c[1]!.split(/[\\/]/).includes('..')) throw new Error(`${specifier}: may not leave the harness's folder`);
+        return next(new URL(c[1]!, CORE).href, context);
+      }
       const m = /^@harness\/plugins\/([a-z0-9][a-z0-9._-]{0,63})\/(.+)$/i.exec(specifier);
       if (m) {
         // Only files inside that plugin's folder.

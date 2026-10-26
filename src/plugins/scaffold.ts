@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { HARNESS_VERSION } from './bundle.ts';
 
 // `npm run plugin -- new <name>`: a complete plugin that works as written, to change into the real one.
 // It shows every part a full plugin has: tools the agent calls, versioned data (api.store), routes its
@@ -30,6 +31,12 @@ export function scaffoldFiles(name: string, o: ScaffoldOptions): Record<string, 
   files['harness-plugin.json'] = `${JSON.stringify({
     name, version: '0.1.0',
     description: `${title}: a list of items the agent and you keep together. Tools to add, list and finish items; a page in the desktop app.`,
+    displayName: title, icon: 'icon.svg', category: 'Productivity', tags: ['lists', 'tasks'],
+    publisher: { name: 'Your name or company', url: 'https://example.com' },
+    license: 'MIT',
+    links: { homepage: 'https://example.com', support: 'mailto:support@example.com' },
+    changelog: 'CHANGELOG.md',
+    engines: { harness: `>=${HARNESS_VERSION}` },
     main: `index.${ext}`,
     skills: 'skills',
     permissions: { routes: true },
@@ -390,6 +397,8 @@ reloads the plugin in the engine.
 The full guide: docs/plugin-sdk/README.md in the harness checkout.
 `;
   files['.gitignore'] = 'node_modules/\n';
+  files['CHANGELOG.md'] = `# Changelog\n\n## 0.1.0\n\n- First version: add, list and finish items; a page in the desktop app.\n`;
+  files['icon.svg'] = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#4f46e5"/><path d="M20 22h24M20 32h24M20 42h16" stroke="#fff" stroke-width="5" stroke-linecap="round"/></svg>\n';
   // ES modules (import.meta, import/export) for Node and the type checker.
   files['package.json'] = `${JSON.stringify({ name, version: '0.1.0', private: true, type: 'module', description: 'A harness plugin (see harness-plugin.json).' }, null, 2)}\n`;
   return files;

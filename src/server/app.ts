@@ -633,6 +633,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     ...(e.ui ? { ui: e.ui, uiBase: `/api/plugins/${e.name}/ui/` } : {}), ...(e.uiError ? { uiError: e.uiError } : {}), ...(e.uiHash ? { uiHash: e.uiHash } : {}),
     ...(e.guide ? { guide: { purpose: e.guide.purpose } } : {}),
     ...(e.error ? { error: e.error } : {}),
+    ...(e.info ? { info: e.info } : {}), ...(e.update ? { update: e.update } : {}),
   });
 
   /**
@@ -711,9 +712,9 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     }
 
     // ---- plugin routes: /api/plugins/<plugin>/<path> (webhooks: alerts, chat, CI/CD) ----
-    // (The server's own paths there - ui/..., enable, disable, reload - are signed-in routes below; no plugin may register them.)
+    // (The server's own paths there - ui/..., enable, disable, reload, update, export, revisions, rollback - are signed-in routes below; no plugin may register them.)
     const pr = /^\/api\/plugins\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/(.+)$/.exec(p);
-    if (pr && !/^(ui\/|enable$|disable$|reload$)/.test(pr[2]!)) return pluginRoute(req, res, url, pr[1]!, pr[2]!, method);
+    if (pr && !/^(ui\/|(enable|disable|reload|update|export|revisions|rollback)$)/.test(pr[2]!)) return pluginRoute(req, res, url, pr[1]!, pr[2]!, method);
 
     // ---- published dashboards (/p/<slug>): their own share token, or a signed-in account they are shared with ----
     if (p.startsWith('/p/') && await publishedRoutes(dataHttp, req, res, url)) return;
@@ -895,6 +896,38 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       const dir = typeof b?.dir === 'string' && b.dir ? b.dir : undefined;
       if (dir && !o.loopback) throw new HttpError(403, 'loading a plugin from a folder is only for a server on this computer');
       try { return send(res, 200, pluginView(await harness.plugins.reload(prl[1]!, dir))); } catch (e) { if (e instanceof PluginStateError) throw new HttpError(e.status, e.message); throw e; }
+    }
+    // ---- bundles: updates (the version before kept), revisions and rollback, export and import ----
+    if (p === '/api/plugins/updates' && method === 'GET') {
+      if (!admin) throw new HttpError(403, 'administrators only');
+      return send(res, 200, await harness.plugins.checkUpdates());
+    }
+    if (p === '/api/plugins/import' && method === 'POST') {
+      if (!admin) throw new HttpError(403, 'only administrators add plugins: their code runs in the server');
+      try {
+        // Unsigned bundles only where the server is the person's own computer (and it has no trust list).
+        return send(res, 201, pluginView(await harness.plugins.importBundle(await readBody(req, 50 * 1024 * 1024), { allowUnsigned: !!o.loopback })));
+      } catch (e) { if (e instanceof PluginStateError) throw new HttpError(e.status, e.message); throw e; }
+    }
+    const pbx = /^\/api\/plugins\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/(update|export|revisions|rollback)$/.exec(p);
+    if (pbx) {
+      if (!admin) throw new HttpError(403, 'administrators only: plugins change what every session can do');
+      const [, name, what] = pbx as unknown as [string, string, string];
+      try {
+        if (what === 'export' && method === 'GET') {
+          const tgz = await harness.plugins.exportBundle(name);
+          const v = harness.plugins.get(name)?.version ?? '0.0.0';
+          res.writeHead(200, { 'content-type': 'application/gzip', 'content-length': String(tgz.length), 'content-disposition': `attachment; filename="${name}-${v.replace(/[^\w.-]/g, '')}.tgz"`, 'x-content-type-options': 'nosniff' });
+          return void res.end(tgz);
+        }
+        if (what === 'revisions' && method === 'GET') return send(res, 200, await harness.plugins.revisions(name));
+        if (what === 'update' && method === 'POST') return send(res, 200, pluginView(await harness.plugins.update(name)));
+        if (what === 'rollback' && method === 'POST') {
+          const b = await readJson(req, 4096).catch(() => ({})) as { id?: unknown };
+          return send(res, 200, pluginView(await harness.plugins.rollback(name, typeof b?.id === 'string' ? b.id : undefined)));
+        }
+      } catch (e) { if (e instanceof PluginStateError) throw new HttpError(e.status, e.message); throw e; }
+      throw new HttpError(405, 'method not allowed');
     }
     const pst = /^\/api\/plugins\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})(?:\/(enable|disable))?$/.exec(p);
     if (pst && ((method === 'POST' && pst[2]) || (method === 'DELETE' && !pst[2])) && pst[1] !== 'install' && pst[1] !== 'catalogue') {

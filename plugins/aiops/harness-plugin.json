@@ -2,7 +2,32 @@
   "name": "aiops",
   "version": "1.1.0",
   "description": "AI operations: an ops inventory (hosts, services, SLOs, alert rules, maintenance windows), monitoring (Prometheus, Loki or docker logs, probes, host stats, Docker; Grafana dashboards, alert rules and annotations; Tempo and Jaeger traces; a service dependency graph; statistical anomaly detection on metrics and log patterns), ssh with Key Vault credentials and pinned host keys, alert checks and SLO burn rates, incidents and postmortems with an evidence ledger and incident memory (similar past incidents), safe runbooks, the incident-response and ops-advisor workflows, SRE agents and skills, and the runbook-safe, inventory-valid, alerts-valid and ops-healthy gates. Its tools appear in sessions whose workspace has .harness/ops/inventory.yaml (or when the operator sets HARNESS_OPS_INVENTORY). It reaches the hosts and endpoints the inventory names directly - that is its job; only the operator's inventory attaches Key Vault credentials (to its hosts and endpoints), every call that uses one is asked about (vault rules), and the server's own Docker engine is off unless the operator allows containers. In the desktop: an Operations console (incidents with their timeline, evidence, root cause, refuter verdict, runbook and postmortem; firing alerts; services with health and SLOs; the dependency topology; the change timeline), an On call home card, status items, /incident, /investigate and /ops-check.",
-  "solution": { "title": "Operations" },
+  "icon": "activity",
+  "category": "Operations",
+  "tags": [
+    "operations",
+    "monitoring",
+    "incidents",
+    "kubernetes",
+    "observability",
+    "sre"
+  ],
+  "publisher": {
+    "name": "Harness",
+    "url": "https://github.com/suhail-akhtar/agent-harness-web"
+  },
+  "links": {
+    "repository": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/plugins/aiops",
+    "docs": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/docs",
+    "support": "https://github.com/suhail-akhtar/agent-harness-web/issues"
+  },
+  "engines": {
+    "harness": ">=0.1.0"
+  },
+  "changelog": "CHANGELOG.md",
+  "solution": {
+    "title": "Operations"
+  },
   "main": "index.mjs",
   "agents": "agents",
   "skills": "skills",

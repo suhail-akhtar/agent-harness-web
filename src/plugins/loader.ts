@@ -18,6 +18,7 @@ import { ROUTE_PATH } from './host.ts';
 import { freshImport } from './fresh-import.ts';
 import { makeStore } from './store.ts';
 import { registerPluginDir } from './resolve.ts';
+import { compatibility, HARNESS_VERSION } from './bundle.ts';
 
 // Plugins are folders with a harness-plugin.json. The operator lists plugin
 // directories (HARNESS_PLUGINS); those are TRUSTED: their code runs in the
@@ -74,6 +75,12 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void, da
   const m = await readManifest(dir);
   if (!m) throw new Error(`no ${MANIFEST} in ${dir}`);
   if (reg.plugins.some((p) => p.name === m.name)) throw new Error(`plugin ${m.name} is loaded twice`);
+  // Made for other harness versions (engines.harness): not loaded, with what to do (HARNESS_PLUGIN_IGNORE_ENGINES=1 loads it anyway).
+  const compat = compatibility(m);
+  if (!compat.ok) {
+    if (process.env.HARNESS_PLUGIN_IGNORE_ENGINES !== '1') throw new Error(`${m.name} ${m.version ?? ''} is not for this harness: ${compat.reason}`);
+    log(`plugin ${m.name}: ${compat.reason} (loaded anyway: HARNESS_PLUGIN_IGNORE_ENGINES=1)`);
+  }
   const contributes: string[] = [];
   const within = (rel: string) => {
     const p = path.resolve(dir, rel);
@@ -141,6 +148,7 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void, da
       pluginName: m.name,
       pluginDir: dir,
       tier,
+      harnessVersion: HARNESS_VERSION,
       // The server's data folder when there is one; a temporary folder otherwise (a plugin loaded on its own, in a test).
       dataDir: pluginData,
       store: (name, so) => makeStore(m.name, pluginData, name, so),
@@ -184,7 +192,7 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void, da
         if (r.auth !== 'token' && r.auth !== 'none' && r.auth !== 'user') throw new Error(`${m.name}: a route's auth is "token", "user" or "none"`);
         if (typeof r.path !== 'string' || !ROUTE_PATH.test(r.path) || r.path.split('/').some((x) => x === '.' || x === '..')) throw new Error(`${m.name}: route path "${r.path}" must be letters, digits, . _ - and / (no leading slash)`);
         // The server's own paths under /api/plugins/<name>/: the UI files, enable and disable.
-        if (/^(ui(\/|$)|enable$|disable$|reload$)/.test(r.path)) throw new Error(`${m.name}: route path "${r.path}" is reserved (ui/..., enable, disable, reload)`);
+        if (/^(ui(\/|$)|(enable|disable|reload|update|export|revisions|rollback)$)/.test(r.path)) throw new Error(`${m.name}: route path "${r.path}" is reserved (ui/..., enable, disable, reload, update, export, revisions, rollback)`);
         if (typeof r.handler !== 'function') throw new Error(`${m.name}: a route needs a handler`);
         if (reg.routes.some((x) => x.plugin === m.name && x.path === r.path && x.method === r.method)) throw new Error(`${m.name}: ${r.method} ${r.path} is registered twice`);
         reg.routes.push({ ...r, plugin: m.name });

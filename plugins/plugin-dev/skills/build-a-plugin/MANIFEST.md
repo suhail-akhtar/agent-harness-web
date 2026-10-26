@@ -5,6 +5,17 @@
   "name": "customer-desk",
   "version": "1.2.0",
   "description": "A support desk: tickets and contacts the agent and the team work together, with triage and reply drafts.",
+  "displayName": "Customer Desk",
+  "icon": "icon.svg",
+  "category": "Support",
+  "tags": ["support", "tickets", "crm"],
+  "publisher": { "name": "Acme Ltd", "url": "https://acme.example" },
+  "author": "Ann Smith <ann@acme.example>",
+  "license": "MIT",
+  "links": { "homepage": "https://acme.example/desk", "docs": "https://acme.example/desk/docs", "support": "mailto:desk@acme.example" },
+  "changelog": "CHANGELOG.md",
+  "engines": { "harness": ">=0.1.0" },
+  "updates": { "url": "https://plugins.acme.example/index.json" },
   "main": "index.ts",
   "skills": "skills",
   "agents": "agents",
@@ -33,6 +44,43 @@
 | `solution` | `{ "title": "Studio" }`: a standalone solution shipped with the harness (Studio, Operations, Engineering, DevOps); on a server that installs solutions one by one it loads only once installed |
 | `permissions` | what its code may reach (below) |
 | `ui` | its desktop UI (below) |
+
+### The bundle: how it is shown, who makes it, what it runs on
+
+All optional; a plugin without them shows its name and description and runs on every harness. The app
+shows them on the plugin's card (Plugins > Installed, and Details), and the review checks them.
+
+| Field | |
+|---|---|
+| `displayName` | its name as people see it (default: `ui.displayName`, the solution's title, then `name`) |
+| `icon` | an image in its folder (`icon.svg`, `assets/icon.png`; png, svg, jpg or webp, at most 256 KB) or an icon name (below) |
+| `tags` (`keywords`) | words it is found by; `category` what kind of plugin it is |
+| `publisher` | the company (or person) that publishes and supports it: `{ name, url?, email? }` |
+| `author` | who wrote it: `"Name <email> (url)"` or `{ name, email?, url? }` |
+| `license` | an SPDX id (`MIT`, `Apache-2.0`) or `proprietary` |
+| `homepage`, `repository`, `links` | `links`: `homepage`, `docs`, `support`, `privacy`, `terms`, `repository`; only `https://` and `mailto:` links are shown |
+| `changelog` | a markdown file in its folder (default `CHANGELOG.md`): shown in Details |
+| `engines.harness` | the harness versions it runs on, an npm-style range (`">=0.1.0"`, `"^1.2.0"`, `">=1 <3"`). A server outside it does not load it and says why ("it runs on harness ^2.0.0; this one is 1.4.0: update the harness, or get a version of the plugin made for it"); `HARNESS_PLUGIN_IGNORE_ENGINES=1` loads it anyway |
+| `updates.url` | where newer versions are listed (https): an index like a catalogue's, `{ "plugins": [{ "name", "version", "url", "sha256" }] }` (`npm run plugin -- index <dir>` writes one) |
+
+### Versions, updates, moving
+
+- **Updates.** Plugins > Installed > *Check for updates* asks each installed plugin's `updates.url`, then
+  the server's catalogue. *Update to x.y.z* installs it, checked like an install (signature against the
+  trust list, `engines.harness`); the version before is kept (the last five), and **Roll back** in Details
+  goes back to one. A version that fails to load leaves the one before running. Shipped plugins update
+  with the harness; folders the operator names (`HARNESS_PLUGINS`) are the operator's.
+- **Moving.** *Export* on a plugin's card saves it as a bundle (`<name>-<version>.tgz`: its folder,
+  signature, tests and all). On another computer, Plugins > Developer > *Import a plugin file* reviews it
+  and loads it; *Open as app* and *Desktop shortcut* then make it its own app there. On a server,
+  `POST /api/plugins/import` (administrators) adds a bundle signed with a trusted key (or, on a server
+  without a trust list, only on the person's own computer); a newer bundle of an installed plugin updates it.
+- **When the harness updates.** What `@harness/plugin-sdk` and `@harness/plugin-sdk/runtime` export (and
+  the manifest) only grows within a major version: a plugin made for `>=1.2.0` keeps working on every 1.x.
+  Anything removed or changed is deprecated for a major version first (the review says so) and goes in the
+  next one, which is why a plugin says `engines.harness`. `api.harnessVersion` is the version it runs on.
+  The harness's own files (`@harness/core/...`) are for tests only: they change between versions, and the
+  review warns when a plugin's code imports them.
 
 ## permissions
 

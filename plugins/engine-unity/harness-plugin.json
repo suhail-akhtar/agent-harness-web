@@ -2,8 +2,33 @@
   "name": "engine-unity",
   "version": "1.0.0",
   "description": "Unity for Studio (Unity 6 / 6000.x LTS, on the host where Unity Hub is; never in a sandbox): the unity tool finds the Hub, the editors, their build modules and the licence; makes 2D, 2.5D and 3D projects from the editor's templates (URP or built-in) with the harness bridge package (com.harness.bridge) and test assemblies, and Studio's .studio/project.json; describes projects; runs C# headless (-batchmode -executeMethod) or live in the open editor through a localhost, token-protected bridge (scene, GameObjects, components, prefabs, play mode, captures, the console); imports and exports assets (FBX, glTF through glTFast, textures and sprite sheets, audio); captures and renders frames; builds levels from grid layouts (tilemaps, isometric, 3D) with collect-and-escape rules; runs Unity Test Framework tests with parsed results; builds and packages Windows 64-bit and WebGL players with the build report; plays the game N seconds with an input timeline (frames, fps, memory, draw calls, events, a Studio playtest) and drives it step by step for the AI player (driver.mjs). Heavy work runs through Studio's job queue. Gates unity-project, unity-tests, unity-build; skills unity-essentials, unity-csharp, unity-2d, unity-build-test; the unity-engineer agent. Installing editors, accepting EULAs and activating the licence are the person's, in Unity Hub.",
-  "solution": { "title": "Studio: Unity" },
-  "requires": ["games3d"],
+  "icon": "box",
+  "category": "Games and 3D",
+  "tags": [
+    "unity",
+    "game engine",
+    "games",
+    "studio"
+  ],
+  "publisher": {
+    "name": "Harness",
+    "url": "https://github.com/suhail-akhtar/agent-harness-web"
+  },
+  "links": {
+    "repository": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/plugins/engine-unity",
+    "docs": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/docs",
+    "support": "https://github.com/suhail-akhtar/agent-harness-web/issues"
+  },
+  "engines": {
+    "harness": ">=0.1.0"
+  },
+  "changelog": "CHANGELOG.md",
+  "solution": {
+    "title": "Studio: Unity"
+  },
+  "requires": [
+    "games3d"
+  ],
   "main": "index.mjs",
   "agents": "agents",
   "skills": "skills",
@@ -13,6 +38,8 @@
     "icon": "box",
     "category": "Studio",
     "guide": "GUIDE.md",
-    "tools": ["unity"]
+    "tools": [
+      "unity"
+    ]
   }
 }

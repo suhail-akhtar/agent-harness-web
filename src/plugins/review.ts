@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { CALLS } from '../../packages/plugin-ui/src/rpc.ts';
 import { CAPABILITIES, ICON_NAMES as ICONS, validateUiManifest } from '../../packages/plugin-ui/src/manifest.ts';
 import { validateWorkflow } from '../graph/validate.ts';
+import { bundleInfo, HARNESS_VERSION } from './bundle.ts';
 import { readManifest } from './loader.ts';
 import { loadPlugin } from './testkit.ts';
 import { pluginTestFiles, runPluginTests } from './run-tests.ts';
@@ -41,7 +42,7 @@ export interface Review {
   durationMs: number;
 }
 
-const KNOWN_KEYS = new Set(['name', 'version', 'description', 'main', 'skills', 'agents', 'outputStyles', 'mcpServers', 'hooks', 'workflows', 'permissions', 'ui', 'author', 'license', 'homepage', 'repository', 'keywords', 'solution', 'requires', '$schema']);
+const KNOWN_KEYS = new Set(['name', 'version', 'description', 'main', 'skills', 'agents', 'outputStyles', 'mcpServers', 'hooks', 'workflows', 'permissions', 'ui', 'author', 'license', 'homepage', 'repository', 'keywords', 'solution', 'requires', 'displayName', 'icon', 'tags', 'category', 'publisher', 'links', 'changelog', 'engines', 'updates', '$schema']);
 /** Ordinary methods of arrays, maps, strings and promises (a page's `files.map(...)` is not an SDK call). */
 const JS_METHODS = new Set(['map', 'filter', 'find', 'findIndex', 'forEach', 'some', 'every', 'reduce', 'flatMap', 'includes', 'indexOf', 'join', 'slice', 'splice', 'sort', 'push', 'pop', 'shift', 'unshift', 'concat', 'at', 'keys', 'values', 'entries', 'get', 'set', 'has', 'delete', 'clear', 'add', 'then', 'catch', 'finally', 'toString', 'trim', 'split', 'replace', 'startsWith', 'endsWith', 'length']);
 const KNOWN_PERMISSIONS = new Set(['network', 'secrets', 'vault', 'sessions', 'routes', 'processes']);
@@ -83,6 +84,15 @@ export async function reviewPlugin(dir: string, o: { runTests?: boolean; testTim
     const st = await fs.stat(path.resolve(dir, rel)).catch(() => null);
     if (!st || (what === 'file' ? !st.isFile() : !st.isDirectory())) add('error', 'manifest', `"${key}" names ${rel}, which is not a ${what} in the plugin.`);
   }
+  // ---- the bundle: how it is shown, who makes it, what it runs on ----
+  const info = await bundleInfo(m, dir);
+  if (typeof m.icon === 'string' && !info.icon && !info.iconData) add('warning', 'bundle', `"icon" ${m.icon} is neither an icon name nor an image in the plugin (png, svg, jpg or webp, at most 256 KB).`);
+  if (m.engines?.harness !== undefined && info.compat.reason && /not a version range/.test(info.compat.reason)) add('error', 'bundle', `"engines.harness" ${info.compat.reason}.`, 'A range like ">=0.1.0" or "^1.2.0".');
+  else if (!info.compat.ok) add('error', 'bundle', `It does not run on this harness: ${info.compat.reason}.`);
+  else if (!m.engines?.harness) add('info', 'bundle', 'It does not say which harness versions it runs on.', `Add "engines": {"harness": ">=${HARNESS_VERSION}"}: a server it was not made for then says so, instead of failing on a missing call.`);
+  for (const [k, v] of Object.entries({ homepage: m.homepage, ...(m.links ?? {}), updates: m.updates?.url })) if (v !== undefined && !/^(https:\/\/|mailto:)/i.test(String(v))) add('warning', 'bundle', `"${k}" ${String(v)} is not an https:// (or mailto:) link${k === 'updates' ? ': updates are not looked for there' : ': it is not shown'}.`);
+  if (m.changelog && !info.changelog) add('warning', 'bundle', `"changelog" names ${m.changelog}, which is not a file in the plugin.`);
+  if (!m.publisher && !m.author) add('info', 'bundle', 'It does not say who publishes it.', 'Add "publisher": {"name", "url"} (or "author"): people see who stands behind it.');
   const perms = (m.permissions ?? {}) as Record<string, unknown>;
   for (const k of Object.keys(perms)) if (!KNOWN_PERMISSIONS.has(k)) add('warning', 'permissions', `Unknown permission "${k}" (ignored).`, `The permissions are ${[...KNOWN_PERMISSIONS].join(', ')}.`);
 
@@ -108,7 +118,12 @@ export async function reviewPlugin(dir: string, o: { runTests?: boolean; testTim
   const allCode = [...code.values()].join('\n');
   for (const f of files.filter((x) => /\.(m?js|cjs|ts|mts|json|md|html|css|txt|env|ya?ml|toml)$/i.test(x) || !x.includes('.'))) {
     const text = await fs.readFile(path.join(dir, f), 'utf8').catch(() => '');
-    for (const [re, what] of SECRET_PATTERNS) if (re.test(text)) add('error', 'security', `${f} holds what looks like ${what}.`, 'Never ship a secret in a plugin: declare it in permissions.secrets and read it with api.secret(NAME), or use the key vault (permissions.vault).');
+    // Tests hold made-up keys on purpose (that redaction hides them): noted, so a real one is still seen.
+    const fixture = /(^|\/)(test|tests|__tests__|fixtures)\//.test(f) || /\.test\.(ts|mjs|js)$/.test(f);
+    for (const [re, what] of SECRET_PATTERNS) if (re.test(text)) {
+      if (fixture) add('info', 'security', `${f} (a test) holds what looks like ${what}: make sure it is made up, not a real one.`);
+      else add('error', 'security', `${f} holds what looks like ${what}.`, 'Never ship a secret in a plugin: declare it in permissions.secrets and read it with api.secret(NAME), or use the key vault (permissions.vault).');
+    }
   }
   if (files.some((f) => f === '.env' || f.endsWith('/.env'))) add('error', 'security', 'The plugin ships a .env file.', 'Remove it: secrets come from the server (api.secret) or the key vault.');
   const declaredSecretNames = ((perms.secrets as unknown[]) ?? []).map(String);
@@ -118,6 +133,7 @@ export async function reviewPlugin(dir: string, o: { runTests?: boolean; testTim
     const outside = [...text.matchAll(IMPORT)].map((x) => x[1]!).filter((sp) => { const abs = path.resolve(dir, path.dirname(f), sp); return abs !== path.resolve(dir) && !abs.startsWith(path.resolve(dir) + path.sep); });
     if (outside.length) add('error', 'portable', `${f} imports ${outside.join(', ')} from outside the plugin's folder: it breaks wherever the plugin is installed on its own.`, "The harness's abilities come from '@harness/plugin-sdk/runtime' (defineTool, resolveIn, writeFileAtomic, findBinary, withBrowser, ...); another plugin's module from '@harness/plugins/<name>/<file>' (and \"requires\": [\"<name>\"] when that plugin must be on).");
     if (/\bfrom\s+['"](node:)?child_process['"]|require\(['"](node:)?child_process['"]\)/.test(text)) startsPrograms.push(f);
+    if (/['"]@harness\/core\//.test(text)) add('warning', 'portable', `${f} imports the harness's own files (@harness/core/...): they change between harness versions.`, "Use '@harness/plugin-sdk' and '@harness/plugin-sdk/runtime': what they export stays the same within a major version. @harness/core is for tests.");
     if (/\beval\(|new Function\(/.test(text)) add('warning', 'security', `${f} runs code from strings (eval / new Function).`);
     // The server's environment: a credential read without declaring it bypasses what the operator approved.
     const secretReads = [...new Set([...text.matchAll(/process\.env(?:\.([A-Za-z_][A-Za-z0-9_]*)|\[\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"]\s*\])/g)].map((x) => x[1] ?? x[2]!))]
@@ -161,10 +177,17 @@ export async function reviewPlugin(dir: string, o: { runTests?: boolean; testTim
   try { kit = await loadPlugin(dir); } catch (e) { add('error', 'load', `It could not be loaded: ${(e as Error).message}`); }
   const tests = async (): Promise<Review['tests'] | undefined> => {
     if (o.runTests === false) return undefined;
-    const n = (await pluginTestFiles(dir)).length;
-    if (!n) { add('warning', 'tests', 'It has no tests.', 'Add test/*.test.ts on the test kit (@harness/plugin-sdk/testing): its tools, routes and a scripted conversation. npm run plugin -- new writes examples.'); return undefined; }
-    const r = await runPluginTests(dir, [], { capture: true, timeoutMs: o.testTimeoutMs ?? 5 * 60_000 }) as { code: number; output: string };
+    const all = await pluginTestFiles(dir);
+    if (!all.length) { add('warning', 'tests', 'It has no tests.', 'Add test/*.test.ts on the test kit (@harness/plugin-sdk/testing): its tools, routes and a scripted conversation. npm run plugin -- new writes examples.'); return undefined; }
+    // The review runs the quick tests; integration tests (real engines, service stacks, a desktop app) run with plugin test.
+    const n = (await pluginTestFiles(dir, { quick: true })).length;
+    if (n < all.length) add('info', 'tests', `${all.length - n} integration test file${all.length - n === 1 ? '' : 's'} (named *e2e*, *-stack, *-real, *-live) not run by the review: npm run plugin -- test runs them.`);
+    if (!n) return { files: 0, passed: true, output: '' };
+    const limit = o.testTimeoutMs ?? 5 * 60_000;
+    const r = await runPluginTests(dir, [], { capture: true, quick: true, timeoutMs: limit }) as { code: number; output: string; timedOut?: boolean };
     const tail = r.output.split('\n').filter((l) => !/^\s+at /.test(l)).slice(-40).join('\n');
+    const failed = /^not ok /m.test(r.output);
+    if (r.timedOut && !failed) { add('warning', 'tests', `Its tests did not finish within ${Math.round(limit / 60_000)} minutes (none failed before then).`, 'Run npm run plugin -- test <dir> to run them all; name the slow ones *-stack, *-real or *-live so a review leaves them out.'); return { files: n, passed: false, output: tail }; }
     if (r.code !== 0) add('error', 'tests', `Its tests fail (${n} file${n === 1 ? '' : 's'}).`, 'Run npm run plugin -- test <dir> and fix what fails.');
     return { files: n, passed: r.code === 0, output: tail };
   };

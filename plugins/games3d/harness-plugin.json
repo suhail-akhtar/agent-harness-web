@@ -2,7 +2,31 @@
   "name": "games3d",
   "version": "1.0.0",
   "description": "Browser games (2D canvas or Three.js) and 3D models: design, build, play-test in a real headless browser, independent playtest/art review, glTF export with validation; Blender and Godot through the engine-blender and engine-godot plugins (their tools, gates, skills and agents). Needs the visual plugin.",
-  "solution": { "title": "Studio" },
+  "icon": "box",
+  "category": "Games and 3D",
+  "tags": [
+    "games",
+    "3d",
+    "assets",
+    "playtesting",
+    "studio"
+  ],
+  "publisher": {
+    "name": "Harness",
+    "url": "https://github.com/suhail-akhtar/agent-harness-web"
+  },
+  "links": {
+    "repository": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/plugins/games3d",
+    "docs": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/docs",
+    "support": "https://github.com/suhail-akhtar/agent-harness-web/issues"
+  },
+  "engines": {
+    "harness": ">=0.1.0"
+  },
+  "changelog": "CHANGELOG.md",
+  "solution": {
+    "title": "Studio"
+  },
   "main": "index.mjs",
   "agents": "agents",
   "skills": "skills",

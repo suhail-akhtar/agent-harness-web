@@ -2,6 +2,26 @@
   "name": "quality-gates",
   "version": "1.0.0",
   "description": "Stack-aware verifiers: tests, type checks, lint and builds for Node, Python, Go, Rust and Java; secret, conflict-marker, TODO and large-file scans.",
+  "icon": "shield",
+  "category": "Developer tools",
+  "tags": [
+    "quality",
+    "gates",
+    "checks"
+  ],
+  "publisher": {
+    "name": "Harness",
+    "url": "https://github.com/suhail-akhtar/agent-harness-web"
+  },
+  "links": {
+    "repository": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/plugins/quality-gates",
+    "docs": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/docs",
+    "support": "https://github.com/suhail-akhtar/agent-harness-web/issues"
+  },
+  "engines": {
+    "harness": ">=0.1.0"
+  },
+  "changelog": "CHANGELOG.md",
   "main": "index.mjs",
   "ui": {
     "apiVersion": 1,
@@ -13,22 +33,87 @@
     "contributes": {
       "settings": [
         {
-          "id": "defaults", "title": "Quality gates", "icon": "shield", "group": "agent", "scope": "account", "order": 50,
+          "id": "defaults",
+          "title": "Quality gates",
+          "icon": "shield",
+          "group": "agent",
+          "scope": "account",
+          "order": 50,
           "schema": {
             "type": "object",
             "title": "Gate defaults",
             "description": "How the gates run in your sessions. Your administrator's settings (gates on stop, permissions) still apply.",
             "properties": {
-              "runOnStop": { "type": "boolean", "title": "Check before finishing", "description": "Ask the agent to run the applicable gates before it says it is done.", "default": true, "order": 1 },
-              "include": { "type": "array", "title": "Gates to run", "description": "Empty: every gate that applies to the workspace.", "items": { "type": "string", "enum": ["node-test", "node-typecheck", "node-lint", "node-build", "python-test", "python-lint", "go-test", "rust-test", "java-test", "secrets", "conflict-markers", "todo-markers", "large-files"] }, "default": [], "order": 2 },
-              "advisory": { "type": "string", "title": "Advisory gates", "description": "What to do with advisory gates (TODO markers, large files).", "enum": ["report", "ignore"], "enumLabels": ["Report them", "Leave them out"], "default": "report", "order": 3 },
-              "timeoutMinutes": { "type": "integer", "title": "Time per gate (minutes)", "minimum": 1, "maximum": 30, "default": 10, "order": 4 }
+              "runOnStop": {
+                "type": "boolean",
+                "title": "Check before finishing",
+                "description": "Ask the agent to run the applicable gates before it says it is done.",
+                "default": true,
+                "order": 1
+              },
+              "include": {
+                "type": "array",
+                "title": "Gates to run",
+                "description": "Empty: every gate that applies to the workspace.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "node-test",
+                    "node-typecheck",
+                    "node-lint",
+                    "node-build",
+                    "python-test",
+                    "python-lint",
+                    "go-test",
+                    "rust-test",
+                    "java-test",
+                    "secrets",
+                    "conflict-markers",
+                    "todo-markers",
+                    "large-files"
+                  ]
+                },
+                "default": [],
+                "order": 2
+              },
+              "advisory": {
+                "type": "string",
+                "title": "Advisory gates",
+                "description": "What to do with advisory gates (TODO markers, large files).",
+                "enum": [
+                  "report",
+                  "ignore"
+                ],
+                "enumLabels": [
+                  "Report them",
+                  "Leave them out"
+                ],
+                "default": "report",
+                "order": 3
+              },
+              "timeoutMinutes": {
+                "type": "integer",
+                "title": "Time per gate (minutes)",
+                "minimum": 1,
+                "maximum": 30,
+                "default": 10,
+                "order": 4
+              }
             }
           }
         }
       ],
       "commands": [
-        { "id": "run-gates", "title": "Run quality gates", "category": "Quality", "icon": "check", "action": { "type": "prompt", "prompt": "Run every applicable quality gate (gates tool) and fix what fails." } }
+        {
+          "id": "run-gates",
+          "title": "Run quality gates",
+          "category": "Quality",
+          "icon": "check",
+          "action": {
+            "type": "prompt",
+            "prompt": "Run every applicable quality gate (gates tool) and fix what fails."
+          }
+        }
       ]
     }
   }

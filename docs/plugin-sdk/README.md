@@ -61,6 +61,23 @@ packed (`npm run plugin -- pack`), signed and installed on any server. Plugins c
 **official** (shipped with the harness, or signed with an official publisher's key: `HARNESS_OFFICIAL_KEYS`)
 and **custom** (everything else). Both have the whole API and runtime.
 
+## A plugin as a bundle
+
+Each plugin carries what people need to find, trust and keep it: a display name, an icon image, tags, a
+category, its publisher (the company behind it), author, licence, links (website, docs, support, privacy),
+a changelog, and the harness versions it runs on (`engines.harness`). Its tests live in its own `test/`
+folder, so they go wherever it goes.
+
+- **Versions.** A server that is not in a plugin's `engines.harness` range does not load it, and the app
+  shows why and what to do. Within a major version of the harness, the SDK and runtime only grow, so an
+  update of the harness never breaks a plugin made for it; see *When the harness updates* in the
+  [manifest reference](../../plugins/plugin-dev/skills/build-a-plugin/MANIFEST.md).
+- **Updates and revisions.** *Check for updates* finds newer versions (the plugin's `updates.url`, the
+  catalogue); *Update* installs one and keeps the version before; *Roll back* returns to it.
+- **Moving.** *Export* saves a plugin as a `.tgz` bundle; *Import a plugin file* (desktop) or
+  `POST /api/plugins/import` (a server) adds it elsewhere, reviewed and checked. On the desktop it can then
+  open as its own app (*Open as app*, *Desktop shortcut*).
+
 ## The reference
 
 The reference lives with the `build-a-plugin` skill, so agents and people read the same text:

@@ -2,6 +2,26 @@
   "name": "plugin-dev",
   "version": "1.0.0",
   "description": "Build plugins for the harness and its desktop app: start one from the template, run its tests, review it deeply (plugin_new, plugin_test, plugin_review), with the build-a-plugin skill holding the procedure and the whole SDK reference.",
+  "icon": "puzzle",
+  "category": "Developer tools",
+  "tags": [
+    "plugins",
+    "sdk",
+    "developer"
+  ],
+  "publisher": {
+    "name": "Harness",
+    "url": "https://github.com/suhail-akhtar/agent-harness-web"
+  },
+  "links": {
+    "repository": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/plugins/plugin-dev",
+    "docs": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/docs",
+    "support": "https://github.com/suhail-akhtar/agent-harness-web/issues"
+  },
+  "engines": {
+    "harness": ">=0.1.0"
+  },
+  "changelog": "CHANGELOG.md",
   "main": "index.mjs",
   "skills": "skills",
   "ui": {

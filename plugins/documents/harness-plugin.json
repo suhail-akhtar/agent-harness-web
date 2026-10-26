@@ -2,6 +2,27 @@
   "name": "documents",
   "version": "1.0.0",
   "description": "Decks and documents a professional would present: storyline and outline, build (.pptx / .docx with PDF), render-and-look checks, an independent visual review, revisions. Needs the visual plugin.",
+  "displayName": "Documents",
+  "icon": "file-text",
+  "category": "Productivity",
+  "tags": [
+    "documents",
+    "writing",
+    "reports"
+  ],
+  "publisher": {
+    "name": "Harness",
+    "url": "https://github.com/suhail-akhtar/agent-harness-web"
+  },
+  "links": {
+    "repository": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/plugins/documents",
+    "docs": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/docs",
+    "support": "https://github.com/suhail-akhtar/agent-harness-web/issues"
+  },
+  "engines": {
+    "harness": ">=0.1.0"
+  },
+  "changelog": "CHANGELOG.md",
   "agents": "agents",
   "skills": "skills",
   "workflows": "workflows"

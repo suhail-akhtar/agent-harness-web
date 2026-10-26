@@ -22,6 +22,7 @@ import type { DesktopContext } from './context';
 import { JsonFile } from './store';
 import { registerPreviewHtml, RUNTIME_URL } from './preview';
 import { reloadInEngine } from './dev-watch';
+import { unpack } from '../../../src/plugins/archive';
 import type { Grants, GrantRecord } from '../shared/grants';
 import type { RemoteServer } from '../shared/prefs';
 
@@ -150,6 +151,53 @@ export function registerIpc(ctx: DesktopContext): { grants: JsonFile<Grants> } {
     }
     ctx.devWatch?.sync();
     return list;
+  });
+  // A plugin bundle (.tgz, from Plugins > Export on another computer or server): unpacked to a staging folder,
+  // reviewed by the window, then moved into place and loaded like a folder (plugins:importCommit).
+  const imported = () => path.join(app.getPath('userData'), 'imported-plugins');
+  h('plugins:importFile', async () => {
+    const w = ctx.window();
+    const opts = { title: 'Import a plugin', properties: ['openFile' as const], filters: [{ name: 'Plugin bundle', extensions: ['tgz', 'gz'] }] };
+    const r = w ? await dialog.showOpenDialog(w, opts) : await dialog.showOpenDialog(opts);
+    const file = r.canceled ? undefined : r.filePaths[0];
+    if (!file) return null;
+    if (fs.statSync(file).size > 50 * 1024 * 1024) throw new Error('The bundle is larger than 50 MB.');
+    const staging = path.join(imported(), '.staging', `${Date.now()}`);
+    fs.mkdirSync(path.dirname(staging), { recursive: true });
+    try {
+      await unpack(fs.readFileSync(file), staging);
+      const m = JSON.parse(fs.readFileSync(path.join(staging, 'harness-plugin.json'), 'utf8')) as { name?: unknown; version?: unknown };
+      if (typeof m.name !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(m.name)) throw new Error('its harness-plugin.json has no valid name');
+      return { dir: staging, name: m.name, version: typeof m.version === 'string' ? m.version : '0.0.0' };
+    } catch (e) {
+      fs.rmSync(staging, { recursive: true, force: true });
+      throw new Error(`Not a plugin bundle: ${(e as Error).message}`);
+    }
+  });
+  h('plugins:importCommit', (staging: string) => {
+    const root = path.join(imported(), '.staging');
+    const from = path.resolve(String(staging));
+    if (path.dirname(from) !== root || !fs.existsSync(from)) throw new Error('No imported bundle there.');
+    const m = JSON.parse(fs.readFileSync(path.join(from, 'harness-plugin.json'), 'utf8')) as { name: string };
+    const dest = path.join(imported(), m.name);
+    // A newer version of one imported before replaces it (it reloads in place).
+    fs.rmSync(dest, { recursive: true, force: true });
+    fs.renameSync(from, dest);
+    return dest;
+  });
+  h('plugins:importCancel', (staging: string) => {
+    const from = path.resolve(String(staging));
+    if (path.dirname(from) === path.join(imported(), '.staging')) fs.rmSync(from, { recursive: true, force: true });
+  });
+  // Saves a plugin bundle the window fetched from the server (Plugins > Export).
+  h('plugins:saveBundle', async (fileName: string, base64: string) => {
+    const w = ctx.window();
+    const name = path.basename(String(fileName)).replace(/[^\w.@-]/g, '_') || 'plugin.tgz';
+    const opts = { title: 'Export the plugin', defaultPath: path.join(app.getPath('downloads'), name), filters: [{ name: 'Plugin bundle', extensions: ['tgz'] }] };
+    const r = w ? await dialog.showSaveDialog(w, opts) : await dialog.showSaveDialog(opts);
+    if (r.canceled || !r.filePath) return null;
+    fs.writeFileSync(r.filePath, Buffer.from(String(base64), 'base64'));
+    return r.filePath;
   });
   h('plugins:devRemove', async (dir: string) => { ctx.prefs.set({ devPlugins: ctx.prefs.get().devPlugins.filter((d) => d !== dir) }); ctx.devWatch?.sync(); if (hasServerCode(dir)) await ctx.engine().restart(); return ctx.devPlugins.load(); });
   h('plugins:devToggle', (name: string, on: boolean) => {

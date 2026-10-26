@@ -80,6 +80,8 @@ export interface PluginAPI {
    * custom: everything else. Both have the whole API and @harness/plugin-sdk/runtime.
    */
   readonly tier: 'official' | 'custom';
+  /** The harness's version (its package.json): compare with what the plugin was made for (engines.harness). */
+  readonly harnessVersion: string;
   /** A folder for the plugin's own state on this server (created on first use): outside every workspace, so no agent can edit it. */
   readonly dataDir: string;
   /**
@@ -342,4 +344,31 @@ export interface PluginManifest {
   solution?: { title?: string; summary?: string } | true;
   /** Plugins it needs loaded first (it imports from them or uses their tools): installing it installs them. */
   requires?: string[];
+
+  // ---- the bundle: how it is shown, who makes it, where it lives, what it runs on (src/plugins/bundle.ts) ----
+  /** Its name as people see it (default: ui.displayName, the solution's title, then name). */
+  displayName?: string;
+  /** An icon: an image in the plugin's folder ("icon.svg", "assets/icon.png") or an icon name ("package"). */
+  icon?: string;
+  /** Words it is found by in the catalogue (keywords is read too). */
+  tags?: string[];
+  keywords?: string[];
+  /** What kind of plugin it is (Operations, Games, Productivity...). */
+  category?: string;
+  /** Who wrote it: "Name <email> (url)" or { name, email, url }. */
+  author?: string | { name: string; email?: string; url?: string };
+  /** The company (or person) that publishes and supports it. */
+  publisher?: { name: string; url?: string; email?: string };
+  /** SPDX licence id ("MIT", "Apache-2.0") or "proprietary". */
+  license?: string;
+  homepage?: string;
+  repository?: string | { type?: string; url: string };
+  /** Where people find more: docs, support (a URL or mailto:), privacy, terms, homepage, repository. */
+  links?: { homepage?: string; docs?: string; support?: string; privacy?: string; terms?: string; repository?: string };
+  /** Its changelog, a markdown file in its folder (default: CHANGELOG.md when there is one). */
+  changelog?: string;
+  /** Which harness versions it runs on, a semver range (">=0.1.0 <2"): a server outside it does not load it. */
+  engines?: { harness?: string };
+  /** Where newer versions are listed: an index.json like a catalogue's ({ plugins: [{ name, version, url, sha256 }] }). */
+  updates?: { url: string };
 }

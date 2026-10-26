@@ -2,7 +2,31 @@
   "name": "visual",
   "version": "1.0.0",
   "description": "Look at what was made: render documents, decks and pages to images with fit checks; drive web pages, games and 3D scenes in an offline headless browser; vendor libraries offline. Gates: documents-render, web-console, playtest.",
+  "displayName": "Visual",
+  "icon": "eye",
+  "category": "Developer tools",
+  "tags": [
+    "browser",
+    "rendering",
+    "screenshots",
+    "visual checks"
+  ],
+  "publisher": {
+    "name": "Harness",
+    "url": "https://github.com/suhail-akhtar/agent-harness-web"
+  },
+  "links": {
+    "repository": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/plugins/visual",
+    "docs": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/docs",
+    "support": "https://github.com/suhail-akhtar/agent-harness-web/issues"
+  },
+  "engines": {
+    "harness": ">=0.1.0"
+  },
+  "changelog": "CHANGELOG.md",
   "main": "index.mjs",
   "skills": "skills",
-  "permissions": { "processes": true }
+  "permissions": {
+    "processes": true
+  }
 }

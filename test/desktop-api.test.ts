@@ -447,9 +447,12 @@ test('plugins: only catalogue-installed ones are uninstalled (their folder remov
   await fs.writeFile(path.join(reserved, 'harness-plugin.json'), JSON.stringify({ name: 'reserved', main: 'index.mjs', permissions: { routes: true } }));
   await fs.writeFile(path.join(reserved, 'index.mjs'), "export default { name: 'reserved', setup(api) { api.registerRoute({ method: 'GET', path: 'ui/x', auth: 'none', handler: async () => ({ status: 200, body: 'mine' }) }); } };\n");
   const t = await setup({ data, plugins: [reserved] });
-  const list = (await t.call(OPERATOR, 'GET', '/api/plugins')).body as { name: string; source: string }[];
+  const list = (await t.call(OPERATOR, 'GET', '/api/plugins')).body as { name: string; source: string; error?: string; contributes: string[] }[];
   assert.equal(list.find((p) => p.name === 'hello-frame')!.source, 'installed');
-  assert.ok(!list.some((p) => p.name === 'reserved'), 'its setup failed: ui/... is the server\'s');
+  // Its setup failed (ui/... is the server's): listed with why, nothing of it loaded.
+  const refused = list.find((p) => p.name === 'reserved');
+  assert.match(refused?.error ?? '', /route path "ui\/x" is reserved/);
+  assert.deepEqual(refused?.contributes, []);
   const alice = await t.member('Alice');
   assert.equal((await t.call(alice.token, 'DELETE', '/api/plugins/hello-frame')).status, 403);
   assert.equal((await t.call(OPERATOR, 'DELETE', '/api/plugins/research')).status, 409, 'shipped with the harness: switch it off instead');

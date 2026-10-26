@@ -2,7 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { unpack } from '../plugins/archive.ts';
+import { pack, unpack } from '../plugins/archive.ts';
+import { bundleInfo, compareVersions, compatibility, type BundleInfo } from '../plugins/bundle.ts';
 import { BUILTIN_MODELS } from '../core/models.ts';
 import { SessionManager } from '../core/manager.ts';
 import type { SessionDeps } from '../core/session.ts';
@@ -201,7 +202,16 @@ export interface PluginEntry extends PluginUi {
   guide?: PluginGuideInfo;
   /** official: shipped with the harness or signed by an official publisher's key; custom: everything else. */
   tier?: 'official' | 'custom';
+  /** The bundle: display name, icon, tags, publisher, links, licence, changelog, which harness versions it runs on. */
+  info?: BundleInfo;
+  /** A newer version found by the last check (plugins.checkUpdates). */
+  update?: PluginUpdate;
 }
+
+/** A newer version of an installed plugin. */
+export interface PluginUpdate { name: string; version: string; latest: string; from: string }
+/** An earlier version kept on this server (plugins.rollback). */
+export interface PluginRevision { id: string; version: string; at: number }
 
 export class PluginStateError extends Error {
   status: number;
@@ -237,6 +247,27 @@ export interface PluginManager {
   installSolution(name: string): Promise<PluginEntry>;
   /** Removes an installed solution: unloaded, its data kept; refused while an installed solution requires it. */
   removeSolution(name: string): Promise<void>;
+  /**
+   * Newer versions of the plugins installed here (catalogue or bundle installs): from each one's updates.url,
+   * then the catalogue. Shipped plugins update with the harness; an operator's folders are the operator's.
+   */
+  checkUpdates(): Promise<PluginUpdate[]>;
+  /**
+   * Installs a plugin's newer version (checked like an install: signature, harness versions); the version
+   * before is kept as a revision. One that fails to load leaves the version before running.
+   */
+  update(name: string): Promise<PluginEntry>;
+  /** The earlier versions kept on this server, newest first (at most five). */
+  revisions(name: string): Promise<PluginRevision[]>;
+  /** Back to a kept version (default: the newest kept); the version replaced is kept in turn. */
+  rollback(name: string, id?: string): Promise<PluginEntry>;
+  /** A plugin as a bundle (.tgz of its folder, signature and tests included): added on another server or computer as it is. */
+  exportBundle(name: string): Promise<Buffer>;
+  /**
+   * Adds a plugin from a bundle, or updates the installed one to the bundle's newer version. Checked against
+   * the trust list when the server has one; without one, only when allowUnsigned (the person's own computer).
+   */
+  importBundle(tgz: Buffer, o?: { allowUnsigned?: boolean }): Promise<PluginEntry>;
 }
 
 export function builtinRegistry(): Registry {
@@ -318,7 +349,10 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       name: m.name, version: m.version ?? '0.0.0', description: m.description ?? '', dir, source: sourceOf(dir), enabled, required: required.has(m.name),
       ...(signature ? { signature } : {}), ...(loaded ? { loaded } : {}), ...(error ? { error } : {}), tier: tierOf(signature),
       ...await readPluginUi(dir, m.ui, trustOf(signature)),
+      info: await bundleInfo(m, dir),
     };
+    const known = entries.get(m.name)?.update;
+    if (known && compareVersions(known.latest, e.version) > 0) e.update = known;
     if (e.uiError) log(`plugin ${m.name}: its ui section is not used: ${e.uiError}`);
     for (const w of e.uiWarnings ?? []) log(`plugin ${m.name}: ${w}`);
     // Its guide for agents (ui.guide, or a <name>-guide skill): desktop sessions list it and load it on demand.
@@ -412,6 +446,8 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
         log(`plugin loaded: ${dir} (${p.signature})`);
       } catch (err) {
         log(`plugin FAILED (${dir}): ${(err as Error).message}`);
+        // Listed with why (made for other harness versions, a failing setup): people see it and what to do.
+        if (m && !entries.has(m.name)) await describe(dir, m, undefined, true, undefined, (err as Error).message).catch(() => {});
       }
     }
   }
@@ -433,6 +469,70 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       }
     }
   }
+  // ---- updates and revisions (installed plugins) ----
+  const revisionsRoot = path.join(opts.dataDir, 'plugin-revisions');
+  /** A newer version of an installed plugin: its updates.url first, then the catalogue. */
+  async function newerVersion(e: PluginEntry): Promise<{ version: string; from: string; fetch(dest: string): Promise<void> } | undefined> {
+    const indexes = [e.info?.updatesUrl, remoteCatalogue ? cataloguePath : undefined].filter((u): u is string => !!u);
+    for (const idx of indexes) {
+      const hit = (await remoteIndex(idx)).filter((p) => p.name === e.name && p.version && compareVersions(p.version, e.version) > 0).sort((a, b) => compareVersions(b.version!, a.version!))[0];
+      if (hit) return { version: hit.version!, from: new URL(idx).host, fetch: async (dest) => { await unpack(await download(new URL(hit.url, idx).toString(), hit.sha256), dest); } };
+    }
+    if (cataloguePath && !remoteCatalogue) {
+      for (const d of await catalogueDirs()) {
+        const m = await readManifest(d).catch(() => undefined);
+        if (m?.name === e.name && compareVersions(m.version ?? '0.0.0', e.version) > 0) return { version: m.version!, from: 'the catalogue', fetch: (dest) => fs.cp(d, dest, { recursive: true }) };
+      }
+    }
+    return undefined;
+  }
+  async function download(url: string, sha256: string): Promise<Buffer> {
+    const res = await fetch(url, { signal: AbortSignal.timeout(120_000) });
+    if (!res.ok) throw new Error(`download failed: HTTP ${res.status}`);
+    if (Number(res.headers.get('content-length') ?? 0) > ARCHIVE_MAX) throw new Error('plugin archive is too large');
+    const data = Buffer.from(await res.arrayBuffer());
+    if (data.length > ARCHIVE_MAX) throw new Error('plugin archive is too large');
+    const sha = crypto.createHash('sha256').update(data).digest('hex');
+    if (sha !== sha256.toLowerCase()) throw new Error(`Refused: the download does not match its sha256 (got ${sha.slice(0, 12)}...)`);
+    return data;
+  }
+  /**
+   * Puts another version of an installed plugin in its place: the one there now is kept as a revision; the new one
+   * is checked (name, harness versions, signature) and loaded. If it fails, the one before comes back.
+   */
+  async function replaceInstalled(e: PluginEntry, dir: string, what: string): Promise<PluginEntry> {
+    const m = await readManifest(dir).catch(() => undefined);
+    if (m?.name !== e.name) throw new PluginStateError(409, `Refused: that holds plugin "${m?.name ?? '?'}", not "${e.name}".`);
+    const c = compatibility(m);
+    if (!c.ok) throw new PluginStateError(409, `${e.name} ${m.version ?? ''} is not for this harness: ${c.reason}`);
+    if (keys) { const v = await verifyPlugin(dir, keys); if (!v.ok) throw new PluginStateError(403, `Refused: ${v.reason}`); }
+    if (!within(installDir, e.dir) || path.resolve(e.dir) === installDir) throw new PluginStateError(409, `${e.dir} is not under ${installDir}`);
+    const keep = path.join(revisionsRoot, e.name, `${e.version}@${Date.now()}`);
+    await fs.mkdir(path.dirname(keep), { recursive: true });
+    await fs.cp(e.dir, keep, { recursive: true });
+    const swap = async (from: string) => {
+      await fs.rm(e.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await fs.cp(from, e.dir, { recursive: true });
+    };
+    await swap(dir);
+    try {
+      if (e.enabled) await plugins.reload(e.name);
+      else await describe(e.dir, (await readManifest(e.dir))!, await admit(e.dir), false);
+    } catch (err) {
+      await swap(keep);
+      await fs.rm(keep, { recursive: true, force: true });
+      if (e.enabled) await plugins.reload(e.name).catch(() => {});
+      throw err instanceof PluginStateError ? err : new PluginStateError(409, (err as Error).message);
+    }
+    // At most five kept versions.
+    for (const old of (await plugins.revisions(e.name)).slice(5)) await fs.rm(path.join(revisionsRoot, e.name, old.id), { recursive: true, force: true });
+    const now = entries.get(e.name)!;
+    delete now.update;
+    log(`plugin ${e.name} ${what}`);
+    pluginsChanged(e.name, 'updated');
+    return now;
+  }
+
   const plugins: PluginManager = {
     list: () => [...entries.values()].sort((a, b) => a.name.localeCompare(b.name)),
     get: (name) => entries.get(name),
@@ -568,6 +668,92 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       log(`plugin ${name} loaded again`);
       pluginsChanged(name, 'reloaded');
       return entries.get(name)!;
+    },
+    async checkUpdates() {
+      const out: PluginUpdate[] = [];
+      for (const e of entries.values()) {
+        delete e.update;
+        if (e.source !== 'installed') continue;
+        const found = await newerVersion(e).catch((err: Error) => { log(`plugin ${e.name}: checking for updates: ${err.message}`); return undefined; });
+        if (found) { e.update = { name: e.name, version: e.version, latest: found.version, from: found.from }; out.push(e.update); }
+      }
+      if (out.length) pluginsChanged(out.map((u) => u.name).join(','), 'updates');
+      return out;
+    },
+    async update(name) {
+      const e = entries.get(name);
+      if (!e) throw new PluginStateError(404, `No plugin "${name}".`);
+      if (e.source !== 'installed') throw new PluginStateError(409, e.source === 'bundled' ? `${name} is shipped with the harness: it updates with the harness.` : `${name} is in a folder the operator names (HARNESS_PLUGINS): update that folder, then reload it.`);
+      let found: Awaited<ReturnType<typeof newerVersion>>;
+      try { found = await newerVersion(e); } catch (err) { throw new PluginStateError(502, `${name}: ${(err as Error).message}`); }
+      if (!found) throw new PluginStateError(409, `${name} ${e.version} is the newest version.`);
+      const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'hw-plugin-update-'));
+      try {
+        const dir = path.join(tmp, name);
+        await found.fetch(dir);
+        return await replaceInstalled(e, dir, `updated to ${found.version} (from ${found.from})`);
+      } finally { await fs.rm(tmp, { recursive: true, force: true }); }
+    },
+    async revisions(name) {
+      const root = path.join(revisionsRoot, name);
+      const out: PluginRevision[] = [];
+      for (const d of await fs.readdir(root).catch(() => [] as string[])) {
+        const m = /^(.+)@(\d+)$/.exec(d);
+        if (m && await readManifest(path.join(root, d)).catch(() => undefined)) out.push({ id: d, version: m[1]!, at: Number(m[2]) });
+      }
+      return out.sort((a, b) => b.at - a.at);
+    },
+    async rollback(name, id) {
+      const e = entries.get(name);
+      if (!e) throw new PluginStateError(404, `No plugin "${name}".`);
+      if (e.source !== 'installed') throw new PluginStateError(409, `${name} was not installed here: nothing to roll back.`);
+      const revs = await plugins.revisions(name);
+      const rev = id ? revs.find((x) => x.id === id) : revs[0];
+      if (!rev) throw new PluginStateError(404, id ? `No kept version "${id}" of ${name}.` : `No earlier version of ${name} is kept.`);
+      const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'hw-plugin-rollback-'));
+      try {
+        const dir = path.join(tmp, name);
+        await fs.cp(path.join(revisionsRoot, name, rev.id), dir, { recursive: true });
+        const r = await replaceInstalled(e, dir, `rolled back to ${rev.version}`);
+        await fs.rm(path.join(revisionsRoot, name, rev.id), { recursive: true, force: true });
+        return r;
+      } finally { await fs.rm(tmp, { recursive: true, force: true }); }
+    },
+    async exportBundle(name) {
+      const e = entries.get(name);
+      if (!e) throw new PluginStateError(404, `No plugin "${name}".`);
+      return pack(e.dir);
+    },
+    async importBundle(tgz, o = {}) {
+      if (tgz.length > ARCHIVE_MAX) throw new PluginStateError(413, 'The bundle is larger than 50 MB.');
+      const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'hw-plugin-import-'));
+      try {
+        const dir = path.join(tmp, 'bundle');
+        try { await unpack(tgz, dir); } catch (err) { throw new PluginStateError(400, `Not a plugin bundle: ${(err as Error).message}`); }
+        const m = await readManifest(dir).catch(() => undefined);
+        if (!m) throw new PluginStateError(400, 'Not a plugin bundle: it has no harness-plugin.json at its top.');
+        if (!/^[a-z0-9][a-z0-9._-]*$/i.test(m.name)) throw new PluginStateError(400, `Bad plugin name "${m.name}".`);
+        if (keys) { const v = await verifyPlugin(dir, keys); if (!v.ok) throw new PluginStateError(403, `Refused: ${v.reason}`); }
+        else if (!o.allowUnsigned) throw new PluginStateError(403, "This server has no trust list (HARNESS_PLUGIN_KEYS): a bundle is added only when it is signed with a trusted key, or on the person's own computer.");
+        const c = compatibility(m);
+        if (!c.ok) throw new PluginStateError(409, `${m.name} ${m.version ?? ''} is not for this harness: ${c.reason}`);
+        const e = entries.get(m.name);
+        if (e) {
+          if (e.source !== 'installed') throw new PluginStateError(409, `${m.name} is already on this server (${e.source === 'bundled' ? 'shipped with the harness' : 'a folder the operator names'}).`);
+          if (compareVersions(m.version ?? '0.0.0', e.version) <= 0) throw new PluginStateError(409, `${m.name} ${e.version} is installed; this bundle is ${m.version ?? '0.0.0'}. Roll back instead to go to an earlier version.`);
+          return await replaceInstalled(e, dir, `updated to ${m.version} from a bundle`);
+        }
+        if (solutionManifests.has(m.name)) throw new PluginStateError(409, `${m.name} is a solution shipped with the harness: install it from the catalogue.`);
+        const dest = path.join(installDir, m.name);
+        if (await exists(dest)) throw new PluginStateError(409, `${dest} already exists.`);
+        await fs.mkdir(installDir, { recursive: true });
+        await fs.cp(dir, dest, { recursive: true });
+        try { await load(dest); } catch (err) { await fs.rm(dest, { recursive: true, force: true }); throw new PluginStateError(409, `${m.name} could not be loaded: ${(err as Error).message}`); }
+        await saveState();
+        log(`plugin ${m.name} ${m.version ?? ''} added from a bundle`);
+        pluginsChanged(m.name, 'installed');
+        return entries.get(m.name)!;
+      } finally { await fs.rm(tmp, { recursive: true, force: true }); }
     },
     async uninstall(name, o = {}) {
       const e = entries.get(name);

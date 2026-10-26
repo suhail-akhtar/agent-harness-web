@@ -69,6 +69,13 @@ export const desktop = {
   revealMain: () => invoke<void>('win:revealMain'),
   /** A shortcut on the desktop (and the Start menu on Windows) that opens the app focused on the plugin. */
   pluginShortcut: (name: string, title: string) => invoke<{ ok: boolean; path?: string; reason?: string }>('plugins:shortcut', name, title),
+  /** Picks a plugin bundle (.tgz) and unpacks it to a staging folder for review; then importCommit (or importCancel). */
+  importPluginFile: () => invoke<{ dir: string; name: string; version: string } | null>('plugins:importFile'),
+  /** Moves a reviewed bundle into place; returns its folder (load it with addDevPlugin). */
+  importCommit: (staging: string) => invoke<string>('plugins:importCommit', staging),
+  importCancel: (staging: string) => invoke<void>('plugins:importCancel', staging).catch(() => {}),
+  /** Saves a plugin bundle (Export): the save dialog; the path saved to, or null. */
+  saveBundle: (fileName: string, base64: string) => invoke<string | null>('plugins:saveBundle', fileName, base64),
   addDevPlugin: (dir?: string) => invoke<DevPluginInfo[] | null>('plugins:devAdd', ...(dir ? [dir] : [])),
   removeDevPlugin: (dir: string) => invoke<DevPluginInfo[]>('plugins:devRemove', dir),
   toggleDevPlugin: (name: string, on: boolean) => invoke<DevPluginInfo[]>('plugins:devToggle', name, on),

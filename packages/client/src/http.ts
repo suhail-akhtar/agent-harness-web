@@ -11,7 +11,7 @@
 
 import { GlobalEvents, sessionEvents, type Fetch } from './events.ts';
 import {
-  isPending, PENDING_KINDS, type Approval, type FileTree, type SearchHit, type Attachment, type CatalogueEntry, type PluginReview, type Config, type Capabilities, type ContextBreakdown, type LiveProviderModels, type EffectiveSetting, type Effort, type FileContent, type FileEntry,
+  isPending, PENDING_KINDS, type Approval, type FileTree, type SearchHit, type Attachment, type CatalogueEntry, type PluginReview, type PluginUpdateInfo, type PluginRevisionInfo, type Config, type Capabilities, type ContextBreakdown, type LiveProviderModels, type EffectiveSetting, type Effort, type FileContent, type FileEntry,
   type GitLogEntry, type GitStatus, type Health, type HarnessEvent, type HistoryPage, type McpBundle, type Me, type Mode, type ModelInfo, type PendingRequest, type PluginInfo,
   type ProviderInfo, type ProviderTest, type Schedule, type SessionDetail, type SessionMeta, type SessionsPage, type TaskView, type VaultEntry, type VersionInfo, type WorkflowInfo, type WorkflowRunView,
   type ArtifactContent, type ArtifactMeta, type Proposal, type TraceSpan,
@@ -276,6 +276,22 @@ export class HarnessClient {
     review: (o: { name?: string; dir?: string; tests?: boolean }) => this.post<PluginReview>('/api/plugins/review', o),
     /** Loads a plugin's code again (it changed), or a folder for the first time (`dir`, a server on this computer only). */
     reload: (name: string, dir?: string) => this.post<PluginInfo>(`/api/plugins/${encodeURIComponent(name)}/reload`, dir ? { dir } : {}),
+    /** Newer versions of the plugins installed on the server (administrators). */
+    checkUpdates: () => this.get<PluginUpdateInfo[]>('/api/plugins/updates'),
+    /** Installs a plugin's newer version; the one before is kept (rollback). */
+    update: (name: string) => this.post<PluginInfo>(`/api/plugins/${encodeURIComponent(name)}/update`),
+    /** The earlier versions kept on the server, newest first. */
+    revisions: (name: string) => this.get<PluginRevisionInfo[]>(`/api/plugins/${encodeURIComponent(name)}/revisions`),
+    /** Back to a kept version (default: the newest kept). */
+    rollback: (name: string, id?: string) => this.post<PluginInfo>(`/api/plugins/${encodeURIComponent(name)}/rollback`, id ? { id } : {}),
+    /** A plugin as a bundle (.tgz): add it on another server or computer. */
+    exportBundle: async (name: string): Promise<Uint8Array> => {
+      const res = await this.fetch(`${this.base}/api/plugins/${encodeURIComponent(name)}/export`, { headers: { ...this.extra() } });
+      if (!res.ok) { const t = await res.text(); let msg = t; try { msg = (JSON.parse(t) as { error?: string }).error ?? t; } catch { /* text */ } throw new ApiError(res.status, msg || `HTTP ${res.status}`); }
+      return new Uint8Array(await res.arrayBuffer());
+    },
+    /** Adds a plugin from a bundle (.tgz), or updates the installed one to the bundle's newer version. */
+    importBundle: (bytes: Uint8Array) => this.request<PluginInfo>('POST', '/api/plugins/import', undefined, { raw: { body: bytes, type: 'application/gzip' } }),
     /** The URL of a plugin's UI file on the engine (main proxies harness://app/plugins/<name>/<path> to it). */
     uiFile: (name: string, file: string) => `${this.base}/api/plugins/${encodeURIComponent(name)}/ui/${file.split('/').map(encodeURIComponent).join('/')}`,
     /** A plugin's own server route. */

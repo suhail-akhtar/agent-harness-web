@@ -2,6 +2,27 @@
   "name": "research",
   "version": "1.0.0",
   "description": "Research with sources you can check: web search and reading, parallel researchers, a report with numbered citations, a citation check against the pages actually read, and an independent fact-check.",
+  "icon": "compass",
+  "category": "Productivity",
+  "tags": [
+    "research",
+    "citations",
+    "sources",
+    "web"
+  ],
+  "publisher": {
+    "name": "Harness",
+    "url": "https://github.com/suhail-akhtar/agent-harness-web"
+  },
+  "links": {
+    "repository": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/plugins/research",
+    "docs": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/docs",
+    "support": "https://github.com/suhail-akhtar/agent-harness-web/issues"
+  },
+  "engines": {
+    "harness": ">=0.1.0"
+  },
+  "changelog": "CHANGELOG.md",
   "main": "index.mjs",
   "agents": "agents",
   "skills": "skills",
@@ -14,26 +35,83 @@
     "category": "Knowledge",
     "trust": "declarative",
     "contributes": {
-      "navItems": [{ "id": "research", "title": "Research", "icon": "compass", "view": "prompts", "placement": "more", "order": 40 }],
+      "navItems": [
+        {
+          "id": "research",
+          "title": "Research",
+          "icon": "compass",
+          "view": "prompts",
+          "placement": "more",
+          "order": 40
+        }
+      ],
       "views": [
         {
-          "id": "prompts", "title": "Research", "icon": "compass", "kind": "prompt-board",
+          "id": "prompts",
+          "title": "Research",
+          "icon": "compass",
+          "kind": "prompt-board",
           "description": "Questions answered from sources you can check: each report cites the pages it read, and the citations are checked.",
           "prompts": [
-            { "title": "Deep research report", "icon": "book", "prompt": "Run the deep-research workflow on: " },
-            { "title": "Compare options", "icon": "table", "prompt": "Research and compare these options, with a table of trade-offs and cited sources: " },
-            { "title": "State of the art", "icon": "sparkles", "prompt": "What is the current state of the art in this area? Cite every claim to a source you read: " },
-            { "title": "Fact-check a claim", "icon": "check", "prompt": "Fact-check this claim against primary sources and say how sure you are: " },
-            { "title": "Literature review", "icon": "library", "prompt": "Write a short literature review, with numbered citations, on: " }
+            {
+              "title": "Deep research report",
+              "icon": "book",
+              "prompt": "Run the deep-research workflow on: "
+            },
+            {
+              "title": "Compare options",
+              "icon": "table",
+              "prompt": "Research and compare these options, with a table of trade-offs and cited sources: "
+            },
+            {
+              "title": "State of the art",
+              "icon": "sparkles",
+              "prompt": "What is the current state of the art in this area? Cite every claim to a source you read: "
+            },
+            {
+              "title": "Fact-check a claim",
+              "icon": "check",
+              "prompt": "Fact-check this claim against primary sources and say how sure you are: "
+            },
+            {
+              "title": "Literature review",
+              "icon": "library",
+              "prompt": "Write a short literature review, with numbered citations, on: "
+            }
           ]
         }
       ],
       "commands": [
-        { "id": "deep-research", "title": "Start deep research", "category": "Research", "icon": "compass", "action": { "type": "workflow", "workflow": "deep-research" } },
-        { "id": "open", "title": "Open research prompts", "category": "Research", "icon": "compass", "action": { "type": "open-view", "view": "prompts" } }
+        {
+          "id": "deep-research",
+          "title": "Start deep research",
+          "category": "Research",
+          "icon": "compass",
+          "action": {
+            "type": "workflow",
+            "workflow": "deep-research"
+          }
+        },
+        {
+          "id": "open",
+          "title": "Open research prompts",
+          "category": "Research",
+          "icon": "compass",
+          "action": {
+            "type": "open-view",
+            "view": "prompts"
+          }
+        }
       ],
       "slashCommands": [
-        { "name": "research", "description": "Research a question with cited sources", "action": { "type": "prompt", "prompt": "Run the deep-research workflow on: {args}" } }
+        {
+          "name": "research",
+          "description": "Research a question with cited sources",
+          "action": {
+            "type": "prompt",
+            "prompt": "Run the deep-research workflow on: {args}"
+          }
+        }
       ]
     }
   }

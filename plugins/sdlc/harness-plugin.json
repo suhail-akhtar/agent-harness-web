@@ -2,7 +2,30 @@
   "name": "sdlc",
   "version": "1.1.0",
   "description": "Software delivery lifecycle: role agents (analyst, architect, planner, engineer, reviewers, tech writer), engineering skills, and the build-feature workflow from requirements to a verified, reviewed, documented delivery. In the desktop: a Delivery board of features by stage with their gates, tests and cost, a Start feature form, a Quality gates panel next to a conversation, /feature, /review and /gates.",
-  "solution": { "title": "Engineering" },
+  "icon": "rocket",
+  "category": "Engineering",
+  "tags": [
+    "engineering",
+    "sdlc",
+    "code review",
+    "releases"
+  ],
+  "publisher": {
+    "name": "Harness",
+    "url": "https://github.com/suhail-akhtar/agent-harness-web"
+  },
+  "links": {
+    "repository": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/plugins/sdlc",
+    "docs": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/docs",
+    "support": "https://github.com/suhail-akhtar/agent-harness-web/issues"
+  },
+  "engines": {
+    "harness": ">=0.1.0"
+  },
+  "changelog": "CHANGELOG.md",
+  "solution": {
+    "title": "Engineering"
+  },
   "main": "index.mjs",
   "agents": "agents",
   "skills": "skills",

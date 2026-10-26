@@ -12,6 +12,7 @@ import {
   type StatusItemContribution, type ThemeContribution, type UiManifest, type UiTrust, type ViewContribution,
   type DataSourceContribution, type WidgetContribution, type BlockActionContribution, type DashboardTemplateContribution,
 } from '@harness/plugin-ui';
+import type { PluginBundleInfo, PluginUpdateInfo } from '@harness/client';
 import { parseChord } from './keybindings.ts';
 
 /** A built-in's code: components and command handlers by the names its manifest uses. */
@@ -41,6 +42,12 @@ export interface PluginEntry {
   tier?: 'official' | 'custom';
   /** What its server code may reach (network hosts, secrets, the vault, sessions, routes, programs on the server). */
   permissions?: Record<string, unknown>;
+  /** The bundle: display name, icon, publisher, tags, links, licence, changelog, harness versions (server plugins). */
+  info?: PluginBundleInfo;
+  /** A newer version the server found (Plugins > Check for updates). */
+  update?: PluginUpdateInfo;
+  /** Why the server did not load it. */
+  error?: string;
 }
 
 /** Added by the person (installed from the catalogue, or loaded from a folder here): these go under Custom. */

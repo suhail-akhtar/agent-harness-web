@@ -11,7 +11,8 @@
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
     "types": ["node"],
-    "lib": ["es2023", "dom"]
+    "lib": ["es2023", "dom"],
+    "paths": { "@harness/core/*": ["./*"] }
   },
-  "include": ["src", "test", "bench", "scripts", "packages/plugin-ui/src", "packages/plugin-sdk/src", "packages/client/src"]
+  "include": ["src", "test", "plugins/*/test", "bench", "scripts", "packages/plugin-ui/src", "packages/plugin-sdk/src", "packages/client/src"]
 }

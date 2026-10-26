@@ -2,6 +2,28 @@
   "name": "computer",
   "version": "1.0.0",
   "description": "Computer use: operate a desktop through screenshots, mouse and keyboard (the computer tool), for GUI apps and pages that need a real browser. In the session's Docker sandbox (the desktop image, npm run sandbox:image:desktop), or on the user's real screen through a companion started with --allow-desktop (each action approved).",
+  "displayName": "Computer use",
+  "icon": "monitor",
+  "category": "Automation",
+  "tags": [
+    "computer use",
+    "desktop",
+    "automation",
+    "screenshots"
+  ],
+  "publisher": {
+    "name": "Harness",
+    "url": "https://github.com/suhail-akhtar/agent-harness-web"
+  },
+  "links": {
+    "repository": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/plugins/computer",
+    "docs": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/docs",
+    "support": "https://github.com/suhail-akhtar/agent-harness-web/issues"
+  },
+  "engines": {
+    "harness": ">=0.1.0"
+  },
+  "changelog": "CHANGELOG.md",
   "main": "index.mjs",
   "skills": "skills"
 }
