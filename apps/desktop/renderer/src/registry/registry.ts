@@ -129,6 +129,8 @@ export interface RegistryOptions {
 const GROUP_ORDER = ['app', 'agent', 'integrations', 'plugins', 'admin'];
 const byOrder = <T extends { order?: number; title?: string; label?: string }>(a: T, b: T) => (a.order ?? 100) - (b.order ?? 100) || String(a.title ?? a.label ?? '').localeCompare(String(b.title ?? b.label ?? ''));
 const isBuiltin = (p: PluginEntry) => p.source === 'builtin';
+/** The sidebar group of the plugins the person added that bring no menu of their own. */
+export const CUSTOM_GROUP = 'custom';
 
 export function buildRegistry(entries: PluginEntry[], o: RegistryOptions = {}): Registry {
   const r: Registry = {
@@ -255,6 +257,15 @@ function buildMenus(r: Registry, personOrder: string[]): void {
     const items = refs.map((it) => entry(it)).filter((x): x is MenuEntry => !!x);
     if (!items.length) continue;
     r.groups.push({ plugin: p.name, title: ui.menu?.title ?? ui.displayName ?? p.name, icon: ui.menu?.icon ?? ui.icon ?? 'puzzle', order: ui.menu?.order ?? 100, collapsed: !!ui.menu?.collapsed, home, homeDeclared: !!declared && home.view === declared, items });
+  }
+  // Plugins the person added (installed, loaded from a folder, the operator's) without a menu of their own:
+  // their pages go in one "Custom" group, like Studio's or Dashboards', instead of crowding the top level.
+  const added = new Set(r.plugins.filter((p) => !isBuiltin(p) && p.source !== 'bundled').map((p) => p.name));
+  const loose = r.navItems.filter((n) => !n.group && added.has(n.plugin) && n.placement !== 'footer');
+  if (loose.length) {
+    for (const n of loose) n.group = CUSTOM_GROUP;
+    r.groups.push({ plugin: CUSTOM_GROUP, title: 'Custom', icon: 'puzzle', order: 900, collapsed: false, home: { view: 'core.plugins:plugins' }, homeDeclared: true,
+      items: loose.map((n) => ({ qid: n.qid, plugin: n.plugin, title: n.title, ...(n.icon ? { icon: n.icon } : {}), view: n.view, ...(n.params ? { params: n.params } : {}), ...(n.badge ? { badge: n.badge } : {}), children: [] })) });
   }
   const rank = (n: string) => { const i = personOrder.indexOf(n); return i < 0 ? 1e6 : i; };
   r.groups.sort((a, b) => rank(a.plugin) - rank(b.plugin) || a.order - b.order || a.title.localeCompare(b.title));

@@ -174,3 +174,17 @@ test('keybindings: parse, match, record and show chords; Mod is Ctrl or Cmd', ()
   assert.ok(!allowedWhileTyping(parseChord('Alt+Left')!), 'Alt+Left in a text box moves the caret, not back');
   assert.deepEqual(conflicts([{ id: 'a', keys: 'Ctrl+K' }, { id: 'b', keys: 'Mod+K' }, { id: 'c', keys: 'Ctrl+J' }], 'win32').map((c) => c.ids), [['a', 'b']]);
 });
+
+test('registry: an added plugin without a menu of its own lands in the Custom group; built-ins and menu-owning plugins do not', () => {
+  const chat = native('core.chat', { navItems: [{ id: 'new', title: 'New chat', view: 'home' }], views: [{ id: 'home', title: 'Home', kind: 'native', component: 'Home' }] });
+  const habits = third('habits', { contributes: { navItems: [{ id: 'today', title: 'Habits', view: 'today' }], views: [{ id: 'today', title: 'Habits', kind: 'markdown', markdown: '# h' }] } }, { source: 'dev' });
+  const studio = third('studio', { menu: { title: 'Studio', items: ['a', 'b'] }, contributes: { navItems: [{ id: 'a', title: 'A', view: 'a' }, { id: 'b', title: 'B', view: 'a' }], views: [{ id: 'a', title: 'A', kind: 'markdown', markdown: 'a' }] } });
+  const r = buildRegistry([chat, habits, studio]);
+  const custom = r.groups.find((g) => g.plugin === 'custom');
+  assert.ok(custom, 'a Custom group');
+  assert.equal(custom.title, 'Custom');
+  assert.deepEqual(custom.items.map((e) => e.qid), ['habits:today']);
+  assert.equal(r.navItems.find((n) => n.qid === 'core.chat:new')!.group, undefined, 'built-ins stay at the top');
+  assert.equal(r.navItems.find((n) => n.qid === 'studio:a')!.group, 'studio', 'a plugin with its own menu keeps it');
+  assert.equal(buildRegistry([chat]).groups.some((g) => g.plugin === 'custom'), false, 'no Custom group with nothing added');
+});
