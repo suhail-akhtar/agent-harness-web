@@ -5,7 +5,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { readTextIn, writeIn } from '../../games3d/lib-engines.mjs';
+import { readTextIn, writeIn } from '@harness/plugins/games3d/lib-engines.mjs';
 import { inProject } from './play.mjs';
 import { PLUGIN_DIR } from './templates.mjs';
 

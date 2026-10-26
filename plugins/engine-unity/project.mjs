@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readTextIn, writeIn } from '../games3d/lib-engines.mjs';
+import { readTextIn, writeIn } from '@harness/plugins/games3d/lib-engines.mjs';
 import { untar } from './lib-archive.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));

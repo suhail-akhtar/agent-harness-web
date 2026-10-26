@@ -210,7 +210,7 @@ const NEVER = /(^|\/)(terraform\.tfstate(\.backup)?|[^/]+\.tfstate|kubeconfig(\.
 export async function secretsGate() {
   let base;
   try {
-    const qg = await import('../../quality-gates/index.mjs');
+    const qg = await import('@harness/plugins/quality-gates/index.mjs');
     base = qg.gates?.find((g) => g.name === 'secrets');
   } catch { /* the quality-gates plugin is not installed */ }
   return {

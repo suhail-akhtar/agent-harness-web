@@ -55,6 +55,12 @@ Studio only, Operations only...), from **Plugins > Catalogue > Solutions**; remo
 - Your own plugin is built the same way: it uses the core's API (and other plugins' tools) and adds
   what the core does not have.
 
+Every solution is **portable**: it imports the harness's abilities from `@harness/plugin-sdk/runtime` and
+another plugin's modules by name (`@harness/plugins/games3d/...`), never by relative path, so it can be
+packed (`npm run plugin -- pack`), signed and installed on any server. Plugins come in two tiers:
+**official** (shipped with the harness, or signed with an official publisher's key: `HARNESS_OFFICIAL_KEYS`)
+and **custom** (everything else). Both have the whole API and runtime.
+
 ## The reference
 
 The reference lives with the `build-a-plugin` skill, so agents and people read the same text:

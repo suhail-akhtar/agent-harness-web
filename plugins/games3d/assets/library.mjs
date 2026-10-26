@@ -6,7 +6,7 @@
 import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { resolveHome } from '../../../src/util/home.ts';
+import { resolveHome } from '@harness/plugin-sdk/runtime';
 import { listIn, readIn, relIn, writeIn } from '../lib-engines.mjs';
 
 export const ASSET_KINDS = ['model', 'sprite', 'spritesheet', 'tileset', 'texture', 'material', 'audio', 'music', 'font', 'ui', 'level', 'heightmap', 'background', 'particles', 'icon', 'pack'];

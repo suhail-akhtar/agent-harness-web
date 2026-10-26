@@ -75,6 +75,11 @@ export interface ProviderDef {
 export interface PluginAPI {
   readonly pluginName: string;
   readonly pluginDir: string;
+  /**
+   * official: shipped with the harness, or signed with an official publisher's key (HARNESS_OFFICIAL_KEYS);
+   * custom: everything else. Both have the whole API and @harness/plugin-sdk/runtime.
+   */
+  readonly tier: 'official' | 'custom';
   /** A folder for the plugin's own state on this server (created on first use): outside every workspace, so no agent can edit it. */
   readonly dataDir: string;
   /**

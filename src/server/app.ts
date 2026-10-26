@@ -628,7 +628,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
 
   /** A plugin as GET /api/plugins lists it: never its folder. */
   const pluginView = (e: import('../kernel/harness.ts').PluginEntry) => ({
-    name: e.name, version: e.version, description: e.description, source: e.source, enabled: e.enabled, required: e.required,
+    name: e.name, version: e.version, description: e.description, source: e.source, enabled: e.enabled, required: e.required, ...(e.tier ? { tier: e.tier } : {}),
     contributes: e.loaded?.contributes ?? [], signature: e.signature ?? null, permissions: e.loaded?.permissions ?? null,
     ...(e.ui ? { ui: e.ui, uiBase: `/api/plugins/${e.name}/ui/` } : {}), ...(e.uiError ? { uiError: e.uiError } : {}), ...(e.uiHash ? { uiHash: e.uiHash } : {}),
     ...(e.guide ? { guide: { purpose: e.guide.purpose } } : {}),

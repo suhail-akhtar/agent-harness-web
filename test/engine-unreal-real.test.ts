@@ -26,7 +26,6 @@ const { engine } = await import('../plugins/engine-unreal/lib/context.mjs');
 const { createDriver } = await import('../plugins/engine-unreal/driver.mjs');
 // @ts-expect-error plain JS module
 const { pngStats } = await import('../plugins/games3d/lib-png.mjs');
-// @ts-expect-error plain JS module
 const { findBinary } = await import('../plugins/visual/lib/binaries.mjs');
 
 const wanted = process.env.HARNESS_REAL_UNREAL === '1';

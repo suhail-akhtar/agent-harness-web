@@ -10,7 +10,6 @@ import { DockerHost, dockerAvailable, dockerDefaults, imageExists } from '../src
 import { FakeProvider, fakeGodot, tempDir, testPicture } from './helpers.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-// @ts-expect-error plain JS module
 const { chromiumPath } = await import('../plugins/visual/lib/browser.mjs');
 const hasChromium = await import('playwright-core').then(() => true, () => false) && !!chromiumPath();
 const IMAGE_3D = 'harness-sandbox-3d:latest';

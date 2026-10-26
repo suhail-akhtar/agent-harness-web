@@ -19,7 +19,6 @@ import { tempDir } from './helpers.ts';
 // With Blender too (and HARNESS_REAL_BLENDER=1), a Blender sprite sheet goes into the 2.5D game.
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-// @ts-expect-error plain JS module
 const { findBinary } = await import('../plugins/visual/lib/binaries.mjs');
 // @ts-expect-error plain JS module
 const { inspectGltf } = await import('../plugins/games3d/lib-gltf.mjs');

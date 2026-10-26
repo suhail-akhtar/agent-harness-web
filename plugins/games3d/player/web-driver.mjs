@@ -3,7 +3,7 @@
 // request blocked). Input goes in as real keyboard and mouse events; the page's clock is the
 // studio runtime's (runtime.mjs), fixed by default.
 
-import { serveDir, withBrowser } from '../../visual/lib/browser.mjs';
+import { serveDir, withBrowser } from '@harness/plugins/visual/lib/browser.mjs';
 import { frameMetrics } from './analysis.mjs';
 import { prepareFrame } from './frames.mjs';
 import { runtimeScript } from './runtime.mjs';

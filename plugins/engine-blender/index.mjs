@@ -15,13 +15,13 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defineTool } from '../../src/plugins/api.ts';
-import { resolveHome } from '../../src/util/home.ts';
+import { defineTool } from '@harness/plugin-sdk/runtime';
+import { resolveHome } from '@harness/plugin-sdk/runtime';
 import {
   blendCheckArgs, blenderArgs, findFiles, findRemote, locate, missingIn, mkdirIn, newId, readIn, readTextIn, relIn, removeIn, runIn, runtimePath, tail, writeIn,
-} from '../games3d/lib-engines.mjs';
-import { toToolResult } from '../games3d/sdk/engine.mjs';
-import { cancelJob, listJobs, runJob } from '../games3d/sdk/jobs.mjs';
+} from '@harness/plugins/games3d/lib-engines.mjs';
+import { toToolResult } from '@harness/plugins/games3d/sdk/engine.mjs';
+import { cancelJob, listJobs, runJob } from '@harness/plugins/games3d/sdk/jobs.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const ACTIONS = ['script', 'detect', 'describe', 'asset.import', 'asset.export', 'capture', 'render', 'sprites', 'bridge.install', 'bridge.status', 'bridge.connect', 'bridge.call', 'jobs', 'job.cancel'];

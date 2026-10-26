@@ -18,7 +18,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { enginesDir, installedEngines, platformKey } from '../../games3d/lib-engines.mjs';
+import { enginesDir, installedEngines, platformKey } from '@harness/plugins/games3d/lib-engines.mjs';
 import { extractZip, zipEntries } from './zip.mjs';
 
 export const RELEASES_API = 'https://api.github.com/repos/godotengine/godot/releases';

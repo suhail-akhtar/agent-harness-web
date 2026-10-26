@@ -88,7 +88,7 @@ async function create(input, ctx) {
   if (t.three) {
     if (host.kind === 'companion') notes.push('Three.js is needed: add it with add_library {"name": "three"} (vendor/three).');
     else {
-      const { addLibrary } = await import('../../visual/lib/libraries.mjs');
+      const { addLibrary } = await import('@harness/plugins/visual/lib/libraries.mjs');
       const lib = await addLibrary(path.join(host.root, project), 'three');
       notes.push(`Three.js ${lib.version} vendored in ${join(project, 'vendor/three')} (offline).`);
     }

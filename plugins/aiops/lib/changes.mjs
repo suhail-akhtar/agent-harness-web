@@ -14,7 +14,7 @@
 // Alert incidents attach the changes of the window before them (lib/alerts.mjs).
 
 import crypto from 'node:crypto';
-import { CHANGE_KINDS, ChangeError } from '../../../src/ops/changes.ts';
+import { CHANGE_KINDS, ChangeError } from '@harness/plugin-sdk/runtime';
 import { runProgram } from './proc.mjs';
 import { parseDuration } from './inventory.mjs';
 import { alertConfig, toMs, webhookSecret } from './alerts.mjs';

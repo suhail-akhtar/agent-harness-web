@@ -6,10 +6,10 @@
 
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { toToolResult, unavailable } from '../games3d/sdk/engine.mjs';
-import { runJob } from '../games3d/sdk/jobs.mjs';
-import { findFiles, findRemote, listIn, newId, readIn, readTextIn, relIn, runIn, runtimePath, tail, writeIn } from '../games3d/lib-engines.mjs';
-import { pngStats } from '../games3d/lib-png.mjs';
+import { toToolResult, unavailable } from '@harness/plugins/games3d/sdk/engine.mjs';
+import { runJob } from '@harness/plugins/games3d/sdk/jobs.mjs';
+import { findFiles, findRemote, listIn, newId, readIn, readTextIn, relIn, runIn, runtimePath, tail, writeIn } from '@harness/plugins/games3d/lib-engines.mjs';
+import { pngStats } from '@harness/plugins/games3d/lib-png.mjs';
 import { alive, connect, readBridgeFile, waitFor } from './bridge.mjs';
 import { discover, discoverRemote, hubLister, INSTALL_HELP, nodeFs } from './detect.mjs';
 import {
@@ -21,7 +21,7 @@ import {
   TEMPLATES, testScaffold, withBuild, withProductName,
 } from './project.mjs';
 import { zip } from './lib-archive.mjs';
-import { PathError } from '../../src/tools/paths.ts';
+import { PathError } from '@harness/plugin-sdk/runtime';
 
 export const ENGINE = 'unity';
 export const ACTIONS = ['detect', 'install', 'project.create', 'project.open', 'describe', 'script', 'asset.import', 'asset.export', 'capture', 'render', 'level.build', 'test', 'build', 'package', 'play', 'bridge.connect', 'bridge.status', 'bridge.call'];

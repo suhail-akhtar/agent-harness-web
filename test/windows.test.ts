@@ -12,7 +12,6 @@ import { tempDir } from './helpers.ts';
 // systems: this suite runs on Linux, so it proves the choices, not the binaries.
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-// @ts-expect-error plain JS module
 const { findBinary, missingMessage } = await import('../plugins/visual/lib/binaries.mjs');
 
 const only = (...paths: string[]) => { const set = new Set(paths.map((p) => p.toLowerCase())); return (p: string) => set.has(p.toLowerCase()); };

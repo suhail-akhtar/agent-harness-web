@@ -37,6 +37,8 @@ export interface PluginEntry {
   contributes?: string[];
   /** A plugin folder the person loaded in this app (its server half runs in the engine, listed there as the operator's). */
   loadedHere?: boolean;
+  /** official: shipped with the harness or signed by an official publisher; custom: everything else. */
+  tier?: 'official' | 'custom';
 }
 
 /** Added by the person (installed from the catalogue, or loaded from a folder here): these go under Custom. */

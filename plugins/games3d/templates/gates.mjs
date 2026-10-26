@@ -171,7 +171,7 @@ export function registerProductionGates(api) {
       let cfg = {};
       try { cfg = await readJson(path.join(dir, 'game.json')); } catch { problems.push('build/web/game.json is missing or broken'); }
       problems.push(...(await checkGameAssets(dir, cfg)).problems.map((p) => `in the build: ${p}`));
-      const { chromiumPath } = await import('../../visual/lib/browser.mjs');
+      const { chromiumPath } = await import('@harness/plugins/visual/lib/browser.mjs');
       if (!chromiumPath()) return problems.length ? { pass: false, summary: problems[0], details: problems.join('\n') } : { pass: false, severity: 'advisory', summary: 'the build has its files; not booted: no Chromium here' };
       const { startWebSession } = await import('../player/web-driver.mjs');
       let s, o, fin;

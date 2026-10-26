@@ -17,9 +17,7 @@ import { tempDir } from './helpers.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const FIX = path.join(here, 'fixtures', 'games');
-// @ts-expect-error plain JS module
 const { chromiumPath, closeBrowser, runPage } = await import('../plugins/visual/lib/browser.mjs');
-// @ts-expect-error plain JS module
 const { addLibrary } = await import('../plugins/visual/lib/libraries.mjs');
 // @ts-expect-error plain JS module
 const { startWebSession } = await import('../plugins/games3d/player/web-driver.mjs');

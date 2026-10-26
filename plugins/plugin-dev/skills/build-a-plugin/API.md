@@ -21,11 +21,52 @@ parameter properties), relative imports with their `.ts` extension, `import type
 `setup` may be `async`. A setup that throws loads nothing of the plugin (all or nothing); on a live
 reload the version before keeps running.
 
+## Imports: the runtime and other plugins
+
+A plugin imports nothing from the harness by relative path (it must run wherever it is installed). Two
+names cover everything; the harness resolves them to where the code is:
+
+```ts
+// The harness's own abilities (the same for every plugin, official or custom):
+import { defineTool, resolveIn, within, PathError, resolveHome, harnessPaths, readJson, writeFileAtomic, withFileLock,
+  run, scrubbedEnv, findBinary, missingMessage, withBrowser, serveDir, runPage, chromiumPath, addLibrary,
+  parseCron, CHANGE_KINDS, ChangeError } from '@harness/plugin-sdk/runtime';
+// Another plugin's module, by its name (declare "requires": ["games3d"] when that plugin must be on):
+import { runJob } from '@harness/plugins/games3d/sdk/jobs.mjs';
+```
+
+| From the runtime | What it is |
+|---|---|
+| `defineTool(def)` | a Tool object from a plain definition (to build tools ahead of `registerTool`) |
+| `resolveIn(host, p)`, `within(root, p)`, `PathError` | a path inside a workspace, symlink-safe |
+| `resolveHome()`, `harnessPaths()` | the harness home (`~/.harness`) and its folders |
+| `readJson(file, fallback)`, `writeFileAtomic(file, data)`, `withFileLock(file, fn)` | files several servers can share safely |
+| `run(cmd, args, { timeoutMs, cwd, env })`, `scrubbedEnv()` | a program on the server (prefer `ctx.host.exec` in tools: it runs where the session runs) |
+| `findBinary(name)`, `missingMessage(name)`, `installPlaces`, `pathNames` | a program on this machine, and how to install it |
+| `withBrowser(fn)`, `serveDir(dir)`, `runPage(o)`, `chromiumPath()`, `frameStats` | the headless browser |
+| `addLibrary(dir, name)`, `LIBRARIES` | browser libraries the harness carries (three.js, ...) |
+| `parseCron(expr)` | a cron expression as a predicate on dates |
+| `CHANGE_KINDS`, `ChangeError` | the change journal's kinds (`api.changes`) |
+
+`npm run plugin -- check --deep` flags any import that leaves the plugin's folder.
+
+## Official and custom plugins
+
+| Tier | What it is |
+|---|---|
+| official | shipped with the harness (Studio, Operations, Engineering, DevOps, the core's plugins), or signed with a key the operator lists as an official publisher (`HARNESS_OFFICIAL_KEYS`, key ids) |
+| custom | everything else: your plugins, a partner's, a folder loaded in the desktop app |
+
+Both have the whole API, the runtime and other plugins' modules; `api.tier` says which one a plugin is,
+and the app shows it. A plugin signed by a trusted key (official or not) may draw native UI; others draw
+in sandboxed frames.
+
 ## api at a glance
 
 | Member | What it does | Needs |
 |---|---|---|
 | `pluginName`, `pluginDir`, `dataDir` | its name, its folder, its own data folder (outside every workspace) | |
+| `tier` | `official` or `custom` | |
 | `store(name, opts)` | a versioned JSON document in `dataDir` (see Data) | |
 | `registerTool(def)` | a tool agents call | |
 | `registerRoute(route)` | an HTTP endpoint `/api/plugins/<name>/<path>` | `permissions.routes` |

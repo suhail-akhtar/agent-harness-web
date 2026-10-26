@@ -15,7 +15,6 @@ import { tempDir } from './helpers.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const EVALS = path.join(here, '..', 'evals');
-// @ts-expect-error plain JS module
 const { chromiumPath, closeBrowser } = await import('../plugins/visual/lib/browser.mjs');
 const hasChromium = await import('playwright-core').then(() => true, () => false) && !!chromiumPath();
 const LONG = { skip: hasChromium ? false : 'no Chromium', timeout: 900_000 };

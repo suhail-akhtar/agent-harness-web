@@ -8,9 +8,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { findBinary, installPlaces, missingMessage, pathNames } from '../visual/lib/binaries.mjs';
-import { PathError, resolveIn } from '../../src/tools/paths.ts';
-import { resolveHome } from '../../src/util/home.ts';
+import { findBinary, installPlaces, missingMessage, pathNames } from '@harness/plugins/visual/lib/binaries.mjs';
+import { PathError, resolveIn } from '@harness/plugin-sdk/runtime';
+import { resolveHome } from '@harness/plugin-sdk/runtime';
 
 export const SKIP_DIRS = new Set(['node_modules', '.git', 'vendor', '.harness', 'dist', 'build', 'coverage', '.venv', 'venv', '__pycache__', 'target']);
 

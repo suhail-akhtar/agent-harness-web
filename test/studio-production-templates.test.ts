@@ -14,7 +14,6 @@ import type { ToolContext } from '../src/tools/types.ts';
 import { tempDir } from './helpers.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-// @ts-expect-error plain JS module
 const { chromiumPath, closeBrowser } = await import('../plugins/visual/lib/browser.mjs');
 // @ts-expect-error plain JS module
 const { closeAllPlay } = await import('../plugins/games3d/player/index.mjs');

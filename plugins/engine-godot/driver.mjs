@@ -22,7 +22,7 @@
 
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { godotProblems, locate, missingIn, readIn, readTextIn, relIn, removeIn } from '../games3d/lib-engines.mjs';
+import { godotProblems, locate, missingIn, readIn, readTextIn, relIn, removeIn } from '@harness/plugins/games3d/lib-engines.mjs';
 import { importProject, inProject, metricsOf, startStep, step as stepGodot, stepSessions, stepState, stopStep, workspaceRel } from './lib/play.mjs';
 
 const FRAME_MS = 1000 / 60;

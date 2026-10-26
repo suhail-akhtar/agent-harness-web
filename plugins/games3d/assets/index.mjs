@@ -8,7 +8,7 @@
 //   studio_source   optional CC0 libraries and paid generators, off unless the operator turns them on
 // and the gates asset-manifest, asset-budget, asset-3d, asset-2d, audio-valid, level-playable.
 
-import { defineTool } from '../../../src/plugins/api.ts';
+import { defineTool } from '@harness/plugin-sdk/runtime';
 import { registerGates } from './gates.mjs';
 import { imageTool, spriteTool } from './tools-2d.mjs';
 import { audioTool } from './tools-audio.mjs';

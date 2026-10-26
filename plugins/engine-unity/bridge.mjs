@@ -4,7 +4,7 @@
 // play mode); calls made then are retried until the editor answers again.
 
 import net from 'node:net';
-import { readTextIn } from '../games3d/lib-engines.mjs';
+import { readTextIn } from '@harness/plugins/games3d/lib-engines.mjs';
 
 export const BRIDGE_FILE = 'Library/HarnessBridge/bridge.json';
 

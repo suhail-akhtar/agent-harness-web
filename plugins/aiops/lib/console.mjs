@@ -21,7 +21,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { readJson, writeFileAtomic } from '../../../src/util/shared-file.ts';
+import { readJson, writeFileAtomic } from '@harness/plugin-sdk/runtime';
 import { INCIDENT_DIR } from './incidents.mjs';
 import { citations, readEvidence } from './memory.mjs';
 import { fromInventory, newGraph } from './topology.mjs';

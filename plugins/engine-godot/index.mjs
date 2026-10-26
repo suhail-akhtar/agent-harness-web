@@ -11,13 +11,13 @@
 
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { defineTool } from '../../src/plugins/api.ts';
+import { defineTool } from '@harness/plugin-sdk/runtime';
 import {
   checkGodot, enginesDir, findFiles, findRemote, godotArgs, godotProblems, listIn, locate, missingIn, mkdirIn, newId, presetsIn,
   readIn, readTextIn, relIn, removeIn, runIn, runtimePath, SELFTEST_FRAMES, selftestGodot, tail, withDisplay, WORKSPACE_ENGINES, writeIn,
-} from '../games3d/lib-engines.mjs';
-import { toToolResult } from '../games3d/sdk/engine.mjs';
-import { cancelJob, listJobs, runJob } from '../games3d/sdk/jobs.mjs';
+} from '@harness/plugins/games3d/lib-engines.mjs';
+import { toToolResult } from '@harness/plugins/games3d/sdk/engine.mjs';
+import { cancelJob, listJobs, runJob } from '@harness/plugins/games3d/sdk/jobs.mjs';
 import { bridgeCall, bridgeInfo, COMMANDS, installBridge } from './lib/bridge.mjs';
 import { BUILDS, DEFAULT_TEMPLATES, defaultPlatforms, installGodot, NETWORK_HOSTS, templatesFor } from './lib/install.mjs';
 import {

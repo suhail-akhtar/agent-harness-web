@@ -7,7 +7,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { execIn, quote } from '../games3d/lib-engines.mjs';
+import { execIn, quote } from '@harness/plugins/games3d/lib-engines.mjs';
 import {
   compareVersions, editorDataDir, editorExecutable, editorInFolder, editorRoots, hubCandidates, hubConfigDir, isUnity6, licensePlaces, licenseStatus,
   mergeEditors, modulesFrom, parseHubEditors, parseHubEditorsJson, parseSecondaryInstallPath, pickEditor, versionFromPath,

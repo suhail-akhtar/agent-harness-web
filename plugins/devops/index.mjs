@@ -14,7 +14,7 @@
 // guard) decide them before the call runs, and the call can read no others. A
 // session on the user's computer (a companion) gets no vault values at all.
 
-import { defineTool } from '../../src/plugins/api.ts';
+import { defineTool } from '@harness/plugin-sdk/runtime';
 import { opsAvailable } from './lib/common.mjs';
 import { CI_CHANGES, CI_REMOTE, ciParameters, ciVaultNames, runCi } from './lib/ci.mjs';
 import { containerParameters, runContainer } from './lib/container.mjs';

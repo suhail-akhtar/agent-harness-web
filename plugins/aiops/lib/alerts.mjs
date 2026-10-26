@@ -29,8 +29,8 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { parseCron } from '../../../src/core/scheduler.ts';
-import { readJson, withFileLock, writeFileAtomic } from '../../../src/util/shared-file.ts';
+import { parseCron } from '@harness/plugin-sdk/runtime';
+import { readJson, withFileLock, writeFileAtomic } from '@harness/plugin-sdk/runtime';
 import { renderIncident } from './incidents.mjs';
 import { inMaintenance, loadInventory, parseDuration } from './inventory.mjs';
 import { revealCredential } from './secrets.mjs';

@@ -9,7 +9,8 @@
   },
   "workspaces": [
     "packages/*",
-    "apps/*"
+    "apps/*",
+    "plugins"
   ],
   "scripts": {
     "build": "node scripts/build.mjs",

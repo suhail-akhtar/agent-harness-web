@@ -22,7 +22,6 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const E = await import('../plugins/games3d/lib-engines.mjs');
 // @ts-expect-error plain JS module
 const { inspectGltf } = await import('../plugins/games3d/lib-gltf.mjs');
-// @ts-expect-error plain JS module
 const { findBinary } = await import('../plugins/visual/lib/binaries.mjs');
 
 const blenderBin = findBinary('blender') as string | null;

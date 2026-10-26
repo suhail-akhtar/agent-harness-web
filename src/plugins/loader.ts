@@ -17,6 +17,7 @@ import { ChangeJournal } from '../ops/changes.ts';
 import { ROUTE_PATH } from './host.ts';
 import { freshImport } from './fresh-import.ts';
 import { makeStore } from './store.ts';
+import { registerPluginDir } from './resolve.ts';
 
 // Plugins are folders with a harness-plugin.json. The operator lists plugin
 // directories (HARNESS_PLUGINS); those are TRUSTED: their code runs in the
@@ -53,12 +54,12 @@ export async function findPluginDirs(root: string): Promise<string[]> {
  * Loads one plugin, all or nothing: a plugin that fails partway through (a bad
  * workflow, a throwing setup) leaves no tools, agents, gates or hooks behind.
  */
-export async function loadPlugin(reg: Registry, dir: string, log: (m: string) => void = () => {}, opts: { dataDir?: string; /** Import its code again, not Node's cached copy (a live reload). */ fresh?: boolean } = {}): Promise<PluginParts> {
+export async function loadPlugin(reg: Registry, dir: string, log: (m: string) => void = () => {}, opts: { dataDir?: string; /** Import its code again, not Node's cached copy (a live reload). */ fresh?: boolean; /** Official or custom (api.tier). */ tier?: 'official' | 'custom' } = {}): Promise<PluginParts> {
   const restore = reg.snapshot();
   // What it adds is recorded, so it can be switched off and on again while the server runs.
   const added = reg.record();
   try {
-    await loadInto(reg, dir, log, opts.dataDir, opts.fresh);
+    await loadInto(reg, dir, log, opts.dataDir, opts.fresh, opts.tier);
     return added();
   } catch (e) {
     restore();
@@ -69,7 +70,7 @@ export async function loadPlugin(reg: Registry, dir: string, log: (m: string) =>
 /** The plugin's UI section, validated (see src/plugins/ui.ts); a bad one is reported, never fatal. */
 export { readPluginUi } from './ui.ts';
 
-async function loadInto(reg: Registry, dir: string, log: (m: string) => void, dataRoot?: string, fresh?: boolean): Promise<void> {
+async function loadInto(reg: Registry, dir: string, log: (m: string) => void, dataRoot?: string, fresh?: boolean, tier: 'official' | 'custom' = 'custom'): Promise<void> {
   const m = await readManifest(dir);
   if (!m) throw new Error(`no ${MANIFEST} in ${dir}`);
   if (reg.plugins.some((p) => p.name === m.name)) throw new Error(`plugin ${m.name} is loaded twice`);
@@ -118,6 +119,8 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void, da
   }
 
   if (m.main) {
+    // Its modules (and other plugins' by name: @harness/plugins/<name>/...) resolve wherever it is installed.
+    registerPluginDir(m.name, dir);
     const mod = (fresh ? await freshImport(within(m.main), dir) : await import(pathToFileURL(within(m.main)).href)) as { default?: PluginDefinition };
     const def = mod.default;
     if (!def || typeof def.setup !== 'function') throw new Error(`${m.name}: ${m.main} must default-export definePlugin({...})`);
@@ -137,6 +140,7 @@ async function loadInto(reg: Registry, dir: string, log: (m: string) => void, da
     const api: PluginAPI = {
       pluginName: m.name,
       pluginDir: dir,
+      tier,
       // The server's data folder when there is one; a temporary folder otherwise (a plugin loaded on its own, in a test).
       dataDir: pluginData,
       store: (name, so) => makeStore(m.name, pluginData, name, so),

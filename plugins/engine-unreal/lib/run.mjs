@@ -12,8 +12,8 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { scrubbedEnv } from '../../../src/runtime/host.ts';
-import { runIn, stripAnsi } from '../../games3d/lib-engines.mjs';
+import { scrubbedEnv } from '@harness/plugin-sdk/runtime';
+import { runIn, stripAnsi } from '@harness/plugins/games3d/lib-engines.mjs';
 
 /** One argument as Unreal's Windows command line wants it: -Key="value with spaces", or a quoted word. */
 export function ueArg(a) {

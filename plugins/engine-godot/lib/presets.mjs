@@ -2,7 +2,7 @@
 // every option left out with its default, so a preset stays short. include_filter keeps
 // the asset.json files (Studio's asset layout) in the export: they are not resources.
 
-import { presetsIn } from '../../games3d/lib-engines.mjs';
+import { presetsIn } from '@harness/plugins/games3d/lib-engines.mjs';
 
 export const PRESETS = {
   windows: { name: 'Windows Desktop', platform: 'Windows Desktop', output: 'build/windows/game.exe', options: ['binary_format/embed_pck=false', 'binary_format/architecture="x86_64"', 'codesign/enable=false', 'application/modify_resources=false'] },

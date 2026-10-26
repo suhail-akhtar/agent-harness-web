@@ -5,7 +5,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { godotArgs, godotProblems, listIn, mkdirIn, newId, readIn, readTextIn, removeIn, runIn, runtimePath, stripAnsi, tail, withDisplay, writeIn } from '../../games3d/lib-engines.mjs';
+import { godotArgs, godotProblems, listIn, mkdirIn, newId, readIn, readTextIn, removeIn, runIn, runtimePath, stripAnsi, tail, withDisplay, writeIn } from '@harness/plugins/games3d/lib-engines.mjs';
 import { PLUGIN_DIR } from './templates.mjs';
 
 export const HARNESS_DIR = '.godot/harness';

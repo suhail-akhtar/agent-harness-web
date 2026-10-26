@@ -12,11 +12,9 @@ import { tempDir } from './helpers.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const plugins = path.join(here, '..', 'plugins');
-// @ts-expect-error plain JS module
 const { chromiumPath, serveDir } = await import('../plugins/visual/lib/browser.mjs');
 const hasChromium = await import('playwright-core').then(() => true, () => false) && !!chromiumPath();
 // Found the way the render tool finds it: on the PATH or in its install folder.
-// @ts-expect-error plain JS module
 const { findBinary } = await import('../plugins/visual/lib/binaries.mjs');
 const soffice = await findBinary('soffice');
 const hasOffice = !!soffice;

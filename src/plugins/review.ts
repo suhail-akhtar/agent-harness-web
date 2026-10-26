@@ -97,6 +97,9 @@ export async function reviewPlugin(dir: string, o: { runTests?: boolean; testTim
   }
   if (files.some((f) => f === '.env' || f.endsWith('/.env'))) add('error', 'security', 'The plugin ships a .env file.', 'Remove it: secrets come from the server (api.secret) or the key vault.');
   for (const [f, text] of code) {
+    // Portable: nothing reached by relative path outside the plugin's own folder (it breaks once installed elsewhere).
+    const outside = [...text.matchAll(/(?:from\s+|import\s*\(\s*)['"](\.{1,2}\/[^'"]+)['"]/g)].map((x) => x[1]!).filter((sp) => { const abs = path.resolve(dir, path.dirname(f), sp); return abs !== path.resolve(dir) && !abs.startsWith(path.resolve(dir) + path.sep); });
+    if (outside.length) add('error', 'portable', `${f} imports ${outside.join(', ')} from outside the plugin's folder: it breaks wherever the plugin is installed on its own.`, "The harness's abilities come from '@harness/plugin-sdk/runtime' (defineTool, resolveIn, writeFileAtomic, findBinary, withBrowser, ...); another plugin's module from '@harness/plugins/<name>/<file>' (and \"requires\": [\"<name>\"] when that plugin must be on).");
     if (/\bfrom\s+['"](node:)?child_process['"]|require\(['"](node:)?child_process['"]\)/.test(text)) add('warning', 'security', `${f} starts processes on the server (child_process).`, 'Tools run commands where the session runs with ctx.host.exec (sandboxed when the session is); child_process runs them on the server itself, outside any sandbox.');
     if (/\beval\(|new Function\(/.test(text)) add('warning', 'security', `${f} runs code from strings (eval / new Function).`);
     if (/process\.env\b/.test(text)) add('warning', 'security', `${f} reads the server's environment directly (process.env).`, 'Declare what it needs in permissions.secrets and read it with api.secret(NAME): undeclared reads bypass what the operator approved.');

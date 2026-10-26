@@ -6,7 +6,7 @@
 //
 // Pure: state in, state out. index.mjs keeps it on disk and serves it through its routes.
 
-import { testCounts } from '../../quality-gates/index.mjs';
+import { testCounts } from '@harness/plugins/quality-gates/index.mjs';
 
 export const STAGES = ['requirement', 'design', 'plan', 'build', 'gates', 'review', 'delivered'];
 export const STAGE_TITLES = { requirement: 'Requirement', design: 'Design / ADR', plan: 'Plan', build: 'Build', gates: 'Gates', review: 'Review', delivered: 'Delivered' };

@@ -6,8 +6,8 @@
 
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { defineTool } from '../../src/plugins/api.ts';
-import { findFiles, readTextIn } from '../games3d/lib-engines.mjs';
+import { defineTool } from '@harness/plugin-sdk/runtime';
+import { findFiles, readTextIn } from '@harness/plugins/games3d/lib-engines.mjs';
 import { ACTIONS, READ_ACTIONS, discoverFor, runUnity, unityProjects, unityTool } from './unity.mjs';
 import { pickEditor } from './lib-unity.mjs';
 

@@ -15,7 +15,7 @@
 
 import crypto from 'node:crypto';
 import net from 'node:net';
-import { execIn, listIn, newId, readTextIn, relIn, runtimePath, commandLine, writeIn } from '../games3d/lib-engines.mjs';
+import { execIn, listIn, newId, readTextIn, relIn, runtimePath, commandLine, writeIn } from '@harness/plugins/games3d/lib-engines.mjs';
 import { alive, connect, readBridgeFile, waitFor } from './bridge.mjs';
 import { keyName, playerArgs } from './lib-unity.mjs';
 

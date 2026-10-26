@@ -15,7 +15,7 @@
 // the watch status (alerts list), not fired.
 
 import path from 'node:path';
-import { readJson, writeFileAtomic } from '../../../src/util/shared-file.ts';
+import { readJson, writeFileAtomic } from '@harness/plugin-sdk/runtime';
 
 const timers = new Set();
 /** The plugin's shared parts per data folder: a seam for tests (the round, the alert engine). */

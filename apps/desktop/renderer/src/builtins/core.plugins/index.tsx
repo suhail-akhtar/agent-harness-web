@@ -80,6 +80,7 @@ function PluginCard({ p }: { p: PluginEntry }) {
             <span className="text-[14px] font-medium">{p.ui?.displayName ?? p.name}</span>
             <span className="text-[11.5px] text-hx-muted">{p.name} {p.version}</span>
             <Badge tone={builtin ? 'accent' : p.source === 'dev' ? 'info' : 'neutral'}>{builtin ? 'Built in' : p.source}</Badge>
+            {!builtin && <span data-tier={p.tier ?? 'custom'}><Badge tone={p.tier === 'official' ? 'success' : 'neutral'}>{p.tier === 'official' ? 'Official' : 'Custom'}</Badge></span>}
             {p.ui && <Badge>{p.ui.trust === 'native' ? 'native UI' : p.ui.trust === 'frame' ? 'frame UI' : 'declarative UI'}</Badge>}
             {required && <Badge tone="warning">Required</Badge>}
           </div>
@@ -161,6 +162,7 @@ function Catalogue() {
                   <span className="text-[14px] font-medium">{c.solution!.title}</span>
                   <span className="text-[11.5px] text-hx-muted">{c.name} {c.version}</span>
                   <span className="flex-1" />
+                  <Badge tone="accent">Official</Badge>
                   {c.installed && <Badge tone="success">Installed</Badge>}
                 </div>
                 <p className="line-clamp-3 text-[12.5px] text-hx-secondary">{c.description}</p>

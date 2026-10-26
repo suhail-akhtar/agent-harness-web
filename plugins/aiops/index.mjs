@@ -28,7 +28,7 @@
 import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { parseCron } from '../../src/core/scheduler.ts';
+import { parseCron } from '@harness/plugin-sdk/runtime';
 import { containerLogs, describe, docker, dockerError, formatContainer, inspect, listContainers, LOCAL_DOCKER_OFF, localContainer, localDockerPolicy, stats } from './lib/docker.mjs';
 import { CONTAINER_STATE_FORMAT, containerStateCmd, controlCmd, dockerLogsCmd, tailFileCmd, unitStateCmd } from './lib/commands.mjs';
 import { duScript, HOST_STATS_SCRIPT, parseDu, parseHostStats } from './lib/hoststats.mjs';

@@ -13,8 +13,8 @@
 import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { run } from '../../../src/runtime/host.ts';
-import { PathError, resolveIn } from '../../../src/tools/paths.ts';
+import { run } from '@harness/plugin-sdk/runtime';
+import { PathError, resolveIn } from '@harness/plugin-sdk/runtime';
 
 /** Names of the throwaway runner containers (tests use their own prefix). */
 export const runner = { prefix: 'harness-devops-' };

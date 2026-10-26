@@ -12,7 +12,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { readJson, writeFileAtomic } from '../../src/util/shared-file.ts';
+import { readJson, writeFileAtomic } from '@harness/plugin-sdk/runtime';
 import { applyEvent, card, emptyState, STAGES, STAGE_TITLES, visible } from './lib/delivery.mjs';
 
 let flushIndex;

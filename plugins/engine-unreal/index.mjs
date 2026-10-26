@@ -11,10 +11,10 @@
 
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { defineTool } from '../../src/plugins/api.ts';
-import { toToolResult, unavailable } from '../games3d/sdk/engine.mjs';
-import { cancelJob, listJobs, runJob } from '../games3d/sdk/jobs.mjs';
-import { tail } from '../games3d/lib-engines.mjs';
+import { defineTool } from '@harness/plugin-sdk/runtime';
+import { toToolResult, unavailable } from '@harness/plugins/games3d/sdk/engine.mjs';
+import { cancelJob, listJobs, runJob } from '@harness/plugins/games3d/sdk/jobs.mjs';
+import { tail } from '@harness/plugins/games3d/lib-engines.mjs';
 import { automationArgs, buildCookRunArgs } from './lib/args.mjs';
 import { launchEditor, rcClient, stopEditor, waitForRc } from './lib/bridge.mjs';
 import { engine, engineReport, exists, installHelpers, projectOf, readJson, relTo, runDir, runPython, writeJson } from './lib/context.mjs';
@@ -187,7 +187,7 @@ async function doCapture(input, host, eng, proj, signal) {
   }
   if (!await exists(outAbs)) return result('capture', 'failed', `no frame was written (${view} view, exit ${r.code}${r.timedOut ? ', timed out' : ''})`, { problems: r.problems?.slice(0, 20), logFile: r.logFile, log: tail(r.text ?? '', 30) });
   const img = await image(outAbs);
-  const { pngStats } = await import('../games3d/lib-png.mjs');
+  const { pngStats } = await import('@harness/plugins/games3d/lib-png.mjs');
   let stats = null;
   try { stats = pngStats(await fsp.readFile(outAbs)); } catch { /* not decodable here */ }
   return {

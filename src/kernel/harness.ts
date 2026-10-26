@@ -10,6 +10,7 @@ import { neutralizeTags } from '../core/untrusted.ts';
 import { McpManager } from '../mcp/manager.ts';
 import type { McpServerConfig } from '../plugins/api.ts';
 import { findPluginDirs, loadPlugin, readManifest } from '../plugins/loader.ts';
+import { registerPluginDir } from '../plugins/resolve.ts';
 import { loadTrustedKeys, SIG_FILE, verifyPlugin } from '../plugins/signing.ts';
 import { OtelExporter, parseHeaders } from './otel.ts';
 import { BUILTIN_PROVIDERS } from '../providers/index.ts';
@@ -198,6 +199,8 @@ export interface PluginEntry extends PluginUi {
   error?: string;
   /** Its guide for agents (src/plugins/guides.ts). */
   guide?: PluginGuideInfo;
+  /** official: shipped with the harness or signed by an official publisher's key; custom: everything else. */
+  tier?: 'official' | 'custom';
 }
 
 export class PluginStateError extends Error {
@@ -297,12 +300,23 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   const solutionTitle = (m: PluginManifest) => (typeof m.solution === 'object' && m.solution.title) || ((m.ui as { displayName?: string } | undefined)?.displayName) || m.name;
   /** Solution manifests seen (installed or not), for what requires what. */
   const solutionManifests = new Map<string, { dir: string; m: PluginManifest }>();
+  /**
+   * The two tiers: official (shipped with the harness, or signed with a key the operator lists as an
+   * official publisher: HARNESS_OFFICIAL_KEYS, key ids) and custom (everything else). Both get the whole
+   * API and runtime; the tier is shown to people and to the plugin (api.tier).
+   */
+  const officialKeys = new Set((process.env.HARNESS_OFFICIAL_KEYS ?? '').split(',').map((s) => s.trim()).filter(Boolean));
+  const tierOf = (signature: string | undefined): 'official' | 'custom' => {
+    if (signature === 'shipped with the harness') return 'official';
+    const id = /^signed by .* \(([^)]+)\)$/.exec(signature ?? '')?.[1];
+    return id && officialKeys.has(id) ? 'official' : 'custom';
+  };
   /** Native UI only for what ships with the harness or is signed by a trusted key. */
   const trustOf = (signature: string | undefined) => (signature === 'shipped with the harness' || /^signed by /.test(signature ?? '') ? 'native' as const : 'frame' as const);
   async function describe(dir: string, m: PluginManifest, signature: string | undefined, enabled: boolean, loaded?: LoadedPlugin, error?: string): Promise<PluginEntry> {
     const e: PluginEntry = {
       name: m.name, version: m.version ?? '0.0.0', description: m.description ?? '', dir, source: sourceOf(dir), enabled, required: required.has(m.name),
-      ...(signature ? { signature } : {}), ...(loaded ? { loaded } : {}), ...(error ? { error } : {}),
+      ...(signature ? { signature } : {}), ...(loaded ? { loaded } : {}), ...(error ? { error } : {}), tier: tierOf(signature),
       ...await readPluginUi(dir, m.ui, trustOf(signature)),
     };
     if (e.uiError) log(`plugin ${m.name}: its ui section is not used: ${e.uiError}`);
@@ -317,7 +331,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     const missing = (m0?.requires ?? []).filter((r) => !registry.plugins.some((p) => p.name === r));
     if (m0 && missing.length) throw new Error(`${m0.name} needs ${missing.join(', ')}, which ${missing.length > 1 ? 'are' : 'is'} not installed or not on`);
     const signature = await admit(dir);
-    const added = await loadPlugin(registry, dir, log, { dataDir: opts.dataDir });
+    const added = await loadPlugin(registry, dir, log, { dataDir: opts.dataDir, tier: tierOf(signature) });
     const p = registry.plugins.at(-1)!;
     p.signature = signature;
     p.source = sourceOf(dir);
@@ -357,6 +371,8 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     for (const dir of await findPluginDirs(path.resolve(root))) found.push({ dir, m: await readManifest(dir).catch(() => undefined), explicit: dir === path.resolve(root) });
   }
   const explicitNames = new Set(found.filter((f) => f.explicit && f.m).map((f) => f.m!.name));
+  // Every plugin found, loaded or not, is importable by name (@harness/plugins/<name>/...): the explicit copy wins.
+  for (const f of [...found.filter((x) => !x.explicit), ...found.filter((x) => x.explicit)]) if (f.m) registerPluginDir(f.m.name, f.dir);
   const ordered: typeof found = [];
   const placing = new Set<(typeof found)[number]>();
   const place = (f: (typeof found)[number]) => {
@@ -524,7 +540,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       let fresh: PluginParts;
       try {
         const signature = await admit(e.dir);
-        fresh = await loadPlugin(registry, e.dir, log, { dataDir: opts.dataDir, fresh: true });
+        fresh = await loadPlugin(registry, e.dir, log, { dataDir: opts.dataDir, fresh: true, tier: tierOf(signature) });
         const p = registry.plugins.at(-1)!;
         p.signature = signature;
         p.source = sourceOf(e.dir);

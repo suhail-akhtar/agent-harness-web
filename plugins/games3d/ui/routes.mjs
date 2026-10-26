@@ -37,10 +37,10 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { harnessPaths } from '../../../src/util/home.ts';
-import { writeFileAtomic } from '../../../src/util/shared-file.ts';
-import { within } from '../../../src/tools/paths.ts';
-import { findBinary } from '../../visual/lib/binaries.mjs';
+import { harnessPaths } from '@harness/plugin-sdk/runtime';
+import { writeFileAtomic } from '@harness/plugin-sdk/runtime';
+import { within } from '@harness/plugin-sdk/runtime';
+import { findBinary } from '@harness/plugins/visual/lib/binaries.mjs';
 import { ENGINES } from '../sdk/engine.mjs';
 import { cancelJob, listJobs } from '../sdk/jobs.mjs';
 
@@ -384,7 +384,7 @@ export async function probeEngines(o = {}) {
 
   // Web: always there (Three.js is vendored); games are played in a headless Chromium when one is installed.
   let chromium;
-  try { chromium = (await import('../../visual/lib/browser.mjs')).chromiumPath(); } catch { chromium = undefined; }
+  try { chromium = (await import('@harness/plugins/visual/lib/browser.mjs')).chromiumPath(); } catch { chromium = undefined; }
   out.web = { installed: true, version: 'Three.js and Canvas', path: chromium, gaps: chromium ? [] : ['no headless Chromium: games build, but cannot be played and checked headless (npx playwright install chromium)'] };
 
   return ENGINES.map((e) => ({ engine: e, ...ENGINE_INFO[e], source: 'host', ...out[e] }));

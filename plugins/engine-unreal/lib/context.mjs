@@ -3,7 +3,7 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { newId } from '../../games3d/lib-engines.mjs';
+import { newId } from '@harness/plugins/games3d/lib-engines.mjs';
 import { commandletPythonArgs, editorPythonArgs } from './args.mjs';
 import { detect, hostSys } from './detect.mjs';
 import { problemsIn, resultsIn } from './logs.mjs';

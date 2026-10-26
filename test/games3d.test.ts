@@ -14,7 +14,6 @@ import { FakeProvider, fakeGodot, glbBytes, tempDir, testPicture } from './helpe
 const here = path.dirname(fileURLToPath(import.meta.url));
 // @ts-expect-error plain JS module
 const { inspectGltf } = await import('../plugins/games3d/lib-gltf.mjs');
-// @ts-expect-error plain JS module
 const { chromiumPath } = await import('../plugins/visual/lib/browser.mjs');
 const hasChromium = await import('playwright-core').then(() => true, () => false) && !!chromiumPath();
 

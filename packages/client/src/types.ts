@@ -188,6 +188,8 @@ export interface PluginInfo {
   ui?: UiManifest; uiError?: string; uiHash?: string; /** Where the server serves this plugin's UI files: /api/plugins/<name>/ui/ */ uiBase?: string;
   /** The plugin has a guide for agents (skill `<name>-guide` in a desktop session): its one-sentence purpose. */
   guide?: { purpose: string };
+  /** official: shipped with the harness or signed by an official publisher; custom: everything else. */
+  tier?: 'official' | 'custom';
 }
 export interface CatalogueEntry { name: string; version: string; description?: string; installed?: boolean; url?: string; /** A solution shipped with the harness (Studio, Operations, ...): installed one by one, in any mix. */ solution?: { title: string; requires: string[]; requiredBy: string[] } }
 /** A deep review of a plugin (POST /api/plugins/review; src/plugins/review.ts). */

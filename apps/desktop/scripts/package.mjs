@@ -57,6 +57,8 @@ copy(path.join(repo, 'src'), path.join(engine, 'src'), skip);
 copy(path.join(repo, 'plugins'), path.join(engine, 'plugins'), skip);
 // The server validates plugin UI manifests with the shared contract.
 copy(path.join(repo, 'packages', 'plugin-ui', 'src'), path.join(engine, 'packages', 'plugin-ui', 'src'), skip);
+// Plugin code imports the harness's abilities from @harness/plugin-sdk/runtime (resolved to these files: src/plugins/resolve.ts).
+copy(path.join(repo, 'packages', 'plugin-sdk', 'src'), path.join(engine, 'packages', 'plugin-sdk', 'src'), skip);
 const rootPkg = JSON.parse(fs.readFileSync(path.join(repo, 'package.json'), 'utf8'));
 fs.writeFileSync(path.join(engine, 'package.json'), JSON.stringify({ name: 'harness-engine', private: true, type: rootPkg.type ?? 'module', version: rootPkg.version }, null, 2));
 // The production dependency closure (dependencies, and the optional ones that are installed).

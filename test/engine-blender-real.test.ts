@@ -16,7 +16,6 @@ import { tempDir } from './helpers.ts';
 // gate, and the bridge add-on's server run in background mode.
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-// @ts-expect-error plain JS module
 const { findBinary } = await import('../plugins/visual/lib/binaries.mjs');
 // @ts-expect-error plain JS module
 const { inspectGltf } = await import('../plugins/games3d/lib-gltf.mjs');

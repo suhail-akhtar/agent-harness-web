@@ -8,8 +8,8 @@
 
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { defineTool } from '../../src/plugins/api.ts';
-import { resolveIn } from '../../src/tools/paths.ts';
+import { defineTool } from '@harness/plugin-sdk/runtime';
+import { resolveIn } from '@harness/plugin-sdk/runtime';
 import { findFiles } from './lib-engines.mjs';
 import { describeGltf, inspectGltf } from './lib-gltf.mjs';
 import { pngStats } from './lib-png.mjs';

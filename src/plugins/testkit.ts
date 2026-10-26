@@ -129,7 +129,20 @@ export async function loadPlugin(dir: string | URL, o: { env?: Record<string, st
   for (const [k, v] of Object.entries(o.env ?? {})) { saved[k] = process.env[k]; process.env[k] = v; }
   const logs: string[] = [];
   const signals: string[] = [];
-  const harness = await createHarness({ dataDir: data, plugins: [root], backgroundWork: false, scheduler: false, search: null, log: (x) => logs.push(x) });
+  // What it requires ("requires"), from beside it (a folder of plugins, as a server keeps them): loaded first.
+  const deps: string[] = [];
+  const addDeps = async (dir: string, seen: Set<string>) => {
+    for (const r of (await readManifest(dir).catch(() => undefined))?.requires ?? []) {
+      if (seen.has(r)) continue;
+      seen.add(r);
+      const d = path.join(path.dirname(dir), r);
+      if (!(await readManifest(d).catch(() => undefined))) continue;
+      await addDeps(d, seen);
+      deps.push(d);
+    }
+  };
+  await addDeps(root, new Set([m.name]));
+  const harness = await createHarness({ dataDir: data, plugins: [...deps, root], backgroundWork: false, scheduler: false, search: null, log: (x) => logs.push(x) });
   const prevSignal = harness.bridge.signal;
   harness.bridge.signal = (plugin, name) => { if (plugin === m.name) signals.push(name); prevSignal?.(plugin, name); };
   const reg = harness.registry;
