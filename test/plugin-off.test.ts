@@ -66,7 +66,7 @@ async function setup(steps: ConstructorParameters<typeof FakeProvider>[0] = []) 
   };
   const close = async () => { await new Promise<void>((r) => (server as http.Server).close(() => r())); await harness.close(); };
   const session = () => harness.sessions.create({ model: 'deepseek-flash', runtime: { kind: 'local', network: 'none', path: work }, mode: 'bypass' });
-  return { harness, fake, call, close, data, work, session };
+  return { harness, fake, call, close, data, work, session, base };
 }
 
 const toolResults = (history: Message[]) => history.flatMap((m) => m.content.filter((b) => b.type === 'tool_result')) as Array<{ content: string; is_error?: boolean }>;
@@ -160,6 +160,13 @@ test('background work: its schedules are skipped with a note and kept, its route
     await sch.remove(plain.id);
     assert.equal((await t.call('POST', '/api/plugins/widgets/hook')).status, 200);
     assert.equal(await t.harness.bridge.lease('widgets', 'watch'), true);
+    // A route that is not here: a signed-in caller learns why, anyone else only that nothing is.
+    const missing = await t.call('POST', '/api/plugins/widgets/hooks');
+    assert.equal(missing.status, 404);
+    assert.match(JSON.stringify(missing.body), /Widget Works has no route \\"hooks\\"\. Its routes: POST hook/);
+    assert.match(JSON.stringify((await t.call('GET', '/api/plugins/nobody/stats')).body), /No plugin \\"nobody\\" runs on this server.*only its page half is loaded/);
+    const anon = await fetch(`${t.base}/api/plugins/nobody/stats`);
+    assert.deepEqual([anon.status, JSON.stringify(await anon.json())], [404, JSON.stringify({ error: 'not found' })]);
 
     await t.harness.plugins.setEnabled('widgets', false);
     const r = await t.call('POST', '/api/plugins/widgets/hook');

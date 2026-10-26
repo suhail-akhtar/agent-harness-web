@@ -1554,6 +1554,16 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
    * the body read whole (1 MB at most), then the plugin's handler. Its errors are logged,
    * not shown to the caller.
    */
+  /** Why a plugin route is not here, in words its author can act on. */
+  function routeMissing(plugin: string, rel: string, e: ReturnType<typeof harness.plugins.get>): string {
+    const name = e?.ui?.displayName ?? plugin;
+    if (!e) return `No plugin "${plugin}" runs on this server, so its route "${rel}" is not here. If its pages show, only its page half is loaded: load its folder again (Plugins > Load a plugin folder) or restart the engine so its server code (tools, routes) loads too.`;
+    if (e.error) return `${name} did not load on this server: ${e.error}`;
+    const own = harness.registry.routes.filter((r) => r.plugin === plugin);
+    if (!own.length) return `${name} registers no server routes (its setup never calls api.registerRoute, or it has no "main"), so "${rel}" is not here.`;
+    return `${name} has no route "${rel}". Its routes: ${own.map((r) => `${r.method} ${r.path}`).join(', ')}.`;
+  }
+
   async function pluginRoute(req: http.IncomingMessage, res: http.ServerResponse, url: URL, plugin: string, rel: string, method: string): Promise<void> {
     // Each route has its own budget per address: junk sent to one (or to paths that do not exist) cannot starve another's callers.
     const routes = harness.bridge.route(plugin, rel);
@@ -1563,6 +1573,8 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       // A plugin switched off: its webhooks hear that it is (they can retry later), not that nothing is here.
       const e = harness.plugins.get(plugin);
       if (e && !e.enabled) throw new HttpError(503, `${e.ui?.displayName ?? plugin} is switched off on this server`, { 'retry-after': '300' });
+      // A signed-in caller (a plugin's own page, its author) learns why; anyone else, only that nothing is here.
+      if (who(req)) throw new HttpError(404, routeMissing(plugin, rel, e));
       throw new HttpError(404, 'not found');
     }
     const r = routes.find((x) => x.method === method);
