@@ -1,6 +1,6 @@
 {
   "name": "@harness/plugin-sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Everything to build a harness plugin: the types of its server API (tools, routes, skills, agents, workflows, versioned data, sessions), the manifest and page SDK types, and a test kit that loads a plugin into a real harness.",
   "type": "module",

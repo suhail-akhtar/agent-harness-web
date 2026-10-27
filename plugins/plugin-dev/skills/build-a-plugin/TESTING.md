@@ -15,6 +15,10 @@ that needs the harness itself (a whole server, its helpers) imports it by name, 
 `@harness/plugins/<name>/...`; the plugin's own files by relative path (`../lib/x.mjs`). The shipped
 solutions do the same: `plugins/aiops/test`, `plugins/games3d/test`, and the harness's suite runs them too.
 
+Name slow integration tests (a real engine or browser, a stack of services in Docker, a desktop app)
+`*-real.test.ts`, `*-stack.test.ts`, `*-live.test.ts` or `*e2e*.test.ts`: the review runs the quick ones
+within five minutes and leaves these out; `npm run plugin -- test` runs them all.
+
 ```ts
 import assert from 'node:assert/strict';
 import { test } from 'node:test';

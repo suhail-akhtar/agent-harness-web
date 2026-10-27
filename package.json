@@ -1,6 +1,6 @@
 {
   "name": "harness-web",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "A browser-based agent harness: one model-driven loop, cache-first context, sandboxed tools.",
   "type": "module",

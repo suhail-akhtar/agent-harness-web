@@ -5,6 +5,7 @@
 
 import crypto from 'node:crypto';
 import type { TraceSpan } from '../core/agent.ts';
+import { HARNESS_VERSION } from '../plugins/bundle.ts';
 
 type Attr = { key: string; value: { stringValue?: string; intValue?: string; doubleValue?: number; boolValue?: boolean } };
 const attr = (key: string, v: string | number | boolean | undefined): Attr[] => {
@@ -77,7 +78,7 @@ export class OtelExporter {
     const body = {
       resourceSpans: [{
         resource: { attributes: [...attr('service.name', this.opts.service ?? 'harness-web')] },
-        scopeSpans: [{ scope: { name: 'harness-web', version: '0.1.0' }, spans: batch }],
+        scopeSpans: [{ scope: { name: 'harness-web', version: HARNESS_VERSION }, spans: batch }],
       }],
     };
     this.sending = this.sending.then(async () => {
