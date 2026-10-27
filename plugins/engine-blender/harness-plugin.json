@@ -11,9 +11,10 @@
     "studio"
   ],
   "publisher": {
-    "name": "Harness",
+    "name": "Suhail Akhtar",
     "url": "https://github.com/suhail-akhtar/agent-harness-web"
   },
+  "license": "MIT",
   "links": {
     "repository": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/plugins/engine-blender",
     "docs": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/docs",

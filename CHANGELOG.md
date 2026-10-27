@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1
+
+- Published by Suhail Akhtar under the MIT licence (LICENSE): every shipped plugin says so on its card, and the packages declare it.
+- The installed desktop app's engine carries its dependencies (the installer is made from the unpacked app after they are copied in).
+
 ## 0.2.0 — the platform release
 
 The core is complete and everything else is a plugin built on it: the core never needs a solution, and
