@@ -317,8 +317,8 @@ test('desktop app end to end: the agent platform', { timeout: 15 * 60_000 }, asy
       fs.mkdirSync(path.join(ws, '.harness', 'workflows'), { recursive: true });
       fs.writeFileSync(path.join(ws, '.harness', 'workflows', 'ship-graph.json'), JSON.stringify(WORKFLOW));
       await page.click('[aria-label="Run a workflow"]');
-      await page.waitForSelector('[data-workflow-dialog] select');
-      await page.locator('[data-workflow-dialog] select').selectOption('ship-graph');
+      await page.click('[data-workflow-dialog] [data-workflow-option="ship-graph"]');
+      await page.waitForSelector('[data-workflow-detail="ship-graph"] [data-workflow-steps]');
       await page.click('[data-start-workflow]');
       await page.waitForSelector('[data-workflow="ship-graph"] [data-workflow-graph]', { timeout: 20_000 });
       await page.waitForSelector('[data-attention] [data-pending="approval_request"]', { timeout: 30_000 });

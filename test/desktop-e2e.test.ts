@@ -190,8 +190,9 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
     await step('a workflow: started from the session, its approval answered in the attention bar, its card follows the run', async () => {
       await page.click('[aria-label="Run a workflow"]');
       await page.waitForSelector('[data-workflow-dialog]');
-      await page.waitForSelector('[data-workflow-dialog] select');
-      await page.locator('[data-workflow-dialog] select').selectOption('ship-check');
+      await page.click('[data-workflow-dialog] [data-workflow-option="ship-check"]');
+      await page.waitForSelector('[data-workflow-detail="ship-check"] [data-workflow-steps]');
+      await shot('workflow-dialog', page.locator('[role="dialog"]'));
       await page.click('[data-start-workflow]');
       await page.waitForSelector('[data-workflow="ship-check"]', { timeout: 20_000 });
       const card = await page.waitForSelector('[data-attention] [data-pending="approval_request"]', { timeout: 20_000 });
