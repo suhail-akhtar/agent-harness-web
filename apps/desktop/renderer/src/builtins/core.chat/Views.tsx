@@ -172,6 +172,8 @@ export function Session({ params }: { params: Record<string, string> }): React.R
   const stop = () => void client.sessions.abort(id).catch((e: Error) => toast(e.message, { kind: 'error' }));
   const respond = respondFor(id);
   const pane = usePane();
+  // The context meter measures against the room before compaction (the model's compaction point).
+  const compactAt = useData((st) => st.models.find((m) => m.id === s.meta?.model)?.compactAt);
   useEffect(() => { if (!pane.split && s.meta) setCrumb({ view: 'core.chat:session', title: s.meta.title }); }, [s.meta?.title, pane.split]);
 
   if (!s.loaded) return <div className="flex h-full flex-col"><TopBar title="Loading…" /><div className="flex flex-1 items-center justify-center"><PageState kind="loading" /></div></div>;
@@ -181,7 +183,7 @@ export function Session({ params }: { params: Record<string, string> }): React.R
       <TopBar title={s.meta?.title}>
         {s.meta && (
           <div className="mr-1 hidden items-center gap-3 text-[11.5px] text-hx-muted md:flex" data-session-meter>
-            <ContextMeter sessionId={id} tokens={s.live.contextTokens} window={s.live.contextWindow} />
+            <ContextMeter sessionId={id} tokens={s.live.contextTokens} window={Math.min(s.live.contextWindow || Infinity, compactAt ?? Infinity) || s.live.contextWindow} />
             <UsageButton meta={s.meta} />
           </div>
         )}
