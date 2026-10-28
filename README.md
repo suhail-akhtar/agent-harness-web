@@ -848,6 +848,15 @@ Store every credential in the Key Vault as an **operator** entry (an administrat
 
 Enforced in code on every call. Order: deny rules, then ask rules, then allow rules, then the mode's default.
 
+**Administrator commands** (`bash` with `elevated: true`) are asked of the person every time: no mode
+(Bypass included), allow rule, hook or auto mode allows one, "Always allow" is not offered, and where nobody
+can answer (dontAsk) it is refused. Then the operating system asks too: Windows a UAC prompt (the command is
+PowerShell), Linux `sudo -n` when no password is needed, else the desktop's polkit dialog (`pkexec`), macOS
+its administrator dialog. A password is typed only into the operating system's dialog; the app and the agent
+never see it. They run only in sessions on this computer (not in a sandbox, not through a companion), without
+the server's credentials or vault secrets; the desktop app's engine allows them, a server only with
+`HARNESS_ELEVATION=on` (`off` turns them off everywhere).
+
 | Mode | Edits | Commands | External services |
 |---|---|---|---|
 | Ask before edits (default) | ask | free in a sandbox, ask on a real machine | ask |

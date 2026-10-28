@@ -5,7 +5,7 @@
 
 import React, { useState } from 'react';
 import { isMissing, type PendingRequest } from '@harness/client';
-import { ActionPanel, Button, CodeBlock, DiffView, Input, Markdown, Textarea, cx, toast } from '@harness/ui';
+import { ActionPanel, Button, CodeBlock, DiffView, Icon, Input, Markdown, Textarea, cx, toast } from '@harness/ui';
 import { client, useData } from '../state/data';
 import { QuestionCard } from './Question';
 import { updateSession } from '../builtins/core.chat/live';
@@ -52,6 +52,12 @@ export function PendingCard({ p, respond, compact }: { p: PendingRequest; respon
       <>
         <div className="text-[13.5px] text-hx-primary">{p.agent ? <><b>{p.agent}</b> wants to use </> : 'Allow '}<b className="font-mono">{p.tool}</b>?</div>
         {cmd ? <CodeBlock code={cmd} language="bash" collapseAt={12} /> : <div className="mt-1 text-[13px] text-hx-secondary">{p.summary}</div>}
+        {(p.input.elevated === true || p.input.elevated === 'true') && (
+          <div className="mt-2 flex items-start gap-1.5 rounded-lg bg-hx-danger/10 px-2.5 py-1.5 text-[12.5px] text-hx-danger" data-elevated-warning>
+            <Icon name="shield" size={14} className="mt-0.5 shrink-0" />
+            <span><b>Runs as administrator</b> on this computer: it can change anything on it. Allow it only if you expect this command; {navigator.platform.toLowerCase().startsWith('win') ? 'Windows' : 'the system'} will ask you again. This is asked every time.</span>
+          </div>
+        )}
         {!compact && p.tool === 'edit' && typeof p.input.path === 'string' && <DiffView path={p.input.path} before={String(p.input.old_string ?? '')} after={String(p.input.new_string ?? '')} />}
         {!compact && p.tool === 'write' && typeof p.input.path === 'string' && <CodeBlock code={String(p.input.content ?? '').slice(0, 6000)} filename={p.input.path} language={String(p.input.path).split('.').pop() ?? ''} collapseAt={16} />}
       </>

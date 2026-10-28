@@ -1,5 +1,6 @@
 import type { Tool, ToolContext, ToolOutcome } from './types.ts';
 import { clip, clipOrSpill, num, str } from './types.ts';
+import { runElevated } from '../runtime/elevate.ts';
 
 /**
  * Shell commands that write file CONTENT the file tools should write instead.
@@ -31,28 +32,31 @@ export const bashTool: Tool = {
   kind: 'exec', parallelSafe: false, remoteable: true,
   spec: {
     name: 'bash',
-    description: 'Run a shell command in the workspace and return its exit code and output. For builds, tests, git, package managers and scripts. Use the file tools rather than cat/sed/grep/find to read, edit or search; writing file contents from the shell (cat > file, heredocs, sed -i, tee, echo > file.js) is refused - use write or edit, which record undo checkpoints and show diffs. Each call is a fresh shell (cd does not persist; use `cd dir && cmd`). Default timeout 120s, max 600s. Long output is trimmed to its head and tail, so filter it (| tail -50, | grep) when you can. For servers, watchers and long jobs set run_in_background: it returns at once with a task id; read its output with task_output, wait for a line or its end with monitor, stop it with task_stop.',
+    description: 'Run a shell command in the workspace and return its exit code and output. Use the file tools rather than cat/sed/grep/find to read, edit or search; writing file contents from the shell (cat > file, heredocs, sed -i, tee, echo > file.js) is refused - use write or edit, which record undo checkpoints and show diffs. Each call is a fresh shell (cd does not persist; use `cd dir && cmd`). Default timeout 120s, max 600s. Long output is trimmed: filter it (| tail -50, | grep). For servers, watchers and long jobs set run_in_background: it returns at once with a task id; read its output with task_output, wait for a line or its end with monitor, stop it with task_stop.',
     input_schema: {
       type: 'object',
       properties: {
         command: { type: 'string' },
         timeout_ms: { type: 'number' },
-        run_in_background: { type: 'boolean', description: 'Start a long-running process (a dev server) and return immediately.' },
-        description: { type: 'string', description: 'Five words or fewer on what it does (shown to the user).' },
+        run_in_background: { type: 'boolean', description: 'A long-running process (a dev server): returns at once.' },
+        description: { type: 'string', description: 'Five words on what it does (shown to the user).' },
+        elevated: { type: 'boolean', description: 'As administrator, only if needed (Windows: PowerShell); asked every time.' },
         secrets: { type: 'object', description: 'Key vault entries as environment variables for this command only: {"VAR": "vault-entry-name"} (see the vault tool). Refer to them as $VAR in the command; never write a value into the command. Their values show as [vault:name] in the output.' },
       },
       required: ['command'],
     },
   },
   vaultNames: (i) => secretMap(i.secrets).map(([, name]) => name),
+  alwaysAsk: (i) => (i.elevated === true || i.elevated === 'true' ? 'it runs with administrator rights' : undefined),
   // A command holding a secret can send it anywhere it can reach: a way out for the untrusted-content guard.
   sendsOut: (i) => (secretMap(i.secrets).length ? true : undefined),
-  summarize: (i) => `${i.run_in_background === true ? '[background] ' : ''}${str(i.command)}${secretMap(i.secrets).length ? ` [secrets: ${secretMap(i.secrets).map(([k, n]) => `${k}=vault:${n}`).join(', ')}]` : ''}`,
+  summarize: (i) => `${i.elevated === true || i.elevated === 'true' ? '[as administrator] ' : ''}${i.run_in_background === true ? '[background] ' : ''}${str(i.command)}${secretMap(i.secrets).length ? ` [secrets: ${secretMap(i.secrets).map(([k, n]) => `${k}=vault:${n}`).join(', ')}]` : ''}`,
   async run(input, ctx) {
     const command = str(input.command);
     if (!command.trim()) return { content: 'command is empty.', is_error: true };
     const write = shellFileWrite(command);
     if (write) return { content: `Not run: this command writes file contents from the shell (${write}). Use the write tool for new or fully rewritten files and edit for changes - they keep undo checkpoints, diffs and edit permissions. Run the rest of the command separately if needed.`, is_error: true };
+    if (input.elevated === true || input.elevated === 'true') return elevated(command, input, ctx);
     // Vault entries become this command's environment, resolved here on the server (the model only names them).
     let secretEnv: Record<string, string> | undefined;
     const wanted = secretMap(input.secrets);
@@ -80,6 +84,30 @@ export const bashTool: Tool = {
 };
 
 const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+
+/**
+ * A command with administrator rights (the person allowed it in the app; the operating system asks again):
+ * only where commands run on this computer itself, never in a sandbox or on another machine, and on a server
+ * only when its operator turned it on (HARNESS_ELEVATION=on; the desktop app's own engine has it unless off).
+ */
+async function elevated(command: string, input: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutcome> {
+  const policy = process.env.HARNESS_ELEVATION;
+  if (policy === 'off' || (policy !== 'on' && process.env.HARNESS_DESKTOP !== '1')) return { content: 'Not run: administrator commands are turned off on this server (its operator can allow them with HARNESS_ELEVATION=on). Tell the user the command so they can run it themselves.', is_error: true };
+  if (ctx.host.kind !== 'local' || ctx.host.sandboxed) return { content: `Not run: this session's commands run ${ctx.host.kind === 'docker' || ctx.host.sandboxed ? 'in a sandbox' : 'on another machine'}, where administrator rights would not reach this computer. Tell the user the command so they can run it themselves, or work in a session on this computer without a sandbox.`, is_error: true };
+  if (input.run_in_background === true || input.run_in_background === 'true') return { content: 'Not run: an administrator command cannot run in the background. Run it in the foreground (it waits for the operating system\'s prompt).', is_error: true };
+  if (secretMap(input.secrets).length) return { content: 'Not run: key vault secrets are not given to administrator commands.', is_error: true };
+  const timeoutMs = Math.min(MAX_TIMEOUT, Math.max(5000, num(input.timeout_ms) ?? DEFAULT_TIMEOUT));
+  const r = await runElevated(command, { cwd: ctx.host.root, timeoutMs, signal: ctx.signal });
+  if (r.declined) return { content: 'Not run: the user said no to the operating system\'s administrator prompt. Do not retry it; ask what they want instead.', is_error: true };
+  if (r.unavailable) return { content: `Not run as administrator: ${r.unavailable}`, is_error: true };
+  const parts = [`ran as administrator (${r.how})`];
+  if (r.timedOut) parts.push(`Timed out after ${timeoutMs / 1000}s: the prompt was not answered in time, or the command is still running (an elevated process cannot be stopped from here).`);
+  parts.push(`exit code: ${r.code ?? 'unknown'}`);
+  if (r.stdout.trim()) parts.push(await clipOrSpill(ctx, 'elevated', r.stdout.trimEnd(), MAX_OUTPUT, 'filter the output to see this part'));
+  if (r.stderr.trim()) parts.push(`stderr:\n${await clipOrSpill(ctx, 'elevated-stderr', r.stderr.trimEnd(), Math.floor(MAX_OUTPUT / 2))}`);
+  if (!r.stdout.trim() && !r.stderr.trim()) parts.push('(no output)');
+  return { content: parts.join('\n'), is_error: r.code !== 0 };
+}
 
 /** bash's `secrets` as [VAR, vault name] pairs (string values only). */
 function secretMap(v: unknown): [string, string][] {

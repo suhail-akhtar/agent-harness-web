@@ -24,7 +24,7 @@ export interface Rules {
   projectAllow?: string[];
 }
 /** `guard`: asked because of untrusted content - only a person (or the operator's hooks) may answer, never auto mode's model. */
-export type Decision = { action: 'allow' | 'deny' | 'ask'; reason: string; guard?: true };
+export type Decision = { action: 'allow' | 'deny' | 'ask'; reason: string; guard?: true; /** Asked every time, of the person (Tool.alwaysAsk). */ always?: true };
 
 export interface PermissionContext {
   mode: PermissionMode;
@@ -151,6 +151,9 @@ export function decide(tool: Tool, input: Record<string, unknown>, ctx: Permissi
   const names = withoutSecrets ? [] : tool.vaultNames?.(input) ?? [];
   if (names.length) return decideSecrets(tool, input, names, ctx);
   if (rules.deny.some((r) => ruleMatches(r, tool, input))) return { action: 'deny', reason: 'blocked by a deny rule' };
+  // Asked every time (administrator rights): whatever the mode and the rules say.
+  const always = tool.alwaysAsk?.(input);
+  if (always) return mode === 'dontAsk' ? { action: 'deny', reason: `${always}, which is asked every time, and this session never asks` } : { action: 'ask', reason: always, always: true };
   if (rules.ask.some((r) => ruleMatches(r, tool, input))) return mode === 'bypass' ? { action: 'allow', reason: 'bypass mode' } : dontAsk({ action: 'ask', reason: 'matches an ask rule' }, mode);
   // After untrusted content, a call that sends data out or outlives the session is
   // confirmed even when an allow rule covers it: the rule may come from the

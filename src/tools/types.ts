@@ -138,6 +138,11 @@ export interface Tool {
   /** One line for permission prompts and the UI. */
   summarize(input: Record<string, unknown>): string;
   /**
+   * A call that must be asked every time, of the person (the reason it is): never allowed by a rule, a
+   * mode, a hook or auto mode, never "always allowed", refused where nobody can be asked. Elevated commands.
+   */
+  alwaysAsk?(input: Record<string, unknown>): string | undefined;
+  /**
    * For dispatcher tools (tool_call): the real tool and input this call runs.
    * Permissions, hooks and validation then apply to THAT tool.
    */

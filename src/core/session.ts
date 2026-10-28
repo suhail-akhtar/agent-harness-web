@@ -2473,6 +2473,7 @@ export class Session {
   private async askPermission(tool: Tool, input: Record<string, unknown>, summary: string, suggestion: string, agent: string): Promise<PermissionAnswer> {
     const requestId = crypto.randomUUID();
     const r = await this.request('permission', { kind: 'permission_request', requestId, tool: tool.spec.name, summary, input, suggestion, agent: agent === 'main' ? undefined : agent }, this.agentSignals.get(agent));
+    if (r.decision === 'allow_always' && !suggestion) return { allow: true };
     if (r.decision === 'allow_always') {
       if (suggestion === 'edit_all') this.setMode('acceptEdits');
       else if (!this.meta.sessionRules.includes(suggestion)) { this.meta.sessionRules.push(suggestion); this.scheduleSave(); }

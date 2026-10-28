@@ -743,7 +743,7 @@ export class Agent {
     // auto mode: a model checks the call against what the user asked; a clear yes runs it, anything else goes on to be asked.
     // Not what the untrusted-content guard asks: the model would judge the very content steering the agent.
     let autoNo: string | undefined;
-    if (decision.action === 'ask' && !decision.guard && pre.decision !== 'allow' && this.hooks.getMode() === 'auto' && this.cfg.autoCheck) {
+    if (decision.action === 'ask' && !decision.guard && !decision.always && pre.decision !== 'allow' && this.hooks.getMode() === 'auto' && this.cfg.autoCheck) {
       const v = await this.cfg.autoCheck({ tool: name, summary: tool.summarize(input), input: this.redact(input), reason: decision.reason, request: this.hooks.latestUserPrompt(), untrustedContentSeen: this.tainted }, signal).catch((e: Error) => ({ ok: false, reason: `the check failed: ${e.message}` }));
       if (v.ok) {
         this.hooks.emit({ kind: 'notice', level: 'info', text: `Auto mode allowed ${tool.summarize(input).slice(0, 120)}`, agent });
@@ -751,17 +751,19 @@ export class Agent {
       } else autoNo = v.reason;
     }
 
-    if (decision.action === 'ask' && pre.decision !== 'allow') {
+    // A call asked every time is the person's to allow: a hook may refuse it, not allow it.
+    if (decision.action === 'ask' && (pre.decision !== 'allow' || decision.always)) {
       // A PermissionRequest hook may answer before a person is asked (a policy service, a judging model).
       const ph = await this.hookRun('PermissionRequest', { tool: name, input, reason: decision.reason }, name, signal);
       for (const e of ph.errors) this.hooks.emit({ kind: 'notice', level: 'warn', text: e, agent });
       if (ph.decision === 'deny' || ph.blocked) return finish(`A PermissionRequest hook denied this call${ph.feedback ? `: ${ph.feedback}` : '.'}`, true, undefined, undefined, name);
-      if (ph.decision !== 'allow') {
-        const answer = await this.hooks.requestPermission(tool, input, autoNo ? `${tool.summarize(input)} (auto mode's check: ${autoNo})` : tool.summarize(input), suggestRule(tool, input), agent);
+      if (ph.decision !== 'allow' || decision.always) {
+        const answer = await this.hooks.requestPermission(tool, input, autoNo ? `${tool.summarize(input)} (auto mode's check: ${autoNo})` : decision.always ? `${tool.summarize(input)} (${decision.reason})` : tool.summarize(input), decision.always ? '' : suggestRule(tool, input), agent);
         if (!answer.allow) return finish(`The user denied this call.${answer.feedback ? ` They said: ${answer.feedback}` : ' Do not retry it unchanged; ask or take another approach.'}`, true, undefined, undefined, name);
       }
     }
 
+    if (decision.always && this.cfg.host.remoteTool) return finish('Not run: a call asked every time (administrator rights) is not sent to a companion. Run it in a session on this computer.', true, undefined, undefined, name);
     // Vault values stay on the server: a companion runs the whole call on the user's computer.
     if ((tool.vaultNames?.(input).length ?? 0) > 0 && this.cfg.host.remoteTool && tool.remoteable) {
       return finish('Not run: key vault secrets are not sent to a companion (the user\'s own computer). Run it in a sandbox or server-folder session, or without secrets.', true, undefined, undefined, name);
