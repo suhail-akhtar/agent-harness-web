@@ -906,7 +906,9 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       if (!admin) throw new HttpError(403, 'only administrators add plugins: their code runs in the server');
       try {
         // Unsigned bundles only where the server is the person's own computer (and it has no trust list).
-        return send(res, 201, pluginView(await harness.plugins.importBundle(await readBody(req, 50 * 1024 * 1024), { allowUnsigned: !!o.loopback })));
+        // A plugin's bundle answers with the plugin; a solution's with what it added and what was there already.
+        const r = await harness.plugins.importFile(await readBody(req, 50 * 1024 * 1024), { allowUnsigned: !!o.loopback });
+        return send(res, 201, r.kind === 'plugin' ? pluginView(r.plugin) : { solution: r.solution, plugins: r.plugins.map(pluginView), unchanged: r.unchanged });
       } catch (e) { if (e instanceof PluginStateError) throw new HttpError(e.status, e.message); throw e; }
     }
     const pbx = /^\/api\/plugins\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/(update|export|revisions|rollback)$/.exec(p);

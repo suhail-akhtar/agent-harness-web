@@ -13,6 +13,7 @@ import type { McpServerConfig } from '../plugins/api.ts';
 import { findPluginDirs, loadPlugin, readManifest } from '../plugins/loader.ts';
 import { registerPluginDir } from '../plugins/resolve.ts';
 import { loadTrustedKeys, SIG_FILE, verifyPlugin } from '../plugins/signing.ts';
+import { readSolutionManifest } from '../plugins/solution-bundle.ts';
 import { OtelExporter, parseHeaders } from './otel.ts';
 import { BUILTIN_PROVIDERS } from '../providers/index.ts';
 import { loadCompatModels } from '../providers/compat.ts';
@@ -275,7 +276,18 @@ export interface PluginManager {
    * the trust list when the server has one; without one, only when allowUnsigned (the person's own computer).
    */
   importBundle(tgz: Buffer, o?: { allowUnsigned?: boolean }): Promise<PluginEntry>;
+  /**
+   * A plugin bundle, or a solution's (harness-solution.json and its plugins: src/plugins/solution-bundle.ts):
+   * every plugin of a solution is checked first (signature, harness versions, what is there already), then
+   * added or updated in the order its "requires" needs; one that fails takes back those added before it.
+   */
+  importFile(tgz: Buffer, o?: { allowUnsigned?: boolean }): Promise<ImportResult>;
 }
+
+/** What an import added: one plugin, or a solution's plugins (those already at that version are left as they are). */
+export type ImportResult =
+  | { kind: 'plugin'; plugin: PluginEntry }
+  | { kind: 'solution'; solution: { name: string; title: string; version: string }; plugins: PluginEntry[]; unchanged: string[] };
 
 export function builtinRegistry(): Registry {
   const reg = new Registry();
@@ -550,6 +562,45 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     return now;
   }
 
+  type CheckedBundle = { dir: string; m: PluginManifest; existing?: PluginEntry; same: boolean };
+  /**
+   * A bundle's plugin folder, checked before anything changes: its name, its signature, the harness versions
+   * it runs on, and what is here already. In a solution the same version installed is left as it is.
+   */
+  async function checkBundleDir(dir: string, o: { allowUnsigned?: boolean }, inSolution = false): Promise<CheckedBundle> {
+    const m = await readManifest(dir).catch(() => undefined);
+    if (!m) throw new PluginStateError(400, 'Not a plugin bundle: it has no harness-plugin.json at its top.');
+    if (!/^[a-z0-9][a-z0-9._-]*$/i.test(m.name)) throw new PluginStateError(400, `Bad plugin name "${m.name}".`);
+    if (keys) { const v = await verifyPlugin(dir, keys); if (!v.ok) throw new PluginStateError(403, `Refused: ${m.name}: ${v.reason}`); }
+    else if (!o.allowUnsigned) throw new PluginStateError(403, "This server has no trust list (HARNESS_PLUGIN_KEYS): a bundle is added only when it is signed with a trusted key, or on the person's own computer.");
+    const c = compatibility(m);
+    if (!c.ok) throw new PluginStateError(409, `${m.name} ${m.version ?? ''} is not for this harness: ${c.reason}`);
+    const e = entries.get(m.name);
+    if (e) {
+      if (e.source !== 'installed') throw new PluginStateError(409, `${m.name} is already on this server (${e.source === 'bundled' ? 'shipped with the harness' : 'a folder the operator names'}).`);
+      const cmp = compareVersions(m.version ?? '0.0.0', e.version);
+      if (cmp === 0 && inSolution) return { dir, m, existing: e, same: true };
+      if (cmp <= 0) throw new PluginStateError(409, `${m.name} ${e.version} is installed; this bundle is ${m.version ?? '0.0.0'}. Roll back instead to go to an earlier version.`);
+      return { dir, m, existing: e, same: false };
+    }
+    if (solutionManifests.has(m.name)) throw new PluginStateError(409, `${m.name} is a solution shipped with the harness: install it from the catalogue.`);
+    if (await exists(path.join(installDir, m.name))) throw new PluginStateError(409, `${path.join(installDir, m.name)} already exists.`);
+    return { dir, m, same: false };
+  }
+
+  /** Adds a checked bundle's plugin (or updates the installed one, the version before kept). */
+  async function installBundleDir(c: CheckedBundle, from = 'a bundle'): Promise<PluginEntry> {
+    if (c.existing) return replaceInstalled(c.existing, c.dir, `updated to ${c.m.version} from ${from}`);
+    const dest = path.join(installDir, c.m.name);
+    await fs.mkdir(installDir, { recursive: true });
+    await fs.cp(c.dir, dest, { recursive: true });
+    try { await load(dest); } catch (err) { await fs.rm(dest, { recursive: true, force: true }); throw new PluginStateError(409, `${c.m.name} could not be loaded: ${(err as Error).message}`); }
+    await saveState();
+    log(`plugin ${c.m.name} ${c.m.version ?? ''} added from ${from}`);
+    pluginsChanged(c.m.name, 'installed');
+    return entries.get(c.m.name)!;
+  }
+
   const plugins: PluginManager = {
     list: () => [...entries.values()].sort((a, b) => a.name.localeCompare(b.name)),
     get: (name) => entries.get(name),
@@ -742,34 +793,47 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       return pack(e.dir);
     },
     async importBundle(tgz, o = {}) {
+      const r = await plugins.importFile(tgz, o);
+      if (r.kind === 'plugin') return r.plugin;
+      return r.plugins[0] ?? entries.get(r.unchanged[0]!)!;
+    },
+    async importFile(tgz, o = {}) {
       if (tgz.length > ARCHIVE_MAX) throw new PluginStateError(413, 'The bundle is larger than 50 MB.');
       const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'hw-plugin-import-'));
       try {
         const dir = path.join(tmp, 'bundle');
         try { await unpack(tgz, dir); } catch (err) { throw new PluginStateError(400, `Not a plugin bundle: ${(err as Error).message}`); }
-        const m = await readManifest(dir).catch(() => undefined);
-        if (!m) throw new PluginStateError(400, 'Not a plugin bundle: it has no harness-plugin.json at its top.');
-        if (!/^[a-z0-9][a-z0-9._-]*$/i.test(m.name)) throw new PluginStateError(400, `Bad plugin name "${m.name}".`);
-        if (keys) { const v = await verifyPlugin(dir, keys); if (!v.ok) throw new PluginStateError(403, `Refused: ${v.reason}`); }
-        else if (!o.allowUnsigned) throw new PluginStateError(403, "This server has no trust list (HARNESS_PLUGIN_KEYS): a bundle is added only when it is signed with a trusted key, or on the person's own computer.");
-        const c = compatibility(m);
-        if (!c.ok) throw new PluginStateError(409, `${m.name} ${m.version ?? ''} is not for this harness: ${c.reason}`);
-        const e = entries.get(m.name);
-        if (e) {
-          if (e.source !== 'installed') throw new PluginStateError(409, `${m.name} is already on this server (${e.source === 'bundled' ? 'shipped with the harness' : 'a folder the operator names'}).`);
-          if (compareVersions(m.version ?? '0.0.0', e.version) <= 0) throw new PluginStateError(409, `${m.name} ${e.version} is installed; this bundle is ${m.version ?? '0.0.0'}. Roll back instead to go to an earlier version.`);
-          return await replaceInstalled(e, dir, `updated to ${m.version} from a bundle`);
+        let sol;
+        try { sol = await readSolutionManifest(dir); } catch (err) { throw new PluginStateError(400, `Not a solution bundle: ${(err as Error).message}`); }
+        if (!sol) {
+          const c = await checkBundleDir(dir, o);
+          return { kind: 'plugin', plugin: await installBundleDir(c) };
         }
-        if (solutionManifests.has(m.name)) throw new PluginStateError(409, `${m.name} is a solution shipped with the harness: install it from the catalogue.`);
-        const dest = path.join(installDir, m.name);
-        if (await exists(dest)) throw new PluginStateError(409, `${dest} already exists.`);
-        await fs.mkdir(installDir, { recursive: true });
-        await fs.cp(dir, dest, { recursive: true });
-        try { await load(dest); } catch (err) { await fs.rm(dest, { recursive: true, force: true }); throw new PluginStateError(409, `${m.name} could not be loaded: ${(err as Error).message}`); }
-        await saveState();
-        log(`plugin ${m.name} ${m.version ?? ''} added from a bundle`);
-        pluginsChanged(m.name, 'installed');
-        return entries.get(m.name)!;
+        const sc = compatibility({ engines: sol.engines });
+        if (!sc.ok) throw new PluginStateError(409, `${sol.title} ${sol.version} is not for this harness: ${sc.reason}`);
+        // Every plugin is checked before any is added.
+        const checked = [];
+        for (const name of sol.plugins) {
+          const pdir = path.join(dir, 'plugins', name);
+          const c = await checkBundleDir(pdir, o, true);
+          if (c.m.name !== name) throw new PluginStateError(400, `${sol.title}: plugins/${name} is named "${c.m.name}".`);
+          checked.push(c);
+        }
+        const added: PluginEntry[] = [], unchanged: string[] = [], fresh: string[] = [];
+        try {
+          for (const c of checked) {
+            if (c.same) { unchanged.push(c.m.name); continue; }
+            const wasThere = !!c.existing;
+            added.push(await installBundleDir(c, `${sol.title} ${sol.version}`));
+            if (!wasThere) fresh.push(c.m.name);
+          }
+        } catch (err) {
+          // Takes back what this import added (an update keeps the version before as a revision: roll back to it).
+          for (const n of fresh.reverse()) await plugins.uninstall(n).catch(() => {});
+          throw err;
+        }
+        log(`solution ${sol.name} ${sol.version} added from a bundle: ${added.map((e) => e.name).join(', ') || 'nothing new'}`);
+        return { kind: 'solution', solution: { name: sol.name, title: sol.title, version: sol.version }, plugins: added, unchanged };
       } finally { await fs.rm(tmp, { recursive: true, force: true }); }
     },
     async uninstall(name, o = {}) {

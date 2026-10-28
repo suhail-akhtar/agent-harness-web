@@ -10,10 +10,19 @@
   "harness": {
     "title": "Studio",
     "core": ">=0.2.3 <0.3.0",
-    "plugins": ["games3d", "engine-blender", "engine-godot", "engine-unity", "engine-unreal"]
+    "plugins": ["games3d", "engine-blender", "engine-godot", "engine-unity", "engine-unreal"],
+    "app": {
+      "name": "Harness Studio",
+      "appId": "dev.harness.studio",
+      "description": "Games and 3D on the harness: Studio with every feature of the harness desktop app.",
+      "tagline": "What shall we make?",
+      "focus": "games3d",
+      "homeFolder": ".harness-studio"
+    }
   },
   "scripts": {
     "test": "node ../../scripts/test.mjs --solution=studio",
+    "bundle": "node ../../scripts/run.mjs ../../src/plugins/cli.ts solution . --out ../../dist/solutions",
     "bundles": "node ../../scripts/run.mjs ../../src/plugins/cli.ts bundles plugins --out ../../dist/studio"
   }
 }

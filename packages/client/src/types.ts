@@ -180,6 +180,9 @@ export interface ProviderInfo {
 }
 export interface ProviderTest { ok: boolean; latencyMs?: number; model?: string; error?: string }
 
+/** What a solution's bundle added (POST /api/plugins/import): its plugins, and those already at that version. */
+export interface SolutionImportInfo { solution: { name: string; title: string; version: string }; plugins: PluginInfo[]; unchanged: string[] }
+
 /** A plugin as the server lists it (GET /api/plugins, new). */
 export interface PluginInfo {
   name: string; version: string; description?: string; enabled: boolean; required?: boolean;

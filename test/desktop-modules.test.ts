@@ -106,6 +106,13 @@ test('ui.menu: nav item refs (own or "<plugin>:<id>"), inline items with sub-ite
 
 // ---------------- groups ----------------
 
+test("registry: an official plugin installed from a file (a solution signed by the product's publisher) has its group of its own, as when it ships; an unofficial one is under Custom", () => {
+  const entries = [shell, inbox, ...GUIDED.map(builtin), { ...notes, tier: 'official' as const }, single];
+  const r = buildRegistry(entries, { navOrder: ['core.chat:new'] });
+  assert.ok(r.groups.some((g) => g.plugin === 'acme-notes'), 'official: its own group');
+  assert.deepEqual(r.groups.find((g) => g.plugin === 'custom')!.items.map((e) => e.qid), ['quick-links:links'], 'the others: under Custom');
+});
+
 test('registry: a plugin with a menu is a group (its items, another plugin\'s by name, sub-items), a third party\'s several nav items too; plain plugins and the core stay at the top; order: the person\'s, then the menu\'s', () => {
   const r = fullRegistry();
   assert.deepEqual(r.groups.map((g) => g.plugin), ['core.agents', 'core.dashboards', 'sdlc', 'aiops', 'custom'], 'by the menus\' order, then title; the plugins the person added under Custom, last');

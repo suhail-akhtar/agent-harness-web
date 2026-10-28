@@ -5,6 +5,8 @@
  *   - the engine runs the harness server from source, so a server change needs an engine restart
  *     (Settings > Application > Restart engine) or an app restart.
  * Extra folders of plugins under development: HARNESS_DESKTOP_DEV_PLUGINS=dir1;dir2 (path delimiter).
+ * --solution <name>: that solution as an app of its own (solutions/<name>/package.json "harness.app"), the
+ * harness desktop app as its base: focused on it, with its own home folder (npm run desktop:dev -- --solution studio).
  */
 
 import { spawn, spawnSync } from 'node:child_process';
@@ -18,6 +20,8 @@ const desktop = path.resolve(here, '..');
 const repo = path.resolve(desktop, '..', '..');
 const dist = path.join(desktop, 'dist');
 const electron = createRequire(import.meta.url)('electron');
+const solArg = process.argv.indexOf('--solution');
+const solution = solArg > 0 ? process.argv[solArg + 1] : undefined;
 
 const first = spawnSync(process.execPath, [path.join(here, 'build.mjs'), '--dev'], { stdio: 'inherit', cwd: repo });
 if (first.status !== 0) process.exit(first.status ?? 1);
@@ -25,7 +29,7 @@ if (first.status !== 0) process.exit(first.status ?? 1);
 let child = null;
 let restarting = false;
 function start() {
-  child = spawn(electron, [desktop], { stdio: 'inherit', env: { ...process.env, HARNESS_DESKTOP_DEV_RELOAD: '1' } });
+  child = spawn(electron, [desktop], { stdio: 'inherit', env: { ...process.env, HARNESS_DESKTOP_DEV_RELOAD: '1', ...(solution ? { HARNESS_SOLUTION: solution } : {}) } });
   child.on('exit', (code) => { if (restarting) { restarting = false; start(); } else process.exit(code ?? 0); });
 }
 function restart() {

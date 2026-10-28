@@ -6,6 +6,8 @@
 import type { DesktopPrefs } from '@desk/prefs';
 import type { ProductProfile } from '@desk/product';
 import type { Grants, GrantRecord } from '@desk/grants';
+import type { PickedBundle } from '@desk/bundle-pick';
+export type { PickedBundle, PickedPlugin } from '@desk/bundle-pick';
 
 interface Bridge {
   platform: string;
@@ -80,6 +82,8 @@ export const desktop = {
   pluginShortcut: (name: string, title: string) => invoke<{ ok: boolean; path?: string; reason?: string }>('plugins:shortcut', name, title),
   /** Picks a plugin bundle (.tgz) and unpacks it to a staging folder for review; then importCommit (or importCancel). */
   importPluginFile: () => invoke<{ dir: string; name: string; version: string } | null>('plugins:importFile'),
+  /** Picks a plugin's or a solution's file to install into the engine: its bytes and what is in it (signatures checked). */
+  pickBundle: () => invoke<PickedBundle | null>('plugins:pickBundle'),
   /** Moves a reviewed bundle into place; returns its folder (load it with addDevPlugin). */
   importCommit: (staging: string) => invoke<string>('plugins:importCommit', staging),
   importCancel: (staging: string) => invoke<void>('plugins:importCancel', staging).catch(() => {}),

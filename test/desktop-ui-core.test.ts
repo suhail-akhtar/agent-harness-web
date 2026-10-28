@@ -4,7 +4,7 @@ import { buildTheme, contrast, DEFAULT_DARK, DEFAULT_LIGHT, modeOf, resolveTheme
 import { coerce, fieldsOf, getPath, labelOf, schemaText, setPath, validate, widgetFor, withDefaults } from '../packages/ui/src/schema.ts';
 import { decide, grantRecord } from '../apps/desktop/shared/grants.ts';
 import { DEFAULT_PREFS, mergePrefs, projectName } from '../apps/desktop/shared/prefs.ts';
-import { matches as productMatches, normaliseProduct } from '../apps/desktop/shared/product.ts';
+import { matches as productMatches, normaliseProduct, solutionProduct } from '../apps/desktop/shared/product.ts';
 import type { JsonSchema } from '../packages/plugin-ui/src/index.ts';
 
 test('theme builder: three colours make every token, and text always reads', () => {
@@ -141,4 +141,18 @@ test('product profiles: defaults filled, plugin patterns', () => {
   assert.ok(productMatches('core.*', 'core.chat'));
   assert.ok(!productMatches('core.*', 'acme'));
   assert.ok(productMatches('acme', 'acme'));
+});
+
+test('a solution as an app of its own: the base profile with its harness.app; it ships the solution, installs its plugins, opens focused on it, in a home of its own', async () => {
+  const fs = await import('node:fs');
+  const base = JSON.parse(fs.readFileSync(new URL('../products/harness.json', import.meta.url), 'utf8'));
+  const pkg = JSON.parse(fs.readFileSync(new URL('../solutions/studio/package.json', import.meta.url), 'utf8'));
+  const p = normaliseProduct(solutionProduct(base, 'studio', pkg));
+  assert.deepEqual([p.id, p.name, p.appId, p.focus, p.homeFolder, p.brand.tagline], ['studio', 'Harness Studio', 'dev.harness.studio', 'games3d', '.harness-studio', 'What shall we make?']);
+  assert.deepEqual(p.solutions, ['studio']);
+  assert.deepEqual(p.server.solutions, pkg.harness.plugins);
+  assert.deepEqual([p.trustedKeys, p.plugins.required], [base.trustedKeys, base.plugins.required], "the base app's keys and core plugins");
+  // Without an app section: named after the base and the solution, focused on its first plugin.
+  const q = normaliseProduct(solutionProduct(base, 'kit', { harness: { title: 'Kit', plugins: ['kit-core', 'kit-engine'] } }));
+  assert.deepEqual([q.name, q.appId, q.focus, q.homeFolder], ['Harness Kit', 'dev.harness.desktop.kit', 'kit-core', '.harness-kit']);
 });

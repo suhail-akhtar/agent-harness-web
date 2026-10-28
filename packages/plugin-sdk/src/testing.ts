@@ -21,6 +21,9 @@ export { Registry } from '../../../src/kernel/registry.ts';
 export { loadPlugin as loadPluginInto, readManifest } from '../../../src/plugins/loader.ts';
 export { readPluginUi } from '../../../src/plugins/ui.ts';
 export { readPluginGuide } from '../../../src/plugins/guides.ts';
+// A solution as one file (what Install from a file takes), and signing (generateKeyPair, signPlugin).
+export { writeSolutionBundle, readSolutionManifest } from '../../../src/plugins/solution-bundle.ts';
+export { generateKeyPair, signPlugin } from '../../../src/plugins/signing.ts';
 
 // Where tools run, and what they are given.
 export { LocalHost, type ExecOptions, type ExecResult, type ToolHost } from '../../../src/runtime/host.ts';

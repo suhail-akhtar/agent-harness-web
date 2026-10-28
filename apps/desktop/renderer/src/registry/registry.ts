@@ -53,7 +53,9 @@ export interface PluginEntry {
 }
 
 /** Added by the person (installed from the catalogue, or loaded from a folder here): these go under Custom. */
-const addedByPerson = (p: PluginEntry) => p.source === 'installed' || p.source === 'dev' || !!p.loadedHere;
+// An official plugin installed from a file or the catalogue (signed by the product's publisher: a solution such as
+// Studio) is shown as it is when it ships with the app, with a group of its own.
+const addedByPerson = (p: PluginEntry) => (p.source === 'installed' && p.tier !== 'official') || p.source === 'dev' || !!p.loadedHere;
 
 type Q<T> = T & { qid: string; plugin: string };
 /** `group`: the plugin whose menu shows it (it is drawn there, not at the top level); `parent`: the item it is a sub-item of. */
@@ -245,7 +247,7 @@ export function buildRegistry(entries: PluginEntry[], o: RegistryOptions = {}): 
  */
 function buildMenus(r: Registry, personOrder: string[], focus?: string): void {
   const claimed = new Set<string>();
-  // Plugins the person added (installed from the catalogue, loaded from a folder here) go under one "Custom" group,
+  // Plugins the person added (installed from the catalogue, loaded from a folder here; not official ones) go under one "Custom" group,
   // like Studio's or Dashboards': a plugin with a menu of its own as an entry with its pages under it.
   // In a window focused on one plugin (focus), that plugin is a group of its own, first.
   const added = new Set(r.plugins.filter((p) => addedByPerson(p) && p.name !== focus).map((p) => p.name));

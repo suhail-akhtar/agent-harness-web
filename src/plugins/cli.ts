@@ -47,14 +47,22 @@ if (cmd === 'keygen' && target) {
   const data = await pack(dir);
   await fs.writeFile(out, data);
   console.log(`${out}\nsha256 ${crypto.createHash('sha256').update(data).digest('hex')}`);
+} else if (cmd === 'solution' && target) {
+  // A solution folder (solutions/<name>) as one file that installs all its plugins, each signed when --key is given.
+  const { writeSolutionBundle } = await import('./solution-bundle.ts');
+  const s = await writeSolutionBundle(path.resolve(target), path.resolve(arg('out') ?? 'dist/solutions'), arg('key') ? await fs.readFile(arg('key')!, 'utf8') : undefined);
+  console.log(`${path.resolve(arg('out') ?? 'dist/solutions', s.file)}  ${(s.size / 1024).toFixed(0)} KB  ${s.signed ? 'signed' : 'unsigned'}  ${s.plugins.join(', ')}
+sha256 ${s.sha256}`);
 } else if (cmd === 'bundles') {
   // Every plugin in a folder (default: the shipped ones, the core's and every solution's) as its own bundle, with an index.json a server or the
   // desktop can install from (HARNESS_PLUGIN_CATALOGUE=<url of index.json>), each signed when --key is given.
   const { writeBundles } = await import('./bundles.ts');
-  const { shippedPluginDirs } = await import('./shipped.ts');
-  const r = await writeBundles({ from: target ? path.resolve(target) : shippedPluginDirs(path.join(import.meta.dirname, '..', '..')), out: path.resolve(arg('out') ?? 'dist/plugins'), ...(arg('base') ? { base: arg('base')! } : {}), ...(arg('key') ? { key: await fs.readFile(arg('key')!, 'utf8') } : {}) });
+  const { shippedPluginDirs, solutionDirs } = await import('./shipped.ts');
+  const root = path.join(import.meta.dirname, '..', '..');
+  const r = await writeBundles({ from: target ? path.resolve(target) : shippedPluginDirs(root), ...(target ? {} : { solutions: solutionDirs(root) }), out: path.resolve(arg('out') ?? 'dist/plugins'), ...(arg('base') ? { base: arg('base')! } : {}), ...(arg('key') ? { key: await fs.readFile(arg('key')!, 'utf8') } : {}) });
   for (const b of r.bundles) console.log(`${b.file}  ${(b.size / 1024).toFixed(0)} KB  ${b.signed ? 'signed' : 'unsigned'}`);
-  console.log(`${r.index}: ${r.bundles.length} plugin(s)`);
+  for (const s of r.solutions) console.log(`${s.file}  ${(s.size / 1024).toFixed(0)} KB  ${s.signed ? 'signed' : 'unsigned'}  the whole solution: ${s.plugins.join(', ')}`);
+  console.log(`${r.index}: ${r.bundles.length} plugin(s)${r.solutions.length ? `, ${r.solutions.length} solution(s)` : ''}`);
 } else if (cmd === 'index' && target) {
   const dir = path.resolve(target);
   const plugins = [];
@@ -87,7 +95,7 @@ if (cmd === 'keygen' && target) {
   // --keys: the environment's API keys reach the tests (for tests on real models); without it they are removed.
   process.exit(await runPluginTests(path.resolve(target), process.argv.slice(process.argv.indexOf(target) + 1).filter((a) => a !== '--' && a !== '--keys'), { keys: process.argv.includes('--keys') }) as number);
 } else {
-  console.error('usage: npm run plugin -- new <name> [--dir d] [--js] | bundles [<plugins dir>] [--out dir] [--base url] [--key k.pem] | check <dir> [--deep] [--json] | test <dir> | keygen <name> [--out dir] | sign <dir> --key <x.key.pem> | verify <dir> --keys <pub.pem|dir> | pack <dir> [--out f.tgz] | index <dir> [--base url]');
+  console.error('usage: npm run plugin -- new <name> [--dir d] [--js] | bundles [<plugins dir>] [--out dir] [--base url] [--key k.pem] | solution <solutions/name> [--out dir] [--key k.pem] | check <dir> [--deep] [--json] | test <dir> | keygen <name> [--out dir] | sign <dir> --key <x.key.pem> | verify <dir> --keys <pub.pem|dir> | pack <dir> [--out f.tgz] | index <dir> [--base url]');
   process.exit(2);
 }
 

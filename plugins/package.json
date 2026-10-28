@@ -1,6 +1,6 @@
 {
   "name": "@harness/plugins",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "private": true,
   "type": "module",
   "description": "The plugins shipped with the harness, importable by name from other plugins (@harness/plugins/<name>/<file>): the harness resolves the same names to wherever a plugin is installed (src/plugins/resolve.ts).",

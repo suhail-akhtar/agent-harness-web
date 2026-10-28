@@ -11,8 +11,9 @@ plugin of Studio carries the same version; `harness.core` in package.json is the
   loading it.
 - Its tests use only the plugin test kit (`@harness/plugin-sdk/testing`, `/testing/desktop`), never the core's
   files, so they run unchanged wherever Studio is developed.
-- Shipped two ways: as signed bundles (release/plugins) that install into the core app, Verified as signed by
-  Suhail Akhtar; or inside Harness Studio, the core with Studio (products/studio.json).
+- Shipped two ways, the harness desktop app the base of both: one signed file (studio-1.1.0.tgz) that
+  installs into the app as it was (Plugins > Install from a file), Verified as signed by Suhail Akhtar; or
+  Harness Studio, the app with Studio inside, focused on it (npm run desktop:build -- --solution studio).
 
 ## 1.0.0
 

@@ -32,10 +32,12 @@ export interface DesktopHome {
 }
 
 /** Where the home is for this app (synchronous: needed before the window and the engine). */
-export function resolveDesktopHome(userData: string): DesktopHome {
+export function resolveDesktopHome(userData: string, edition?: string): DesktopHome {
   const isolated = !!process.env.HARNESS_DESKTOP_DATA && !process.env.HARNESS_HOME;
-  const pointer = isolated ? path.join(userData, 'home-location') : path.join(os.homedir(), POINTER_FILE);
-  const home = resolveHome({ pointer, ...(isolated ? { fallback: path.join(userData, 'home') } : {}) });
+  // An edition with a home of its own (a solution's app: ~/.harness-studio), and its own pointer when moved.
+  const own = !isolated && edition && /^\.?[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(edition) ? edition : undefined;
+  const pointer = isolated ? path.join(userData, 'home-location') : own ? path.join(os.homedir(), `${own}-location`) : path.join(os.homedir(), POINTER_FILE);
+  const home = resolveHome({ pointer, ...(isolated ? { fallback: path.join(userData, 'home') } : own ? { fallback: path.join(os.homedir(), own) } : {}) });
   const layout = homeLayout(home);
   ensureHome(layout);
   const legacyScratch = path.join(userData, 'workspace');

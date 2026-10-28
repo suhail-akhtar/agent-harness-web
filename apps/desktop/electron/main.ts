@@ -19,7 +19,7 @@ import { registerIpc, serverToken } from './ipc';
 import { registerEdit } from './edit';
 import { DevPlugins } from './dev-plugins';
 import { DevWatch } from './dev-watch';
-import { normaliseProduct, type ProductProfile } from '../shared/product';
+import { normaliseProduct, solutionProduct, type ProductProfile } from '../shared/product';
 import { projectName } from '../shared/prefs';
 import { desktopRoots, engineLogFile, migrateEngineData, registerHomeIpc, resolveDesktopHome } from './home';
 
@@ -32,11 +32,23 @@ const repoRoot = !app.isPackaged && fs.existsSync(path.join(repoGuess, 'src', 's
 /** The folder the profile's relative paths (trustedKeys) are read from. */
 let productDir: string | undefined;
 function loadProduct(): ProductProfile {
+  // In the checkout, a solution as its own app (npm run desktop:dev -- --solution studio): the base profile with the solution's.
+  const sol = process.env.HARNESS_SOLUTION?.trim();
+  if (sol && repoRoot && !process.env.HARNESS_PRODUCT) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, 'solutions', sol, 'package.json'), 'utf8'));
+      const base = JSON.parse(fs.readFileSync(path.join(repoRoot, 'products', 'harness.json'), 'utf8'));
+      productDir = path.join(repoRoot, 'products');
+      return normaliseProduct(solutionProduct(base, sol, pkg));
+    } catch (e) { console.error(`HARNESS_SOLUTION=${sol}: ${(e as Error).message}`); }
+  }
   const candidates = [process.env.HARNESS_PRODUCT, app.isPackaged ? path.join(process.resourcesPath, 'product.json') : undefined, repoRoot ? path.join(repoRoot, 'products', 'harness.json') : undefined].filter(Boolean) as string[];
   for (const c of candidates) { try { const p = normaliseProduct(JSON.parse(fs.readFileSync(c, 'utf8'))); productDir = path.dirname(path.resolve(c)); return p; } catch { /* next */ } }
   return normaliseProduct({});
 }
 const product = loadProduct();
+// A solution's own app opens focused on it (its menu first, its home), every core service there too.
+const mainUrl = product.focus ? `${APP_ORIGIN}/?focus=${encodeURIComponent(product.focus)}` : `${APP_ORIGIN}/`;
 // The official publishers' keys: packaged, in resources/keys (scripts/package.mjs); else beside the profile.
 const publisherKeys = (product.trustedKeys ?? [])
   .map((k) => (app.isPackaged && !process.env.HARNESS_PRODUCT ? path.join(process.resourcesPath, 'keys', path.basename(k)) : productDir ? path.resolve(productDir, k) : ''))
@@ -56,7 +68,7 @@ registerSchemePrivileges();
 
 const prefs = new PrefsStore(path.join(dataDir, 'prefs.json'));
 // The harness home (~/.harness): the engine's data, workspaces, scratch folders (tmp), exports, logs. Shared with the server and the CLI.
-const home = resolveDesktopHome(dataDir);
+const home = resolveDesktopHome(dataDir, product.homeFolder);
 const logToFile = engineLogFile(home);
 
 const devPluginDirs = () => [...(process.env.HARNESS_DESKTOP_DEV_PLUGINS ?? '').split(path.delimiter).filter(Boolean), ...prefs.get().devPlugins];
@@ -97,6 +109,7 @@ const ctx: DesktopContext = {
   prefs,
   engine: () => engine,
   product,
+  publisherKeys,
   paths: { dataDir, get engineData() { return home.dataDir; }, get scratch() { return home.layout.tmp; }, get home() { return home.layout.home; }, rendererDir: path.join(distDir, 'renderer'), sdkDir: path.join(distDir, 'sdk'), repoRoot },
   devPlugins,
   devWatch: undefined,
@@ -147,7 +160,7 @@ function appIcon(): Electron.NativeImage | undefined {
   const icon = product.brand.icon;
   const candidates = [
     app.isPackaged ? path.join(process.resourcesPath, 'icon.png') : undefined,
-    icon && repoRoot ? path.join(repoRoot, 'products', icon) : undefined,
+    icon && repoRoot ? path.resolve(repoRoot, 'products', icon) : undefined,
     path.join(desktopDir, 'build', 'icon.png'),
   ].filter(Boolean) as string[];
   for (const c of candidates) if (fs.existsSync(c)) return nativeImage.createFromPath(c);
@@ -179,7 +192,7 @@ function createWindow(): void {
   // visible window (a hidden one lets plugin frames' layout go stale, so clicks land on the old layout),
   // yet nobody sees it and it never takes focus or a taskbar entry.
   mainWindow.once('ready-to-show', () => { if (quiet) { mainWindow?.setPosition(offscreen(b.width).x, offscreen(b.width).y); mainWindow?.showInactive(); } else if (!process.env.HARNESS_DESKTOP_HIDDEN && !focusArg(process.argv)) mainWindow?.show(); });
-  void mainWindow.loadURL(`${APP_ORIGIN}/`);
+  void mainWindow.loadURL(mainUrl);
   const save = () => {
     if (!mainWindow || mainWindow.isDestroyed() || quiet) return;
     const max = mainWindow.isMaximized();
@@ -193,7 +206,7 @@ function createWindow(): void {
   mainWindow.on('blur', () => ctx.emit('win:focus', false));
   mainWindow.on('close', (e) => { if (!quitting && prefs.get().keepInTray && tray) { e.preventDefault(); mainWindow?.hide(); } });
   mainWindow.on('closed', () => { mainWindow = null; });
-  guardWindow(mainWindow, `${APP_ORIGIN}/`);
+  guardWindow(mainWindow, mainUrl);
 }
 
 /** Links leave the app; the app never navigates away from itself; plugin frames stay on their own files. */

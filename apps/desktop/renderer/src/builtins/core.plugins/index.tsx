@@ -12,7 +12,7 @@ import { Badge, Button, Checkbox, EmptyState, Icon, InfoNote, Input, Modal, Spin
 import type { BuiltinPlugin } from '../../state/data';
 import { useData, client } from '../../state/data';
 import { useApp } from '../../state/app';
-import { desktop } from '../../bridge';
+import { desktop, type PickedBundle } from '../../bridge';
 import { CAPABILITY_TEXT, decide } from '@desk/grants';
 import type { PluginEntry } from '../../registry/registry';
 import { ReviewModal } from './Review';
@@ -27,7 +27,7 @@ function PluginsPage() {
     <Page data-plugins-page width="wide" title="Plugins" actions={<Tabs value={tab} onChange={setTab} tabs={[{ id: 'installed', label: 'Installed', count: plugins.length }, { id: 'catalogue', label: 'Catalogue' }, { id: 'dev', label: 'Developer' }]} />}>
         {tab === 'installed' && (
           <>
-            <div className="mb-3 flex items-center gap-2"><div className="flex-1"><Input icon="search" placeholder="Filter plugins" value={q} onChange={(e) => setQ(e.target.value)} /></div><CheckUpdates /></div>
+            <div className="mb-3 flex items-center gap-2"><div className="flex-1"><Input icon="search" placeholder="Filter plugins" value={q} onChange={(e) => setQ(e.target.value)} /></div><InstallFile /><CheckUpdates /></div>
             <div className="space-y-2">{shown.map((p) => <PluginCard key={`${p.source}:${p.name}`} p={p} />)}</div>
           </>
         )}
@@ -214,6 +214,73 @@ function BundleDetails({ p, admin }: { p: PluginEntry; admin: boolean }) {
 }
 
 /** Asks the server for newer versions of the plugins installed on it (administrators). */
+const SIGNATURE_TEXT: Record<PickedBundle['plugins'][number]['signature'], { tone: 'success' | 'danger' | 'warning' | 'neutral'; label: string }> = {
+  verified: { tone: 'success', label: 'Verified' },
+  changed: { tone: 'danger', label: 'Changed after signing' },
+  signed: { tone: 'warning', label: 'Signed by an unknown publisher' },
+  unsigned: { tone: 'warning', label: 'Not signed' },
+};
+
+/**
+ * Install from a file: a plugin's bundle (.tgz) or a whole solution's (Studio: all its plugins in one file),
+ * as it is installed from the catalogue: into the engine, updated and rolled back like any installed plugin.
+ * What is in the file and who signed it is shown first; a file changed after it was signed is not installed.
+ */
+function InstallFile() {
+  const me = useData((s) => s.me);
+  const [picked, setPicked] = useState<PickedBundle | null>(null);
+  const [busy, setBusy] = useState(false);
+  if (me?.role !== 'admin') return null;
+  const pick = () => void desktop.pickBundle().then((b) => { if (b) setPicked(b); }).catch((e: Error) => toast(e.message, { kind: 'error' }));
+  const changed = picked?.plugins.some((p) => p.signature === 'changed') ?? false;
+  const verified = !!picked && picked.plugins.every((p) => p.signature === 'verified');
+  const install = async () => {
+    if (!picked) return;
+    setBusy(true);
+    try {
+      const bytes = Uint8Array.from(atob(picked.base64), (c) => c.charCodeAt(0));
+      const r = await client.plugins.importFile(bytes);
+      await useData.getState().refreshPlugins();
+      if ('solution' in r) {
+        const added = r.plugins.map((p) => `${p.name} ${p.version}`);
+        toast(`${r.solution.title} ${r.solution.version} installed${added.length ? `: ${added.join(', ')}` : ''}${r.unchanged.length ? ` (${r.unchanged.join(', ')} already at this version)` : ''}`, { kind: 'success' });
+      } else toast(`${r.ui?.displayName ?? r.name} ${r.version} installed`, { kind: 'success' });
+      setPicked(null);
+    } catch (e) { toast((e as Error).message, { kind: 'error' }); } finally { setBusy(false); }
+  };
+  return (
+    <>
+      <Button size="sm" variant="ghost" icon="upload" data-install-file onClick={pick}>Install from a file…</Button>
+      {picked && (
+        <Modal open onClose={() => setPicked(null)} title={`Install ${picked.title} ${picked.version}?`} size="md" label="Install from a file"
+          footer={<><Button variant="ghost" onClick={() => setPicked(null)}>Cancel</Button><Button variant="primary" data-confirm-install disabled={busy || changed} onClick={() => void install()}>{busy ? 'Installing…' : picked.kind === 'solution' ? `Install ${picked.plugins.length} plugins` : 'Install'}</Button></>}>
+          <div className="space-y-3 text-[13px]" data-install-dialog={picked.kind}>
+            <p className="text-hx-secondary">{picked.description ?? (picked.kind === 'solution' ? 'A solution: several plugins that work together.' : 'A plugin.')}</p>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-hx-muted">
+              <span>{picked.file}</span>
+              {picked.publisher && <span>by {picked.publisher}</span>}
+              {picked.license && <span>{picked.license} licence</span>}
+              {picked.harness && <span>for harness {picked.harness}</span>}
+            </div>
+            {verified && <InfoNote tone="success">Every file is as {picked.plugins[0]?.signedBy ? `${picked.publisher ?? picked.plugins[0].signedBy}` : 'its publisher'} signed it: an official publisher of this app.</InfoNote>}
+            {changed && <InfoNote tone="danger">Some of its files changed after they were signed. It is not installed: get the file again from its publisher.</InfoNote>}
+            {!verified && !changed && <InfoNote tone="warning">It is not signed by a publisher this app knows. Its code runs on this computer: install it only if you trust where it came from.</InfoNote>}
+            {picked.kind === 'solution' && <p className="text-[12px] text-hx-muted">Installed in this order, all or none; a plugin already at this version is left as it is, an older one is updated (the version before is kept).</p>}
+            <div className="space-y-1.5" data-install-plugins>
+              {picked.plugins.map((p) => (
+                <div key={p.name} className="flex items-center gap-2 rounded-lg border border-hx-border-subtle px-2.5 py-2" data-install-plugin={p.name}>
+                  <span className="min-w-0 flex-1"><span className="font-medium">{p.displayName ?? p.name}</span> <span className="text-[11.5px] text-hx-muted">{p.name} {p.version}</span>{p.description && <span className="block truncate text-[12px] text-hx-muted">{p.description}</span>}</span>
+                  <span data-signature={p.signature}><Badge tone={SIGNATURE_TEXT[p.signature].tone}>{SIGNATURE_TEXT[p.signature].label}</Badge></span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Modal>
+      )}
+    </>
+  );
+}
+
 function CheckUpdates() {
   const me = useData((s) => s.me);
   const [busy, setBusy] = useState(false);

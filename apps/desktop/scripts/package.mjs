@@ -1,7 +1,12 @@
 /**
  * npm run desktop:build: packages Harness Desktop with electron-builder.
  *
- *   node scripts/package.mjs [--dir-only]
+ *   node scripts/package.mjs [--dir-only] [--solution <name>]
+ *
+ * --solution <name> (or HARNESS_SOLUTION): that solution as an app of its own, the harness desktop app as its
+ * base: the base profile with the solution's package.json "harness.app" (shared/product.ts solutionProduct),
+ * the solution inside its engine and installed on first start, the window focused on it, its own home
+ * folder. Output in apps/desktop/release-<name>/.
  *
  * 1. Builds the app (scripts/build.mjs).
  * 2. Stages it in a temporary folder: the built dist/ and a minimal package.json (the app
@@ -16,8 +21,8 @@
  *
  * The product profile (products/harness.json, or HARNESS_PRODUCT=path) gives the name, the app id
  * and the icon; it is shipped as resources/product.json, its publishers' keys (trustedKeys) as
- * resources/keys. The engine holds the core's plugins and the solutions the profile names ("solutions":
- * products/studio.json ships Studio); every plugin, the core's and every solution's, is also written as its
+ * resources/keys. The engine holds the core's plugins and the solutions the profile names ("solutions";
+ * --solution studio ships Studio); every plugin, the core's and every solution's, is also written as its
  * own bundle in release/plugins, signed with the publisher's key when there is one (HARNESS_PUBLISHER_KEY, a
  * private key file; default ~/.harness-publisher/*.pem).
  */
@@ -27,21 +32,31 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const desktop = path.resolve(here, '..');
 const repo = path.resolve(desktop, '..', '..');
-const release = path.join(desktop, 'release');
+const solArg = process.argv.indexOf('--solution');
+const solution = (solArg > 0 ? process.argv[solArg + 1] : undefined) ?? process.env.HARNESS_SOLUTION?.trim() ?? undefined;
+const release = path.join(desktop, solution ? `release-${solution}` : 'release');
 // Outside the workspace: electron-builder would otherwise collect the workspace's node_modules into the app.
 const stage = path.join(os.tmpdir(), 'harness-desktop-stage');
 const engine = path.join(release, 'engine');
 const dirOnly = process.argv.includes('--dir-only');
 
-const productFile = path.resolve(process.env.HARNESS_PRODUCT ?? path.join(repo, 'products', 'harness.json'));
-const product = JSON.parse(fs.readFileSync(productFile, 'utf8'));
+const baseFile = path.resolve(process.env.HARNESS_PRODUCT ?? path.join(repo, 'products', 'harness.json'));
+// Relative paths in the profile (icon, trustedKeys) are read beside the base profile.
+const productDir = path.dirname(baseFile);
+let product = JSON.parse(fs.readFileSync(baseFile, 'utf8'));
+if (solution) {
+  const pkgFile = path.join(repo, 'solutions', solution, 'package.json');
+  if (!fs.existsSync(pkgFile)) throw new Error(`--solution ${solution}: no ${path.relative(repo, pkgFile)}`);
+  const { solutionProduct } = await import(pathToFileURL(path.join(desktop, 'shared', 'product.ts')).href);
+  product = solutionProduct(product, solution, JSON.parse(fs.readFileSync(pkgFile, 'utf8')));
+}
 const pkg = JSON.parse(fs.readFileSync(path.join(desktop, 'package.json'), 'utf8'));
-const iconSrc = product.brand?.icon ? path.resolve(path.dirname(productFile), product.brand.icon) : null;
+const iconSrc = product.brand?.icon ? path.resolve(productDir, product.brand.icon) : null;
 
 const step = (m) => console.log(`\n[package] ${m}`);
 const run = (cmd, args, opts = {}) => { const r = spawnSync(cmd, args, { stdio: 'inherit', cwd: repo, shell: process.platform === 'win32' && !cmd.endsWith('.exe') && cmd !== process.execPath, ...opts }); if (r.status !== 0) throw new Error(`${path.basename(cmd)} ${args.join(' ')} failed (${r.status})`); };
@@ -54,6 +69,9 @@ step('staging the app');
 fs.rmSync(release, { recursive: true, force: true });
 fs.rmSync(stage, { recursive: true, force: true });
 fs.mkdirSync(stage, { recursive: true });
+// The profile the app ships (resources/product.json): the base one, or a solution's made from it.
+const productOut = path.join(os.tmpdir(), 'harness-desktop-product.json');
+fs.writeFileSync(productOut, JSON.stringify(product, null, 2));
 copy(path.join(desktop, 'dist'), path.join(stage, 'dist'), (p) => !p.endsWith('.map'));
 fs.writeFileSync(path.join(stage, 'package.json'), JSON.stringify({ name: 'harness-desktop', productName: product.name, version: pkg.version, description: product.description ?? pkg.description, author: pkg.author, main: 'dist/main.cjs' }, null, 2));
 
@@ -64,7 +82,7 @@ copy(path.join(repo, 'plugins'), path.join(engine, 'plugins'), skip);
 // The solutions this edition ships (solutions/<name>/plugins); the others are installed as bundles.
 for (const s of product.solutions ?? []) {
   const from = path.join(repo, 'solutions', s);
-  if (!fs.existsSync(path.join(from, 'plugins'))) throw new Error(`${path.relative(repo, productFile)}: no solution "${s}" in solutions/`);
+  if (!fs.existsSync(path.join(from, 'plugins'))) throw new Error(`the profile names the solution "${s}": it is not in solutions/`);
   copy(path.join(from, 'plugins'), path.join(engine, 'solutions', s, 'plugins'), skip);
   for (const f of ['package.json', 'CHANGELOG.md']) if (fs.existsSync(path.join(from, f))) fs.copyFileSync(path.join(from, f), path.join(engine, 'solutions', s, f));
   console.log(`  solution: ${s}`);
@@ -110,8 +128,8 @@ const config = {
     // Without its node_modules: electron-builder leaves them out of extra resources whatever the filter
     // says; they are copied into the unpacked app below, before the installer is made from it.
     { from: engine, to: 'engine' },
-    { from: productFile, to: 'product.json' },
-    ...(product.trustedKeys ?? []).map((k) => ({ from: path.resolve(path.dirname(productFile), k), to: path.join('keys', path.basename(k)) })),
+    { from: productOut, to: 'product.json' },
+    ...(product.trustedKeys ?? []).map((k) => ({ from: path.resolve(productDir, k), to: path.join('keys', path.basename(k)) })),
     ...(iconSrc && fs.existsSync(iconSrc) ? [{ from: iconSrc, to: 'icon.png' }] : []),
   ],
   ...(iconSrc && fs.existsSync(iconSrc) ? { icon: iconSrc } : {}),

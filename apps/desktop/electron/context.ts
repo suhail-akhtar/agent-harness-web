@@ -19,6 +19,8 @@ export interface DesktopContext {
   prefs: PrefsStore;
   engine(): Engine;
   product: ProductProfile;
+  /** The official publishers' public key files (the product's trustedKeys): what Install from a file checks a bundle against. */
+  publisherKeys: string[];
   paths: DesktopPaths;
   devPlugins: DevPlugins;
   /** Watches the plugin folders loaded in the app (pages refresh, server code reloads in the engine). */

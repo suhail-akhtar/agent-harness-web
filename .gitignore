@@ -16,5 +16,6 @@ dist/
 
 # Desktop packaging output
 apps/desktop/release/
+apps/desktop/release-*/
 __pycache__/
 *.pyc

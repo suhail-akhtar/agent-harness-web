@@ -28,11 +28,20 @@ solutions/studio/
 
 ## How it ships
 
-- **Into the core app**, as bundles: the desktop build writes each plugin as `release/plugins/<name>-<version>.tgz`,
-  signed with the publisher's key. In the app, Plugins > Install from a file. Studio then shows as **Official**
-  and **Verified**: every file is as the publisher signed it.
-- **As Harness Studio**, the core with Studio inside:
-  `HARNESS_PRODUCT=products/studio.json npm run desktop:build` (products/studio.json: `"solutions": ["studio"]`).
+The harness desktop app is the base of both ways:
+
+- **As a plugin, in the harness app you have**: one file, `studio-1.1.0.tgz`. The desktop build writes it to
+  `release/plugins`, with every plugin signed by the publisher; `npm run bundle -w @harness/studio` writes it
+  too. In the app, open Plugins > Install from a file. The app shows what is in the file and who signed it,
+  then installs the five plugins in order, all or none. Studio then shows as **Official** and **Verified**,
+  and works as it did when it shipped with the app. Installing the same file again changes nothing; a newer
+  one updates Studio, and the version before is kept.
+- **As its own app, Harness Studio**: `npm run desktop:build -- --solution studio` writes the installer to
+  `apps/desktop/release-studio`. It is the harness app with every feature, Studio inside and installed, the
+  window focused on Studio (its menu first, opening on its home), and its own home folder
+  (`~/.harness-studio`), so it runs beside the harness app. Its name, app id and tagline come from
+  `"harness.app"` in package.json. `npm run desktop:dev -- --solution studio` runs it from the checkout. Any
+  solution becomes an app the same way.
 - **On a server**: in the harness checkout every solution's plugins are shipped plugins (offered under
   Plugins, installed on demand); elsewhere, from the bundles or a catalogue (`HARNESS_PLUGIN_CATALOGUE`).
 

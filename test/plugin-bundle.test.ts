@@ -191,6 +191,66 @@ test("an official publisher (publisherKeys, the desktop product's trustedKeys): 
   } finally { await h2.close(); }
 });
 
+test('a solution as one file: its plugins installed in the order they require, signed each, all or none; again: nothing changes; a newer one updates; a changed file is refused', async () => {
+  const { writeSolutionBundle, readSolutionManifest } = await import('../src/plugins/solution-bundle.ts');
+  const { generateKeyPair } = await import('../src/plugins/signing.ts');
+  const { unpack } = await import('../src/plugins/archive.ts');
+  const solution = async (version: string, engines = '>=0.1.0') => {
+    const dir = path.join(await tempDir(), 'kit');
+    // Listed engine first: the file puts what it requires before it.
+    await fs.mkdir(path.join(dir, 'plugins'), { recursive: true });
+    await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ name: '@acme/kit', version, description: 'A kit of two.', license: 'MIT', author: 'Acme', harness: { title: 'Kit', core: '>=0.1.0', plugins: ['kit-engine', 'kit-core'] } }));
+    await plugin(path.join(dir, 'plugins'), 'kit-core', version, { engines: { harness: engines } }, `core ${version}`);
+    const eng = path.join(dir, 'plugins', 'kit-engine');
+    await fs.mkdir(eng, { recursive: true });
+    await fs.writeFile(path.join(eng, 'harness-plugin.json'), JSON.stringify({ name: 'kit-engine', version, description: 'The engine of the kit, for the tests.', requires: ['kit-core'] }));
+    return dir;
+  };
+  const pair = generateKeyPair();
+  const keys = await tempDir();
+  await fs.writeFile(path.join(keys, 'acme.pub.pem'), pair.publicPem);
+  const out = await tempDir();
+  const w = await writeSolutionBundle(await solution('1.0.0'), out, pair.privatePem);
+  assert.deepEqual([w.file, w.plugins, w.signed], ['kit-1.0.0.tgz', ['kit-core', 'kit-engine'], true]);
+  const data = await fs.readFile(path.join(out, w.file));
+  const look = path.join(await tempDir(), 'kit');
+  await unpack(data, look);
+  assert.equal((await readSolutionManifest(look))!.title, 'Kit');
+  assert.ok(await fs.stat(path.join(look, 'plugins', 'kit-core', 'harness-plugin.sig')), 'each plugin signed');
+
+  const h = await createHarness({ dataDir: await tempDir(), plugins: [], pluginKeys: keys, backgroundWork: false, scheduler: false, search: null });
+  try {
+    const r = await h.plugins.importFile(data);
+    assert.equal(r.kind, 'solution');
+    if (r.kind !== 'solution') return;
+    assert.deepEqual([r.solution, r.plugins.map((p) => p.name), r.unchanged], [{ name: 'kit', title: 'Kit', version: '1.0.0' }, ['kit-core', 'kit-engine'], []]);
+    assert.ok(r.plugins.every((p) => p.source === 'installed' && !!p.loaded && /^signed by acme/.test(p.signature ?? '')));
+    // The same file again: nothing changes.
+    const again = await h.plugins.importFile(data);
+    assert.deepEqual(again.kind === 'solution' && [again.plugins.length, again.unchanged], [0, ['kit-core', 'kit-engine']]);
+    // A newer one: both updated, the versions before kept.
+    const w2 = await writeSolutionBundle(await solution('1.1.0'), out, pair.privatePem);
+    const r2 = await h.plugins.importFile(await fs.readFile(path.join(out, w2.file)));
+    assert.deepEqual(r2.kind === 'solution' && r2.plugins.map((p) => `${p.name} ${p.version}`), ['kit-core 1.1.0', 'kit-engine 1.1.0']);
+    assert.equal((await h.plugins.revisions('kit-core'))[0]?.version, '1.0.0');
+    // One file changed after signing (of the version installed): refused, nothing changes.
+    const changed = path.join(await tempDir(), 'kit');
+    await unpack(await fs.readFile(path.join(out, w2.file)), changed);
+    await fs.appendFile(path.join(changed, 'plugins', 'kit-engine', 'harness-plugin.json'), ' ');
+    await assert.rejects(h.plugins.importFile(await pack(changed)), /Refused: kit-engine/);
+  } finally { await h.close(); }
+
+  // All or none: a plugin that does not run on this harness stops the whole solution before anything is added.
+  const h2 = await createHarness({ dataDir: await tempDir(), plugins: [], backgroundWork: false, scheduler: false, search: null });
+  try {
+    const bad = await writeSolutionBundle(await solution('2.0.0', '>=99.0.0'), out);
+    await assert.rejects(h2.plugins.importFile(await fs.readFile(path.join(out, bad.file)), { allowUnsigned: true }), /kit-core 2\.0\.0 is not for this harness/);
+    assert.deepEqual(h2.plugins.list().filter((p) => p.name.startsWith('kit-')), []);
+    // Unsigned, where the server has no trust list: only on the person's own computer.
+    await assert.rejects(h2.plugins.importFile(data), /no trust list/);
+  } finally { await h2.close(); }
+});
+
 test('bundles over the API: administrators export, import, check, update and roll back; a member may not; plugins may not take these paths', async () => {
   const { createApp } = await import('../src/server/app.ts');
   const { UserStore } = await import('../src/server/users.ts');

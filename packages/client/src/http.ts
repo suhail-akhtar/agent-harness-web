@@ -12,7 +12,7 @@
 import { GlobalEvents, sessionEvents, type Fetch } from './events.ts';
 import {
   isPending, PENDING_KINDS, type Approval, type FileTree, type SearchHit, type Attachment, type CatalogueEntry, type PluginReview, type PluginUpdateInfo, type PluginRevisionInfo, type Config, type Capabilities, type ContextBreakdown, type LiveProviderModels, type EffectiveSetting, type Effort, type FileContent, type FileEntry,
-  type GitLogEntry, type GitStatus, type Health, type HarnessEvent, type HistoryPage, type McpBundle, type Me, type Mode, type ModelInfo, type PendingRequest, type PluginInfo,
+  type GitLogEntry, type GitStatus, type Health, type HarnessEvent, type HistoryPage, type McpBundle, type Me, type Mode, type ModelInfo, type PendingRequest, type PluginInfo, type SolutionImportInfo,
   type ProviderInfo, type ProviderTest, type Schedule, type SessionDetail, type SessionMeta, type SessionsPage, type TaskView, type VaultEntry, type VersionInfo, type WorkflowInfo, type WorkflowRunView,
   type ArtifactContent, type ArtifactMeta, type Proposal, type TraceSpan,
 } from './types.ts';
@@ -292,6 +292,8 @@ export class HarnessClient {
     },
     /** Adds a plugin from a bundle (.tgz), or updates the installed one to the bundle's newer version. */
     importBundle: (bytes: Uint8Array) => this.request<PluginInfo>('POST', '/api/plugins/import', undefined, { raw: { body: bytes, type: 'application/gzip' } }),
+    /** Adds a plugin's bundle or a whole solution's (all its plugins, in order, all or none). */
+    importFile: (bytes: Uint8Array) => this.request<PluginInfo | SolutionImportInfo>('POST', '/api/plugins/import', undefined, { raw: { body: bytes, type: 'application/gzip' } }),
     /** The URL of a plugin's UI file on the engine (main proxies harness://app/plugins/<name>/<path> to it). */
     uiFile: (name: string, file: string) => `${this.base}/api/plugins/${encodeURIComponent(name)}/ui/${file.split('/').map(encodeURIComponent).join('/')}`,
     /** A plugin's own server route. */

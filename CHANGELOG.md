@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.4
+
+- **Install from a file** (Plugins page): a plugin's file, or a whole solution's in one file (Studio: its five
+  plugins, signed each, installed in order, all or none; again: nothing changes; a newer one updates), into
+  the app as it was, after showing what is in it and who signed it. `npm run plugin -- solution <dir>`; the
+  desktop build writes `<solution>-<version>.tgz` beside the plugins' files.
+- **Any solution as an app of its own, the harness desktop app as its base**: `npm run desktop:build --
+  --solution studio` builds Harness Studio (solutions/studio/package.json "harness.app": its name, app id,
+  tagline, the plugin it opens on), with every feature of the harness, Studio inside and installed, the window
+  focused on Studio, and its own home folder (~/.harness-studio) so both apps run side by side.
+  `npm run desktop:dev -- --solution studio` runs it from the checkout. The core's installer ships the core.
+- An official plugin installed from a file has its own group in the sidebar, as when it ships (others: Custom).
+
 ## 0.2.3
 
 - **Solutions apart from the core**: a complete product on the core lives in `solutions/<name>` with its own
@@ -15,9 +28,6 @@
   `trustedKeys`: Suhail Akhtar's) are Official and Verified on the Plugins page; a signed plugin changed
   afterwards says its signature does not match; a person's own plugins load as before. The desktop build
   signs every bundle with the publisher's key when there is one (HARNESS_PUBLISHER_KEY).
-- **Harness Studio**: a product can ship solutions inside its engine (`"solutions"` in products/*.json);
-  `HARNESS_PRODUCT=products/studio.json npm run desktop:build` builds the core with Studio. The core's
-  installer ships the core; Studio installs into it as bundles.
 
 ## 0.2.2
 

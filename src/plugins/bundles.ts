@@ -6,16 +6,19 @@ import { pack } from './archive.ts';
 import { bundleInfo } from './bundle.ts';
 import { findPluginDirs, readManifest } from './loader.ts';
 import { signPlugin } from './signing.ts';
+import { writeSolutionBundle, type WrittenSolution } from './solution-bundle.ts';
 
 // Each plugin as its own installable bundle (`npm run plugin -- bundles`): <name>-<version>.tgz, signed when a
 // key is given (in a copy: the source folder is left as it is), and an index.json listing them the way a
 // catalogue does ({ plugins: [{ name, version, description, url, sha256 }] }) plus what the catalogue page
 // shows (display name, solution, what it requires, publisher, tags). Serve the folder and point a server at
-// it (HARNESS_PLUGIN_CATALOGUE=https://.../index.json), or import one file in the desktop app.
+// it (HARNESS_PLUGIN_CATALOGUE=https://.../index.json), or import one file in the desktop app. Each solution
+// (solutions/<name>) is also written whole as <name>-<version>.tgz (src/plugins/solution-bundle.ts): one file
+// that installs all its plugins.
 
 export interface WrittenBundle { name: string; version: string; file: string; size: number; sha256: string; signed: boolean }
 
-export async function writeBundles(o: { from: string | string[]; out: string; base?: string; key?: string }): Promise<{ index: string; bundles: WrittenBundle[] }> {
+export async function writeBundles(o: { from: string | string[]; out: string; base?: string; key?: string; /** Solution folders, each written whole too. */ solutions?: string[] }): Promise<{ index: string; bundles: WrittenBundle[]; solutions: WrittenSolution[] }> {
   await fs.mkdir(o.out, { recursive: true });
   const bundles: WrittenBundle[] = [];
   const entries: Record<string, unknown>[] = [];
@@ -47,7 +50,14 @@ export async function writeBundles(o: { from: string | string[]; out: string; ba
     } finally { if (tmp) await fs.rm(tmp, { recursive: true, force: true }); }
   }
   entries.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  const solutions: WrittenSolution[] = [];
+  const solutionEntries: Record<string, unknown>[] = [];
+  for (const dir of o.solutions ?? []) {
+    const s = await writeSolutionBundle(dir, o.out, o.key);
+    solutions.push(s);
+    solutionEntries.push({ name: s.name, version: s.version, url: o.base ? new URL(s.file, o.base.replace(/\/?$/, '/')).toString() : s.file, sha256: s.sha256, plugins: s.plugins });
+  }
   const index = path.join(o.out, 'index.json');
-  await fs.writeFile(index, JSON.stringify({ plugins: entries }, null, 2));
-  return { index, bundles };
+  await fs.writeFile(index, JSON.stringify({ plugins: entries, ...(solutionEntries.length ? { solutions: solutionEntries } : {}) }, null, 2));
+  return { index, bundles, solutions };
 }

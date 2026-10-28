@@ -23,6 +23,9 @@ import { JsonFile } from './store';
 import { registerPreviewHtml, RUNTIME_URL } from './preview';
 import { reloadInEngine } from './dev-watch';
 import { unpack } from '../../../src/plugins/archive';
+import { loadTrustedKeys, SIG_FILE, verifyPlugin } from '../../../src/plugins/signing';
+import type { PickedBundle, PickedPlugin } from '../shared/bundle-pick';
+import os from 'node:os';
 import type { Grants, GrantRecord } from '../shared/grants';
 import type { RemoteServer } from '../shared/prefs';
 
@@ -173,6 +176,54 @@ export function registerIpc(ctx: DesktopContext): { grants: JsonFile<Grants> } {
       fs.rmSync(staging, { recursive: true, force: true });
       throw new Error(`Not a plugin bundle: ${(e as Error).message}`);
     }
+  });
+  // Install from a file: a plugin's bundle or a whole solution's, read here first (what is in it, who signed it),
+  // then installed into the engine by the window (POST /api/plugins/import), where it is checked again.
+  h('plugins:pickBundle', async (): Promise<PickedBundle | null> => {
+    const w = ctx.window();
+    const opts = { title: 'Install a plugin or a solution', properties: ['openFile' as const], filters: [{ name: 'Plugin or solution', extensions: ['tgz', 'gz'] }] };
+    const r = w ? await dialog.showOpenDialog(w, opts) : await dialog.showOpenDialog(opts);
+    const file = r.canceled ? undefined : r.filePaths[0];
+    if (!file) return null;
+    if (fs.statSync(file).size > 50 * 1024 * 1024) throw new Error('The file is larger than 50 MB.');
+    const data = fs.readFileSync(file);
+    const top = fs.mkdtempSync(path.join(os.tmpdir(), 'hx-pick-'));
+    // unpack makes the folder it unpacks into.
+    const tmp = path.join(top, 'bundle');
+    try {
+      try { await unpack(data, tmp); } catch (e) { throw new Error(`Not a plugin or solution file: ${(e as Error).message}`); }
+      const keys = (await Promise.all(ctx.publisherKeys.map((k) => loadTrustedKeys(k).catch(() => [])))).flat();
+      const read = (f: string) => JSON.parse(fs.readFileSync(f, 'utf8')) as Record<string, unknown>;
+      const one = async (dir: string): Promise<PickedPlugin> => {
+        if (!fs.existsSync(path.join(dir, 'harness-plugin.json'))) throw new Error(`Not a plugin or solution file: no harness-plugin.json in ${path.relative(tmp, dir) || 'its top'}`);
+        const m = read(path.join(dir, 'harness-plugin.json')) as { name?: string; version?: string; displayName?: string; description?: string; publisher?: { name?: string } | string; ui?: { displayName?: string } };
+        if (typeof m.name !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(m.name)) throw new Error('Not a plugin or solution file: a harness-plugin.json has no valid name');
+        const signed = fs.existsSync(path.join(dir, SIG_FILE));
+        const v = signed && keys.length ? await verifyPlugin(dir, keys) : null;
+        const known = !!v && (v.ok || (!!v.keyId && keys.some((k) => k.keyId === v.keyId)));
+        const publisher = typeof m.publisher === 'string' ? m.publisher : m.publisher?.name;
+        return {
+          name: m.name, version: typeof m.version === 'string' ? m.version : '0.0.0',
+          ...(m.displayName ?? m.ui?.displayName ? { displayName: m.displayName ?? m.ui?.displayName } : {}),
+          ...(typeof m.description === 'string' ? { description: m.description } : {}), ...(publisher ? { publisher } : {}),
+          signature: v?.ok ? 'verified' : known ? 'changed' : signed ? 'signed' : 'unsigned', ...(v?.ok ? { signedBy: v.keyName } : {}),
+        };
+      };
+      const solFile = path.join(tmp, 'harness-solution.json');
+      if (fs.existsSync(solFile)) {
+        const s = read(solFile) as { title?: string; name?: string; version?: string; description?: string; publisher?: { name?: string }; license?: string; engines?: { harness?: string }; plugins?: string[] };
+        if (!Array.isArray(s.plugins) || !s.plugins.length) throw new Error('Not a solution file: its harness-solution.json names no plugins');
+        const plugins = await Promise.all(s.plugins.map((p) => one(path.join(tmp, 'plugins', String(p)))));
+        return {
+          file: path.basename(file), base64: data.toString('base64'), kind: 'solution', title: String(s.title ?? s.name), version: String(s.version ?? '0.0.0'),
+          ...(s.description ? { description: s.description } : {}), ...(s.publisher?.name ? { publisher: s.publisher.name } : {}), ...(s.license ? { license: s.license } : {}),
+          ...(s.engines?.harness ? { harness: s.engines.harness } : {}), plugins,
+        };
+      }
+      const p = await one(tmp);
+      const m = read(path.join(tmp, 'harness-plugin.json')) as { license?: string; engines?: { harness?: string } };
+      return { file: path.basename(file), base64: data.toString('base64'), kind: 'plugin', title: p.displayName ?? p.name, version: p.version, ...(p.description ? { description: p.description } : {}), ...(p.publisher ? { publisher: p.publisher } : {}), ...(m.license ? { license: m.license } : {}), ...(m.engines?.harness ? { harness: m.engines.harness } : {}), plugins: [p] };
+    } finally { fs.rmSync(top, { recursive: true, force: true }); }
   });
   h('plugins:importCommit', (staging: string) => {
     const root = path.join(imported(), '.staging');
