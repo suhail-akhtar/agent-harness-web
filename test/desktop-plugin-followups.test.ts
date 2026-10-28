@@ -18,9 +18,10 @@ import { createHarness } from '../src/kernel/harness.ts';
 import { LocalHost } from '../src/runtime/host.ts';
 import type { ToolContext } from '../src/tools/types.ts';
 import { tempDir } from './helpers.ts';
+import { pluginDir } from '../src/plugins/test-fixtures.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const manifest = async (name: string) => validateUiManifest(JSON.parse(await fs.readFile(path.join(root, 'plugins', name, 'harness-plugin.json'), 'utf8')).ui);
+const manifest = async (name: string) => validateUiManifest(JSON.parse(await fs.readFile(path.join(pluginDir(name), 'harness-plugin.json'), 'utf8')).ui);
 const entry = (name: string, ui: UiManifest, source = 'bundled'): PluginEntry => ({ name, source, enabled: true, ui });
 
 test('registry.has / registry.list: what else is installed, ids and yes/no only; any frame may ask', async () => {
@@ -143,7 +144,7 @@ test('aiops inventory gates: in operations projects only (a workspace inventory,
   await fs.writeFile(opFile, 'services:\n  - name: api\n    health: http://127.0.0.1:9/health\nalerts:\n  - name: ApiDown\n    expr: up{job="api"} == 0\n    service: api\n');
   const before = process.env.HARNESS_OPS_INVENTORY;
   process.env.HARNESS_OPS_INVENTORY = opFile;
-  const h = await createHarness({ dataDir: await tempDir(), plugins: [path.join(root, 'plugins', 'aiops')], search: null, memory: 'off', scheduler: false, backgroundWork: false });
+  const h = await createHarness({ dataDir: await tempDir(), plugins: [pluginDir('aiops')], search: null, memory: 'off', scheduler: false, backgroundWork: false });
   try {
     const gate = (n: string) => h.registry.gates.get(n)!;
     const applies = (n: string, ws: string) => gate(n).applies!(new LocalHost(ws), new AbortController().signal);

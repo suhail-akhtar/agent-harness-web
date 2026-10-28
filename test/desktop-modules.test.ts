@@ -19,6 +19,7 @@ import * as settingsM from '../apps/desktop/renderer/src/builtins/core.settings/
 import { Registry as ServerRegistry } from '../src/kernel/registry.ts';
 import { loadPlugin } from '../src/plugins/loader.ts';
 import { readPluginGuide, serverGuide } from '../src/plugins/guides.ts';
+import { pluginDir } from '../src/plugins/test-fixtures.ts';
 
 // Plugins as first-class modules of the desktop (docs/desktop/DESIGN.md, "Plugins as modules"):
 // the menu contract, the registry's groups and homes, the generated home page, breadcrumbs and the
@@ -41,12 +42,12 @@ const native = (name: string, contributes: Record<string, unknown>, extra: Recor
 });
 const shell = native('core.shell', { views: [{ id: 'plugin-home', title: 'Home', kind: 'native', component: 'PluginHome' }], commands: [{ id: 'palette', title: 'Palette', handler: 'p' }] });
 const SERVER_UI = ['sdlc', 'aiops', 'research', 'quality-gates'];
-const manifestOf = (p: string) => JSON.parse(fs.readFileSync(path.join(root, 'plugins', p, 'harness-plugin.json'), 'utf8')) as { name: string; description: string; ui?: unknown; skills?: string };
+const manifestOf = (p: string) => JSON.parse(fs.readFileSync(path.join(pluginDir(p), 'harness-plugin.json'), 'utf8')) as { name: string; description: string; ui?: unknown; skills?: string };
 const server = (p: string, extra: Partial<PluginEntry> = {}): PluginEntry => {
   const m = manifestOf(p);
   const ui = m.ui ? validateUiManifest(m.ui, { trustCeiling: 'frame' }) : undefined;
   // What GET /api/plugins says of its guide: the purpose from its frontmatter.
-  const purpose = ui?.guide ? parseGuideMarkdown(fs.readFileSync(path.join(root, 'plugins', p, ui.guide), 'utf8')).purpose : undefined;
+  const purpose = ui?.guide ? parseGuideMarkdown(fs.readFileSync(path.join(pluginDir(p), ui.guide), 'utf8')).purpose : undefined;
   return { name: m.name, description: m.description, source: 'bundled', enabled: true, ...(ui ? { ui } : {}), ...(purpose ? { guideInfo: { purpose } } : {}), uiHash: 'h', ...extra };
 };
 const third = (name: string, ui: Record<string, unknown>): PluginEntry => ({ name, source: 'installed', enabled: true, ui: validateUiManifest(ui), uiHash: 'h' });
@@ -215,7 +216,7 @@ function authoredGuides(): Array<{ name: string; text: string; ui: UiManifest | 
   for (const p of ['sdlc', 'aiops', 'research', 'quality-gates', 'devops', 'integrations']) {
     const m = manifestOf(p);
     const ui = m.ui ? validateUiManifest(m.ui, { trustCeiling: 'frame' }) : undefined;
-    const file = ui?.guide ? path.join(root, 'plugins', p, ui.guide) : path.join(root, 'plugins', p, m.skills ?? 'skills', `${p}-guide`, 'SKILL.md');
+    const file = ui?.guide ? path.join(pluginDir(p), ui.guide) : path.join(pluginDir(p), m.skills ?? 'skills', `${p}-guide`, 'SKILL.md');
     out.push({ name: p, text: fs.readFileSync(file, 'utf8'), ui, description: m.description });
   }
   return out;
@@ -256,11 +257,11 @@ test('guides: every full plugin has one (a one-sentence purpose, what it is for,
 
 test('guides on the server: the plugin\'s authored text plus its tools, workflows, agents, gates and skills as loaded; the purpose from its frontmatter', async () => {
   const reg = new ServerRegistry();
-  for (const p of ['sdlc', 'research', 'quality-gates', 'devops']) await loadPlugin(reg, path.join(root, 'plugins', p));
+  for (const p of ['sdlc', 'research', 'quality-gates', 'devops']) await loadPlugin(reg, pluginDir(p));
   const entry = async (p: string, contributes: string[]) => {
     const m = manifestOf(p);
     const ui = m.ui ? validateUiManifest(m.ui, { trustCeiling: 'frame' }) : undefined;
-    return { name: p, description: m.description, dir: path.join(root, 'plugins', p), enabled: true, ui, ...(await readPluginGuide(path.join(root, 'plugins', p), m, ui)), loaded: { contributes } };
+    return { name: p, description: m.description, dir: pluginDir(p), enabled: true, ui, ...(await readPluginGuide(pluginDir(p), m, ui)), loaded: { contributes } };
   };
   const sdlc = await entry('sdlc', []);
   assert.match(sdlc.guide!.purpose, /^Engineering: features from request/);

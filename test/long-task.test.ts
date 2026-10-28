@@ -7,9 +7,10 @@ import { fileURLToPath } from 'node:url';
 import { createHarness } from '../src/kernel/harness.ts';
 import { LocalHost } from '../src/runtime/host.ts';
 import { FakeProvider, tempDir } from './helpers.ts';
+import { pluginDir } from '../src/plugins/test-fixtures.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const wf = JSON.parse(await fs.readFile(path.join(here, '..', 'plugins', 'sdlc', 'workflows', 'long-task.json'), 'utf8'));
+const wf = JSON.parse(await fs.readFile(path.join(pluginDir('sdlc'), 'workflows', 'long-task.json'), 'utf8'));
 const feature = (id: string, passes = false) => ({ id, category: 'core', description: `feature ${id}`, steps: [`check ${id}`], passes });
 
 test('long-task check: what is left, and a feature list changed beyond its passes fields is caught', async () => {
@@ -41,7 +42,7 @@ test('long-task check: what is left, and a feature list changed beyond its passe
 test('long-task runs feature by feature in fresh contexts until every feature passes, then reviews', async () => {
   const ws = await tempDir();
   execFileSync('git', ['init', '-q', ws]);
-  const h = await createHarness({ dataDir: await tempDir(), plugins: [path.join(here, '..', 'plugins', 'sdlc')], search: null, memory: 'off' });
+  const h = await createHarness({ dataDir: await tempDir(), plugins: [pluginDir('sdlc')], search: null, memory: 'off' });
   assert.ok(h.registry.workflows.has('long-task'));
   const fl = (a: boolean, b: boolean) => JSON.stringify([feature('F01', a), feature('F02', b)], null, 1);
   const fake = new FakeProvider([
@@ -77,7 +78,7 @@ test('long-task runs feature by feature in fresh contexts until every feature pa
 test('long-task stops for a person when three sessions in a row pass no feature', async () => {
   const ws = await tempDir();
   execFileSync('git', ['init', '-q', ws]);
-  const h = await createHarness({ dataDir: await tempDir(), plugins: [path.join(here, '..', 'plugins', 'sdlc')], search: null, memory: 'off' });
+  const h = await createHarness({ dataDir: await tempDir(), plugins: [pluginDir('sdlc')], search: null, memory: 'off' });
   const fake = new FakeProvider([
     { calls: [{ name: 'write', input: { path: '.harness/long-task/features.json', content: JSON.stringify([feature('F01')]) } }] },
     { text: 'planned' },
@@ -103,7 +104,7 @@ test('long-task stops for a person when three sessions in a row pass no feature'
 test('long-task: approving "stuck" retries at most three times, so an unattended run cannot loop forever', async () => {
   const ws = await tempDir();
   execFileSync('git', ['init', '-q', ws]);
-  const h = await createHarness({ dataDir: await tempDir(), plugins: [path.join(here, '..', 'plugins', 'sdlc')], search: null, memory: 'off' });
+  const h = await createHarness({ dataDir: await tempDir(), plugins: [pluginDir('sdlc')], search: null, memory: 'off' });
   const fake = new FakeProvider([
     { calls: [{ name: 'write', input: { path: '.harness/long-task/features.json', content: JSON.stringify([feature('F01')]) } }] },
     { text: 'planned' },

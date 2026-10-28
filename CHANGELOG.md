@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Every solution apart from the core**: Engineering (`solutions/engineering`: sdlc 1.2.0), DevOps
+  (`solutions/devops`: devops 1.1.0) and Operations (`solutions/operations`: aiops 1.2.0) join Studio, each with its
+  own version, tests (test kit only), eval pack, docs and changelog. Each installs into the harness app as one
+  signed file (Plugins > Install from a file) or becomes an app of its own (`--solution engineering|devops|operations`).
+  The core is the engine, the SDK, the desktop app and its built-in plugins (visual, documents, research,
+  computer, integrations, quality-gates, plugin-dev); its installer ships just those.
 - **Your messages**: copy, edit and send again, send again from here, branch a new conversation from here (under
   each message, and on a right-click). Editing goes back to that message: what came after it is removed from
   the conversation (files the agent changed stay as they are); a conversation that changed since it was shown

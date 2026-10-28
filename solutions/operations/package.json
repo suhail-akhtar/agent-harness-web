@@ -1,0 +1,29 @@
+{
+  "name": "@harness/operations",
+  "version": "1.2.0",
+  "private": true,
+  "type": "module",
+  "description": "AI operations on the harness: an ops inventory (hosts, services, SLOs, alert rules, maintenance windows), monitoring and alerts, incidents with an investigation by agents, runbooks, Kubernetes, and the Operations console.",
+  "license": "MIT",
+  "author": "Suhail Akhtar",
+  "homepage": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/solutions/operations",
+  "harness": {
+    "title": "Operations",
+    "core": ">=0.2.4 <0.3.0",
+    "plugins": [
+      "aiops"
+    ],
+    "app": {
+      "name": "Harness Operations",
+      "appId": "dev.harness.operations",
+      "tagline": "What needs looking at?",
+      "description": "Operations with every feature of the harness desktop app.",
+      "focus": "aiops",
+      "homeFolder": ".harness-operations"
+    }
+  },
+  "scripts": {
+    "test": "node ../../scripts/test.mjs --solution=operations",
+    "bundle": "node ../../scripts/run.mjs ../../src/plugins/cli.ts solution . --out ../../dist/solutions"
+  }
+}

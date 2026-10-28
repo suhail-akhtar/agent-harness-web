@@ -77,8 +77,8 @@ the clash. A `ui` section that does not validate contributes nothing and shows i
   only when "Also delete its data folder" is ticked.
 
 Examples: `examples/plugins/hello-frame` and `notes-frame` (frames with the SDK), `quick-links`
-(declarative only). Two real ones: `plugins/sdlc` ("Engineering": a Delivery board, a Start a feature form, a
-Quality gates panel) and `plugins/aiops` ("Operations": incidents, alerts, services, topology,
+(declarative only). Two real ones: `solutions/engineering/plugins/sdlc` ("Engineering": a Delivery board, a Start a feature form, a
+Quality gates panel) and `solutions/operations/plugins/aiops` ("Operations": incidents, alerts, services, topology,
 changes, an On call card). Both are bundled, and still frames: the path any third party takes.
 
 ### Writing a frame plugin

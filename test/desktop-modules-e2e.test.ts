@@ -22,6 +22,7 @@ import { test } from 'node:test';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { assertNotBlank, capture } from './fixtures/desktop/png.ts';
+import { pluginDir } from '../src/plugins/test-fixtures.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const desktop = path.join(root, 'apps', 'desktop');
@@ -86,7 +87,7 @@ test('plugins as modules: groups, fold and reorder, the rail, homes, palette and
     HARNESS_DESKTOP_ENGINE: path.join(root, 'test', 'fixtures', 'desktop', 'modules-engine.ts'),
     HARNESS_DESKTOP_NO_TRAY: '1',
     HARNESS_DESKTOP_DEV_PLUGINS: devPlugin(),
-    HARNESS_PLUGINS: ['quality-gates', 'sdlc', 'research', 'aiops'].map((p) => path.join(root, 'plugins', p)).join(path.delimiter),
+    HARNESS_PLUGINS: ['quality-gates', 'sdlc', 'research', 'aiops'].map((p) => pluginDir(p)).join(path.delimiter),
     HARNESS_PLUGIN_LOOPS: 'off',
     HARNESS_OPS_ALERTS_PATH: ops,
     HARNESS_OPS_ALERTS_INVESTIGATE: '0',

@@ -14,6 +14,7 @@ import { createApp } from '../src/server/app.ts';
 import { UserStore } from '../src/server/users.ts';
 import { validateUiManifest } from '../packages/plugin-ui/src/manifest.ts';
 import { FakeProvider, tempDir, testPicture } from './helpers.ts';
+import { pluginDir } from '../src/plugins/test-fixtures.ts';
 
 // The HTTP API the desktop app codes against (docs/desktop/DESIGN.md section 7): health,
 // the global event stream, providers, plugins with their UI halves, a session's files and
@@ -330,7 +331,7 @@ test('plugins: listed with validated UI halves (trust by source), a bad ui secti
   assert.match(by('wants-native').uiError, /Native UI is only for plugins signed/);
   // Every bundled plugin's ui section is valid as shipped.
   for (const n of ['research', 'quality-gates']) {
-    const m = JSON.parse(await fs.readFile(path.join(root, 'plugins', n, 'harness-plugin.json'), 'utf8'));
+    const m = JSON.parse(await fs.readFile(path.join(pluginDir(n), 'harness-plugin.json'), 'utf8'));
     assert.doesNotThrow(() => validateUiManifest(m.ui, { trustCeiling: 'native' }));
   }
   // Members see the list too (their desktop builds its UI from it).

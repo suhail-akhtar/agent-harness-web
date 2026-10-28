@@ -7,7 +7,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { duration, summarize, toRows, workedLabel, type ArtifactFile, type ArtifactRef, type Item, type Row, type ToolItem } from '@harness/client';
-import { Badge, Button, CodeBlock, DiffView, EmptyState, FencedBlock, Icon, IconButton, ImageStrip, ImageView, JsonView, Markdown, Popover, Reasoning, RenderBoundary, Spinner, Tabs, Working, VirtualList, copyRich, copyText, cx, toast, type FenceRenderer, type VirtualListHandle, type Source } from '@harness/ui';
+import { Badge, Button, CodeBlock, DiffView, EmptyState, FencedBlock, Icon, IconButton, ImageStrip, ImageView, JsonView, Markdown, Popover, Reasoning, RenderBoundary, Spinner, Tabs, Textarea, Working, VirtualList, copyRich, copyText, cx, toast, type FenceRenderer, type VirtualListHandle, type Source } from '@harness/ui';
 import { useData, client } from '../../state/data';
 import { useApp } from '../../state/app';
 import { offRendererFor, rendererFor } from '../../registry/registry';
@@ -205,9 +205,9 @@ function UserMessage({ item }: { item: Extract<Item, { kind: 'user' }> }) {
       {item.files?.length ? <div className="mb-1 flex flex-wrap justify-end gap-1">{item.files.map((f) => <Badge key={f}><Icon name="file" size={11} className="mr-1" />{f}</Badge>)}</div> : null}
       {editing ? (
         <div className="w-full max-w-[85%] rounded-2xl border border-hx-border bg-hx-elevated p-2" data-user-edit>
-          <textarea autoFocus value={draft} onChange={(e) => setDraft(e.target.value)} rows={Math.min(12, Math.max(3, draft.split('\n').length + 1))}
+          <Textarea autoFocus value={draft} onChange={(e) => setDraft(e.target.value)} rows={Math.min(12, Math.max(3, draft.split('\n').length + 1))}
             onKeyDown={(e) => { if (e.key === 'Escape') setEditing(false); if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void resend(draft); } }}
-            className="w-full resize-y rounded-lg bg-transparent px-2 py-1.5 text-[14.5px] leading-6 text-hx-primary outline-none" aria-label="Edit your message" />
+            className="resize-y border-0 bg-transparent px-2 py-1.5 text-[14.5px] leading-6 focus:ring-0" aria-label="Edit your message" />
           <div className="flex items-center gap-2 px-1 pt-1">
             <span className="flex-1 text-[11.5px] text-hx-muted">The conversation goes back to this message; what came after it is removed. Files are not changed back.</span>
             <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>

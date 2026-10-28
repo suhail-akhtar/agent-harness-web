@@ -14,15 +14,15 @@ import { createApp } from '../src/server/app.ts';
 import { UserStore } from '../src/server/users.ts';
 import type { ToolContext } from '../src/tools/types.ts';
 import { FakeProvider, tempDir } from './helpers.ts';
+import { pluginDir } from '../src/plugins/test-fixtures.ts';
 // @ts-expect-error plain JS
 const gatesLib = await import('../plugins/quality-gates/index.mjs');
 // @ts-expect-error plain JS
-const delivery = await import('../plugins/sdlc/lib/delivery.mjs');
+const delivery = await import('@harness/plugins/sdlc/lib/delivery.mjs');
 // @ts-expect-error plain JS
-const consoleLib = await import('../plugins/aiops/lib/console.mjs');
+const consoleLib = await import('@harness/plugins/aiops/lib/console.mjs');
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const PLUGINS = path.join(here, '..', 'plugins');
 const OPERATOR = 'operator-token-for-desktop-plugins';
 const until = async (f: () => boolean | Promise<boolean>, ms = 60_000) => {
   const end = Date.now() + ms;
@@ -57,22 +57,22 @@ async function serve(o: { plugins: string[]; env?: Record<string, string>; steps
 
 test('both UI halves validate as frame plugins (never native), with every entry on disk and every contribution point the journey needs', async () => {
   for (const name of ['sdlc', 'aiops']) {
-    const m = JSON.parse(await fs.readFile(path.join(PLUGINS, name, 'harness-plugin.json'), 'utf8'));
+    const m = JSON.parse(await fs.readFile(path.join(pluginDir(name), 'harness-plugin.json'), 'utf8'));
     const ui = validateUiManifest(m.ui, { trustCeiling: 'frame' });
     assert.equal(ui.trust, 'frame', `${name} is a frame plugin, the path any third party takes`);
     assert.throws(() => validateUiManifest({ ...m.ui, trust: 'native' }, { trustCeiling: 'frame' }), /signed by a key/);
-    for (const e of uiEntries(ui)) await fs.access(path.join(PLUGINS, name, e));
-    for (const f of ['ui/kit.js', 'ui/kit.css']) await fs.access(path.join(PLUGINS, name, f));
+    for (const e of uiEntries(ui)) await fs.access(path.join(pluginDir(name), e));
+    for (const f of ['ui/kit.js', 'ui/kit.css']) await fs.access(path.join(pluginDir(name), f));
     const c = ui.contributes;
     assert.ok(c.navItems.length && c.views.length && c.panels.length && c.commands.length && c.slashCommands.length && c.settings.length && c.renderers.length && c.homeCards.length, name);
     assert.ok(c.commands.some((x) => x.agent), `${name} has agent-callable commands`);
     // Frames read their own settings (settings.read): this machine's sections, and the account's (the person's choices that follow them).
     assert.deepEqual(c.settings.map((s) => s.scope).sort(), ['account', 'app'], `${name}: one section on this computer, one with the account`);
   }
-  const sdlc = validateUiManifest(JSON.parse(await fs.readFile(path.join(PLUGINS, 'sdlc', 'harness-plugin.json'), 'utf8')).ui);
+  const sdlc = validateUiManifest(JSON.parse(await fs.readFile(path.join(pluginDir('sdlc'), 'harness-plugin.json'), 'utf8')).ui);
   assert.deepEqual(sdlc.contributes.slashCommands.map((s) => s.name), ['feature', 'review', 'gates']);
   assert.deepEqual(sdlc.contributes.composerChips.map((s) => s.setting), ['sdlc.targetBranch', 'sdlc.testLevel']);
-  const aiops = validateUiManifest(JSON.parse(await fs.readFile(path.join(PLUGINS, 'aiops', 'harness-plugin.json'), 'utf8')).ui);
+  const aiops = validateUiManifest(JSON.parse(await fs.readFile(path.join(pluginDir('aiops'), 'harness-plugin.json'), 'utf8')).ui);
   assert.deepEqual(aiops.contributes.slashCommands.map((s) => s.name), ['incident', 'investigate', 'ops-check']);
   assert.equal(aiops.contributes.navItems[0]!.badge, 'aiops.open');
   assert.deepEqual(aiops.contributes.views.map((v) => v.id), ['home', 'incidents', 'alerts', 'services', 'topology', 'changes']);
@@ -81,11 +81,11 @@ test('both UI halves validate as frame plugins (never native), with every entry 
   assert.equal(sdlc.home, 'home');
   assert.equal(aiops.menu!.items.length, 5);
   assert.equal(sdlc.menu!.items.length, 3);
-  for (const p of ['sdlc', 'aiops']) await fs.access(path.join(PLUGINS, p, 'GUIDE.md'));
+  for (const p of ['sdlc', 'aiops']) await fs.access(path.join(pluginDir(p), 'GUIDE.md'));
   // Role models reach the workflows' agent nodes from their inputs.
-  const bf = JSON.parse(await fs.readFile(path.join(PLUGINS, 'sdlc', 'workflows', 'build-feature.json'), 'utf8'));
+  const bf = JSON.parse(await fs.readFile(path.join(pluginDir('sdlc'), 'workflows', 'build-feature.json'), 'utf8'));
   assert.equal(bf.nodes['code-review'].model, '{{input.reviewerModel}}');
-  const ir = JSON.parse(await fs.readFile(path.join(PLUGINS, 'aiops', 'workflows', 'incident-response.json'), 'utf8'));
+  const ir = JSON.parse(await fs.readFile(path.join(pluginDir('aiops'), 'workflows', 'incident-response.json'), 'utf8'));
   assert.equal(ir.nodes.refute.model, '{{input.refuterModel}}');
   assert.equal(ir.inputs.refuterModel.default, '');
 });
@@ -109,7 +109,7 @@ test('quality gates report test counts in their summaries, for every runner they
 });
 
 test('the delivery index follows a real build-feature run, its gates and the agent\'s own test runs; routes need a signed-in caller and show each person their own', async () => {
-  const t = await serve({ plugins: [path.join(PLUGINS, 'quality-gates'), path.join(PLUGINS, 'sdlc')] });
+  const t = await serve({ plugins: [pluginDir('quality-gates'), pluginDir('sdlc')] });
   try {
     const ws = t.work;
     await fs.writeFile(path.join(ws, 'README.md'), '# demo\n');
@@ -239,7 +239,7 @@ alerts:
 `);
   const work = await tempDir();
   const t = await serve({
-    plugins: [path.join(PLUGINS, 'aiops')],
+    plugins: [pluginDir('aiops')],
     env: { HARNESS_OPS_INVENTORY: inv, HARNESS_OPS_ALERTS_PATH: work, HARNESS_OPS_ALERTS_INVESTIGATE: '0', HARNESS_OPS_WATCH_SECONDS: '0', HARNESS_PLUGIN_LOOPS: 'off', HARNESS_OPS_LOCAL_DOCKER: '' },
   });
   try {

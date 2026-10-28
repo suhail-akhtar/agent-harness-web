@@ -26,6 +26,7 @@ import { test } from 'node:test';
 import { assertNotBlank, capture } from './fixtures/desktop/png.ts';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { pluginDir } from '../src/plugins/test-fixtures.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const desktop = path.join(root, 'apps', 'desktop');
@@ -70,7 +71,7 @@ test('plugins journey: Engineering and Operations switched on and off live, used
     HARNESS_DESKTOP_TEST: '1', ...(process.env.HARNESS_E2E_SHOW ? { HARNESS_E2E_SHOW: process.env.HARNESS_E2E_SHOW } : {}),
     HARNESS_DESKTOP_ENGINE: path.join(root, 'test', 'fixtures', 'desktop', 'plugins-engine.ts'),
     HARNESS_DESKTOP_NO_TRAY: '1',
-    HARNESS_PLUGINS: ['quality-gates', 'sdlc', 'aiops'].map((p) => path.join(root, 'plugins', p)).join(path.delimiter),
+    HARNESS_PLUGINS: ['quality-gates', 'sdlc', 'aiops'].map((p) => pluginDir(p)).join(path.delimiter),
     HARNESS_PLUGIN_LOOPS: 'off',
     HARNESS_OPS_ALERTS_PATH: ops,
     HARNESS_OPS_ALERTS_INVESTIGATE: '0',

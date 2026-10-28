@@ -22,6 +22,7 @@ import type { Tool } from '../src/tools/types.ts';
 import { clipOrSpill } from '../src/tools/types.ts';
 import { Redactor } from '../src/vault/redact.ts';
 import { FakeProvider, makeAgent, results, tempDir } from './helpers.ts';
+import { shippedPluginDirs } from '../src/plugins/shipped.ts';
 
 const until = async (f: () => boolean | Promise<boolean>, ms = 15_000) => {
   const end = Date.now() + ms;
@@ -115,9 +116,9 @@ test('deferral: a model that calls a deferred tool by its own name is served, an
 
 test('deferral in a session with bundled plugins: plugin tools wait behind load_tools, a load reaches the next request, the history keeps it after a restart', async () => {
   const data = await tempDir();
-  const plugins = path.resolve('plugins');
+  const plugins = shippedPluginDirs(path.resolve('.'));
   const fake = new FakeProvider([{ calls: [{ name: LOAD_TOOLS, input: { groups: ['visual'] } }] }, { text: 'loaded' }]);
-  const h = await createHarness({ dataDir: data, plugins: [plugins], shippedPlugins: [plugins], backgroundWork: false, scheduler: false, search: null });
+  const h = await createHarness({ dataDir: data, plugins, shippedPlugins: plugins, backgroundWork: false, scheduler: false, search: null });
   try {
     for (const id of h.registry.providers.keys()) h.registry.setProviderInstance(id, fake);
     const s = await h.sessions.create({ model: 'claude-haiku-5-5', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: await tempDir() } });

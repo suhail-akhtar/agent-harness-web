@@ -497,8 +497,8 @@ runs default to the home's data and a scratch folder each in `tmp/`.
 
 ## 20. Domain plugins as frames (sdlc, aiops)
 
-The first two domain products are plugins, not core: `plugins/sdlc` ("Engineering") and
-`plugins/aiops` ("Operations") bring their pages as **frames**, the path a third party takes; native
+The first two domain products are plugins, not core: `solutions/engineering/plugins/sdlc` ("Engineering") and
+`solutions/operations/plugins/aiops` ("Operations") bring their pages as **frames**, the path a third party takes; native
 stays for the desktop's own built-ins. What the core gained so that a frame can do real work (each
 small, each for any plugin):
 

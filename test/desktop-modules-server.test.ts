@@ -7,6 +7,7 @@ import { parseGuideMarkdown } from '../packages/plugin-ui/src/index.ts';
 import type { HarnessEvent } from '../src/core/types.ts';
 import { tempDir } from './helpers.ts';
 import { OPERATOR, record, Scripted, setupServer, turnsEnded, waitFor } from './multi-helpers.ts';
+import { pluginDir } from '../src/plugins/test-fixtures.ts';
 
 // Plugin guides in a desktop session (docs/desktop/DESIGN.md, "Plugins as modules"): one index line
 // per enabled plugin in the client block of the system prompt (the cached prefix; it changes only
@@ -35,7 +36,7 @@ const tokens = (text: string) => Math.round(text.length / 4);
 const skillEnum = (s: Scripted, key: string, i = 0) => ((s.byKey[key]![i]!.tools.find((t) => t.name === 'skill')?.input_schema as { properties: { name: { enum: string[] } } } | undefined)?.properties.name.enum ?? []);
 
 test('the guide index: one line per plugin in the client block (the server\'s own purpose for its plugins, the app\'s for its built-ins, no line for a plugin it cannot vouch for); within its token budget; guides out of <skills>', async (t) => {
-  const s = await setupServer({ plugins: SERVER.map((p) => path.join(root, 'plugins', p)) });
+  const s = await setupServer({ plugins: SERVER.map((p) => pluginDir(p)) });
   try {
     const mk = async (plugins?: unknown[]) => (await s.call(OPERATOR, 'POST', '/api/sessions', { runtime: 'local', path: await tempDir(), model: 'deepseek-flash', mode: 'bypass', client: { kind: 'desktop', version: '1', renderers: ['mermaid', 'dashboard'], tools: TOOLS, ...(plugins ? { plugins } : {}) } }));
     const bad = await mk([{ name: 'x', purpose: 'p', from: 'elsewhere' }]);
@@ -56,7 +57,7 @@ test('the guide index: one line per plugin in the client block (the server\'s ow
     await plain.send('[[p]] hello'); await waitFor(() => turnsEnded(pev) === 1, 'plain turn');
     const sys = system(s.ds, 'g');
     const lines = sys.split('\n').filter((l) => /; guide: load skill /.test(l));
-    const purpose = (p: string) => parseGuideMarkdown(fs.readFileSync(path.join(root, 'plugins', p, p === 'devops' || p === 'integrations' ? `skills/${p}-guide/SKILL.md` : 'GUIDE.md'), 'utf8')).purpose;
+    const purpose = (p: string) => parseGuideMarkdown(fs.readFileSync(path.join(pluginDir(p), p === 'devops' || p === 'integrations' ? `skills/${p}-guide/SKILL.md` : 'GUIDE.md'), 'utf8')).purpose;
     assert.deepEqual(lines, [
       `- core.agents: ${builtinGuide('core.agents')}; guide: load skill core.agents-guide`,
       `- core.artifacts: ${builtinGuide('core.artifacts')}; guide: load skill core.artifacts-guide`,
@@ -91,7 +92,7 @@ test('the guide index: one line per plugin in the client block (the server\'s ow
 });
 
 test('loading a guide: the server\'s from its plugin folder (authored + generated); the app\'s built-in through desktop_describe {plugin, guide}; switched off and on, the index line and the skill follow, the rest of the prefix stays', async () => {
-  const s = await setupServer({ plugins: SERVER.map((p) => path.join(root, 'plugins', p)), env: { HARNESS_CLIENT_CALL_MS: '5000' } });
+  const s = await setupServer({ plugins: SERVER.map((p) => pluginDir(p)), env: { HARNESS_CLIENT_CALL_MS: '5000' } });
   try {
     const a = await s.member('alice');
     const sess = await s.harness.sessions.create({ model: 'deepseek-flash', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: await tempDir() }, owner: a.id, client: { kind: 'desktop', version: '1', renderers: ['dashboard'], tools: TOOLS as never, plugins: PLUGINS as never } });

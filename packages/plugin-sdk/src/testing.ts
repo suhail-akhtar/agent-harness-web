@@ -14,6 +14,8 @@ export type { PluginTestKit, ScriptedTurn, ChatResult, RouteResult, ToolCallReco
 
 // Fixtures: plugin folders by name (pluginDir, shippedPlugins), temporary folders (removed when the test process ends), a scripted model, small PNG and GLB files.
 export { FakeProvider, glbBytes, pluginDir, pngBytes, shippedPlugins, tempDir, testPicture, type ScriptedStep } from '../../../src/plugins/test-fixtures.ts';
+// An agent with a scripted model (a tool's or a turn's test): makeAgent([{ calls: [...] }, { text: 'done' }], { tools }).
+export { makeAgent, results, type Harness as AgentHarness } from '../../../src/plugins/test-agent.ts';
 
 // A harness of its own (createHarness({ dataDir, plugins: [dir] })) and the registry a plugin loads into.
 export { createHarness, type Harness, type HarnessOptions } from '../../../src/kernel/harness.ts';
@@ -26,17 +28,24 @@ export { writeSolutionBundle, readSolutionManifest } from '../../../src/plugins/
 export { generateKeyPair, signPlugin } from '../../../src/plugins/signing.ts';
 
 // Where tools run, and what they are given.
-export { LocalHost, type ExecOptions, type ExecResult, type ToolHost } from '../../../src/runtime/host.ts';
+export { LocalHost, run, type ExecOptions, type ExecResult, type ToolHost } from '../../../src/runtime/host.ts';
 export { DockerHost, dockerAvailable, dockerDefaults, imageExists } from '../../../src/runtime/docker.ts';
-export type { ToolContext } from '../../../src/tools/types.ts';
+export type { Tool, ToolContext } from '../../../src/tools/types.ts';
 export { validateInput } from '../../../src/tools/index.ts';
 
 // Gates, skills, workflows and evals, checked as the harness checks them.
 export { formatGates, runGates } from '../../../src/gates/gates.ts';
 export { skillsIn } from '../../../src/skills/skills.ts';
 export { validateWorkflow } from '../../../src/graph/validate.ts';
-export type { WorkflowDef } from '../../../src/graph/types.ts';
-export { loadCases, runChecks } from '../../../src/eval/runner.ts';
+export type { RunRecord, WorkflowDef, WorkflowHost } from '../../../src/graph/types.ts';
+export { loadCases, runChecks, runEvals, runOne, type EvalCase } from '../../../src/eval/runner.ts';
+export { newRun, WorkflowRunner } from '../../../src/graph/runner.ts';
+
+// Permissions, the operations journal and the HTTP app, as the harness decides and serves them.
+export { decide, suggestRule, type Rules } from '../../../src/core/permissions.ts';
+export { ChangeJournal } from '../../../src/ops/changes.ts';
+export { createApp } from '../../../src/server/app.ts';
+export { defineTool } from '../../../src/plugins/api.ts';
 
 // Messages and model providers.
 export type { Block, Message } from '../../../src/core/types.ts';

@@ -1,0 +1,29 @@
+{
+  "name": "@harness/devops",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "description": "DevOps on the harness: Terraform/OpenTofu plan and an approved-plan apply, Kubernetes validate, diff, apply, rollout and undo, GitHub Actions and CI runs, with the change journal and its approvals.",
+  "license": "MIT",
+  "author": "Suhail Akhtar",
+  "homepage": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/solutions/devops",
+  "harness": {
+    "title": "DevOps",
+    "core": ">=0.2.4 <0.3.0",
+    "plugins": [
+      "devops"
+    ],
+    "app": {
+      "name": "Harness DevOps",
+      "appId": "dev.harness.devops",
+      "tagline": "What shall we ship?",
+      "description": "DevOps with every feature of the harness desktop app.",
+      "focus": "devops",
+      "homeFolder": ".harness-devops"
+    }
+  },
+  "scripts": {
+    "test": "node ../../scripts/test.mjs --solution=devops",
+    "bundle": "node ../../scripts/run.mjs ../../src/plugins/cli.ts solution . --out ../../dist/solutions"
+  }
+}

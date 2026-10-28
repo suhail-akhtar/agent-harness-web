@@ -19,6 +19,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { startOpsFixture } from './ops-fixture.ts';
+import { pluginDir } from '../../../src/plugins/test-fixtures.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..', '..', '..');
@@ -43,7 +44,7 @@ const env: Record<string, string> = {};
 for (const [k, v] of Object.entries(process.env)) if (v !== undefined && k !== 'NODE_TEST_CONTEXT') env[k] = v;
 Object.assign(env, {
   HARNESS_DESKTOP_DATA: data, HARNESS_DESKTOP_NO_TRAY: '1', HARNESS_DESKTOP_TEST: '1', ...(process.env.HARNESS_E2E_SHOW ? { HARNESS_E2E_SHOW: process.env.HARNESS_E2E_SHOW } : {}), 
-  HARNESS_PLUGINS: ['quality-gates', 'sdlc', 'aiops'].map((p) => path.join(root, 'plugins', p)).join(path.delimiter),
+  HARNESS_PLUGINS: ['quality-gates', 'sdlc', 'aiops'].map((p) => pluginDir(p)).join(path.delimiter),
   HARNESS_OPS_INVENTORY: process.env.HARNESS_LIVE_OPS_INVENTORY ?? fixture!.inventory, HARNESS_OPS_ALERTS_PATH: opsDir,
   HARNESS_OPS_ALERTS_INVESTIGATE: '0', HARNESS_OPS_WATCH_SECONDS: '0', HARNESS_PLUGIN_LOOPS: 'off',
 });

@@ -1,0 +1,29 @@
+{
+  "name": "@harness/engineering",
+  "version": "1.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Software delivery on the harness: role agents (analyst, architect, planner, engineer, reviewers, tech writer), engineering skills, and the build-a-feature workflows with their quality gates and the Deliveries board.",
+  "license": "MIT",
+  "author": "Suhail Akhtar",
+  "homepage": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/solutions/engineering",
+  "harness": {
+    "title": "Engineering",
+    "core": ">=0.2.4 <0.3.0",
+    "plugins": [
+      "sdlc"
+    ],
+    "app": {
+      "name": "Harness Engineering",
+      "appId": "dev.harness.engineering",
+      "tagline": "What shall we build?",
+      "description": "Engineering with every feature of the harness desktop app.",
+      "focus": "sdlc",
+      "homeFolder": ".harness-engineering"
+    }
+  },
+  "scripts": {
+    "test": "node ../../scripts/test.mjs --solution=engineering",
+    "bundle": "node ../../scripts/run.mjs ../../src/plugins/cli.ts solution . --out ../../dist/solutions"
+  }
+}

@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { createHarness } from '../src/kernel/harness.ts';
 import { generateKeyPair, loadTrustedKeys, signPlugin, verifyPlugin } from '../src/plugins/signing.ts';
 import { FakeProvider, tempDir } from './helpers.ts';
+import { shippedPluginDirs } from '../src/plugins/shipped.ts';
+import { pluginDir } from '../src/plugins/test-fixtures.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ACME = path.join(here, '..', 'examples', 'plugins', 'acme');
@@ -72,8 +74,8 @@ test('with a trust list, unsigned plugins are refused; signed and shipped ones l
   await fs.writeFile(path.join(unsigned, 'harness-plugin.json'), JSON.stringify({ ...mf, name: 'acme2' }));
   const logs: string[] = [];
   const h = await createHarness({
-    dataDir: await tempDir(), plugins: [path.join(here, '..', 'plugins', 'sdlc'), extra, unsignedRoot],
-    shippedPlugins: [path.join(here, '..', 'plugins')], pluginKeys: keysDir, log: (m) => logs.push(m),
+    dataDir: await tempDir(), plugins: [pluginDir('sdlc'), extra, unsignedRoot],
+    shippedPlugins: shippedPluginDirs(path.join(here, '..')), pluginKeys: keysDir, log: (m) => logs.push(m),
   });
   const by = Object.fromEntries(h.registry.plugins.map((p) => [p.name, p.signature]));
   assert.equal(by.sdlc, 'shipped with the harness');

@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createHarness } from '../src/kernel/harness.ts';
 import { FakeProvider, results, tempDir } from './helpers.ts';
+import { pluginDir } from '../src/plugins/test-fixtures.ts';
 
 // The AIOps pack against the real Key Vault (the plugins' own tests use a stand-in):
 // an operator stores a token, an agent's tool call uses it, and it never reaches the model.
@@ -26,7 +27,7 @@ test('devops ci with the real vault: the operator\'s token reaches GitHub, never
   process.env.HARNESS_PLUGIN_NETWORK = JSON.stringify({ devops: ['127.0.0.1'] });
   const token = `ghp_${'Q'.repeat(36)}`;
   const data = await tempDir();
-  const h = await createHarness({ dataDir: data, search: null, memory: 'off', scheduler: false, plugins: [path.join(root, 'plugins', 'devops')] });
+  const h = await createHarness({ dataDir: data, search: null, memory: 'off', scheduler: false, plugins: [pluginDir('devops')] });
   const fake = new FakeProvider([{ calls: [{ name: 'ci', input: { action: 'runs', repo: 'acme/shop' } }] }, { text: 'Run 42 failed.' }]);
   h.registry.setProviderInstance('deepseek', fake);
   try {
