@@ -350,7 +350,15 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
         assert.equal(await page.locator('[data-settings] [data-render-error]').count(), 0, `${id} renders`);
         if (id === 'core.settings:models') { await page.waitForSelector('[data-provider="deepseek"]'); for (const p of ['anthropic', 'moonshot', 'zai']) assert.ok(await page.locator(`[data-provider="${p}"]`).count(), `${p} is listed`); await shot('settings-models'); }
         if (id === 'notes-frame:notes') { await page.waitForSelector('[data-schema-form] [data-field="maxNotes"]'); await shot('settings-plugin-schema'); }
-        if (id === 'core.settings:appearance') await shot('settings-appearance');
+        if (id === 'core.settings:appearance') {
+          await shot('settings-appearance');
+          // The working animation: six styles, the one picked kept.
+          assert.equal(await page.locator('[data-working-styles] [data-working-choice]').count(), 6);
+          await page.click('[data-working-choice="wave"]');
+          await page.waitForFunction(async () => (await (window as unknown as { harnessDesktop: { invoke(c: string): Promise<{ working?: string }> } }).harnessDesktop.invoke('prefs:get')).working === 'wave');
+          await shot('settings-working-styles', page.locator('[data-working-styles]'));
+          await page.click('[data-working-choice="dots"]');
+        }
       }
       await page.fill('[data-settings] input[aria-label="Search settings"]', 'kimi');
       assert.deepEqual(await page.$$eval('[data-settings-section]', (els) => els.map((e) => e.getAttribute('data-settings-section'))), ['core.settings:models'], 'search finds sections by what they hold');

@@ -6,7 +6,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { Attachment, Effort, Mode } from '@harness/client';
-import { Button, EmptyState, Icon, IconButton, Input, Popover, MenuList, Spinner, Tooltip, toast, type MenuItem, Page, PageState, ListRow } from '@harness/ui';
+import { Button, EmptyState, Icon, IconButton, Input, Popover, MenuList, Spinner, Tooltip, Working, toast, type MenuItem, Page, PageState, ListRow } from '@harness/ui';
 import { useApp, openSession, navigate, setCrumb } from '../../state/app';
 import { useData, client, clientInfo, notePluginsTold, syncClientPlugins } from '../../state/data';
 import { desktop, scratchFolder } from '../../bridge';
@@ -136,6 +136,7 @@ export function Session({ params }: { params: Record<string, string> }): React.R
   const [think, setThink] = useState(false);
   const [sources, setSources] = useState<Array<{ n: number; url: string; title?: string; snippet?: string }>>([]);
   const running = s.status !== 'idle';
+  const workingPref = useApp((x) => x.prefs.working);
   const spec = models.find((m) => m.id === s.meta?.model);
   const value: ComposerValue = { model: s.meta?.model ?? '', effort: s.meta?.effort, mode: s.meta?.mode ?? 'default', think };
   useEffect(() => { void desktop.busy(running); }, [running]);
@@ -195,7 +196,7 @@ export function Session({ params }: { params: Record<string, string> }): React.R
         </div>
       )}
       {running && !s.pending.length && (
-        <div className="mx-auto flex w-full max-w-column items-center gap-2 px-6 pb-1 text-[12px] text-hx-muted" data-working><Spinner size={12} className="text-hx-accent-text" />Working… <span className="text-hx-muted/70">Enter steers, Queue waits for the end</span></div>
+        <div className="mx-auto flex w-full max-w-column items-center gap-2 px-6 pb-1 text-[12px] text-hx-muted" data-working><Working style={workingPref} className="text-hx-accent-text" />Working… <span className="text-hx-muted/70">Enter steers, Queue waits for the end</span></div>
       )}
       <Composer draftKey={`s:${id}`} value={value} onChange={(v) => void patch(v)} onSend={send} running={running} onStop={stop} sessionId={id} queued={queue} onUnqueue={(i) => setQueue((q) => q.filter((_, j) => j !== i))} autoFocus />
     </div>

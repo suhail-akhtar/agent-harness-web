@@ -3,7 +3,7 @@
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Badge, Button, Field, Icon, IconButton, Input, Kbd, Select, Switch, Spinner, cx, toast, InfoNote, Page } from '@harness/ui';
+import { Badge, Button, Field, Icon, IconButton, Input, Kbd, Select, Switch, Spinner, cx, toast, InfoNote, Page, Working, WORKING_STYLES } from '@harness/ui';
 import { useApp } from '../../state/app';
 import { useData, client } from '../../state/data';
 import { allThemes } from '../../state/theme';
@@ -52,6 +52,16 @@ export function Appearance(): React.ReactElement {
         <Field label="Transcript width" inline><Select value={prefs.transcriptWidth} onChange={(v) => set({ transcriptWidth: v as DesktopPrefs['transcriptWidth'] })} options={[{ value: 'normal', label: 'Normal' }, { value: 'wide', label: 'Wide' }, { value: 'full', label: 'Full width' }]} className="w-40" /></Field>
         <Field label="Interface font"><Input value={prefs.uiFont} onChange={(e) => set({ uiFont: e.target.value })} /></Field>
         <Field label="Code font"><Input className="font-mono" value={prefs.codeFont} onChange={(e) => set({ codeFont: e.target.value })} /></Field>
+        <Field label="While the agent works" help="The animation on the jump-to-latest button and over the composer; hovering the button shows the arrow.">
+          <div className="grid grid-cols-3 gap-2 pt-1 sm:grid-cols-6" role="radiogroup" aria-label="Working animation" data-working-styles>
+            {WORKING_STYLES.map((w) => (
+              <button key={w.id} type="button" role="radio" aria-checked={(prefs.working ?? 'dots') === w.id} data-working-choice={w.id} onClick={() => set({ working: w.id })}
+                className={cx('flex flex-col items-center gap-2 rounded-xl border px-2 py-3 text-[11.5px]', (prefs.working ?? 'dots') === w.id ? 'border-hx-accent text-hx-primary ring-2 ring-hx-accent/35' : 'border-hx-border-subtle text-hx-secondary hover:border-hx-border')}>
+                <span className="flex h-5 items-center"><Working style={w.id} label={w.label} /></span>{w.label}
+              </button>
+            ))}
+          </div>
+        </Field>
         <Field label="Reduce motion" inline><Switch checked={prefs.motion === 'reduced'} onChange={(v) => set({ motion: v ? 'reduced' : 'system' })} label="Reduce motion" /></Field>
       </Section>
     </div>

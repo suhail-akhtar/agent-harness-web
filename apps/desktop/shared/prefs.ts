@@ -23,6 +23,8 @@ export interface DesktopPrefs {
   sendKey: 'enter' | 'mod-enter';
   /** Tool steps under "Worked for ...": folded or open. */
   steps: 'collapsed' | 'expanded';
+  /** How "the agent is working" is drawn: the jump-to-latest button while it works, and the line over the composer. */
+  working: 'dots' | 'typing' | 'wave' | 'orbit' | 'pulse' | 'comet';
   notifications: boolean;
   startAtLogin: boolean;
   keepInTray: boolean;
@@ -67,6 +69,7 @@ export const DEFAULT_PREFS: DesktopPrefs = {
   motion: 'system',
   sendKey: 'enter',
   steps: 'collapsed',
+  working: 'dots',
   notifications: true,
   startAtLogin: false,
   keepInTray: false,

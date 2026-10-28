@@ -8,6 +8,7 @@ export * from './components/toast.tsx';
 export * from './components/SchemaForm.tsx';
 export * from './components/VirtualList.tsx';
 export * from './components/Resizable.tsx';
+export * from './components/Working.tsx';
 export { Markdown, FencedBlock, slugify, type FenceRenderer, type MarkdownProps } from './render/Markdown.tsx';
 export { CodeBlock } from './render/CodeBlock.tsx';
 export { Diagram } from './render/Diagram.tsx';

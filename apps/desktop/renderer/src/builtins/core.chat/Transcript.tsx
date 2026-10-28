@@ -7,7 +7,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { duration, summarize, toRows, workedLabel, type ArtifactFile, type ArtifactRef, type Item, type Row, type ToolItem } from '@harness/client';
-import { Badge, Button, CodeBlock, DiffView, EmptyState, FencedBlock, Icon, IconButton, ImageStrip, ImageView, JsonView, Markdown, Popover, Reasoning, RenderBoundary, Spinner, Tabs, VirtualList, copyRich, copyText, cx, toast, type FenceRenderer, type VirtualListHandle, type Source } from '@harness/ui';
+import { Badge, Button, CodeBlock, DiffView, EmptyState, FencedBlock, Icon, IconButton, ImageStrip, ImageView, JsonView, Markdown, Popover, Reasoning, RenderBoundary, Spinner, Tabs, Working, VirtualList, copyRich, copyText, cx, toast, type FenceRenderer, type VirtualListHandle, type Source } from '@harness/ui';
 import { useData, client } from '../../state/data';
 import { useApp } from '../../state/app';
 import { offRendererFor, rendererFor } from '../../registry/registry';
@@ -39,6 +39,7 @@ export function Transcript({ sessionId, items, running, onRetry, sources, footer
   const lastAnswerKey = useMemo(() => { for (let i = rows.length - 1; i >= 0; i--) { const r = rows[i]!; if (r.kind === 'item' && r.item.kind === 'assistant') return r.key; } return ''; }, [rows]);
   const fence = useFenceRenderer();
   const stepsPref = useApp((s) => s.prefs.steps);
+  const workingStyle = useApp((s) => s.prefs.working);
   const chapters = useMemo(() => rows.flatMap((r) => (r.kind === 'item' && r.item.kind === 'chapter' ? [{ key: r.key, index: r.item.index, title: r.item.title, summary: r.item.summary }] : [])), [rows]);
   if (!rows.length) return <div className="flex flex-1 items-center justify-center"><EmptyState icon="chat" title="Nothing here yet">Send a message to start.</EmptyState></div>;
   return (
@@ -60,9 +61,15 @@ export function Transcript({ sessionId, items, running, onRetry, sources, footer
         )}
       />
       {!atBottom && (
-        <button type="button" data-jump-latest aria-label="Jump to the latest" onClick={() => list.current?.scrollToBottom(true)}
-          className="absolute bottom-3 left-1/2 flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full border border-hx-border bg-hx-elevated text-hx-secondary shadow-md hover:text-hx-primary">
-          <Icon name="arrow-down" size={16} />
+        // While the agent works: its "working" animation, the arrow on hover or focus; a click goes to the latest.
+        <button type="button" data-jump-latest data-working={running ? '1' : '0'} aria-label={running ? 'The agent is working: jump to the latest' : 'Jump to the latest'} title={running ? 'Working… click to jump to the latest' : 'Jump to the latest'} onClick={() => list.current?.scrollToBottom(true)}
+          className={cx('group/jump absolute bottom-3 left-1/2 flex h-9 -translate-x-1/2 items-center justify-center rounded-full border border-hx-border bg-hx-elevated text-hx-secondary shadow-md transition-[width] hover:text-hx-primary', running ? 'w-12' : 'w-9')}>
+          {running ? (
+            <>
+              <Working style={workingStyle} className="group-hover/jump:hidden group-focus-visible/jump:hidden" label="Working" />
+              <Icon name="arrow-down" size={16} className="hidden group-hover/jump:block group-focus-visible/jump:block" />
+            </>
+          ) : <Icon name="arrow-down" size={16} />}
         </button>
       )}
     </div>
