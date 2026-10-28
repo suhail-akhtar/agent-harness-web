@@ -213,7 +213,7 @@ export interface PluginSessions {
    * no such pending request. Refused for a session outside the plugin's reach (see README) and
    * for allowing a tool call the session's deny rules cover.
    */
-  respond(id: string, requestId: string, d: { decision: 'approve' | 'reject' | 'allow' | 'deny' | 'answer'; feedback?: string; answer?: string; by: string }): Promise<boolean>;
+  respond(id: string, requestId: string, d: { decision: 'approve' | 'reject' | 'allow' | 'deny' | 'answer' | 'reply'; feedback?: string; answer?: string; by: string }): Promise<boolean>;
   get(id: string): { id: string; title: string; owner?: string; status: string } | undefined;
 }
 

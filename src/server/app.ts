@@ -1546,7 +1546,8 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         const b = await readJson(req);
         // A question with a form takes its answer as an object (or its JSON), checked against the form.
         let answer: string | undefined;
-        try { answer = s.formAnswer(String(b.requestId), b.answer); } catch (e) { if (e instanceof FormAnswerError) throw new HttpError(400, e.message); throw e; }
+        // No answer (skipped, or a reply in words instead of the form): nothing to check.
+        if (b.answer !== undefined) try { answer = s.formAnswer(String(b.requestId), b.answer); } catch (e) { if (e instanceof FormAnswerError) throw new HttpError(400, e.message); throw e; }
         let ok: boolean;
         try { ok = s.respond(String(b.requestId), { decision: String(b.decision ?? 'deny'), feedback: typeof b.feedback === 'string' ? b.feedback : undefined, answer }); } catch (e) { if (e instanceof FormAnswerError) throw new HttpError(400, e.message); throw e; }
         return send(res, ok ? 200 : 404, { ok });

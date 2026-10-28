@@ -177,7 +177,7 @@ export function createBridge(o: { registry: Registry; dataDir: string; sessions:
         if (refused) { await audit({ plugin, action: 'respond', session: id, requestId, decision: d.decision, by, result: 'refused', reason: refused }); throw new Error(refused); }
         const ev = s.pendingRequests().find((e) => (e as { requestId?: string }).requestId === requestId);
         if (!ev) return false;
-        const allowed: Record<string, string[]> = { permission_request: ['allow', 'deny'], approval_request: ['approve', 'reject'], plan_proposed: ['approve', 'reject'], question: ['answer', 'deny'] };
+        const allowed: Record<string, string[]> = { permission_request: ['allow', 'deny'], approval_request: ['approve', 'reject'], plan_proposed: ['approve', 'reject'], question: ['answer', 'reply', 'deny'] };
         if (!(allowed[ev.kind] ?? []).includes(d.decision)) throw new Error(`a ${ev.kind} is answered with ${(allowed[ev.kind] ?? []).join(' or ')}, not "${d.decision}"`);
         if (ev.kind === 'permission_request' && d.decision === 'allow') {
           const denied = s.deniedByRules(requestId);

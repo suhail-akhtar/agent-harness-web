@@ -10,6 +10,9 @@ import type { ToolHost, ToolOutcome } from '../runtime/host.ts';
  */
 export type ToolKind = 'read' | 'edit' | 'exec' | 'network' | 'external' | 'meta';
 
+/** What the person did with a question (ask_user). */
+export type AskOutcome = { answered: string; note?: string } | { replied: string } | { skipped: true; note?: string };
+
 export interface FileStamp { mtimeMs: number; size: number }
 
 /** Harness services a tool may use; absent ones are turned off. */
@@ -82,7 +85,11 @@ export interface ToolContext {
   /** Called with a file's real path before a tool changes it (checkpoints for rewind). */
   beforeWrite?(realPath: string): Promise<void>;
   /** With `form` (a JSON Schema the session checked), the answer is the filled-in object as JSON. */
-  askUser?(question: string, options: string[], form?: Record<string, unknown>): Promise<string>;
+  /**
+   * Asks the person; resolves with what they did: answered (the option, the text or the form's JSON, and a
+   * note if they added one), replied in their own words instead, or skipped the question.
+   */
+  askUser?(question: string, options: string[], form?: Record<string, unknown>, choices?: import('../core/types.ts').QuestionChoice[]): Promise<string | AskOutcome>;
   proposePlan?(plan: string): Promise<{ approved: boolean; feedback?: string }>;
   isPlanMode?(): boolean;
   /** Switches the session into plan mode (the main agent only); refused where nobody could approve a plan. */

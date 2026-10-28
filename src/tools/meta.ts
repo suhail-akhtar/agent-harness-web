@@ -1,5 +1,6 @@
 import { type JsonSchema, validateFormSchema } from '../../packages/plugin-ui/src/manifest.ts';
 import { regex } from './tasks.ts';
+import type { QuestionChoice } from '../core/types.ts';
 import type { Tool } from './types.ts';
 import { str } from './types.ts';
 
@@ -12,25 +13,52 @@ export const askUserTool: Tool = {
   kind: 'meta', parallelSafe: false, remoteable: false,
   spec: {
     name: 'ask_user',
-    description: 'Ask the user a question when you are blocked on a decision only they can make (a preference, a missing requirement). Offer 2-4 options when you can. Do not ask for things you can find out yourself.',
+    description: 'Ask the user a decision only they can make. One short question, 2-4 options (mark the recommended one). A form only for multi-part answers: enum = one choice, array of enum items = several, examples = suggestions, default = the safe choice. They may reply in words or skip.',
     input_schema: {
       type: 'object',
-      properties: { question: { type: 'string' }, options: { type: 'array', items: { type: 'string' } }, form: { type: 'object', description: 'JSON Schema of fields to fill in; the answer is JSON.' } },
+      properties: {
+        question: { type: 'string' },
+        options: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, description: { type: 'string' }, recommended: { type: 'boolean' } }, required: ['label'] } },
+        form: { type: 'object', description: 'JSON Schema of fields; the answer is their JSON.' },
+      },
       required: ['question'],
     },
   },
   summarize: (i) => `ask: ${str(i.question)}`,
   async run(input, ctx) {
     if (!ctx.askUser) return { content: 'No user is available to answer. Decide sensibly, state the assumption, and continue.', is_error: true };
-    const options = Array.isArray(input.options) ? input.options.filter((o): o is string => typeof o === 'string').slice(0, 6) : [];
+    const choices = choicesOf(input.options);
     let form: Record<string, unknown> | undefined;
     if (input.form !== undefined) {
       try { form = checkForm(input.form); } catch (e) { return { content: `form is not usable: ${(e as Error).message}`, is_error: true }; }
     }
-    const answer = await ctx.askUser(str(input.question), options, form);
-    return { content: `The user answered: ${answer}` };
+    const question = str(input.question).trim();
+    if (!question) return { content: 'question is empty: say what you need the user to decide.', is_error: true };
+    const r = await ctx.askUser(question, choices.map((c) => c.label), form, choices.some((c) => c.description || c.recommended) ? choices : undefined);
+    if (typeof r === 'string') return { content: `The user answered: ${r}` };
+    if ('skipped' in r) return { content: `The user skipped this question${r.note ? ` and said: ${r.note}` : ''}. Do not ask it again: decide sensibly, say what you assumed, and continue (or stop if going on without an answer is unsafe).` };
+    if ('replied' in r) return { content: `The user did not pick a suggested answer${form ? ' or fill in the form' : ''}; they wrote: ${r.replied}\nTake it as their answer, or as new instructions if it asks for something else.` };
+    return { content: `The user answered: ${r.answered}${r.note ? `\nTheir note: ${r.note}` : ''}` };
   },
 };
+
+/** The suggested answers: labels, or { label, description, recommended }; at most six, the recommended one first. */
+function choicesOf(raw: unknown): QuestionChoice[] {
+  if (!Array.isArray(raw)) return [];
+  const out: QuestionChoice[] = [];
+  for (const o of raw) {
+    if (typeof o === 'string' && o.trim()) out.push({ label: o.trim().slice(0, 200) });
+    else if (o && typeof o === 'object' && typeof (o as { label?: unknown }).label === 'string' && (o as { label: string }).label.trim()) {
+      const x = o as { label: string; description?: unknown; recommended?: unknown };
+      out.push({ label: x.label.trim().slice(0, 200), ...(typeof x.description === 'string' && x.description.trim() ? { description: x.description.trim().slice(0, 500) } : {}), ...(x.recommended === true ? { recommended: true } : {}) });
+    }
+  }
+  const seen = new Set<string>();
+  const unique = out.filter((c) => !seen.has(c.label) && seen.add(c.label));
+  let marked = false;
+  for (const c of unique) { if (c.recommended && marked) delete c.recommended; if (c.recommended) marked = true; }
+  return [...unique.filter((c) => c.recommended), ...unique.filter((c) => !c.recommended)].slice(0, 6);
+}
 
 /** A form schema an agent wrote: the plugin-ui subset, and every pattern one that cannot stall the server. */
 function checkForm(raw: unknown): Record<string, unknown> {

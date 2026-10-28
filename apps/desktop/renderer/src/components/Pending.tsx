@@ -3,12 +3,11 @@
  * Drawn in the chat's attention bar and in the inbox; answering posts to the session.
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import { isMissing, type PendingRequest } from '@harness/client';
-import type { JsonSchema } from '@harness/plugin-ui';
-import { ActionPanel, Button, CodeBlock, DiffView, Input, Markdown, SchemaForm, Textarea, cx, toast, validate, withDefaults } from '@harness/ui';
+import { ActionPanel, Button, CodeBlock, DiffView, Input, Markdown, Textarea, cx, toast } from '@harness/ui';
 import { client, useData } from '../state/data';
-import { desktop } from '../bridge';
+import { QuestionCard } from './Question';
 import { updateSession } from '../builtins/core.chat/live';
 
 export type Respond = (b: { requestId: string; decision: string; feedback?: string; answer?: string | Record<string, unknown> }) => Promise<void>;
@@ -20,38 +19,15 @@ export function respondFor(sessionId: string): Respond {
     const drop = () => updateSession(sessionId, (s) => ({ ...s, pending: s.pending.filter((p) => p.requestId !== b.requestId) }));
     try {
       const r = await client.sessions.respond(sessionId, b);
-      if (!r.ok) { drop(); toast('That request was already answered or closed.', { kind: 'warning' }); }
+      // Answered: off the conversation at once (as in the inbox), not only when the stream says so.
+      drop();
+      if (!r.ok) toast('That request was already answered or closed.', { kind: 'warning' });
     } catch (e) {
       // 404: the request is gone (answered elsewhere, or its turn was stopped): close the card rather than show the status.
       if (isMissing(e)) { drop(); toast('That request was already answered or closed.', { kind: 'warning' }); return; }
       toast((e as Error).message, { kind: 'error' }); void useData.getState().refreshApprovals();
     }
   };
-}
-
-/** ask_user with a form: the JSON Schema drawn as a native form; the answer is the filled-in object (the server checks it again). */
-function FormQuestion({ p, busy, onSubmit }: { p: Extract<PendingRequest, { kind: 'question' }>; busy: boolean; onSubmit: (answer: Record<string, unknown>) => void }) {
-  const schema = p.form as unknown as JsonSchema;
-  const [value, setValue] = useState<Record<string, unknown>>(() => (withDefaults(schema, {}) as Record<string, unknown>) ?? {});
-  const [tried, setTried] = useState(false);
-  const errors = useMemo(() => validate(schema, value), [schema, value]);
-  const submit = () => {
-    setTried(true);
-    if (Object.keys(errors).length) return;
-    // Empty optional fields are left out (the form's schema refuses unknown fields, never missing optional ones).
-    const clean = Object.fromEntries(Object.entries(value).filter(([, v]) => v !== '' && v !== undefined && v !== null));
-    onSubmit(clean);
-  };
-  return (
-    <div data-question-form>
-      <div className="text-[13.5px] font-medium text-hx-primary">{p.question}</div>
-      {schema.description && <p className="mt-0.5 text-[12.5px] text-hx-muted">{schema.description}</p>}
-      <div className="mt-2 rounded-lg border border-hx-border-subtle bg-hx-bg px-3"><SchemaForm schema={schema} value={value} onChange={setValue} showAllErrors={tried} pickPath={() => desktop.openFolder()} idPrefix={`q-${p.requestId.slice(0, 8)}`} /></div>
-      <div className="mt-2 flex justify-end gap-2">
-        <Button size="sm" variant="primary" disabled={busy} data-submit-form onClick={submit}>Send</Button>
-      </div>
-    </div>
-  );
 }
 
 const KIND_LABEL: Record<PendingRequest['kind'], { icon: string; label: string }> = {
@@ -63,7 +39,6 @@ const KIND_LABEL: Record<PendingRequest['kind'], { icon: string; label: string }
 
 export function PendingCard({ p, respond, compact }: { p: PendingRequest; respond: Respond; compact?: boolean }): React.ReactElement {
   const [feedback, setFeedback] = useState('');
-  const [answer, setAnswer] = useState('');
   const [file, setFile] = useState(0);
   const [busy, setBusy] = useState(false);
   const go = (b: Parameters<Respond>[0]) => { setBusy(true); void respond(b).finally(() => setBusy(false)); };
@@ -91,19 +66,8 @@ export function PendingCard({ p, respond, compact }: { p: PendingRequest; respon
         </div>
       </>
     );
-  } else if (p.kind === 'question' && p.form && typeof p.form === 'object') {
-    body = <FormQuestion p={p} busy={busy} onSubmit={(answer) => go({ requestId: p.requestId, decision: 'answer', answer })} />;
   } else if (p.kind === 'question') {
-    title = p.question;
-    body = <div className="flex flex-wrap gap-2 py-1">{p.options.map((o) => <Button key={o} size="sm" disabled={busy} onClick={() => go({ requestId: p.requestId, decision: 'answer', answer: o })}>{o}</Button>)}</div>;
-    actions = (
-      <>
-        <div className="flex gap-2">
-          <Input className="h-7 text-[12.5px]" placeholder="Or type an answer" value={answer} onChange={(e) => setAnswer(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && answer.trim()) go({ requestId: p.requestId, decision: 'answer', answer }); }} />
-          <Button size="sm" variant="primary" disabled={busy || !answer.trim()} onClick={() => go({ requestId: p.requestId, decision: 'answer', answer })}>Answer</Button>
-        </div>
-      </>
-    );
+    return <QuestionCard p={p} respond={respond} />;
   } else if (p.kind === 'plan_proposed') {
     title = 'The agent proposes this plan';
     body = <Markdown text={p.plan} />;

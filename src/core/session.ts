@@ -23,7 +23,7 @@ import type { ToolHost } from '../runtime/host.ts';
 import { LocalHost, run } from '../runtime/host.ts';
 import { clientSkills, makeSkillTool, type Skill, skillsIn, skillsListing, workspaceSkills } from '../skills/skills.ts';
 import { sortTools } from '../tools/index.ts';
-import type { FileStamp, Tool, ToolServices } from '../tools/types.ts';
+import type { AskOutcome, FileStamp, Tool, ToolServices } from '../tools/types.ts';
 import { loadedGroups, pluginGroups, sentSpecs, type ToolGroup } from '../tools/deferred.ts';
 import { SpillStore } from '../tools/spill.ts';
 import type { ToolSpec } from '../providers/types.ts';
@@ -43,7 +43,7 @@ import { costOf } from './models.ts';
 import { loadInstructions, workspaceReader } from './instructions.ts';
 import { environmentBlock, firstMessageText, resolveOutputStyle, SUBAGENT_PROMPT, systemPrompt } from './prompt.ts';
 import { applyUserSettings, loadProjectSettings, loadUserInstructions, loadUserSettings, mergeSettings, operatorSettings, type Settings } from './settings.ts';
-import type { HarnessEvent, ImageBlock, Message, PermissionMode, SessionStatus, Todo, ToolUseBlock, TurnEndReason, Usage, WorkflowRunView } from './types.ts';
+import type { HarnessEvent, QuestionChoice, ImageBlock, Message, PermissionMode, SessionStatus, Todo, ToolUseBlock, TurnEndReason, Usage, WorkflowRunView } from './types.ts';
 import { addUsage, emptyUsage } from './types.ts';
 import type { LeaseRecord, Leases } from '../util/lease.ts';
 import { readJson, withFileLock, writeFileAtomic } from '../util/shared-file.ts';
@@ -1598,7 +1598,7 @@ export class Session {
       injectionCheck: this.injectionCheck(settings),
       progressReviewer: this.progressReviewer(settings),
       runSubagent: (a: SubagentArgs) => this.runSubagent(a, 1, this.agent),
-      askUser: (q: string, o: string[], form?: Record<string, unknown>) => this.ask(q, o, form),
+      askUser: (q: string, o: string[], form?: Record<string, unknown>, choices?: QuestionChoice[]) => this.ask(q, o, form, choices),
       proposePlan: (p: string) => this.proposePlan(p),
       enterPlanMode: (reason: string) => this.enterPlanMode(reason),
       beforeWrite: this.checkpoints ? (p: string) => this.checkpoints!.before(p) : undefined,
@@ -2482,9 +2482,15 @@ export class Session {
     return { allow: false, feedback: r.feedback };
   }
 
-  private async ask(question: string, options: string[], form?: Record<string, unknown>): Promise<string> {
-    const r = await this.request('question', { kind: 'question', requestId: crypto.randomUUID(), question, options, ...(form ? { form } : {}) });
-    return r.answer?.trim() || r.feedback || '(no answer)';
+  private async ask(question: string, options: string[], form?: Record<string, unknown>, choices?: QuestionChoice[]): Promise<AskOutcome> {
+    const r = await this.request('question', { kind: 'question', requestId: crypto.randomUUID(), question, options, ...(choices?.length ? { choices } : {}), ...(form ? { form } : {}) });
+    const note = r.feedback?.trim() || undefined;
+    // Skipped (or a turn stopped while it waited), in their own words instead, or answered (with a note).
+    if (r.decision === 'deny') return { skipped: true, ...(note ? { note } : {}) };
+    if (r.decision === 'reply' && note) return { replied: note };
+    const answered = r.answer?.trim();
+    if (!answered) return note ? { replied: note } : { skipped: true };
+    return { answered, ...(note ? { note } : {}) };
   }
 
   /**

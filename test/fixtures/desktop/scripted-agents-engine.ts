@@ -77,7 +77,16 @@ const SCRIPTS: Record<string, Script> = {
     (r) => ({ text: `Done. The app answered: ${r.slice(-1)[0]?.slice(0, 80) ?? ''}` }),
   ],
   form: [
-    { calls: [{ name: 'ask_user', input: { question: 'Who is the release for?', options: [], form: { type: 'object', properties: { name: { type: 'string', title: 'Name', minLength: 1 }, seats: { type: 'integer', title: 'Seats', minimum: 1, maximum: 50, default: 3 }, plan: { type: 'string', enum: ['team', 'enterprise'], default: 'team' } }, required: ['name'] } } }] },
+    { calls: [{ name: 'ask_user', input: {
+      question: 'Who is the release for?',
+      options: [{ label: 'The core team', description: 'Team plan, 3 seats, Europe: what it was last time', recommended: true }, { label: 'Decide for me', description: 'Go on with sensible defaults; change them later' }],
+      form: { type: 'object', properties: {
+        name: { type: 'string', title: 'Name', description: 'Who receives the release', minLength: 1, examples: ['Ada Lovelace', 'Grace Hopper'] },
+        seats: { type: 'integer', title: 'Seats', minimum: 1, maximum: 50, default: 3 },
+        plan: { type: 'string', title: 'Plan', enum: ['team', 'enterprise'], enumLabels: ['Team', 'Enterprise'], default: 'team' },
+        regions: { type: 'array', title: 'Regions', description: 'Where it is rolled out', items: { type: 'string', enum: ['eu', 'us', 'apac'], enumLabels: ['Europe', 'United States', 'Asia-Pacific'] }, default: ['eu'] },
+      }, required: ['name'] },
+    } }] },
     (r) => { let who = '?'; try { who = (JSON.parse(r.at(-1) ?? '{}') as { name?: string }).name ?? '?'; } catch { who = r.at(-1) ?? '?'; } return { text: `Thanks: the release is for **${who}**.` }; },
   ],
   delegate: [

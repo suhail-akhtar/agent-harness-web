@@ -83,7 +83,12 @@ function SchemaField({ path, name, schema: s, root, set, errors, show, disabled,
       </div>
     ); break;
     case 'list': control = <ListInput id={id} schema={s} value={Array.isArray(v) ? v : []} onChange={(x) => set(path, x)} disabled={disabled} />; break;
-    default: control = <Input {...common} type={w === 'email' ? 'email' : w === 'url' ? 'url' : 'text'} value={typeof v === 'string' ? v : v === undefined ? '' : String(v)} placeholder={s.default !== undefined ? String(s.default) : undefined} onChange={(e) => set(path, e.target.value)} invalid={!!error} />;
+    default: control = (
+      <div className="flex flex-col gap-1.5">
+        <Input {...common} type={w === 'email' ? 'email' : w === 'url' ? 'url' : 'text'} value={typeof v === 'string' ? v : v === undefined ? '' : String(v)} placeholder={s.default !== undefined ? String(s.default) : undefined} onChange={(e) => set(path, e.target.value)} invalid={!!error} />
+        {s.examples && s.examples.length > 0 && <Suggestions values={s.examples.map(String)} chosen={(x) => String(v ?? '') === x} disabled={disabled} onPick={(x) => set(path, x)} />}
+      </div>
+    );
   }
   return (
     <div data-field={path}>
@@ -105,10 +110,45 @@ export function SecretInput({ value, onChange, ...rest }: { value: string; onCha
   );
 }
 
+/** Suggested values as chips: a click fills the field in (or adds to a list); the chosen ones are marked. */
+function Suggestions({ values, chosen, onPick, disabled }: { values: string[]; chosen: (v: string) => boolean; onPick: (v: string) => void; disabled?: boolean }): React.ReactElement {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5" data-suggestions>
+      <span className="text-[11.5px] text-hx-muted">Suggestions:</span>
+      {values.map((x) => (
+        <button key={x} type="button" disabled={disabled || chosen(x)} data-suggestion={x} onClick={() => onPick(x)}
+          className={cx('rounded-full border px-2 py-0.5 text-[12px]', chosen(x) ? 'border-hx-accent/40 bg-hx-accent-soft text-hx-accent-text' : 'border-hx-border-subtle text-hx-secondary hover:border-hx-accent/40 hover:text-hx-primary')}>{x}</button>
+      ))}
+    </div>
+  );
+}
+
 function ListInput({ id, schema, value, onChange, disabled }: { id: string; schema: JsonSchema; value: unknown[]; onChange: (v: unknown[]) => void; disabled?: boolean }): React.ReactElement {
   const [draft, setDraft] = useState('');
   const item = schema.items ?? { type: 'string' };
-  const add = () => { const t = draft.trim(); if (!t) return; onChange([...value, coerce(item, t)]); setDraft(''); };
+  // A list of known choices: each one ticked or not (no typing).
+  if (item.enum && item.enum.length) {
+    const has = (o: string) => value.map(String).includes(o);
+    return (
+      <div className="flex flex-col gap-1" role="group" aria-label={schema.title} data-choices>
+        {optionLabels(item).map((o) => (
+          <label key={o.value} className={cx('flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-[13px]', has(o.value) ? 'bg-hx-accent-soft/60 text-hx-primary' : 'hover:bg-hx-hover')} data-choice={o.value}>
+            <input type="checkbox" className="h-3.5 w-3.5 accent-[var(--hx-accent)]" disabled={disabled} checked={has(o.value)}
+              onChange={(e) => onChange(e.target.checked ? [...value, coerce(item, o.value)] : value.filter((x) => String(x) !== o.value))} />
+            {o.label}
+          </label>
+        ))}
+        {item.enum.length > 3 && (
+          <div className="flex gap-3 px-2 pt-0.5 text-[12px]">
+            <button type="button" disabled={disabled} className="text-hx-accent-text hover:underline" onClick={() => onChange(item.enum!.map((x) => x))}>Select all</button>
+            <button type="button" disabled={disabled} className="text-hx-muted hover:underline" onClick={() => onChange([])}>Clear</button>
+          </div>
+        )}
+      </div>
+    );
+  }
+  const add = (raw = draft) => { const t = raw.trim(); if (!t || value.map(String).includes(t)) { setDraft(''); return; } onChange([...value, coerce(item, t)]); setDraft(''); };
+  const suggestions = (schema.examples ?? item.examples ?? []).map(String);
   return (
     <div className="flex flex-col gap-1.5">
       {value.length > 0 && (
@@ -122,9 +162,11 @@ function ListInput({ id, schema, value, onChange, disabled }: { id: string; sche
         </div>
       )}
       <div className="flex gap-2">
-        <Input id={id} disabled={disabled} value={draft} placeholder="Add an item" onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } }} />
-        <Button disabled={disabled || !draft.trim()} onClick={add}>Add</Button>
+        {/* What is typed counts once the field is left (no Add needed): an answer is never lost to a missed click. */}
+        <Input id={id} disabled={disabled} value={draft} placeholder="Type an item and press Enter" onChange={(e) => setDraft(e.target.value)} onBlur={() => add()} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } }} />
+        <Button disabled={disabled} onClick={() => add()}>Add</Button>
       </div>
+      {suggestions.length > 0 && <Suggestions values={suggestions} chosen={(x) => value.map(String).includes(x)} disabled={disabled} onPick={(x) => add(x)} />}
     </div>
   );
 }

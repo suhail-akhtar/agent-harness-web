@@ -109,7 +109,7 @@ export type HarnessEvent =
   | { kind: 'tool_result'; id: string; name: string; content: string; is_error: boolean; display?: ToolDisplay; ms: number; agent?: string; images?: ImageData[] }
   | { kind: 'permission_request'; requestId: string; tool: string; summary: string; input: Record<string, unknown>; suggestion?: string; agent?: string }
   /** `form`: a JSON Schema the answer fills in (an object); `agent`: a sub-agent asked. */
-  | { kind: 'question'; requestId: string; question: string; options: string[]; form?: Record<string, unknown>; agent?: string }
+  | { kind: 'question'; requestId: string; question: string; options: string[]; /** The suggested answers with what each does, the recommended one first. */ choices?: Array<{ label: string; description?: string; recommended?: boolean }>; form?: Record<string, unknown>; agent?: string }
   | { kind: 'plan_proposed'; requestId: string; plan: string }
   | { kind: 'approval_request'; requestId: string; runId: string; node: string; title: string; message: string; files: { path: string; content: string }[] }
   | { kind: 'workflow'; phase: 'started' | 'node_started' | 'node_finished' | 'finished'; node?: string; run: WorkflowRunView }

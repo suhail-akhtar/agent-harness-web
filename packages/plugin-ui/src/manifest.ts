@@ -361,6 +361,8 @@ export interface JsonSchema {
   pattern?: string;
   format?: 'secret' | 'url' | 'email' | 'path' | 'multiline' | 'color';
   items?: JsonSchema;
+  /** Suggested values: shown as chips that fill the field in (a list adds them). */
+  examples?: Array<string | number>;
   order?: number;
 }
 

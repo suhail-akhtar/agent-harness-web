@@ -292,3 +292,29 @@ test('ask_user with a form: the question carries the schema; answers are checked
     assert.equal(rs[1]!.content, 'The user answered: {"n":3,"size":"m"}');
   } finally { await t.close(); }
 });
+
+test('a question answered from the app: suggested answers with their descriptions; a reply in words instead of the form, a skip with a note, an answer with a note', async () => {
+  const t = await setupServer();
+  try {
+    const s = await t.harness.sessions.create({ model: 'deepseek-flash', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: await tempDir() } });
+    const ev = record(s);
+    const form = { type: 'object', properties: { entries: { type: 'array', items: { type: 'string', enum: ['ollama-tunnel', 'updater'] } } } };
+    const options = [{ label: 'Disable all', description: 'Reversible', recommended: true }, { label: 'Keep all' }];
+    t.ds.scripts['q'] = [{ calls: [{ name: 'ask_user', input: { question: 'What to disable?', options, form } }, { name: 'ask_user', input: { question: 'Uninstall the VPNs?', options: ['Yes', 'No'] } }, { name: 'ask_user', input: { question: 'Which?', form } }] }, { text: 'ok' }];
+    await s.send('[[q]] go');
+    const id = s.meta.id;
+    const nth = async (n: number) => { await waitFor(() => ev.filter((e) => e.kind === 'question').length >= n, `question ${n}`); return ev.filter((e) => e.kind === 'question')[n - 1] as Extract<HarnessEvent, { kind: 'question' }>; };
+    const q1 = await nth(1);
+    assert.deepEqual(q1.choices, [{ label: 'Disable all', description: 'Reversible', recommended: true }, { label: 'Keep all' }]);
+    assert.equal((await t.call(OPERATOR, 'POST', `/api/sessions/${id}/respond`, { requestId: q1.requestId, decision: 'reply', feedback: 'Disable all' })).status, 200);
+    const q2 = await nth(2);
+    assert.equal((await t.call(OPERATOR, 'POST', `/api/sessions/${id}/respond`, { requestId: q2.requestId, decision: 'deny', feedback: 'decide later' })).status, 200);
+    const q3 = await nth(3);
+    assert.equal((await t.call(OPERATOR, 'POST', `/api/sessions/${id}/respond`, { requestId: q3.requestId, decision: 'answer', answer: { entries: ['updater'] }, feedback: 'not the tunnel' })).status, 200);
+    await waitFor(() => turnsEnded(ev) === 1, 'turn');
+    const rs = (ev.filter((e) => e.kind === 'tool_result') as Extract<HarnessEvent, { kind: 'tool_result' }>[]).map((r) => r.content);
+    assert.match(rs[0]!, /did not pick a suggested answer or fill in the form; they wrote: Disable all/);
+    assert.match(rs[1]!, /skipped this question and said: decide later/);
+    assert.equal(rs[2], 'The user answered: {"entries":["updater"]}\nTheir note: not the tunnel');
+  } finally { await t.close(); }
+});

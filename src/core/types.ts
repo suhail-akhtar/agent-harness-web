@@ -1,6 +1,9 @@
 // Provider-neutral transcript, events and usage. Every provider adapter converts
 // to and from these shapes; the loop, the UI and the store only ever see them.
 
+/** A suggested answer to a question: its label, what it means, and whether the agent recommends it. */
+export interface QuestionChoice { label: string; description?: string; recommended?: boolean }
+
 export type ProviderId = string;
 
 export interface TextBlock { type: 'text'; text: string }
@@ -73,8 +76,11 @@ export type HarnessEvent =
   | { kind: 'tool_call'; id: string; name: string; input: Record<string, unknown>; agent?: string }
   | { kind: 'tool_result'; id: string; name: string; content: string; is_error: boolean; display?: ToolDisplay; ms: number; agent?: string; images?: { media_type: string; data: string }[] }
   | { kind: 'permission_request'; requestId: string; tool: string; summary: string; input: Record<string, unknown>; suggestion?: string; agent?: string }
-  /** `form`: a JSON Schema (packages/plugin-ui's subset) the answer must fill in, as an object. */
-  | { kind: 'question'; requestId: string; question: string; options: string[]; agent?: string; form?: Record<string, unknown> }
+  /**
+   * `form`: a JSON Schema (packages/plugin-ui's subset) the answer must fill in, as an object. `options`: the
+   * suggested answers' labels; `choices` the same with what each does and the one the agent recommends.
+   */
+  | { kind: 'question'; requestId: string; question: string; options: string[]; choices?: QuestionChoice[]; agent?: string; form?: Record<string, unknown> }
   /** An artifact was made or got a new version (its own `kind` is markdown, html, ...). */
   | { kind: 'artifact'; artifact: { id: string; title: string; kind: string; version: number; action: 'create' | 'update' | 'rewrite' } }
   /** A desktop tool call for the attached client to answer (POST /api/sessions/:id/client-result). */

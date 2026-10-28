@@ -263,8 +263,18 @@ test('desktop app end to end: the agent platform', { timeout: 15 * 60_000 }, asy
       await page.click('[data-question-form] [data-submit-form]');
       await page.waitForSelector('[data-question-form] [data-field="name"] [role="alert"], [data-question-form] [data-field="name"] .text-hx-danger', { timeout: 5_000 }).catch(() => {});
       assert.ok(await page.locator('[data-attention] [data-question-form]').count(), 'a required field keeps the form open');
-      await page.locator('[data-question-form] [data-field="name"] input').fill('Ada Lovelace');
+      // Suggested answers with what each does (the recommended one marked), tick boxes for several choices.
+      assert.match(await page.locator('[data-question-form] [data-question-choices]').innerText(), /The core team\s*Recommended[\s\S]*Decide for me/);
+      await page.locator('[data-question-form] [data-field="regions"] [data-choice="us"] input').check();
+      await page.click('[data-question-form] [data-field="name"] [data-suggestion="Ada Lovelace"]');
+      assert.equal(await page.locator('[data-question-form] [data-field="name"] input').inputValue(), 'Ada Lovelace');
+      await page.locator('[data-question-form] [data-own-words]').fill('Ship it before Friday');
       await shot('ask-user-form', page.locator('[data-attention]'));
+      // Review what will be sent, then send it.
+      await page.click('[data-question-form] [data-review-answers]');
+      const review = await page.locator('[data-question-form] [data-answer-review]').innerText();
+      assert.match(review, /Ada Lovelace[\s\S]*Team[\s\S]*Europe, United States[\s\S]*Ship it before Friday/);
+      await shot('ask-user-review', page.locator('[data-attention]'));
       await page.click('[data-question-form] [data-submit-form]');
       await idle(id);
       await page.waitForSelector('[data-assistant-message]:has-text("Ada Lovelace")');
