@@ -79,13 +79,16 @@ export function ViewHost({ view, params }: { view: View; params: Record<string, 
         </Page>
       );
       case 'prompt-board': return (
-        <Page title={view.title}>
+        <Page title={view.title} subtitle={view.description}>
+          {!view.prompts?.length && <EmptyState icon={view.icon ?? 'sparkles'} title="No prompts here yet">{view.plugin} lists none.</EmptyState>}
           <div className="grid gap-2 sm:grid-cols-2">
             {view.prompts.map((p, i) => <ListRow key={i} card icon={<Icon name={p.icon ?? 'sparkles'} size={16} className="shrink-0 text-hx-accent-text" />} onClick={() => prefill(p.prompt, true)} title={p.title} subtitle={p.prompt} />)}
           </div>
         </Page>
       );
       case 'form': return <FormView view={view} />;
+      // A kind this app does not draw (a newer plugin): said, never a blank page.
+      default: return <EmptyState icon="puzzle" title="This page cannot be shown here">{(view as { plugin: string }).plugin} made it as a “{String((view as { kind?: unknown }).kind)}” page, which this version of the app does not draw. Updating the app may help.</EmptyState>;
     }
   })();
   return <RenderBoundary fallback={(e, retry) => <Failed what={`The page "${view.title}"`} error={e} retry={retry} plugin={view.plugin} />}><Probe qid={view.qid}>{body}</Probe></RenderBoundary>;

@@ -5,15 +5,15 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { Artifact, BlockActionsContext, Button, EmptyState, IconButton, RenderBoundary, ResizablePane, Toaster, Tooltip } from '@harness/ui';
+import { Artifact, BlockActionsContext, Button, EmptyState, IconButton, RenderBoundary, ResizablePane, Toaster, Tooltip, toast } from '@harness/ui';
 import { SIDE_PANEL_PANE, SPLIT_PANE } from '../state/layout';
 import { useApp, navigate, HOME, NARROW_PX } from '../state/app';
 import type { View } from '../registry/registry';
-import { useData } from '../state/data';
+import { useData, client } from '../state/data';
 import { ViewHost, PanelHost, PaneContext } from '../registry/PluginView';
 import { runCommand } from '../registry/actions';
 import { allowedWhileTyping, matches, parseChord } from '../registry/keybindings';
-import { platform } from '../bridge';
+import { desktop, platform } from '../bridge';
 import { Sidebar } from './Sidebar';
 import { StatusBar, TopBar, pageTitle } from './Bars';
 import { CommandPalette } from './CommandPalette';
@@ -63,6 +63,34 @@ function useWindowTitle() {
   }, [route, crumb, info, registry]);
 }
 
+/** A page nothing provides now: its plugin switched off (switch it on here), not installed, or still loading. */
+function Unavailable({ view }: { view: string }): React.ReactElement {
+  const registry = useData((s) => s.registry);
+  const me = useData((s) => s.me);
+  const [busy, setBusy] = React.useState(false);
+  const owner = view.includes(':') ? view.slice(0, view.indexOf(':')) : '';
+  const p = registry.plugins.find((x) => x.name === owner);
+  const name = p?.ui?.displayName ?? p?.info?.displayName ?? owner;
+  const canSwitch = !!p && !p.enabled && (p.source === 'builtin' || p.source === 'dev' || me?.role === 'admin');
+  const on = async () => {
+    setBusy(true);
+    try {
+      if (p!.source === 'builtin') { const prefs = useApp.getState().prefs; useApp.getState().setPrefs({ disabledPlugins: prefs.disabledPlugins.filter((x) => x !== p!.name) }); useData.getState().rebuild(); }
+      else if (p!.source === 'dev') { await desktop.toggleDevPlugin(p!.name, true); await useData.getState().refreshPlugins(); }
+      else { await client.plugins.enable(p!.name); await useData.getState().refreshPlugins(); }
+    } catch (e) { toast((e as Error).message, { kind: 'error' }); } finally { setBusy(false); }
+  };
+  if (!registry.active.length) return <EmptyState icon="puzzle" title="Loading plugins…">The app's plugins are starting.</EmptyState>;
+  return (
+    <div data-unavailable={view}>
+      <EmptyState icon="puzzle" title={p && !p.enabled ? `${name} is switched off` : 'This page is not available'}
+        action={<div className="flex gap-2">{canSwitch && <Button variant="primary" icon="zap" loading={busy} data-switch-on={p!.name} onClick={() => void on()}>Switch {name} on</Button>}<Button variant={canSwitch ? 'ghost' : 'primary'} onClick={() => navigate(HOME)}>Go home</Button>{p && <Button variant="ghost" onClick={() => navigate({ view: 'core.plugins:plugins' })}>Plugins</Button>}</div>}>
+        {p && !p.enabled ? `This page comes from ${name}, which is switched off${canSwitch ? '' : ' (an administrator can switch it on)'}.` : p?.error ? `${name} did not load: ${p.error}` : owner ? `Nothing provides this page: ${owner} is not installed here (Plugins > Catalogue).` : `Nothing provides ${view}.`}
+      </EmptyState>
+    </div>
+  );
+}
+
 export function App(): React.ReactElement {
   useKeybindings();
   useWindowTitle();
@@ -94,12 +122,7 @@ export function App(): React.ReactElement {
           {route.view !== 'core.chat:session' && <TopBar />}
           <div className="flex min-h-0 flex-1">
             <div className="min-w-0 flex-1" data-view={route.view}>
-              {view ? <ViewHost key={route.view} view={view} params={route.params ?? {}} />
-                : (
-                  <EmptyState icon="puzzle" title="This page is not available" action={<Button variant="primary" onClick={() => navigate(HOME)}>Go home</Button>}>
-                    {registry.active.length ? `Nothing provides ${route.view}; its plugin may be switched off.` : 'Loading plugins…'}
-                  </EmptyState>
-                )}
+              {view ? <ViewHost key={route.view} view={view} params={route.params ?? {}} /> : <Unavailable view={route.view} />}
             </div>
             {split && splitView && !narrow && <SplitPane view={splitView} params={split.params ?? {}} />}
             {panel && <SidePanel narrow={narrow} />}
