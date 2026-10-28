@@ -16,6 +16,7 @@ import { APP_ORIGIN, PREVIEW_ORIGIN, parseDeepLink, SCHEME } from './policy';
 import { PrefsStore } from './store';
 import { makeHandle, type DesktopContext } from './context';
 import { registerIpc, serverToken } from './ipc';
+import { registerEdit } from './edit';
 import { DevPlugins } from './dev-plugins';
 import { DevWatch } from './dev-watch';
 import { normaliseProduct, type ProductProfile } from '../shared/product';
@@ -310,6 +311,7 @@ app.whenReady().then(async () => {
   // The window may ask for nothing: no camera, microphone, location or notifications from web content.
   session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(permission === 'clipboard-sanitized-write' || permission === 'fullscreen'));
   registerIpc(ctx);
+  registerEdit();
   ctx.handle('projects:add', (dir: string) => {
     if (typeof dir !== 'string' || !path.isAbsolute(dir) || !fs.existsSync(dir)) throw new Error('That folder does not exist.');
     const p = prefs.get();

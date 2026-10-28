@@ -16,6 +16,7 @@ import { desktop } from '../../bridge';
 import { CAPABILITY_TEXT, decide } from '@desk/grants';
 import type { PluginEntry } from '../../registry/registry';
 import { ReviewModal } from './Review';
+import { contextItems } from '../../shell/ContextMenu';
 
 function PluginsPage() {
   const plugins = useData((s) => s.registry.plugins);
@@ -91,7 +92,14 @@ function PluginCard({ p }: { p: PluginEntry }) {
     } catch (e) { toast(isMissing(e) ? 'This server cannot export plugins.' : (e as Error).message, { kind: 'error' }); }
   };
   return (
-    <div data-plugin={p.name} data-enabled={p.enabled ? '1' : '0'} className="rounded-xl border border-hx-border-subtle bg-hx-elevated p-4">
+    <div data-plugin={p.name} data-enabled={p.enabled ? '1' : '0'} className="rounded-xl border border-hx-border-subtle bg-hx-elevated p-4" onContextMenu={contextItems(() => [
+      ...(p.enabled && !builtin && (p.ui?.contributes.views.length ?? 0) > 0 ? [{ id: 'app', label: 'Open as its own app', icon: 'external', onSelect: () => void desktop.openPluginWindow(p.name) }] : []),
+      { id: 'details', label: open ? 'Hide details' : 'Show details', icon: 'info', onSelect: () => setOpen(!open) },
+      ...(!builtin && p.source !== 'dev' && me?.role === 'admin' ? [{ id: 'export', label: 'Export as a file…', icon: 'share', onSelect: () => void exportBundle() }] : []),
+      ...(!builtin && p.source !== 'bundled' && me?.role === 'admin' ? [{ id: 'review', label: 'Review', icon: 'shield', onSelect: () => setReviewing(true) }] : []),
+      ...(!required && (builtin || p.source === 'dev' || me?.role === 'admin') ? [{ id: 'toggle', label: p.enabled ? 'Switch off' : 'Switch on', icon: 'zap', disabled: busy, onSelect: () => void toggle(!p.enabled) }] : []),
+      { id: 'copy', label: 'Copy name', icon: 'copy', onSelect: () => void desktop.clipboard(p.name) },
+    ], title)}>
       <div className="flex items-start gap-3">
         <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-hx-pill text-hx-secondary">{p.info?.iconData ? <img src={p.info.iconData} alt="" className="h-9 w-9 object-cover" data-plugin-icon /> : <Icon name={(p.ui?.icon ?? p.info?.icon ?? 'puzzle') as IconName} size={18} />}</span>
         <div className="min-w-0 flex-1">

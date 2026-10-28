@@ -101,6 +101,13 @@ export function Composer(p: ComposerProps): React.ReactElement {
   useEffect(() => { if (prefillReq) { setText(prefillReq.text); useApp.setState({ prefill: null }); setTimeout(() => box.current?.focus(), 0); } }, [prefillReq]);
   useEffect(() => { const el = box.current; if (!el) return; el.style.height = 'auto'; el.style.height = `${Math.min(280, el.scrollHeight)}px`; }, [text]);
   useEffect(() => { if (p.autoFocus) box.current?.focus(); }, [p.autoFocus, p.draftKey]);
+  // "Ask about this in the chat" (the right-click menu): the quote goes in front of what is there.
+  useEffect(() => {
+    if (!p.autoFocus) return;
+    const on = (e: Event) => { const t = (e as CustomEvent<{ text: string }>).detail?.text; if (!t) return; setText((x) => `${t}${x}`); setTimeout(() => box.current?.focus(), 0); };
+    window.addEventListener('hx:compose', on);
+    return () => window.removeEventListener('hx:compose', on);
+  }, [p.autoFocus]);
 
   // "@" files and "/" commands.
   useEffect(() => {

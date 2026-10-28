@@ -222,7 +222,9 @@ function UsageButton({ meta }: { meta: import('@harness/client').SessionMeta }) 
 }
 
 export function Search(): React.ReactElement {
-  const [q, setQ] = useState('');
+  const asked = useApp((s) => (s.route.view === 'core.chat:search' ? s.route.params?.q : undefined));
+  const [q, setQ] = useState(asked ?? '');
+  useEffect(() => { if (asked !== undefined) setQ(asked); }, [asked]);
   const [archived, setArchived] = useState(false);
   const [list, setList] = useState<import('@harness/client').SessionMeta[] | null>(null);
   useEffect(() => {

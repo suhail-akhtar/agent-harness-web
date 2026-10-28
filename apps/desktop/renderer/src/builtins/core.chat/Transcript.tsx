@@ -16,6 +16,7 @@ import { toolRendererContext } from '../../registry/tool-context';
 import { OffPluginNote, useArtifactRenderer, useEventComponent, useFenceRenderer } from '../../registry/renderers';
 import { FilePreview } from '../../components/FilePreview';
 import { WorkflowGraph } from '../../components/WorkflowGraph';
+import { contextItems, quoteInComposer } from '../../shell/ContextMenu';
 
 export { useArtifactRenderer, useFenceRenderer };
 
@@ -159,7 +160,10 @@ function ProgressCard({ item }: { item: Extract<Item, { kind: 'progress' }> }) {
 function UserMessage({ item }: { item: Extract<Item, { kind: 'user' }> }) {
   if (item.origin === 'auto' && !item.text && !item.images?.length) return <div data-user-message="auto" className="my-1 flex items-center gap-3 text-[11.5px] text-hx-muted"><span className="h-px flex-1 bg-hx-border-subtle" /><Icon name="refresh" size={12} />Continued on its own after a linked session reported<span className="h-px flex-1 bg-hx-border-subtle" /></div>;
   return (
-    <div className="group flex flex-col items-end" data-user-message>
+    <div className="group flex flex-col items-end" data-user-message onContextMenu={contextItems(() => [
+      { id: 'copy', label: 'Copy message', icon: 'copy', onSelect: () => void copyText(item.text).then(() => toast('Copied')) },
+      { id: 'quote', label: 'Quote in reply', icon: 'chat', onSelect: () => quoteInComposer(item.text) },
+    ], 'Your message')}>
       {item.images?.length ? <div className="mb-1"><ImageStrip images={item.images} /></div> : null}
       {item.files?.length ? <div className="mb-1 flex flex-wrap justify-end gap-1">{item.files.map((f) => <Badge key={f}><Icon name="file" size={11} className="mr-1" />{f}</Badge>)}</div> : null}
       {item.text && <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl bg-hx-pill px-4 py-2.5 text-[14.5px] leading-6 text-hx-primary">{item.text}</div>}
@@ -172,7 +176,12 @@ function AssistantMessage({ item, fence, sources, canRetry, onRetry, compact }: 
   const body = useRef<HTMLDivElement>(null);
   const streamingReasoning = item.streaming && !item.text;
   return (
-    <div className="group" data-assistant-message data-streaming={item.streaming ? '1' : '0'}>
+    <div className="group" data-assistant-message data-streaming={item.streaming ? '1' : '0'} onContextMenu={item.streaming || !item.text ? undefined : contextItems(() => [
+      { id: 'copy', label: 'Copy as Markdown', icon: 'copy', onSelect: () => void copyText(item.text).then((ok) => ok && toast('Copied as Markdown')) },
+      { id: 'rich', label: 'Copy as rich text', icon: 'file-text', onSelect: () => void copyRich(body.current?.innerHTML ?? item.text, item.text).then((ok) => ok && toast('Copied as rich text')) },
+      { id: 'quote', label: 'Quote in reply', icon: 'chat', onSelect: () => quoteInComposer(item.text) },
+      ...(canRetry && onRetry ? [{ id: 'retry', label: 'Retry', icon: 'refresh', onSelect: onRetry }] : []),
+    ], 'Reply')}>
       {item.reasoning && <Reasoning text={item.reasoning} streaming={streamingReasoning} ms={item.reasoningMs} />}
       {item.text && <div ref={body} className={compact ? 'text-[13.5px]' : ''}><Markdown text={item.text} streaming={item.streaming} renderFence={fence} sources={sources} /></div>}
       {item.streaming && item.text && <span className="hx-thinking ml-0.5 inline-block h-3 w-1.5 rounded-sm bg-hx-accent align-middle" aria-label="Writing" />}

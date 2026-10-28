@@ -291,6 +291,36 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       await page.waitForSelector('[data-session][data-status="idle"]', { timeout: 30_000 });
     });
 
+    await step('right-click menus: what is under the pointer first (a conversation, a reply), then copy, quote and the editing commands', async () => {
+      const row = page.locator('[data-session-row]').first();
+      await row.click({ button: 'right' });
+      const menu = page.locator('[data-context-menu]');
+      await menu.waitFor();
+      const text = await menu.innerText();
+      for (const x of ['Conversation', 'Open', 'Rename', 'Pin', 'Archive', 'Copy title', 'Delete']) assert.match(text, new RegExp(x, 'i'), `the conversation menu has ${x}`);
+      await shot('context-menu-conversation', menu);
+      await page.keyboard.press('Escape');
+      await menu.waitFor({ state: 'detached' });
+      // A reply: copy it, quote it into the composer.
+      await row.click();
+      const reply = page.locator('[data-assistant-message]').last();
+      await reply.waitFor();
+      await reply.click({ button: 'right' });
+      await menu.waitFor();
+      assert.match(await menu.innerText(), /Copy as Markdown[\s\S]*Quote in reply/);
+      await menu.locator('[role="menuitem"]:has-text("Quote in reply")').click();
+      await page.waitForFunction(() => /^> /.test((document.querySelector('[data-composer] textarea') as HTMLTextAreaElement | null)?.value ?? ''), null, { timeout: 5_000 });
+      // The composer: the editing commands, with their keys.
+      await page.locator('[data-composer] textarea').click({ button: 'right' });
+      await menu.waitFor();
+      const edit = await menu.innerText();
+      for (const x of ['Undo', 'Redo', 'Cut', 'Copy', 'Paste', 'Paste as plain text', 'Select all']) assert.match(edit, new RegExp(x), `the text field menu has ${x}`);
+      await shot('context-menu-edit', menu);
+      await menu.locator('[role="menuitem"]:has-text("Select all")').click();
+      await page.waitForFunction(() => { const t = document.querySelector('[data-composer] textarea') as HTMLTextAreaElement | null; return !!t && t.value.length > 0 && t.selectionEnd - t.selectionStart === t.value.length; }, null, { timeout: 5_000 });
+      await page.keyboard.press('Delete');
+    });
+
     await step('the command palette opens with Ctrl+K and runs commands', async () => {
       await page.keyboard.press('Control+K');
       await page.waitForSelector('[data-palette]');

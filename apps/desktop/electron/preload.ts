@@ -7,7 +7,7 @@
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
-const PREFIXES = ['app:', 'engine:', 'prefs:', 'win:', 'dialog:', 'shell:', 'clipboard:', 'notify:', 'plugins:', 'grants:', 'servers:', 'preview:', 'projects:', 'command:', 'deeplink:', 'home:'];
+const PREFIXES = ['app:', 'engine:', 'prefs:', 'win:', 'dialog:', 'shell:', 'clipboard:', 'notify:', 'plugins:', 'grants:', 'servers:', 'preview:', 'projects:', 'command:', 'deeplink:', 'home:', 'edit:'];
 const allowed = (c: unknown): c is string => typeof c === 'string' && PREFIXES.some((p) => c.startsWith(p));
 
 // Only the app's own top-level page gets the bridge.

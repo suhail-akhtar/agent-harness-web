@@ -19,6 +19,7 @@ import { StatusBar, TopBar, pageTitle } from './Bars';
 import { CommandPalette } from './CommandPalette';
 import { FilePreview } from '../components/FilePreview';
 import { ConfirmHost, EngineGate, FullWindow, Onboarding, SettingsModal, ShortcutsSheet, WorkflowDialog } from './Overlays';
+import { ContextMenuHost } from './ContextMenu';
 
 function useKeybindings() {
   const commands = useData((s) => s.registry.commands);
@@ -113,6 +114,7 @@ export function App(): React.ReactElement {
       <ShortcutsSheet />
       <FullWindow />
       <ConfirmHost />
+      <ContextMenuHost />
       <Toaster />
     </div>
     </BlockActionsContext.Provider>

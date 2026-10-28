@@ -61,6 +61,15 @@ export const desktop = {
   clipboard: (text: string) => invoke<boolean>('clipboard:write', text),
   /** force: shown even while the window is in front (an agent's desktop_notify). */
   notify: (n: { title: string; body?: string; route?: string; force?: boolean }) => invoke<boolean>('notify:show', n).catch(() => false),
+  /** Editing in the focused window, for the right-click menu (electron/edit.ts). */
+  edit: {
+    do: (what: 'undo' | 'redo' | 'cut' | 'copy' | 'paste' | 'pasteAndMatchStyle' | 'selectAll' | 'delete') => invoke<boolean>('edit:do', what).catch(() => false),
+    spelling: () => invoke<{ word: string; suggestions: string[] } | null>('edit:spelling').catch(() => null),
+    replaceMisspelling: (word: string) => invoke<boolean>('edit:replaceMisspelling', word),
+    addToDictionary: (word: string) => invoke<boolean>('edit:addToDictionary', word),
+    copyImageAt: (x: number, y: number) => invoke<boolean>('edit:copyImageAt', x, y),
+    saveImage: (url: string) => invoke<boolean>('edit:saveImage', url),
+  },
   devPlugins: () => invoke<DevPluginInfo[]>('plugins:dev').catch(() => [] as DevPluginInfo[]),
   pickPluginFolder: () => invoke<string | null>('plugins:pickFolder'),
   /** Opens a plugin as its own app: a window focused on it (every core service and plugin still there). */

@@ -5,7 +5,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { create } from 'zustand';
-import { cx, Icon, IconButton, Menu, ResizeHandle, Tooltip, toast, Input, useResizable } from '@harness/ui';
+import { cx, Icon, IconButton, Menu, ResizeHandle, Tooltip, toast, Input, useResizable, type MenuItem } from '@harness/ui';
 import type { SessionMeta } from '@harness/client';
 import { useApp, navigate, openSession, FOCUS } from '../state/app';
 import { useData, client } from '../state/data';
@@ -15,6 +15,7 @@ import { runCommand } from '../registry/actions';
 import { desktop, platform } from '../bridge';
 import { ProductMark } from '../components/ProductMark';
 import { SIDEBAR_PANE } from '../state/layout';
+import { contextItems } from './ContextMenu';
 
 /** The sidebar; a narrow window passes its own (unsaved) collapsed state and toggle. */
 export function Sidebar({ collapsed: forced, onToggle }: { collapsed?: boolean; onToggle?: () => void } = {}): React.ReactElement {
@@ -82,6 +83,10 @@ function NavRow({ item, collapsed, indent, depth = 0 }: { item: NavItem; collaps
   const badge = item.badge ? badges[item.badge] : undefined;
   const row = (
     <button type="button" data-nav={item.qid} {...(item.group ? { 'data-in-group': item.group } : {})} aria-current={active ? 'page' : undefined} onClick={() => navigate({ view: item.view, ...(item.params ? { params: item.params } : {}) })}
+      onContextMenu={contextItems(() => [
+        { id: 'open', label: `Open ${item.title}`, icon: item.icon ?? 'puzzle', onSelect: () => navigate({ view: item.view, ...(item.params ? { params: item.params } : {}) }) },
+        ...(item.plugin.startsWith('core.') ? [] : [{ id: 'app', label: 'Open as its own app', icon: 'external', onSelect: () => void desktop.openPluginWindow(item.plugin) }]),
+      ], item.title)}
       className={cx('relative flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition-colors', collapsed && 'justify-center px-0', indent && !collapsed && 'pl-6', depth === 1 && !collapsed && 'pl-7', depth >= 2 && !collapsed && 'h-7 pl-11 text-[12.5px]',
         active ? 'bg-hx-active font-medium text-hx-primary' : 'text-hx-secondary hover:bg-hx-hover hover:text-hx-primary')}>
       <Icon name={item.icon ?? 'puzzle'} size={16} />
@@ -156,7 +161,12 @@ function GroupBlock({ group: g, first, last, over, setOver }: { group: MenuGroup
     { id: 'down', label: 'Move down', icon: 'arrow-down', disabled: last, onSelect: () => moveGroup(g.plugin, 1) },
   ];
   return (
-    <div data-group={g.plugin} data-folded={folded ? '1' : '0'} className={cx('mb-0.5 rounded-lg', over && 'ring-1 ring-hx-accent/60')}
+    <div data-group={g.plugin} data-folded={folded ? '1' : '0'} onContextMenu={contextItems(() => [
+      ...actions,
+      { id: 'sep2', label: '', separator: true },
+      ...(g.plugin.startsWith('core.') ? [] : [{ id: 'app', label: 'Open as its own app', icon: 'external', onSelect: () => void desktop.openPluginWindow(g.plugin) }]),
+      { id: 'manage', label: 'Manage plugins…', icon: 'puzzle', onSelect: () => navigate({ view: 'core.plugins:plugins' }) },
+    ], g.title)} className={cx('mb-0.5 rounded-lg', over && 'ring-1 ring-hx-accent/60')}
       onDragOver={(e) => { if (e.dataTransfer.types.includes('application/x-harness-group')) { e.preventDefault(); setOver(g.plugin); } }}
       onDragLeave={() => setOver(null)}
       onDrop={(e) => { const from = e.dataTransfer.getData('application/x-harness-group'); setOver(null); if (from && from !== g.plugin) { e.preventDefault(); moveGroup(from, { before: g.plugin }); } }}>
@@ -238,6 +248,13 @@ function Projects() {
         const active = route.view === 'core.projects:project' && route.params?.path === p.path;
         return (
           <button key={p.path} type="button" title={p.path} onClick={() => navigate({ view: 'core.projects:project', params: { path: p.path } })}
+            onContextMenu={contextItems(() => [
+              { id: 'open', label: 'Open project', icon: 'folder', onSelect: () => navigate({ view: 'core.projects:project', params: { path: p.path } }) },
+              { id: 'reveal', label: 'Show in folder', icon: 'folder-open', onSelect: () => void desktop.showItem(p.path) },
+              { id: 'copy', label: 'Copy path', icon: 'copy', onSelect: () => void desktop.clipboard(p.path) },
+              { id: 'sep', label: '', separator: true },
+              { id: 'remove', label: 'Remove from projects', icon: 'x', onSelect: () => void desktop.removeProject(p.path).then((projects) => useApp.getState().setPrefs({ projects })) },
+            ], p.name)}
             className={cx('flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-[13px]', active ? 'bg-hx-active text-hx-primary' : 'text-hx-secondary hover:bg-hx-hover')}>
             <Icon name="folder" size={15} /><span className="min-w-0 flex-1 truncate text-left">{p.name}</span>
           </button>
@@ -284,20 +301,24 @@ function ConversationRow({ s }: { s: SessionMeta }) {
   if (renaming) {
     return <div className="px-1 py-0.5"><Input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} onBlur={() => setRenaming(false)} onKeyDown={(e) => { if (e.key === 'Enter') { setRenaming(false); void act(() => client.sessions.patch(s.id, { title })); } if (e.key === 'Escape') setRenaming(false); }} /></div>;
   }
+  const items: MenuItem[] = [
+    { id: 'open', label: 'Open', icon: 'chat', onSelect: () => openSession(s.id) },
+    { id: 'pin', label: s.pinned ? 'Unpin' : 'Pin', icon: 'pin', onSelect: () => void act(() => client.sessions.patch(s.id, { pinned: !s.pinned })) },
+    { id: 'rename', label: 'Rename', icon: 'edit', onSelect: () => setRenaming(true) },
+    { id: 'fork', label: 'Fork', icon: 'git-branch', onSelect: () => void act(async () => { const m = await client.sessions.fork(s.id); openSession(m.id); }, 'Forked') },
+    { id: 'archive', label: s.archived ? 'Unarchive' : 'Archive', icon: 'archive', onSelect: () => void act(() => (s.archived ? client.sessions.unarchive(s.id) : client.sessions.archive(s.id)), s.archived ? 'Unarchived' : 'Archived') },
+    ...(s.runtime?.path ? [{ id: 'folder', label: 'Show its folder', icon: 'folder-open', onSelect: () => void desktop.showItem(s.runtime!.path!) }] : []),
+    { id: 'copy-title', label: 'Copy title', icon: 'copy', onSelect: () => void desktop.clipboard(s.title || 'New conversation') },
+    { id: 'sep', label: '', separator: true },
+    { id: 'delete', label: 'Delete', icon: 'trash', danger: true, onSelect: () => void useApp.getState().ask({ title: 'Delete this conversation?', body: `"${s.title}" and its workspace history are removed. This cannot be undone.`, confirmLabel: 'Delete', danger: true }).then((yes) => { if (yes) void act(async () => { await client.sessions.remove(s.id); if (active) navigate({ view: 'core.chat:home' }); }, 'Deleted'); }) },
+  ];
   return (
-    <div data-session-row={s.id} className={cx('group relative flex h-8 items-center rounded-lg pr-1', active ? 'bg-hx-active' : 'hover:bg-hx-hover')}>
+    <div data-session-row={s.id} onContextMenu={contextItems(() => items, 'Conversation')} className={cx('group relative flex h-8 items-center rounded-lg pr-1', active ? 'bg-hx-active' : 'hover:bg-hx-hover')}>
       <button type="button" onClick={() => openSession(s.id)} className="flex h-full min-w-0 flex-1 items-center gap-2 pl-2.5 text-left text-[13px]">
         {s.status === 'running' ? <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-hx-accent" title="Working" /> : s.status === 'waiting' ? <span className="h-2 w-2 shrink-0 rounded-full bg-hx-warning" title="Needs you" /> : s.pinned ? <Icon name="pin" size={12} className="shrink-0 text-hx-muted" /> : null}
         <span className={cx('min-w-0 flex-1 truncate', active ? 'text-hx-primary' : 'text-hx-secondary')}>{s.title || 'New conversation'}</span>
       </button>
-      <Menu placement="bottom-end" items={[
-        { id: 'pin', label: s.pinned ? 'Unpin' : 'Pin', icon: 'pin', onSelect: () => void act(() => client.sessions.patch(s.id, { pinned: !s.pinned })) },
-        { id: 'rename', label: 'Rename', icon: 'edit', onSelect: () => setRenaming(true) },
-        { id: 'fork', label: 'Fork', icon: 'git-branch', onSelect: () => void act(async () => { const m = await client.sessions.fork(s.id); openSession(m.id); }, 'Forked') },
-        { id: 'archive', label: s.archived ? 'Unarchive' : 'Archive', icon: 'archive', onSelect: () => void act(() => (s.archived ? client.sessions.unarchive(s.id) : client.sessions.archive(s.id)), s.archived ? 'Unarchived' : 'Archived') },
-        { id: 'sep', label: '', separator: true },
-        { id: 'delete', label: 'Delete', icon: 'trash', danger: true, onSelect: () => void useApp.getState().ask({ title: 'Delete this conversation?', body: `"${s.title}" and its workspace history are removed. This cannot be undone.`, confirmLabel: 'Delete', danger: true }).then((yes) => { if (yes) void act(async () => { await client.sessions.remove(s.id); if (active) navigate({ view: 'core.chat:home' }); }, 'Deleted'); }) },
-      ]} trigger={({ ref, toggle, open }) => <IconButton ref={ref} icon="more" size="xs" label="Conversation actions" onClick={toggle} className={cx('opacity-0 group-hover:opacity-100 focus:opacity-100', open && 'opacity-100')} />} />
+      <Menu placement="bottom-end" items={items.filter((x) => x.id !== 'open')} trigger={({ ref, toggle, open }) => <IconButton ref={ref} icon="more" size="xs" label="Conversation actions" onClick={toggle} className={cx('opacity-0 group-hover:opacity-100 focus:opacity-100', open && 'opacity-100')} />} />
     </div>
   );
 }
