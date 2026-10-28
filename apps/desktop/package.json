@@ -1,7 +1,7 @@
 {
   "name": "@harness/desktop",
   "productName": "Harness",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "Harness Desktop: the generic desktop shell of the agent harness, where everything is a plugin.",
   "license": "MIT",
@@ -19,9 +19,9 @@
     "live-smoke": "node scripts/live-smoke.mjs"
   },
   "dependencies": {
-    "@harness/client": "0.2.1",
-    "@harness/plugin-ui": "0.2.1",
-    "@harness/ui": "0.2.1",
+    "@harness/client": "0.2.2",
+    "@harness/plugin-ui": "0.2.2",
+    "@harness/ui": "0.2.2",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "zustand": "5.0.15"

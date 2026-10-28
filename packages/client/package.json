@@ -1,6 +1,6 @@
 {
   "name": "@harness/client",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "A typed client of the harness HTTP API and its event streams, shared by the desktop and the browser UI.",
   "license": "MIT",

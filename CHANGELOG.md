@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.2.2
+
+- **Questions from the agent**: suggested answers with what each does and the recommended one marked; a form's
+  choices as tick boxes, suggestions as chips; a note with the answer, a reply in your own words, a review of
+  what is sent, Skip (the agent decides and says what it assumed). Send works in the conversation as in the
+  Inbox; a form question can be skipped or answered in words.
+- **Run a workflow**: what a workflow is, workflows searched and grouped by plugin, how the chosen one runs
+  (steps, who does each, where it waits for you, what repeats), what it needs, what happens when you start it.
+- **Right-click menus** everywhere: what is under the pointer (a conversation, a project, a plugin, a reply),
+  spelling, copy and quote, links and images, code blocks, and the editing commands in text fields.
+- **Working animation**: the jump-to-latest button shows it while the agent works (the arrow on hover); six
+  styles in Settings > Appearance.
+- **Administrator commands**: bash with elevated: true, asked every time, then by the operating system (UAC,
+  sudo or the system's password dialog); never with a password the app sees; only on this computer.
+- **Plugins as separate installables**: npm run plugins:bundles, and the desktop build writes every plugin's
+  bundle and an index beside the installer.
+- A page that cannot be shown says why (its plugin switched off, with Switch it on), never blank.
+- **Too large for the provider (413)**: a request carries the newest images up to a budget (older ones become a note);
+  a 413 is sent again without images, then after compacting; past that it says what to do. Long screenshot-heavy
+  conversations go on instead of stopping.
+
 ## 0.2.1
 
 - Published by Suhail Akhtar under the MIT licence (LICENSE): every shipped plugin says so on its card, and the packages declare it.

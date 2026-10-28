@@ -596,7 +596,8 @@ export class Agent {
       ...(!compaction ? { effortLog: this.noteEffort(messages.length) } : {}),
       ...(this.cfg.toolGroups?.length ? { allTools: this.specs, deferrable: this.cfg.toolGroups.flatMap((g) => g.tools) } : {}),
       // Already clean when appended; this catches a value registered after its message was (it is hidden from then on).
-      messages: this.redact(messages),
+      // The oldest images are left out once the newest fill what a request may carry.
+      messages: capImages(this.redact(messages)),
       effort: this.cfg.effort,
       cacheKey: this.cfg.cacheKey,
       compactAt: this.compactAt(),
@@ -606,7 +607,7 @@ export class Agent {
       onReasoning: (text) => this.hooks.emit({ kind: 'reasoning_delta', text, agent: this.cfg.name }),
     };
     const t0 = Date.now();
-    let imagesDropped = false;
+    let imagesDropped = false, compactedForSize = false;
     for (let attempt = 0; ; attempt++) {
       try {
         const resp = await this.cfg.provider.send(req);
@@ -624,6 +625,26 @@ export class Agent {
           req.messages = stripped;
           this.hooks.emit({ kind: 'notice', level: 'warn', text: `The provider rejected an image (${err.message.slice(0, 120)}); continuing without images.`, agent: this.cfg.name });
           continue;
+        }
+        // Larger than the provider accepts (413): first without images; then (not while compacting) the
+        // conversation is compacted and the request sent again; then the person is told what to do.
+        if (err instanceof ProviderError && err.status === 413) {
+          if (!imagesDropped && hasImages(req.messages)) {
+            imagesDropped = true;
+            req.messages = stripImages(req.messages, IMAGE_TOO_BIG);
+            if (messages === this.messages) this.messages = stripImages(this.messages, IMAGE_TOO_BIG);
+            this.hooks.emit({ kind: 'notice', level: 'warn', text: `The request was larger than ${this.cfg.model.provider} accepts; sending it again without the images in the conversation (their text results stay).`, agent: this.cfg.name });
+            continue;
+          }
+          if (!compaction && !compactedForSize && messages === this.messages) {
+            compactedForSize = true;
+            this.hooks.emit({ kind: 'notice', level: 'warn', text: `The conversation is larger than ${this.cfg.model.provider} accepts in one request; compacting it, then going on.`, agent: this.cfg.name });
+            await this.compact(signal);
+            messages = this.messages;
+            req.messages = capImages(this.redact(this.messages));
+            continue;
+          }
+          throw new ProviderError(`The request is larger than ${this.cfg.model.provider} accepts, even without images${compactedForSize ? ' and after compacting' : ''}. Start a new conversation (the agent can carry on from a summary: ask it to write one first), or switch to a model with a larger request limit.`, 413, false);
         }
         if (!(err instanceof ProviderError) || !err.retryable || attempt >= MAX_RETRIES) throw err;
         const delay = Math.min(60_000, err.retryAfterMs ?? 1000 * 2 ** attempt + Math.random() * 500);
@@ -1179,17 +1200,56 @@ function hasImages(messages: Message[]): boolean {
 }
 
 const IMAGE_REJECTED = '[The image(s) here were not sent: the model provider rejected an image. Rely on the text results, or make a smaller or simpler image.]';
+const IMAGE_TOO_BIG = '[The image(s) here were not sent: the request would be larger than the model provider accepts. Rely on the text results, or take a new, smaller screenshot if you need to see it again.]';
+const IMAGE_OLDER = '[An older image was here; it is no longer sent (images are large: the newest are kept). Take a new screenshot if you need to see it again.]';
 
 /** Copies of the messages with every image replaced by a note (the stored history keeps them). */
-function stripImages(messages: Message[]): Message[] {
+function stripImages(messages: Message[], note = IMAGE_REJECTED): Message[] {
   return messages.map((m) => {
     if (!hasImages([m])) return m;
     return {
       ...m,
       content: m.content.map((b): Block => {
-        if (b.type === 'image') return { type: 'text', text: IMAGE_REJECTED };
-        if (b.type === 'tool_result' && b.images?.length) return { ...b, images: undefined, content: `${b.content}\n${IMAGE_REJECTED}` };
+        if (b.type === 'image') return { type: 'text', text: note };
+        if (b.type === 'tool_result' && b.images?.length) return { ...b, images: undefined, content: `${b.content}\n${note}` };
         return b;
+      }),
+    };
+  });
+}
+
+/**
+ * Image bytes a request may carry (base64): providers refuse request bodies past their own limit (DeepSeek
+ * answers 413 "length limit exceeded"), and a few full-size screenshots reach it. The newest images are kept
+ * up to it, older ones become a note. HARNESS_REQUEST_IMAGE_BYTES changes it.
+ */
+const IMAGE_BYTES = Number(process.env.HARNESS_REQUEST_IMAGE_BYTES) > 0 ? Number(process.env.HARNESS_REQUEST_IMAGE_BYTES) : 6_000_000;
+
+/** The messages with the oldest images left out (as a note) once the newest fill the budget; the same array when nothing is over. */
+export function capImages(messages: Message[], budget = IMAGE_BYTES): Message[] {
+  let used = 0, over = false;
+  const keep = new Set<object>();
+  for (let i = messages.length - 1; i >= 0; i--) {
+    for (const b of [...messages[i]!.content].reverse()) {
+      const imgs = b.type === 'image' ? [b] : b.type === 'tool_result' ? b.images ?? [] : [];
+      for (const im of imgs) {
+        const size = (im as { data?: string }).data?.length ?? 0;
+        if (!over && used + size <= budget) { used += size; keep.add(im); } else over = true;
+      }
+    }
+  }
+  if (!over) return messages;
+  return messages.map((m) => {
+    if (!hasImages([m])) return m;
+    return {
+      ...m,
+      content: m.content.flatMap((b): Block[] => {
+        if (b.type === 'image') return keep.has(b) ? [b] : [{ type: 'text', text: IMAGE_OLDER }];
+        if (b.type === 'tool_result' && b.images?.length) {
+          const kept = b.images.filter((im) => keep.has(im));
+          return kept.length === b.images.length ? [b] : [{ ...b, images: kept.length ? kept : undefined, content: `${b.content}\n${IMAGE_OLDER}` }];
+        }
+        return [b];
       }),
     };
   });
