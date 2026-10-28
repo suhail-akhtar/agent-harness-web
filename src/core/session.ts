@@ -328,6 +328,7 @@ export function nodeViews(w: WorkflowDef): WorkflowRunView['nodes'] {
 export function runView(run: RunRecord, w?: WorkflowDef): WorkflowRunView {
   return {
     id: run.id, workflow: run.workflow, status: run.status, current: run.current, cost: run.cost, error: run.error ?? run.paused?.reason,
+    ...(typeof run.at === 'number' ? { at: run.at } : {}),
     ...(run.paused ? { paused: run.paused } : {}),
     nodes: w ? nodeViews(w) : [],
     ...(w ? { start: w.start } : {}),
@@ -2305,6 +2306,7 @@ export class Session {
       const w = (await this.workflows()).find((x) => x.name === name);
       if (!w) throw new Error(this.offWorkflow(name) ?? `No workflow named "${name}".`);
       const run = newRun(w, this.meta.id, input);
+      run.at = this.history.length;
       if (this.meta.title === 'New session') {
         const first = Object.values(run.input).find((v) => v.trim()) ?? '';
         this.meta.title = `${w.name}: ${first.replace(/\s+/g, ' ')}`.slice(0, 60);
@@ -2406,6 +2408,37 @@ export class Session {
   }
 
   /** Puts files back as they were before `turn`. The conversation is not edited; the agent is told. */
+  /**
+   * Cuts the conversation back to just before one of the person's messages (the turn-th they typed, from 0),
+   * to send it again or an edited one: what came after it is removed from the stored history (and the
+   * agent's context). `expect` is that message's text: a conversation that changed since the person saw it
+   * is not cut. Files the agent changed after it stay as they are (rewind restores those). Not past a
+   * compaction: what it summarised is no longer there to go back to.
+   */
+  async cutBefore(turn: number, expect?: string): Promise<{ removed: number }> {
+    if (this.status !== 'idle') throw new Error('Stop the agent before editing an earlier message.');
+    await this.takeLease();
+    try {
+      const typed = (m: Message) => m.role === 'user' && !m.compactionSummary && !m.content.some((x) => x.type === 'tool_result') && m.content.some((x) => x.type === 'text' && !x.text.startsWith('<system-reminder>'));
+      const starts = this.history.map((m, i) => (typed(m) ? i : -1)).filter((i) => i >= 0);
+      const cut = starts[turn];
+      if (cut === undefined) throw new Error(`There is no message ${turn + 1} of yours in this conversation.`);
+      const text = this.history[cut]!.content.filter((x) => x.type === 'text').map((x) => (x as { text: string }).text).join('\n');
+      if (expect !== undefined && text.trim() !== expect.trim() && !text.trim().startsWith(expect.trim())) throw new Error('The conversation changed since it was shown: open it again, then edit the message.');
+      if (cut < this.meta.contextStart) throw new Error('That message is before the conversation was compacted: branch from a later message, or start a new conversation.');
+      const removed = this.history.length - cut;
+      this.history = this.history.slice(0, cut);
+      await writeFileAtomic(path.join(this.dir, 'history.jsonl'), this.history.map((m) => `${JSON.stringify(m)}\n`).join(''));
+      // The conversation is rebuilt from the history at the next turn.
+      this.agent = undefined;
+      this.readFiles.clear();
+      this.queued.push('<system-reminder>The user went back to an earlier message of theirs: the conversation after it was removed, and they are sending it again (perhaps changed). Files you changed after it are as you left them: check before relying on them.</system-reminder>');
+      await this.saveMeta();
+      this.emit({ kind: 'notice', level: 'info', text: `Went back to your message ${turn + 1}: ${removed} message(s) after it removed.` });
+      return { removed };
+    } finally { this.releaseSoon(); }
+  }
+
   async rewind(turn: number): Promise<string[]> {
     if (this.status !== 'idle') throw new Error('Stop the agent before rewinding.');
     await this.takeLease();

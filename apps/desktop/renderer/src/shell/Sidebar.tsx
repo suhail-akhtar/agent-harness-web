@@ -16,6 +16,7 @@ import { desktop, platform } from '../bridge';
 import { ProductMark } from '../components/ProductMark';
 import { SIDEBAR_PANE } from '../state/layout';
 import { contextItems } from './ContextMenu';
+import { copyConversation, exportConversation } from '../builtins/core.chat/export';
 
 /** The sidebar; a narrow window passes its own (unsaved) collapsed state and toggle. */
 export function Sidebar({ collapsed: forced, onToggle }: { collapsed?: boolean; onToggle?: () => void } = {}): React.ReactElement {
@@ -309,6 +310,9 @@ function ConversationRow({ s }: { s: SessionMeta }) {
     { id: 'archive', label: s.archived ? 'Unarchive' : 'Archive', icon: 'archive', onSelect: () => void act(() => (s.archived ? client.sessions.unarchive(s.id) : client.sessions.archive(s.id)), s.archived ? 'Unarchived' : 'Archived') },
     ...(s.runtime?.path ? [{ id: 'folder', label: 'Show its folder', icon: 'folder-open', onSelect: () => void desktop.showItem(s.runtime!.path!) }] : []),
     { id: 'copy-title', label: 'Copy title', icon: 'copy', onSelect: () => void desktop.clipboard(s.title || 'New conversation') },
+    { id: 'copy-md', label: 'Copy as Markdown', icon: 'copy', onSelect: () => void copyConversation(s.id) },
+    { id: 'export-md', label: 'Export as Markdown…', icon: 'download', onSelect: () => void exportConversation(s.id, 'md') },
+    { id: 'export-txt', label: 'Export as text…', icon: 'download', onSelect: () => void exportConversation(s.id, 'txt') },
     { id: 'sep', label: '', separator: true },
     { id: 'delete', label: 'Delete', icon: 'trash', danger: true, onSelect: () => void useApp.getState().ask({ title: 'Delete this conversation?', body: `"${s.title}" and its workspace history are removed. This cannot be undone.`, confirmLabel: 'Delete', danger: true }).then((yes) => { if (yes) void act(async () => { await client.sessions.remove(s.id); if (active) navigate({ view: 'core.chat:home' }); }, 'Deleted'); }) },
   ];

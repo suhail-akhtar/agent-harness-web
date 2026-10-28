@@ -71,6 +71,8 @@ Kit.start(async (harness) => {
   const refreshMs = Math.max(5, Number(settings.refreshSeconds) || 20) * 1000;
   const TABS = [['projects', 'Projects'], ['assets', 'Assets'], ['scenes', 'Scenes'], ['renders', 'Renders'], ['builds', 'Builds'], ['playtests', 'Playtests'], ['jobs', 'Jobs'], ['engines', 'Engines']];
   const route = (p, body) => Kit.studio(harness, p, body ?? {});
+  // A web game opens in the person's browser from a link the engine serves (not its file: modules and fetch need http).
+  const play = async (project, id) => { try { const r = await route('play', { project, id }); await harness.external.open(r.url); } catch (e) { toast(e.message, 'error'); } };
   const toast = (text, kind) => harness.notify.toast(String(text).slice(0, 280), { kind: kind || 'info' }).catch(() => {});
   const resultTone = (r) => (r === 'pass' ? 'ok' : r === 'fail' || r === 'crash' ? 'bad' : r === 'timeout' ? 'warn' : '');
   const buildTone = (s) => (s === 'ok' || s === 'success' || s === 'passed' ? 'ok' : s === 'failed' || s === 'error' ? 'bad' : s === 'running' ? 'running' : '');
@@ -337,6 +339,7 @@ Kit.start(async (harness) => {
         h('div', { class: 'kpi' }, h('b', {}, b.took ? Kit.secs(b.took) : '—'), h('span', { class: 'muted small' }, 'took')),
         h('div', { class: `kpi ${r.artifact && !r.artifact.exists ? 'warn' : ''}` }, h('b', {}, r.artifact?.exists ? Kit.size(r.artifact.size) : r.artifact ? 'missing' : '—'), h('span', { class: 'muted small', title: b.path || '' }, b.path ? Kit.base(b.path) : 'artifact'))),
       b.summary ? h('p', { class: 'small' }, b.summary) : null,
+      b.platform === 'web' && b.status !== 'failed' ? h('div', { class: 'row', style: { marginBottom: '12px' } }, h('button', { type: 'button', class: 'btn primary', 'data-play-build': b.id, onclick: () => play(r.project.id, b.id) }, 'Play in the browser'), h('span', { class: 'muted small' }, 'Served from this computer: a web game does not run from its file.')) : null,
       h('div', { class: 'grid2' },
         h('div', { class: 'stack' }, h('section', { class: 'card', 'data-problems': '' }, h('h2', {}, `Problems (${r.problems.length})`),
           r.problems.length ? r.problems.slice(0, 200).map((p) => h('div', { class: 'problem', 'data-problem': p.file || '' }, chip(p.severity, p.severity === 'error' ? 'bad' : 'warn'), h('div', { style: { minWidth: '0', overflowWrap: 'anywhere' } }, p.message),

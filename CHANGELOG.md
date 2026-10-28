@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- **Your messages**: copy, edit and send again, send again from here, branch a new conversation from here (under
+  each message, and on a right-click). Editing goes back to that message: what came after it is removed from
+  the conversation (files the agent changed stay as they are); a conversation that changed since it was shown
+  is not cut (POST /api/sessions/:id/cut).
+- **Export a conversation**: as Markdown or text (a save dialog), or copy it as Markdown, from the
+  conversation's header and its row in the sidebar.
+- **Workflow cards** fold once the run is done (Show graph opens them again), and sit where the run started in
+  the conversation, not after everything, when it is opened again.
+- **The context meter** measures against the compaction point, not the model's whole window.
+- **Studio: playing a web game**: studio_template play and Builds > Play in the browser serve the build on this
+  computer (a module game does not run from file://); a game opened from its file says how to play it.
+
 ## 0.2.4
 
 - **Install from a file** (Plugins page): a plugin's file, or a whole solution's in one file (Studio: its five

@@ -10,6 +10,16 @@
 </style>
 </head>
 <body>
+<script>
+  // Opened from its file (file://): browsers refuse the game's modules and data there. Say how to play it.
+  if (location.protocol === 'file:') addEventListener('DOMContentLoaded', () => {
+    const d = document.createElement('div');
+    d.setAttribute('data-file-note', '');
+    d.style.cssText = 'position:fixed;inset:auto 16px 16px 16px;max-width:640px;margin:auto;padding:14px 16px;border-radius:10px;background:#1c2230;color:#e6e9ef;font:14px/1.5 system-ui,sans-serif;box-shadow:0 6px 24px #0008;z-index:9';
+    d.textContent = 'This game runs from a web address, not from its file: browsers block its scripts on file://. Play it from Studio (Builds > Play in the browser), ask the agent for a link (studio_template play), or serve this folder (npx http-server .) and open the address it prints.';
+    document.body.append(d);
+  });
+</script>
 <!-- Studio web template platformer-2d: the gameplay is src/main.js, its settings and assets game.json. -->
 <canvas id="game" tabindex="0"></canvas>
 <script type="module" src="src/main.js"></script>

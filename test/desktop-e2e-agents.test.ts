@@ -326,6 +326,9 @@ test('desktop app end to end: the agent platform', { timeout: 15 * 60_000 }, asy
       await page.waitForSelector('[data-graph-node="approve"][data-node-status="waiting"]');
       await page.click('[data-attention] [data-pending="approval_request"] button:has-text("Approve")');
       await page.waitForSelector('[data-workflow="ship-graph"][data-status="succeeded"]', { timeout: 30_000 });
+      // Done: folded to its header; shown again on a click.
+      await page.waitForSelector('[data-workflow="ship-graph"][data-expanded="0"]');
+      await page.click('[data-workflow="ship-graph"] [data-workflow-show]');
       await page.locator('[data-workflow="ship-graph"]').scrollIntoViewIfNeeded();
       await page.click('[data-graph-node="build"]');
       await page.waitForSelector('[data-graph-output="build"]:has-text("Done: Build it")');

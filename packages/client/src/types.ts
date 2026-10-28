@@ -83,6 +83,8 @@ export type ToolDisplay =
 
 export interface WorkflowRunView {
   id: string; workflow: string; status: string; current?: string; cost: number; error?: string;
+  /** The conversation's length (stored messages) when it started: where its card goes (newer servers). */
+  at?: number;
   /** Waiting at a node whose plugin is switched off on the server (it carries on when that is switched on). */
   paused?: { node: string; plugin: string; reason: string };
   nodes: WorkflowNodeView[];

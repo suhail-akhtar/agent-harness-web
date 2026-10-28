@@ -18,6 +18,7 @@ import { setupPlayer } from './player/index.mjs';
 import { templateTool } from './templates/index.mjs';
 import { registerProductionGates } from './templates/gates.mjs';
 import { setupUiRoutes } from './ui/routes.mjs';
+import { stopAllPlaying } from './lib-play.mjs';
 
 const isPng = (n) => /\.png$/i.test(n);
 
@@ -36,6 +37,8 @@ async function findModels(root, rel = '', depth = 4, out = []) {
 
 export default {
   name: 'games3d',
+  // The games served for playing (studio_template play) stop with the harness.
+  close: () => stopAllPlaying(),
   setup(api) {
     setupAssets(api);
     setupPlayer(api);

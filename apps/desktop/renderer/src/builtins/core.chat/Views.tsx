@@ -14,8 +14,9 @@ import { TopBar } from '../../shell/Bars';
 import { HomeCardHost } from '../../registry/PluginView';
 import { Composer, chipContext, type ComposerValue } from './Composer';
 import { Transcript, fmtCost } from './Transcript';
-import { useSessionLive } from './live';
+import { reloadHistory, useSessionLive } from './live';
 import { PendingCard, respondFor } from '../../components/Pending';
+import { copyConversation, exportConversation } from './export';
 import { usePane } from '../../registry/PluginView';
 import { ProductMark } from '../../components/ProductMark';
 import { recommendedModel } from '../../state/recommend';
@@ -158,6 +159,18 @@ export function Session({ params }: { params: Record<string, string> }): React.R
     if (!Object.keys(b).length) return;
     try { const m = await client.sessions.patch(id, b); set((x) => ({ ...x, meta: m })); } catch (e) { toast((e as Error).message, { kind: 'error' }); }
   };
+  // One of the person's earlier messages, again (edited or as it was): the conversation goes back to just before it, then it is sent.
+  const editFrom = async (turn: number, before: string, text: string) => {
+    try {
+      await client.sessions.cut(id, turn, before);
+      await reloadHistory(id);
+    } catch (e) { toast((e as Error).message, { kind: 'error' }); return false; }
+    return send(text, [], 'send');
+  };
+  // A new conversation with everything up to that message (the original stays as it is).
+  const branchFrom = async (turns: number) => {
+    try { const m = await client.sessions.fork(id, turns); openSession(m.id); toast('Branched into a new conversation', { kind: 'success' }); } catch (e) { toast((e as Error).message, { kind: 'error' }); }
+  };
   const send = async (text: string, attachments: Attachment[], how: 'send' | 'queue') => {
     if (how === 'queue' && running) { setQueue((q) => [...q, text]); return true; }
     try {
@@ -185,12 +198,13 @@ export function Session({ params }: { params: Record<string, string> }): React.R
           <div className="mr-1 hidden items-center gap-3 text-[11.5px] text-hx-muted md:flex" data-session-meter>
             <ContextMeter sessionId={id} tokens={s.live.contextTokens} window={Math.min(s.live.contextWindow || Infinity, compactAt ?? Infinity) || s.live.contextWindow} />
             <UsageButton meta={s.meta} />
+            <ExportButton id={id} />
           </div>
         )}
         <Tooltip label="Run a workflow"><IconButton icon="workflow" size="sm" label="Run a workflow" onClick={() => useApp.setState({ workflowDialog: { sessionId: id } })} /></Tooltip>
       </TopBar>
       {s.stream === 'retrying' && <div className="bg-hx-warning/12 px-4 py-1 text-center text-[12px] text-hx-warning">Reconnecting to the conversation…</div>}
-      <Transcript sessionId={id} items={s.live.items} running={running} onRetry={(t) => void send(t, [], 'send')} sources={sources} />
+      <Transcript sessionId={id} items={s.live.items} running={running} onRetry={(t) => void send(t, [], 'send')} onEdit={editFrom} onBranch={branchFrom} sources={sources} />
       {s.live.retry && <div className="mx-auto w-full max-w-column px-6 pb-1 text-[12px] text-hx-warning">{s.live.retry}</div>}
       {s.pending.length > 0 && (
         <div data-attention className="hx-scroll mx-auto max-h-[65vh] w-full max-w-column shrink-0 space-y-2 overflow-y-auto px-4 pb-2 sm:px-6">
@@ -206,6 +220,23 @@ export function Session({ params }: { params: Record<string, string> }): React.R
 }
 
 /** The conversation's cost; a click shows it per model (its own and the ones its agents delegated to). */
+/** The conversation as a file (Markdown or plain text) or on the clipboard as Markdown. */
+function ExportButton({ id }: { id: string }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLButtonElement>(null);
+  const items: MenuItem[] = [
+    { id: 'copy-md', label: 'Copy as Markdown', icon: 'copy', onSelect: () => void copyConversation(id) },
+    { id: 'export-md', label: 'Export as Markdown…', icon: 'download', onSelect: () => void exportConversation(id, 'md') },
+    { id: 'export-txt', label: 'Export as text…', icon: 'file-text', onSelect: () => void exportConversation(id, 'txt') },
+  ];
+  return (
+    <>
+      <Tooltip label="Export or copy this conversation"><button ref={ref} type="button" data-export-conversation aria-label="Export this conversation" onClick={() => setOpen(!open)} className="rounded p-0.5 hover:bg-hx-hover hover:text-hx-primary"><Icon name="download" size={14} /></button></Tooltip>
+      <Popover open={open} onClose={() => setOpen(false)} anchor={ref} placement="bottom-end" className="w-[220px]" role="presentation"><MenuList items={items} onDone={() => setOpen(false)} /></Popover>
+    </>
+  );
+}
+
 function UsageButton({ meta }: { meta: import('@harness/client').SessionMeta }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLButtonElement>(null);

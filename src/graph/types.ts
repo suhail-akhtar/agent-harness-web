@@ -174,6 +174,8 @@ export interface RunRecord {
   current?: string;
   counts: Record<string, number>;
   agentRuns: number;
+  /** The conversation's length (its stored messages) when the run started: where its card goes in the transcript. */
+  at?: number;
   history: NodeRecord[];
   createdAt: number;
   updatedAt: number;

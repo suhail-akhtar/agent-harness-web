@@ -68,4 +68,4 @@ window.__game: state (loading, title, play, paused, won, gameover), player {x, y
 
 ## Build
 
-`studio_template {"action": "build"}` → build/web/ (only the assets game.json names) and build/<title>-web.zip, recorded in .studio/project.json builds; the web-build gate boots it offline.
+`studio_template {"action": "build"}` → build/web/ (only the assets game.json names) and build/<title>-web.zip, recorded in .studio/project.json builds; the web-build gate boots it offline. To let the person play it: `studio_template {"action": "play"}` gives a link (served on this computer); never a file:// path, and no server of your own.

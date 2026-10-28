@@ -17,6 +17,7 @@ import { audioTool } from '../assets/tools-audio.mjs';
 import { modelTool } from '../assets/tools-model.mjs';
 import { procgenTool } from '../assets/tools-procgen.mjs';
 import { writeZip } from './zip.mjs';
+import { playableDir, playUrl } from '../lib-play.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const WEB_DIR = path.join(here, 'web');
@@ -186,7 +187,7 @@ export const templateTool = {
   parameters: {
     type: 'object',
     properties: {
-      action: { type: 'string', enum: ['list', 'info', 'create', 'build'], description: 'What to do: list, info, create or build (default list)' },
+      action: { type: 'string', enum: ['list', 'info', 'create', 'build', 'play'], description: 'What to do: list, info, create, build, or play (a link that plays the game in a browser) (default list)' },
       template: { type: 'string', description: 'create/info: the template id' },
       project: { type: 'string', description: 'The game folder (default the workspace root)' },
       title: { type: 'string', description: 'create: the game\'s title (game.json and project.json)' },
@@ -212,9 +213,18 @@ export const templateTool = {
       if (a === 'build') {
         const project = await relIn(ctx.host, String(input.project ?? '.'));
         const b = await buildWeb(ctx.host, project, { out: input.out ? String(input.out) : undefined, zip: input.zip !== false }, ctx.signal);
-        return { content: `Web build ${b.id ?? ''} in ${b.out}/: ${b.files} files, ${(b.bytes / 1048576).toFixed(2)} MB${b.zip ? `, packaged as ${b.zip}` : ''}; assets: ${b.assets.join(', ') || 'none'}${b.missing.length ? `; MISSING: ${b.missing.join(', ')} (build them, or fix game.json)` : ''}. Open ${b.out}/index.html through a local server (npx http-server ${b.out}); the web-build gate boots it offline.`, is_error: b.missing.length > 0 };
+        return { content: `Web build ${b.id ?? ''} in ${b.out}/: ${b.files} files, ${(b.bytes / 1048576).toFixed(2)} MB${b.zip ? `, packaged as ${b.zip}` : ''}; assets: ${b.assets.join(', ') || 'none'}${b.missing.length ? `; MISSING: ${b.missing.join(', ')} (build them, or fix game.json)` : ''}. To let the person play it: studio_template {"action": "play"} gives a link (never a file:// path or index.html to double-click: browsers refuse a module game from the disk); the web-build gate boots it offline.`, is_error: b.missing.length > 0 };
       }
-      return { content: `studio_template: unknown action ${a} (list, info, create, build)`, is_error: true };
+      if (a === 'play') {
+        // Served from this computer: a link the person opens (a file:// page cannot load the game's modules and data).
+        if (ctx.host.kind === 'companion') return { content: "studio_template play: the game is on the companion's computer: serve its build folder there (npx http-server build/web) and open the address it prints.", is_error: true };
+        const project = await relIn(ctx.host, String(input.project ?? '.'));
+        const dir = playableDir(path.join(ctx.host.root, project));
+        if (!dir) return { content: `studio_template play: no index.html in ${project}/build/web or ${project}: build the game first ({"action": "build"}).`, is_error: true };
+        const url = await playUrl(dir);
+        return `Play it at ${url} (served from ${path.relative(ctx.host.root, dir).split(path.sep).join('/') || '.'} on this computer only; open again for a fresh link after two hours). Give the person this link, not a file path: a web game does not run from file://.`;
+      }
+      return { content: `studio_template: unknown action ${a} (list, info, create, build, play)`, is_error: true };
     } catch (e) { return { content: `studio_template ${a}: ${e.message}`, is_error: true }; }
   },
 };

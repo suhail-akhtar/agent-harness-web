@@ -93,6 +93,17 @@ export function registerIpc(ctx: DesktopContext): { grants: JsonFile<Grants> } {
     const r = w ? await dialog.showOpenDialog(w, { title: title ?? 'Open a folder', properties: ['openDirectory', 'createDirectory'] }) : await dialog.showOpenDialog({ properties: ['openDirectory'] });
     return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
   });
+  // Saves text the window made (a conversation as Markdown or plain text) where the person picks.
+  h('dialog:saveText', async (fileName: string, text: string, kind?: string) => {
+    const w = ctx.window();
+    const ext = kind === 'txt' ? 'txt' : 'md';
+    const name = path.basename(String(fileName)).replace(/[^\w .@()-]/g, '_') || `conversation.${ext}`;
+    const opts = { title: 'Export the conversation', defaultPath: path.join(app.getPath('documents'), name), filters: [ext === 'md' ? { name: 'Markdown', extensions: ['md'] } : { name: 'Text', extensions: ['txt'] }] };
+    const r = w ? await dialog.showSaveDialog(w, opts) : await dialog.showSaveDialog(opts);
+    if (r.canceled || !r.filePath) return null;
+    fs.writeFileSync(r.filePath, String(text), 'utf8');
+    return r.filePath;
+  });
   h('dialog:openFiles', async () => {
     const w = ctx.window();
     const r = w ? await dialog.showOpenDialog(w, { properties: ['openFile', 'multiSelections'] }) : await dialog.showOpenDialog({ properties: ['openFile', 'multiSelections'] });

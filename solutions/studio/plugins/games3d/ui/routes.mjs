@@ -43,6 +43,7 @@ import { within } from '@harness/plugin-sdk/runtime';
 import { findBinary } from '@harness/plugins/visual/lib/binaries.mjs';
 import { ENGINES } from '../sdk/engine.mjs';
 import { cancelJob, listJobs } from '../sdk/jobs.mjs';
+import { playableDir, playUrl } from '../lib-play.mjs';
 
 export class StudioError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -673,6 +674,16 @@ export function setupUiRoutes(api) {
       for (const b of p.builds) out.push({ ...b, project: p.id, projectName: p.name, engine: b.engine || p.engine, problems: undefined, errors: b.problems.filter((x) => x.severity === 'error').length, warnings: b.problems.filter((x) => x.severity === 'warning').length });
     }
     return { builds: out.sort((x, y) => String(y.at ?? '').localeCompare(String(x.at ?? ''))) };
+  });
+
+  // A web build (or the project's own index.html) served on this computer for the person's browser: a module
+  // game does not run from file://.
+  write('play', async (a) => {
+    const p = await project(a.project);
+    const b = a.id ? p.builds.find((x) => x.id === a.id) : undefined;
+    const dir = b?.path ? path.dirname(await insideBase(p.dir, b.path)) : playableDir(p.dir);
+    if (!dir) throw notFound('no web build to play: build the game first (studio_template build)');
+    return { url: await playUrl(dir) };
   });
 
   read('build', async (a) => {

@@ -25,24 +25,38 @@ export interface TranscriptProps {
   items: Item[];
   running: boolean;
   onRetry?: (text: string) => void;
+  /** From one of the person's messages (the turn-th they typed, from 0): send it again edited (or as it was), or branch a new conversation there. */
+  onEdit?: (turn: number, before: string, text: string) => Promise<boolean>;
+  onBranch?: (turn: number) => void;
   sources?: Source[];
   footer?: React.ReactNode;
 }
 
+/** What a message of the person's may do: its turn (the server counts the messages they typed), edit and branch. */
+interface UserActions { turnOf: Map<string, number>; running: boolean; onEdit?: TranscriptProps['onEdit']; onBranch?: TranscriptProps['onBranch'] }
+const UserActionsContext = React.createContext<UserActions>({ turnOf: new Map(), running: false });
+
 const extOf = (p: string) => (/\.([a-z0-9]+)$/i.exec(p)?.[1] ?? '').toLowerCase();
 
-export function Transcript({ sessionId, items, running, onRetry, sources, footer }: TranscriptProps): React.ReactElement {
+export function Transcript({ sessionId, items, running, onRetry, onEdit, onBranch, sources, footer }: TranscriptProps): React.ReactElement {
   const rows = useMemo(() => toRows(items, running), [items, running]);
   const list = useRef<VirtualListHandle>(null);
   const [atBottom, setAtBottom] = useState(true);
   const lastUser = useMemo(() => { for (let i = items.length - 1; i >= 0; i--) { const it = items[i]!; if (it.kind === 'user') return it.text; } return ''; }, [items]);
   const lastAnswerKey = useMemo(() => { for (let i = rows.length - 1; i >= 0; i--) { const r = rows[i]!; if (r.kind === 'item' && r.item.kind === 'assistant') return r.key; } return ''; }, [rows]);
   const fence = useFenceRenderer();
+  // The person's typed messages in order (what the server counts as turns); automatic ones are not.
+  const userActions = useMemo<UserActions>(() => {
+    const turnOf = new Map<string, number>();
+    for (const it of items) if (it.kind === 'user' && it.text && it.origin !== 'auto') turnOf.set(it.key, turnOf.size);
+    return { turnOf, running, onEdit, onBranch };
+  }, [items, running, onEdit, onBranch]);
   const stepsPref = useApp((s) => s.prefs.steps);
   const workingStyle = useApp((s) => s.prefs.working);
   const chapters = useMemo(() => rows.flatMap((r) => (r.kind === 'item' && r.item.kind === 'chapter' ? [{ key: r.key, index: r.item.index, title: r.item.title, summary: r.item.summary }] : [])), [rows]);
   if (!rows.length) return <div className="flex flex-1 items-center justify-center"><EmptyState icon="chat" title="Nothing here yet">Send a message to start.</EmptyState></div>;
   return (
+    <UserActionsContext.Provider value={userActions}>
     <div className="relative min-h-0 flex-1">
       {chapters.length > 0 && <Contents chapters={chapters} onJump={(k) => list.current?.scrollToKey(k)} />}
       <VirtualList
@@ -73,6 +87,7 @@ export function Transcript({ sessionId, items, running, onRetry, sources, footer
         </button>
       )}
     </div>
+    </UserActionsContext.Provider>
   );
 }
 
@@ -166,15 +181,48 @@ function ProgressCard({ item }: { item: Extract<Item, { kind: 'progress' }> }) {
 
 function UserMessage({ item }: { item: Extract<Item, { kind: 'user' }> }) {
   if (item.origin === 'auto' && !item.text && !item.images?.length) return <div data-user-message="auto" className="my-1 flex items-center gap-3 text-[11.5px] text-hx-muted"><span className="h-px flex-1 bg-hx-border-subtle" /><Icon name="refresh" size={12} />Continued on its own after a linked session reported<span className="h-px flex-1 bg-hx-border-subtle" /></div>;
+  const { turnOf, running, onEdit, onBranch } = React.useContext(UserActionsContext);
+  const turn = turnOf.get(item.key);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(item.text);
+  const [busy, setBusy] = useState(false);
+  const canGoBack = turn !== undefined && !!onEdit && !running;
+  const copy = () => void copyText(item.text).then(() => toast('Copied'));
+  const resend = async (text: string) => {
+    if (turn === undefined || !onEdit || !text.trim()) return;
+    setBusy(true);
+    try { if (await onEdit(turn, item.text, text)) setEditing(false); } finally { setBusy(false); }
+  };
+  const startEdit = () => { setDraft(item.text); setEditing(true); };
   return (
-    <div className="group flex flex-col items-end" data-user-message onContextMenu={contextItems(() => [
-      { id: 'copy', label: 'Copy message', icon: 'copy', onSelect: () => void copyText(item.text).then(() => toast('Copied')) },
+    <div className="group flex flex-col items-end" data-user-message data-turn={turn} onContextMenu={editing ? undefined : contextItems(() => [
+      { id: 'copy', label: 'Copy message', icon: 'copy', onSelect: copy },
       { id: 'quote', label: 'Quote in reply', icon: 'chat', onSelect: () => quoteInComposer(item.text) },
+      ...(canGoBack ? [{ id: 'edit', label: 'Edit and send again', icon: 'edit', onSelect: startEdit }, { id: 'retry', label: 'Send again from here', icon: 'refresh', onSelect: () => void resend(item.text) }] : []),
+      ...(turn !== undefined && onBranch ? [{ id: 'branch', label: 'Branch from here', icon: 'git-branch', onSelect: () => onBranch(turn + 1) }] : []),
     ], 'Your message')}>
       {item.images?.length ? <div className="mb-1"><ImageStrip images={item.images} /></div> : null}
       {item.files?.length ? <div className="mb-1 flex flex-wrap justify-end gap-1">{item.files.map((f) => <Badge key={f}><Icon name="file" size={11} className="mr-1" />{f}</Badge>)}</div> : null}
-      {item.text && <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl bg-hx-pill px-4 py-2.5 text-[14.5px] leading-6 text-hx-primary">{item.text}</div>}
-      <div className="mt-0.5 opacity-0 transition-opacity group-hover:opacity-100"><IconButton size="xs" icon="copy" label="Copy" onClick={() => void copyText(item.text).then(() => toast('Copied'))} /></div>
+      {editing ? (
+        <div className="w-full max-w-[85%] rounded-2xl border border-hx-border bg-hx-elevated p-2" data-user-edit>
+          <textarea autoFocus value={draft} onChange={(e) => setDraft(e.target.value)} rows={Math.min(12, Math.max(3, draft.split('\n').length + 1))}
+            onKeyDown={(e) => { if (e.key === 'Escape') setEditing(false); if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void resend(draft); } }}
+            className="w-full resize-y rounded-lg bg-transparent px-2 py-1.5 text-[14.5px] leading-6 text-hx-primary outline-none" aria-label="Edit your message" />
+          <div className="flex items-center gap-2 px-1 pt-1">
+            <span className="flex-1 text-[11.5px] text-hx-muted">The conversation goes back to this message; what came after it is removed. Files are not changed back.</span>
+            <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>
+            <Button size="sm" variant="primary" data-user-edit-send loading={busy} disabled={!draft.trim() || running} onClick={() => void resend(draft)}>Send</Button>
+          </div>
+        </div>
+      ) : item.text && <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl bg-hx-pill px-4 py-2.5 text-[14.5px] leading-6 text-hx-primary">{item.text}</div>}
+      {!editing && (
+        <div className="mt-0.5 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100" data-user-actions>
+          <IconButton size="xs" icon="copy" label="Copy" onClick={copy} />
+          {canGoBack && <IconButton size="xs" icon="edit" label="Edit and send again" data-user-edit-open onClick={startEdit} />}
+          {canGoBack && <IconButton size="xs" icon="refresh" label="Send again from here" data-user-retry onClick={() => void resend(item.text)} />}
+          {turn !== undefined && onBranch && <IconButton size="xs" icon="git-branch" label="Branch a new conversation from here" data-user-branch onClick={() => onBranch(turn + 1)} />}
+        </div>
+      )}
     </div>
   );
 }
@@ -365,16 +413,25 @@ function WorkflowCard({ item, sessionId }: { item: Extract<Item, { kind: 'workfl
   const [view, setView] = useState<'graph' | 'steps'>(graphable ? 'graph' : 'steps');
   const live = run.status === 'running' || run.status === 'waiting';
   const title = (id: string) => run.nodes.find((n) => n.id === id)?.title ?? id;
+  // Open while it runs or waits for the person; folded once it is done (the person opens it again, and their choice stays).
+  const [shown, setShown] = useState<boolean | null>(null);
+  const expanded = shown ?? live;
+  const last = run.history.at(-1);
   return (
-    <div data-workflow={run.workflow} data-status={run.status} className="my-2 rounded-xl border border-hx-border bg-hx-elevated">
-      <div className="flex items-center gap-2 border-b border-hx-border-subtle px-3 py-2">
+    <div data-workflow={run.workflow} data-status={run.status} data-expanded={expanded ? '1' : '0'} className="my-2 rounded-xl border border-hx-border bg-hx-elevated">
+      <div className={cx('flex items-center gap-2 px-3 py-2', expanded && 'border-b border-hx-border-subtle')}>
+        <button type="button" data-workflow-toggle aria-expanded={expanded} aria-label={expanded ? 'Fold the workflow' : 'Show the workflow'} onClick={() => setShown(!expanded)} className="-ml-1 rounded p-0.5 text-hx-muted hover:bg-hx-hover hover:text-hx-primary">
+          <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={14} />
+        </button>
         <Icon name="workflow" size={15} className="text-hx-accent-text" />
         <b className="text-[13px]">{run.workflow}</b>
         <Badge tone={run.status === 'succeeded' ? 'success' : run.status === 'failed' ? 'danger' : run.status === 'waiting' ? 'warning' : 'accent'}>{live && <Spinner size={10} className="mr-1" />}{({ running: 'Running', waiting: 'Needs you', succeeded: 'Succeeded', failed: 'Failed', aborted: 'Stopped', interrupted: 'Interrupted' } as Record<string, string>)[run.status] ?? run.status}</Badge>
-        <span className="ml-auto text-[11.5px] text-hx-muted">{run.history.length} steps · ${run.cost.toFixed(run.cost < 0.01 ? 4 : 2)}</span>
-        {graphable && <Tabs size="sm" value={view} onChange={(v) => setView(v as 'graph' | 'steps')} tabs={[{ id: 'graph', label: 'Graph' }, { id: 'steps', label: 'Steps' }]} />}
+        {!expanded && last && <span className="min-w-0 truncate text-[11.5px] text-hx-muted" data-workflow-last>· {title(last.node)}</span>}
+        <span className="ml-auto shrink-0 text-[11.5px] text-hx-muted">{run.history.length} steps · ${run.cost.toFixed(run.cost < 0.01 ? 4 : 2)}</span>
+        {expanded && graphable && <Tabs size="sm" value={view} onChange={(v) => setView(v as 'graph' | 'steps')} tabs={[{ id: 'graph', label: 'Graph' }, { id: 'steps', label: 'Steps' }]} />}
+        {!expanded && <Button size="sm" variant="ghost" onClick={() => setShown(true)} data-workflow-show>{graphable ? 'Show graph' : 'Show steps'}</Button>}
       </div>
-      {view === 'graph' && graphable ? <div className="py-2"><WorkflowGraph run={run} /></div> : <ol className="p-1.5">
+      {!expanded ? null : view === 'graph' && graphable ? <div className="py-2"><WorkflowGraph run={run} /></div> : <ol className="p-1.5">
         {run.history.map((h, i) => {
           const acts = h.status === 'running' ? item.activity[h.node] ?? [] : [];
           return (

@@ -181,6 +181,8 @@ export class HarnessClient {
     archive: (id: string) => this.post<SessionMeta>(`/api/sessions/${id}/archive`),
     unarchive: (id: string) => this.post<SessionMeta>(`/api/sessions/${id}/unarchive`),
     fork: (id: string, turn?: number) => this.post<SessionMeta>(`/api/sessions/${id}/fork`, turn ? { turn } : {}),
+    /** Back to just before the person's turn-th message (from 0), to send it again or edited; `expect`: its text. */
+    cut: (id: string, turn: number, expect?: string) => this.post<{ removed: number }>(`/api/sessions/${id}/cut`, { turn, ...(expect !== undefined ? { expect } : {}) }),
     history: (id: string, q: { after?: number; limit?: number } = {}) => this.optional(`history`, () => this.get<HistoryPage>(`/api/sessions/${id}/history?after=${q.after ?? 0}${q.limit ? `&limit=${q.limit}` : ''}`), async () => { const d = await this.sessions.get(id); return { total: d.history.length, messages: d.history.slice(q.after ?? 0), next: null }; }),
     workflows: (id: string) => this.get<{ workflows: WorkflowInfo[]; runs: WorkflowRunView[] }>(`/api/sessions/${id}/workflows`),
     startWorkflow: (id: string, name: string, input: Record<string, string>) => this.post<unknown>(`/api/sessions/${id}/workflows`, { name, input }),

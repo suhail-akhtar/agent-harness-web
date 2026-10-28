@@ -1512,6 +1512,12 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       if (action === 'capabilities' && method === 'GET') return send(res, 200, await s.capabilities());
       if (action === 'context' && method === 'GET') return send(res, 200, await s.contextBreakdown());
       if (action === 'checkpoints' && method === 'GET') return send(res, 200, await s.listCheckpoints());
+      if (action === 'cut' && method === 'POST') {
+        const b = await readJson(req);
+        const turn = Number(b.turn);
+        if (!Number.isInteger(turn) || turn < 0) throw new HttpError(400, 'turn must be a whole number from 0');
+        try { return send(res, 200, await s.cutBefore(turn, typeof b.expect === 'string' ? b.expect : undefined)); } catch (e) { throw new HttpError(409, (e as Error).message); }
+      }
       if (action === 'rewind' && method === 'POST') {
         const b = await readJson(req);
         const turn = Number(b.turn);

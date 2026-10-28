@@ -58,6 +58,8 @@ export const desktop = {
   overlay: (color: string, symbolColor: string) => invoke<void>('win:overlay', { color, symbolColor }).catch(() => {}),
   openFolder: (title?: string) => invoke<string | null>('dialog:openFolder', title),
   openFiles: () => invoke<Array<{ name: string; path: string; size: number; base64: string }>>('dialog:openFiles'),
+  /** Saves text to a file the person picks (a save dialog); the path, or null when cancelled. */
+  saveText: (fileName: string, text: string, kind: 'md' | 'txt') => invoke<string | null>('dialog:saveText', fileName, text, kind),
   openExternal: (url: string) => invoke<boolean>('shell:openExternal', url),
   showItem: (p: string) => invoke<void>('shell:showItem', p),
   clipboard: (text: string) => invoke<boolean>('clipboard:write', text),

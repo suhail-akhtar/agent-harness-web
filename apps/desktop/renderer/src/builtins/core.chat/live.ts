@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { apply, fromHistory, isPending, type HarnessEvent, type Live, type PendingRequest, type SessionDetail, type SessionMeta, type SessionStatus, type TaskView, type Usage } from '@harness/client';
+import { apply, fromHistory, isPending, type HarnessEvent, type Live, type Message, type WorkflowRunView, type PendingRequest, type SessionDetail, type SessionMeta, type SessionStatus, type TaskView, type Usage } from '@harness/client';
 import { client, dispatchClientCall, useData } from '../../state/data';
 import { addModelUsage, agentsFromItems, foldAgent, withTrace, type Agents } from '../../state/agents';
 
@@ -65,6 +65,28 @@ export function reduce(s: SessionLive, e: HarnessEvent, now = Date.now()): Sessi
   return next;
 }
 
+/**
+ * The finished and running workflows of a conversation that was opened, each card where its run started
+ * (run.at: the messages before it) rather than after the whole conversation; one without it (older servers)
+ * at the end. A card already there (a live event came first) is updated in place.
+ */
+export function placeRuns(live: Live, runs: WorkflowRunView[], history: Message[]): Live {
+  let out = live;
+  // Oldest first: the cards placed before this one start no later, so they sit before it.
+  const sorted = [...runs].sort((a, b) => (a.at ?? Infinity) - (b.at ?? Infinity));
+  let placed = 0;
+  for (const run of sorted) {
+    const there = out.items.some((i) => i.kind === 'workflow' && i.run.id === run.id);
+    if (there || typeof run.at !== 'number' || run.at >= history.length) { out = apply(out, { kind: 'workflow', phase: 'started', run }); continue; }
+    // The items the messages before it make, plus the cards placed among them.
+    const idx = Math.min(out.items.length, fromHistory(history.slice(0, run.at)).length + placed);
+    const card = apply({ ...out, items: [] }, { kind: 'workflow', phase: 'started', run }).items[0]!;
+    out = { ...out, items: [...out.items.slice(0, idx), card, ...out.items.slice(idx)] };
+    placed++;
+  }
+  return out;
+}
+
 /** The state of a conversation as its stored detail gives it. */
 export function fromDetail(d: SessionDetail, contextWindow: number): SessionLive {
   const items = fromHistory(d.history);
@@ -114,7 +136,8 @@ function start(id: string): void {
     setState(id, () => fromDetail(d, spec?.compactAt ?? spec?.contextWindow ?? 0));
     // Every workflow run gets its card back, finished ones too: a conversation a workflow started keeps its
     // work in the run, not the history, and would otherwise reopen empty.
-    client.sessions.workflows(id).then((r) => { if (!cancelled) setState(id, (s) => ({ ...s, live: [...r.runs].reverse().reduce((l, run) => apply(l, { kind: 'workflow', phase: 'started', run }), s.live) })); }).catch(() => {});
+    // Each card where its run started in the conversation (the messages before it), not after everything.
+    client.sessions.workflows(id).then((r) => { if (!cancelled) setState(id, (s) => ({ ...s, live: placeRuns(s.live, [...r.runs].reverse(), d.history) })); }).catch(() => {});
     // Cost and model per sub-agent (the history keeps neither).
     if (Object.keys(stores.get(id)?.state.agents ?? {}).length || Object.keys(d.meta.byModel ?? {}).length > 1) client.sessions.trace(id).then((spans) => { if (!cancelled && Array.isArray(spans)) setState(id, (s) => ({ ...s, agents: withTrace(s.agents, spans) })); }).catch(() => {});
     const stopStream = client.sessions.events(id, d.lastSeq, (e) => {
@@ -124,6 +147,12 @@ function start(id: string): void {
     }, (state) => setState(id, (s) => ({ ...s, stream: state })));
     st.stop = () => { cancelled = true; stopStream(); };
   }).catch((e: Error) => { if (!cancelled) setState(id, (s) => ({ ...s, error: e.message, loaded: true })); });
+}
+
+/** The conversation's transcript again from the server (after it was cut back to an earlier message); the stream goes on. */
+export async function reloadHistory(id: string): Promise<void> {
+  const [d, runs] = await Promise.all([client.sessions.get(id), client.sessions.workflows(id).then((r) => r.runs, () => [] as WorkflowRunView[])]);
+  setState(id, (s) => ({ ...s, meta: d.meta, status: d.status, live: placeRuns({ ...s.live, items: fromHistory(d.history) }, [...runs].reverse(), d.history), agents: agentsFromItems(fromHistory(d.history), d.meta.model) }));
 }
 
 function release(id: string): void {
