@@ -135,4 +135,9 @@ if (!dirOnly) {
   step('installer');
   run(process.execPath, [builder, '--projectDir', stage, '--config', configFile, platform, '--prepackaged', process.platform === 'darwin' ? path.dirname(resources).replace(/[\\/]Contents$/, '') : unpacked], { cwd: stage });
 }
+// Each shipped plugin as its own installable bundle beside the installer (release/plugins: <name>-<version>.tgz
+// and index.json): import one on another computer, or serve the folder as a catalogue.
+step('plugin bundles');
+fs.rmSync(path.join(release, 'plugins'), { recursive: true, force: true });
+run(process.execPath, [path.join(repo, 'scripts', 'run.mjs'), 'src/plugins/cli.ts', 'bundles', '--out', path.join(release, 'plugins')]);
 console.log(`\n[package] done: ${path.relative(repo, release)}`);

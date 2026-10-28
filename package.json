@@ -28,6 +28,7 @@
     "sandbox:image:ops": "docker build -t harness-sandbox-ops:latest -f docker/Dockerfile.sandbox-ops docker",
     "eval": "node scripts/run.mjs src/eval/cli.ts",
     "plugin": "node scripts/run.mjs src/plugins/cli.ts",
+    "plugins:bundles": "node scripts/run.mjs src/plugins/cli.ts bundles",
     "users": "node scripts/run.mjs src/server/users-cli.ts",
     "desktop:dev": "npm run dev -w @harness/desktop",
     "desktop:build": "npm run build:app -w @harness/desktop",

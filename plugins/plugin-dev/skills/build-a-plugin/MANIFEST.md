@@ -70,6 +70,7 @@ shows them on the plugin's card (Plugins > Installed, and Details), and the revi
   trust list, `engines.harness`); the version before is kept (the last five), and **Roll back** in Details
   goes back to one. A version that fails to load leaves the one before running. Shipped plugins update
   with the harness; folders the operator names (`HARNESS_PLUGINS`) are the operator's.
+- **Bundles of every plugin.** `npm run plugins:bundles -- --out dist/plugins [--key publisher.key.pem] [--base https://host/plugins/]` writes each plugin as its own `<name>-<version>.tgz` (signed in a copy when a key is given) and an `index.json` a server installs from (`HARNESS_PLUGIN_CATALOGUE=https://host/plugins/index.json`); the desktop build writes them beside the installer (`release/plugins`).
 - **Moving.** *Export* on a plugin's card saves it as a bundle (`<name>-<version>.tgz`: its folder,
   signature, tests and all). On another computer, Plugins > Developer > *Import a plugin file* reviews it
   and loads it; *Open as app* and *Desktop shortcut* then make it its own app there. On a server,

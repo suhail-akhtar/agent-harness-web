@@ -125,6 +125,38 @@ test('moving and changing a plugin: export, import on another server, update (th
   } finally { await h.close(); }
 });
 
+test('every plugin as its own bundle (plugin bundles): one .tgz each, signed in a copy, an index a server installs from and checks', async () => {
+  const { writeBundles } = await import('../src/plugins/bundles.ts');
+  const { generateKeyPair } = await import('../src/plugins/signing.ts');
+  const { unpack } = await import('../src/plugins/archive.ts');
+  const crypto = await import('node:crypto');
+  const src = await tempDir();
+  await plugin(src, 'alpha', '1.2.0', { publisher: { name: 'Acme' }, tags: ['one'], engines: { harness: '>=0.1.0' } });
+  await plugin(src, 'beta', '0.3.0', { requires: ['alpha'] });
+  const keys = await tempDir();
+  const pair = generateKeyPair();
+  await fs.writeFile(path.join(keys, 'test-publisher.pub.pem'), pair.publicPem);
+  const out = path.join(await tempDir(), 'bundles');
+  const r = await writeBundles({ from: src, out, key: pair.privatePem, base: 'https://plugins.example/' });
+  assert.deepEqual(r.bundles.map((b) => [b.file, b.signed]), [['alpha-1.2.0.tgz', true], ['beta-0.3.0.tgz', true]]);
+  assert.equal(await fs.stat(path.join(src, 'alpha', 'harness-plugin.sig')).then(() => true, () => false), false, 'the source folder is not changed');
+  const index = JSON.parse(await fs.readFile(r.index, 'utf8')) as { plugins: Array<Record<string, unknown>> };
+  assert.deepEqual(index.plugins.map((p) => [p.name, p.version, p.url, p.publisher ?? null, p.requires ?? null]), [['alpha', '1.2.0', 'https://plugins.example/alpha-1.2.0.tgz', 'Acme', null], ['beta', '0.3.0', 'https://plugins.example/beta-0.3.0.tgz', null, ['alpha']]]);
+  const data = await fs.readFile(path.join(out, 'alpha-1.2.0.tgz'));
+  assert.equal(index.plugins[0]!.sha256, crypto.createHash('sha256').update(data).digest('hex'));
+  // A server with that publisher's key installs it (signature checked); one without the key refuses it.
+  const h = await createHarness({ dataDir: await tempDir(), plugins: [], pluginKeys: keys, backgroundWork: false, scheduler: false, search: null });
+  try {
+    const e = await h.plugins.importBundle(data);
+    assert.deepEqual([e.name, e.version, /^signed by test-publisher/.test(e.signature ?? '')], ['alpha', '1.2.0', true]);
+  } finally { await h.close(); }
+  const tampered = await tempDir();
+  await unpack(data, path.join(tampered, 'alpha'));
+  await fs.appendFile(path.join(tampered, 'alpha', 'index.mjs'), '\n// changed\n');
+  const h2 = await createHarness({ dataDir: await tempDir(), plugins: [], pluginKeys: keys, backgroundWork: false, scheduler: false, search: null });
+  try { await assert.rejects(h2.plugins.importBundle(await pack(path.join(tampered, 'alpha'))), /Refused/); } finally { await h2.close(); }
+});
+
 test('bundles over the API: administrators export, import, check, update and roll back; a member may not; plugins may not take these paths', async () => {
   const { createApp } = await import('../src/server/app.ts');
   const { UserStore } = await import('../src/server/users.ts');

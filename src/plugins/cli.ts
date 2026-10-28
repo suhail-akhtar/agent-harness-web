@@ -21,7 +21,9 @@ import { runPluginTests } from './run-tests.ts';
 import { fileURLToPath } from 'node:url';
 
 const arg = (n: string) => { const i = process.argv.indexOf(`--${n}`); return i > 0 ? process.argv[i + 1] : undefined; };
-const [cmd, target] = process.argv.slice(2);
+const [cmd, second] = process.argv.slice(2);
+// The folder or name after the command (a flag there is not one: `bundles --out x`).
+const target = second?.startsWith('--') ? undefined : second;
 
 if (cmd === 'keygen' && target) {
   const out = path.resolve(arg('out') ?? '.');
@@ -45,6 +47,13 @@ if (cmd === 'keygen' && target) {
   const data = await pack(dir);
   await fs.writeFile(out, data);
   console.log(`${out}\nsha256 ${crypto.createHash('sha256').update(data).digest('hex')}`);
+} else if (cmd === 'bundles') {
+  // Every plugin in a folder (default: the shipped ones) as its own bundle, with an index.json a server or the
+  // desktop can install from (HARNESS_PLUGIN_CATALOGUE=<url of index.json>), each signed when --key is given.
+  const { writeBundles } = await import('./bundles.ts');
+  const r = await writeBundles({ from: path.resolve(target ?? path.join(import.meta.dirname, '..', '..', 'plugins')), out: path.resolve(arg('out') ?? 'dist/plugins'), ...(arg('base') ? { base: arg('base')! } : {}), ...(arg('key') ? { key: await fs.readFile(arg('key')!, 'utf8') } : {}) });
+  for (const b of r.bundles) console.log(`${b.file}  ${(b.size / 1024).toFixed(0)} KB  ${b.signed ? 'signed' : 'unsigned'}`);
+  console.log(`${r.index}: ${r.bundles.length} plugin(s)`);
 } else if (cmd === 'index' && target) {
   const dir = path.resolve(target);
   const plugins = [];
@@ -77,7 +86,7 @@ if (cmd === 'keygen' && target) {
   // --keys: the environment's API keys reach the tests (for tests on real models); without it they are removed.
   process.exit(await runPluginTests(path.resolve(target), process.argv.slice(process.argv.indexOf(target) + 1).filter((a) => a !== '--' && a !== '--keys'), { keys: process.argv.includes('--keys') }) as number);
 } else {
-  console.error('usage: npm run plugin -- new <name> [--dir d] [--js] | check <dir> [--deep] [--json] | test <dir> | keygen <name> [--out dir] | sign <dir> --key <x.key.pem> | verify <dir> --keys <pub.pem|dir> | pack <dir> [--out f.tgz] | index <dir> [--base url]');
+  console.error('usage: npm run plugin -- new <name> [--dir d] [--js] | bundles [<plugins dir>] [--out dir] [--base url] [--key k.pem] | check <dir> [--deep] [--json] | test <dir> | keygen <name> [--out dir] | sign <dir> --key <x.key.pem> | verify <dir> --keys <pub.pem|dir> | pack <dir> [--out f.tgz] | index <dir> [--base url]');
   process.exit(2);
 }
 
