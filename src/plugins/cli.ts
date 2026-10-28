@@ -48,10 +48,11 @@ if (cmd === 'keygen' && target) {
   await fs.writeFile(out, data);
   console.log(`${out}\nsha256 ${crypto.createHash('sha256').update(data).digest('hex')}`);
 } else if (cmd === 'bundles') {
-  // Every plugin in a folder (default: the shipped ones) as its own bundle, with an index.json a server or the
+  // Every plugin in a folder (default: the shipped ones, the core's and every solution's) as its own bundle, with an index.json a server or the
   // desktop can install from (HARNESS_PLUGIN_CATALOGUE=<url of index.json>), each signed when --key is given.
   const { writeBundles } = await import('./bundles.ts');
-  const r = await writeBundles({ from: path.resolve(target ?? path.join(import.meta.dirname, '..', '..', 'plugins')), out: path.resolve(arg('out') ?? 'dist/plugins'), ...(arg('base') ? { base: arg('base')! } : {}), ...(arg('key') ? { key: await fs.readFile(arg('key')!, 'utf8') } : {}) });
+  const { shippedPluginDirs } = await import('./shipped.ts');
+  const r = await writeBundles({ from: target ? path.resolve(target) : shippedPluginDirs(path.join(import.meta.dirname, '..', '..')), out: path.resolve(arg('out') ?? 'dist/plugins'), ...(arg('base') ? { base: arg('base')! } : {}), ...(arg('key') ? { key: await fs.readFile(arg('key')!, 'utf8') } : {}) });
   for (const b of r.bundles) console.log(`${b.file}  ${(b.size / 1024).toFixed(0)} KB  ${b.signed ? 'signed' : 'unsigned'}`);
   console.log(`${r.index}: ${r.bundles.length} plugin(s)`);
 } else if (cmd === 'index' && target) {

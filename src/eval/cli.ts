@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getModel } from '../core/models.ts';
+import { evalDirs, shippedPluginDirs } from '../plugins/shipped.ts';
 import { type HarnessConfig, loadCases, parseConfigs, parseInlineConfig, rejudge, runEvals } from './runner.ts';
 
 const arg = (n: string, d?: string) => { const i = process.argv.indexOf(`--${n}`); return i > 0 ? process.argv[i + 1] : d; };
@@ -13,11 +14,14 @@ const all = (n: string) => process.argv.flatMap((a, i) => (a === `--${n}` && i +
 const list = (v?: string) => (v ? v.split(',').map((x) => x.trim()).filter(Boolean) : undefined);
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const cases = await loadCases(path.join(appRoot, 'evals'), list(arg('packs')), list(arg('cases')));
-const plugins = [path.join(appRoot, 'plugins'), ...(process.env.HARNESS_PLUGINS || '').split(path.delimiter).filter(Boolean)];
+// The core's eval packs (evals/) and each solution's (solutions/<name>/evals/).
+const allCases = async (packs?: string[], only?: string[]) => (await Promise.all(evalDirs(appRoot).map((d) => loadCases(d, packs, only)))).flat();
+const cases = await allCases(list(arg('packs')), list(arg('cases')));
+const shipped = shippedPluginDirs(appRoot);
+const plugins = [...shipped, ...(process.env.HARNESS_PLUGINS || '').split(path.delimiter).filter(Boolean)];
 const again = arg('rejudge');
 if (again) {
-  const runs = await rejudge(path.resolve(again), await loadCases(path.join(appRoot, 'evals')), { plugins, shipped: [path.join(appRoot, 'plugins')], log: (m) => console.log(m) });
+  const runs = await rejudge(path.resolve(again), await allCases(), { plugins, shipped, log: (m) => console.log(m) });
   console.log(`
 ${runs.filter((r) => r.pass).length}/${runs.filter((r) => !r.unscored).length} passed${runs.some((r) => r.unscored) ? ` (${runs.filter((r) => r.unscored).length} not scored: provider errors or the machine asleep)` : ''}. Report: ${path.join(path.resolve(again), 'report.md')}`);
   process.exit(0);
@@ -38,7 +42,7 @@ console.log(`${cases.length} case(s) x ${models.length} model(s) x ${repeats}${c
 const runs = await runEvals({
   cases, models, repeats, out, concurrency: Number(arg('concurrency', '3')),
   plugins, configs,
-  shipped: [path.join(appRoot, 'plugins')],
+  shipped,
   log: (s) => console.log(s),
 });
 console.log(`\n${runs.filter((r) => r.pass).length}/${runs.filter((r) => !r.unscored).length} passed${runs.some((r) => r.unscored) ? ` (${runs.filter((r) => r.unscored).length} not scored: provider errors or the machine asleep)` : ''}. Report: ${path.join(out, 'report.md')}`);

@@ -1,0 +1,50 @@
+{
+  "name": "engine-unreal",
+  "version": "1.1.0",
+  "description": "Unreal Engine 5 for Studio, Blueprint and Python first: the unreal tool finds the engine and its gaps (no MSVC), makes projects from the Blueprint templates (third person, first person, top down, blank; side-scroller and top-down 2D setups with an orthographic camera) with editor Python and Remote Control on, describes levels, actors, assets and Blueprints, runs editor Python with the harness_ue helpers (levels from a layout, materials, Blueprints with components, variables and graphs through the 5.8 graph API, imports, game modes), captures frames, renders turntables with Movie Render Queue, runs Automation tests and Python checks, packages for Win64 with RunUAT BuildCookRun and the precompiled game binary (no compiler needed), plays builds with scripted inputs (frames, fps, memory, errors, a playtest report), runs a paused step server an AI player drives, and bridges to an editor it launches through Remote Control. Gates: unreal-project, unreal-package, unreal-automation. Unreal runs on this machine (no sandbox image); it never touches an editor it did not start.",
+  "icon": "box",
+  "category": "Games and 3D",
+  "tags": [
+    "unreal engine",
+    "game engine",
+    "games",
+    "studio"
+  ],
+  "publisher": {
+    "name": "Suhail Akhtar",
+    "url": "https://github.com/suhail-akhtar/agent-harness-web"
+  },
+  "license": "MIT",
+  "links": {
+    "repository": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/solutions/studio/plugins/engine-unreal",
+    "docs": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/solutions/studio/docs",
+    "support": "https://github.com/suhail-akhtar/agent-harness-web/issues"
+  },
+  "engines": {
+    "harness": ">=0.2.3 <0.3.0"
+  },
+  "changelog": "CHANGELOG.md",
+  "solution": {
+    "title": "Studio: Unreal Engine"
+  },
+  "requires": [
+    "games3d"
+  ],
+  "main": "index.mjs",
+  "permissions": {
+    "processes": true
+  },
+  "agents": "agents",
+  "skills": "skills",
+  "ui": {
+    "apiVersion": 1,
+    "displayName": "Unreal Engine",
+    "icon": "box",
+    "category": "Studio",
+    "trust": "declarative",
+    "guide": "GUIDE.md",
+    "tools": [
+      "unreal"
+    ]
+  }
+}

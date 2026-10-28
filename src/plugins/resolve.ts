@@ -15,10 +15,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const SDK = pathToFileURL(path.join(import.meta.dirname, '..', '..', 'packages', 'plugin-sdk', 'src') + path.sep).href;
 const CORE = pathToFileURL(path.join(import.meta.dirname, '..', '..') + path.sep).href;
-const SDK_FILES: Record<string, string> = { '@harness/plugin-sdk': 'index.ts', '@harness/plugin-sdk/runtime': 'runtime.ts', '@harness/plugin-sdk/testing': 'testing.ts', '@harness/plugin-sdk/ui': 'ui.ts' };
+const SDK_FILES: Record<string, string> = { '@harness/plugin-sdk': 'index.ts', '@harness/plugin-sdk/runtime': 'runtime.ts', '@harness/plugin-sdk/testing': 'testing.ts', '@harness/plugin-sdk/testing/desktop': 'testing-desktop.ts', '@harness/plugin-sdk/ui': 'ui.ts' };
 /** Plugin name -> its folder (a file URL ending in /). */
 const dirs = new Map<string, string>();
-/** Folders whose sub-folders are plugins by name (the checkout's plugins/: tests, scripts). */
+/** Folders whose sub-folders are plugins by name (the checkout's plugins/ and solutions/<name>/plugins/: tests, scripts). */
 const roots: string[] = [];
 let registered = false;
 

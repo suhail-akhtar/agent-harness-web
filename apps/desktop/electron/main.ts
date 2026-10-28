@@ -29,12 +29,18 @@ const repoGuess = path.resolve(desktopDir, '..', '..');
 const repoRoot = !app.isPackaged && fs.existsSync(path.join(repoGuess, 'src', 'server', 'main.ts')) ? repoGuess : null;
 
 // ---- the product profile: name, app id, brand ----
+/** The folder the profile's relative paths (trustedKeys) are read from. */
+let productDir: string | undefined;
 function loadProduct(): ProductProfile {
   const candidates = [process.env.HARNESS_PRODUCT, app.isPackaged ? path.join(process.resourcesPath, 'product.json') : undefined, repoRoot ? path.join(repoRoot, 'products', 'harness.json') : undefined].filter(Boolean) as string[];
-  for (const c of candidates) { try { return normaliseProduct(JSON.parse(fs.readFileSync(c, 'utf8'))); } catch { /* next */ } }
+  for (const c of candidates) { try { const p = normaliseProduct(JSON.parse(fs.readFileSync(c, 'utf8'))); productDir = path.dirname(path.resolve(c)); return p; } catch { /* next */ } }
   return normaliseProduct({});
 }
 const product = loadProduct();
+// The official publishers' keys: packaged, in resources/keys (scripts/package.mjs); else beside the profile.
+const publisherKeys = (product.trustedKeys ?? [])
+  .map((k) => (app.isPackaged && !process.env.HARNESS_PRODUCT ? path.join(process.resourcesPath, 'keys', path.basename(k)) : productDir ? path.resolve(productDir, k) : ''))
+  .filter((k) => k && fs.existsSync(k));
 // Under the end-to-end tests (HARNESS_DESKTOP_TEST=1) the window is shown without focus off every display, never
 // flashed, and nothing notifies: playwright drives it through CDP. HARNESS_E2E_SHOW=1 shows it on screen to watch.
 const quiet = process.env.HARNESS_DESKTOP_TEST === '1' && process.env.HARNESS_E2E_SHOW !== '1';
@@ -76,7 +82,8 @@ const local = new EngineHost({
     const plugins = [...(process.env.HARNESS_PLUGINS ?? '').split(path.delimiter).filter(Boolean), ...withCode].join(path.delimiter);
     // The product's edition: the solutions a new engine starts with (an existing one keeps what is installed).
     const solutions: Record<string, string> = !process.env.HARNESS_SOLUTIONS && product.server.solutions?.length ? { HARNESS_SOLUTIONS: product.server.solutions.join(',') } : {};
-    return { ...solutions, ...(plugins ? { HARNESS_PLUGINS: plugins } : {}), HARNESS_HOME: home.layout.home, HARNESS_DATA: home.dataDir, HARNESS_LOCAL_ROOTS: localRoots().join(path.delimiter), HARNESS_DESKTOP: '1', ...(typeof limit === 'number' && limit >= 0 ? { HARNESS_MAX_COST_USD: String(limit) } : {}) };
+    const publishers: Record<string, string> = !process.env.HARNESS_PUBLISHER_KEYS && publisherKeys.length ? { HARNESS_PUBLISHER_KEYS: publisherKeys.join(path.delimiter) } : {};
+    return { ...solutions, ...publishers, ...(plugins ? { HARNESS_PLUGINS: plugins } : {}), HARNESS_HOME: home.layout.home, HARNESS_DATA: home.dataDir, HARNESS_LOCAL_ROOTS: localRoots().join(path.delimiter), HARNESS_DESKTOP: '1', ...(typeof limit === 'number' && limit >= 0 ? { HARNESS_MAX_COST_USD: String(limit) } : {}) };
   },
 });
 let engine: Engine = local;

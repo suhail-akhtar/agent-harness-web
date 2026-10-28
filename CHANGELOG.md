@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.3
+
+- **Solutions apart from the core**: a complete product on the core lives in `solutions/<name>` with its own
+  version, plugins, tests, evals, docs and changelog. Studio is the first (`solutions/studio`, Studio 1.1.0:
+  games3d and the Blender, Godot, Unity and Unreal engines); its changes are in solutions/studio/CHANGELOG.md.
+  The core finds every solution's plugins in the checkout; `npm test -- --core` or `--solution=studio` runs
+  one part's tests.
+- **The plugin test kit** covers what a plugin's or solution's tests need (`@harness/plugin-sdk/testing`:
+  createHarness, pluginDir, hosts, gates, skills, workflows, evals, fixtures; `/testing/desktop`: how the
+  desktop app shows a plugin), so they never import the harness's own files; the core's suite checks that no
+  solution does. `@harness/plugin-sdk/runtime` has HARNESS_VERSION and version ranges (`satisfies`).
+- **Official and verified**: plugins signed with an official publisher's key (the desktop product's
+  `trustedKeys`: Suhail Akhtar's) are Official and Verified on the Plugins page; a signed plugin changed
+  afterwards says its signature does not match; a person's own plugins load as before. The desktop build
+  signs every bundle with the publisher's key when there is one (HARNESS_PUBLISHER_KEY).
+- **Harness Studio**: a product can ship solutions inside its engine (`"solutions"` in products/*.json);
+  `HARNESS_PRODUCT=products/studio.json npm run desktop:build` builds the core with Studio. The core's
+  installer ships the core; Studio installs into it as bundles.
+
 ## 0.2.2
 
 - **Questions from the agent**: suggested answers with what each does and the recommended one marked; a form's

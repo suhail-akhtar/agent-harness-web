@@ -20,7 +20,7 @@
   "home": {
     "cards": ["core.inbox:attention", "core.chat:recent"]
   },
-  "trustedKeys": ["keys/harness.pub"],
+  "trustedKeys": ["keys/suhail-akhtar.pub.pem"],
   "policy": { "lock": {}, "defaults": {} },
   "server": { "mode": "local" }
 }

@@ -123,7 +123,7 @@ test('deferral in a session with bundled plugins: plugin tools wait behind load_
     const s = await h.sessions.create({ model: 'claude-haiku-5-5', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: await tempDir() } });
     const before = await s.sentToolSpecs();
     assert.ok(before.all.some((t) => t.name === 'render') && !before.sent.some((t) => t.name === 'render'));
-    assert.ok(before.groups.some((g) => g.id === 'games3d'), 'games3d is a group');
+    assert.ok(before.groups.some((g) => g.id === 'devops'), 'devops is a group');
     assert.ok(before.sent.length < before.all.length);
     await s.send('render my page');
     await until(() => h.sessions.statusOf(s.meta.id) === 'idle' && fake.requests.length >= 2);

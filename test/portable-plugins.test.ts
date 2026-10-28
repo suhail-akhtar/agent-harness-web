@@ -11,6 +11,8 @@ import { createHarness } from '../src/kernel/harness.ts';
 import { pack, unpack } from '../src/plugins/archive.ts';
 import { registerPluginDir } from '../src/plugins/resolve.ts';
 import { tempDir } from './helpers.ts';
+import { pluginDir } from '../src/plugins/test-fixtures.ts';
+import { solutionDirs } from '../src/plugins/shipped.ts';
 
 const repo = path.resolve(import.meta.dirname!, '..');
 const SOLUTIONS = ['aiops', 'sdlc', 'devops', 'games3d', 'engine-blender', 'engine-godot', 'engine-unity', 'engine-unreal'];
@@ -24,10 +26,23 @@ async function* files(dir: string): AsyncGenerator<string> {
   }
 }
 
+test('portable: a solution (solutions/<name>) reaches the harness only through the SDK, its tests too: no @harness/core/ import, no path into the core', async () => {
+  const found: string[] = [];
+  for (const sol of solutionDirs(repo)) {
+    for await (const f of files(sol)) {
+      if (!/\.(m?js|ts)$/.test(f) || /[\/](node_modules|vendor)[\/]/.test(f)) continue;
+      const text = await fs.readFile(f, 'utf8');
+      for (const m of text.matchAll(/['"](@harness\/core\/[^'"]+)['"]/g)) found.push(`${path.relative(repo, f)}: ${m[1]}`);
+    }
+  }
+  assert.deepEqual(found, [], 'import @harness/plugin-sdk/testing (or /testing/desktop) instead');
+  assert.ok(solutionDirs(repo).some((d) => path.basename(d) === 'studio'), 'Studio is a solution of its own');
+});
+
 test('portable: no module of a solution imports outside its own folder by relative path', async () => {
   const escapes: string[] = [];
   for (const n of SOLUTIONS) {
-    const dir = path.join(repo, 'plugins', n);
+    const dir = pluginDir(n);
     for await (const f of files(dir)) {
       const text = await fs.readFile(f, 'utf8');
       for (const m of text.matchAll(/(?:from\s+|import\s*\(\s*)['"](\.{1,2}\/[^'"]+)['"]/g)) {
@@ -54,11 +69,11 @@ test('portable: names resolve to where a plugin is (registered), the SDK to the 
 test('portable: a solution packed and unpacked into another server\'s install folder loads and works there; Studio\'s engine finds Studio\'s copy', async () => {
   const install = path.join(await tempDir(), 'installed-plugins');
   await fs.mkdir(install, { recursive: true });
-  for (const n of ['devops', 'games3d', 'engine-godot']) await unpack(await pack(path.join(repo, 'plugins', n)), path.join(install, n));
+  for (const n of ['devops', 'games3d', 'engine-godot']) await unpack(await pack(pluginDir(n)), path.join(install, n));
   const logs: string[] = [];
   // The core's plugins from the harness (as a server ships them); the solutions only from the install folder.
   const h = await createHarness({
-    dataDir: await tempDir(), installDir: install, plugins: ['quality-gates', 'visual'].map((n) => path.join(repo, 'plugins', n)),
+    dataDir: await tempDir(), installDir: install, plugins: ['quality-gates', 'visual'].map((n) => pluginDir(n)),
     backgroundWork: false, scheduler: false, search: null, log: (m) => logs.push(m),
   });
   try {

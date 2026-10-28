@@ -279,6 +279,8 @@ A plugin is a folder with `harness-plugin.json`. **[The plugin SDK](docs/plugin-
 
 Every plugin is a bundle: its display name, icon, publisher, licence, links, changelog and tests travel with it, it says which harness versions it runs on (`engines.harness`), and it is updated (the version before kept, roll back any time), exported as a `.tgz` and imported on another computer or server from the Plugins page. What changed in each release: [CHANGELOG.md](CHANGELOG.md).
 
+**The repository: the core, and solutions.** The core is `src/`, `packages/`, `apps/desktop` and the plugins that ship with it (`plugins/`: visual, documents, research, computer, integrations, quality gates, plugin-dev, and for now aiops, devops and sdlc). A solution is a complete product on the core in `solutions/<name>`, with its own version, plugins, tests, eval packs, docs and changelog, released apart from the core. **[Studio](solutions/studio/README.md)** (games and 3D) is the first one; the others follow. In the checkout the core finds every solution's plugins (`src/plugins/shipped.ts`), and `npm test` runs every test (`--core` for the core's only, `--solution=studio` for one solution's). A solution builds on the core only through the SDK; its tests use only the test kit (`@harness/plugin-sdk/testing`), and the core's suite checks that. A solution ships in one of two ways. Its plugins can be signed bundles that install into the core app; signed with an official publisher's key (the product's `trustedKeys`), they show as **Official** and **Verified**, and a changed file shows as not matching. Or a product ships it inside its engine: `HARNESS_PRODUCT=products/studio.json npm run desktop:build` builds Harness Studio.
+
 ```json
 {
   "name": "acme",
@@ -501,7 +503,7 @@ LibreOffice runs without network (`unshare -rn`) where the kernel allows, so a d
 
 `make-deck` and `write-document`: storyline and outline (with the sources checked against each other), optional approval, build with a script (PptxGenJS / docx), render-and-fix, an independent `visual-reviewer` that renders every page and checks provenance (every number and label must come from the sources), up to two revision rounds, PDF export and a delivery note. Skills carry design rules and recipes that were run and rendered before they shipped (number formats on chart labels, sizing text boxes, real heading styles, page numbers).
 
-### Games and 3D (`plugins/games3d`)
+### Games and 3D: Studio (`solutions/studio`)
 
 `build-game`: design document and `playtest.json`, build (Canvas 2D or Three.js), `web-console` + `playtest` gates with a fix loop, an independent `playtester` that plays with real input and screenshots, a polish round with a scenario for every bug fixed, and a how-to-play README. `model-3d`: plan with real dimensions, the model as code (`model.js`) with a viewer that shows fixed views, look-and-fix, export `model.glb`, the `gltf-valid` gate and `model_info` (container checks, triangles per placed instance, size from composed node transforms), an independent `art-director`, revisions. The skills hold a complete template game and a Three.js viewer that were run in the headless browser before they shipped.
 

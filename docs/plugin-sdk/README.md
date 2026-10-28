@@ -99,12 +99,13 @@ The reference lives with the `build-a-plugin` skill, so agents and people read t
 | `npm run plugin -- new` | the template: tools, data, routes, a skill, a guide, a page, tests |
 | [`examples/plugins/acme`](../../examples/plugins/acme) | a tool, a gate, a hook, an agent, a skill |
 | [`examples/plugins/hello-frame`](../../examples/plugins/hello-frame) | the page protocol by hand (no SDK) |
-| `plugins/` | the shipped plugins (Operations, Studio, DevOps...) |
+| `plugins/` | the plugins shipped with the core (Operations, DevOps, SDLC, visual, documents...) |
+| [`solutions/studio`](../../solutions/studio/README.md) | a whole solution on the SDK: five plugins, its own version, tests (test kit only), evals and docs |
 
 ## Types
 
 `@harness/plugin-sdk` has the types of everything (`import type { PluginAPI, PluginDefinition } from
-'@harness/plugin-sdk'`); `@harness/plugin-sdk/testing` the test kit; `@harness/plugin-sdk/ui` the
+'@harness/plugin-sdk'`); `@harness/plugin-sdk/testing` the test kit (and the parts of the harness a plugin's tests build on; `/testing/desktop` for how the desktop app shows it); `@harness/plugin-sdk/ui` the
 page SDK and UI kit types. A plugin imports only types from it (nothing to bundle); the template's
 `tsconfig.json` points at this checkout, so editors and `tsc` check plugin code, and the review runs
 `tsc` when a plugin has one.

@@ -12,7 +12,7 @@
     "skipLibCheck": true,
     "types": ["node"],
     "lib": ["es2023", "dom"],
-    "paths": { "@harness/core/*": ["./*"] }
+    "paths": { "@harness/core/*": ["./*"], "@harness/plugins/*": ["./plugins/*", "./solutions/studio/plugins/*"] }
   },
-  "include": ["src", "test", "plugins/*/test", "bench", "scripts", "packages/plugin-ui/src", "packages/plugin-sdk/src", "packages/client/src"]
+  "include": ["src", "test", "plugins/*/test", "solutions/*/test", "solutions/*/plugins/*/test", "bench", "scripts", "packages/plugin-ui/src", "packages/plugin-sdk/src", "packages/client/src"]
 }

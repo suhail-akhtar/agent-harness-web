@@ -108,6 +108,9 @@ function PluginCard({ p }: { p: PluginEntry }) {
             <span className="text-[11.5px] text-hx-muted">{p.name} {p.version}</span>
             <Badge tone={builtin ? 'accent' : p.source === 'dev' ? 'info' : 'neutral'}>{builtin ? 'Built in' : p.source}</Badge>
             {!builtin && <span data-tier={p.tier ?? 'custom'}><Badge tone={p.tier === 'official' ? 'success' : 'neutral'}>{p.tier === 'official' ? 'Official' : 'Custom'}</Badge></span>}
+            {/* Signed by an official publisher and every file as signed; or a signature that does not verify. */}
+            {p.tier === 'official' && p.signature?.startsWith('signed by ') && <span data-verified={p.name} title={`Every file is as ${p.info?.publisher?.name ?? 'the publisher'} signed it (${p.signature}).`}><Badge tone="success">Verified</Badge></span>}
+            {p.signature?.startsWith('signed, not verified') && <span data-unverified={p.name} title={p.signature}><Badge tone="danger">Signature does not match</Badge></span>}
             {p.ui && <Badge>{p.ui.trust === 'native' ? 'native UI' : p.ui.trust === 'frame' ? 'frame UI' : 'declarative UI'}</Badge>}
             {required && <Badge tone="warning">Required</Badge>}
             {p.update && <span data-update-available={p.update.latest}><Badge tone="info">Update: {p.update.latest}</Badge></span>}

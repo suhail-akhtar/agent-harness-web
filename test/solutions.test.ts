@@ -9,6 +9,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { createHarness, type HarnessOptions } from '../src/kernel/harness.ts';
 import { tempDir } from './helpers.ts';
+import { pluginDir } from '../src/plugins/test-fixtures.ts';
 
 async function shipped(): Promise<string> {
   const root = path.join(await tempDir(), 'plugins');
@@ -94,8 +95,7 @@ test('solutions: a data folder in use before keeps every solution; HARNESS_SOLUT
 });
 
 test('solutions: the real ones are marked, and an engine of Studio requires Studio', async () => {
-  const dir = path.join(import.meta.dirname, '..', 'plugins');
-  const m = async (n: string) => JSON.parse(await fs.readFile(path.join(dir, n, 'harness-plugin.json'), 'utf8')) as { solution?: { title: string }; requires?: string[] };
+  const m = async (n: string) => JSON.parse(await fs.readFile(path.join(pluginDir(n), 'harness-plugin.json'), 'utf8')) as { solution?: { title: string }; requires?: string[] };
   for (const [n, title] of [['aiops', 'Operations'], ['devops', 'DevOps'], ['sdlc', 'Engineering'], ['games3d', 'Studio']] as const) assert.equal((await m(n)).solution?.title, title, n);
   for (const n of ['engine-blender', 'engine-godot', 'engine-unity', 'engine-unreal']) assert.deepEqual((await m(n)).requires, ['games3d'], n);
   for (const n of ['quality-gates', 'research', 'documents', 'integrations', 'visual', 'computer', 'plugin-dev']) assert.equal((await m(n)).solution, undefined, `${n} stays core`);

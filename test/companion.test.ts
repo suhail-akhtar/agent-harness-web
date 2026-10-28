@@ -7,7 +7,9 @@ import { createCompanionHandler, type CompanionJob } from '../src/companion/hand
 import { createHarness } from '../src/kernel/harness.ts';
 import { CompanionHub, mirrorPath } from '../src/runtime/companion.ts';
 import { DockerHost, dockerAvailable, dockerDefaults, imageExists } from '../src/runtime/docker.ts';
-import { FakeProvider, fakeGodot, tempDir, testPicture } from './helpers.ts';
+import { fakeGodot } from '@harness/plugins/games3d/test/fixtures/fake-godot.ts';
+import { pluginDir } from '../src/plugins/test-fixtures.ts';
+import { FakeProvider, tempDir, testPicture } from './helpers.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const { chromiumPath } = await import('../plugins/visual/lib/browser.mjs');
@@ -241,7 +243,7 @@ const GODOT_SCRIPT = 'extends Node2D\n\nfunc _process(_delta: float) -> void:\n\
 
 /** A companion session whose model asks for one godot screenshot; returns what the model was sent back. */
 async function companionScreenshot(dir: string, handler: Parameters<typeof createCompanionHandler>[1], info: Record<string, unknown> = {}) {
-  const h = await createHarness({ dataDir: await tempDir(), plugins: ['games3d', 'engine-blender', 'engine-godot'].map((p) => path.join(here, '..', 'plugins', p)), search: null, memory: 'off' });
+  const h = await createHarness({ dataDir: await tempDir(), plugins: ['games3d', 'engine-blender', 'engine-godot'].map((p) => pluginDir(p)), search: null, memory: 'off' });
   const { id } = await h.companions.create('laptop');
   const stop = runCompanionWith(h.companions, id, dir, handler, info);
   const fake = new FakeProvider([{ calls: [{ name: 'godot', input: { action: 'screenshot', project: 'game', frames: 3, out: 'shots/start.png' } }] }, { text: 'looks fine' }]);

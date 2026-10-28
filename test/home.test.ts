@@ -238,7 +238,8 @@ test('the CLI and the server default to the home: the CLI\'s data and scratch fo
   server.stdout.on('data', (b) => { log += b; }); server.stderr.on('data', (b) => { log += b; });
   try {
     const deadline = Date.now() + 60_000;
-    while (!/listening on/.test(log) && Date.now() < deadline) await new Promise((res) => setTimeout(res, 200));
+    // The lines after 'listening on' may come in a later chunk: wait for the last one.
+    while (!/local folders:/.test(log) && Date.now() < deadline) await new Promise((res) => setTimeout(res, 200));
     assert.match(log, /listening on/, log);
     assert.match(log, new RegExp(`data: ${path.join(home, 'data').replace(/\\/g, '\\\\')}`));
     const cfg = await (await fetch(`http://127.0.0.1:${port}/api/config`, { headers: { authorization: 'Bearer home-test' } })).json() as { runtimes: { local: boolean; localRoots: string[] } };

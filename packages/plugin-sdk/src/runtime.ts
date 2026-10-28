@@ -17,6 +17,8 @@ export const HARNESS_ROOT: string = path.resolve(import.meta.dirname, '..', '..'
 
 /** A Tool object from a plain definition (what api.registerTool does with one; for code that builds tools ahead). */
 export { defineTool } from '../../../src/plugins/api.ts';
+// This harness's version, and npm-style version ranges (a plugin's engines.harness).
+export { HARNESS_VERSION, compareVersions, satisfies } from '../../../src/plugins/bundle.ts';
 export type { ToolDefinition } from '../../../src/plugins/api.ts';
 
 // ---- paths and files ----

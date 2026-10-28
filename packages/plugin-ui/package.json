@@ -1,6 +1,6 @@
 {
   "name": "@harness/plugin-ui",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
   "description": "The UI contract of harness plugins: the manifest's ui section, capabilities, the frame protocol and the SDK frames use.",
   "license": "MIT",

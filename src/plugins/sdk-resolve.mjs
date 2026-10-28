@@ -4,5 +4,7 @@
 // ('@harness/core/...') from this harness, with nothing installed in the folder (see resolve.ts).
 import path from 'node:path';
 import { registerPluginRoot } from './resolve.ts';
+import { shippedPluginDirs } from './shipped.ts';
 
-registerPluginRoot(path.join(import.meta.dirname, '..', '..', 'plugins'));
+// The core's plugins/ and each solution's solutions/<name>/plugins/.
+for (const d of shippedPluginDirs(path.join(import.meta.dirname, '..', '..'))) registerPluginRoot(d);

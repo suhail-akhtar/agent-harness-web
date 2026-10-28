@@ -15,7 +15,11 @@
  *    apps/desktop/release/.
  *
  * The product profile (products/harness.json, or HARNESS_PRODUCT=path) gives the name, the app id
- * and the icon; it is shipped as resources/product.json.
+ * and the icon; it is shipped as resources/product.json, its publishers' keys (trustedKeys) as
+ * resources/keys. The engine holds the core's plugins and the solutions the profile names ("solutions":
+ * products/studio.json ships Studio); every plugin, the core's and every solution's, is also written as its
+ * own bundle in release/plugins, signed with the publisher's key when there is one (HARNESS_PUBLISHER_KEY, a
+ * private key file; default ~/.harness-publisher/*.pem).
  */
 
 import fs from 'node:fs';
@@ -57,6 +61,14 @@ step('staging the engine');
 const skip = (p) => !/[\\/](\.harness-data|test|tests|__tests__)([\\/]|$)/.test(path.relative(repo, p)) && !p.endsWith('.map');
 copy(path.join(repo, 'src'), path.join(engine, 'src'), skip);
 copy(path.join(repo, 'plugins'), path.join(engine, 'plugins'), skip);
+// The solutions this edition ships (solutions/<name>/plugins); the others are installed as bundles.
+for (const s of product.solutions ?? []) {
+  const from = path.join(repo, 'solutions', s);
+  if (!fs.existsSync(path.join(from, 'plugins'))) throw new Error(`${path.relative(repo, productFile)}: no solution "${s}" in solutions/`);
+  copy(path.join(from, 'plugins'), path.join(engine, 'solutions', s, 'plugins'), skip);
+  for (const f of ['package.json', 'CHANGELOG.md']) if (fs.existsSync(path.join(from, f))) fs.copyFileSync(path.join(from, f), path.join(engine, 'solutions', s, f));
+  console.log(`  solution: ${s}`);
+}
 // The server validates plugin UI manifests with the shared contract.
 copy(path.join(repo, 'packages', 'plugin-ui', 'src'), path.join(engine, 'packages', 'plugin-ui', 'src'), skip);
 // Plugin code imports the harness's abilities from @harness/plugin-sdk/runtime (resolved to these files: src/plugins/resolve.ts).
@@ -99,6 +111,7 @@ const config = {
     // says; they are copied into the unpacked app below, before the installer is made from it.
     { from: engine, to: 'engine' },
     { from: productFile, to: 'product.json' },
+    ...(product.trustedKeys ?? []).map((k) => ({ from: path.resolve(path.dirname(productFile), k), to: path.join('keys', path.basename(k)) })),
     ...(iconSrc && fs.existsSync(iconSrc) ? [{ from: iconSrc, to: 'icon.png' }] : []),
   ],
   ...(iconSrc && fs.existsSync(iconSrc) ? { icon: iconSrc } : {}),
@@ -139,5 +152,11 @@ if (!dirOnly) {
 // and index.json): import one on another computer, or serve the folder as a catalogue.
 step('plugin bundles');
 fs.rmSync(path.join(release, 'plugins'), { recursive: true, force: true });
-run(process.execPath, [path.join(repo, 'scripts', 'run.mjs'), 'src/plugins/cli.ts', 'bundles', '--out', path.join(release, 'plugins')]);
+const publisherKey = process.env.HARNESS_PUBLISHER_KEY ?? (() => {
+  const d = path.join(os.homedir(), '.harness-publisher');
+  const f = fs.existsSync(d) ? fs.readdirSync(d).filter((x) => x.endsWith('.pem')).sort()[0] : undefined;
+  return f ? path.join(d, f) : undefined;
+})();
+if (!publisherKey) console.log('  no publisher key (HARNESS_PUBLISHER_KEY): the bundles are unsigned');
+run(process.execPath, [path.join(repo, 'scripts', 'run.mjs'), 'src/plugins/cli.ts', 'bundles', '--out', path.join(release, 'plugins'), ...(publisherKey ? ['--key', publisherKey] : [])]);
 console.log(`\n[package] done: ${path.relative(repo, release)}`);

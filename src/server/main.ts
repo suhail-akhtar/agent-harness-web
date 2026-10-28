@@ -7,6 +7,7 @@ import { createApp } from './app.ts';
 import { BrowserSessions, NOBODY_ALLOWED, OidcClient, oidcConfigFromEnv, refusal } from './oidc.ts';
 import { SpendLedger, UserStore } from './users.ts';
 import { ensureHome, harnessPaths, scheduleTmpCleanup } from '../util/home.ts';
+import { shippedPluginDirs } from '../plugins/shipped.ts';
 
 // The server process: configuration from the environment, then the app.
 
@@ -24,7 +25,7 @@ const loopback = HOST === '127.0.0.1' || HOST === 'localhost' || HOST === '::1';
 const AUTH_OFF = process.env.HARNESS_AUTH === 'off' && loopback;
 const TOKEN = process.env.HARNESS_TOKEN || crypto.randomBytes(18).toString('base64url');
 // Bundled plugins (quality gates, SDLC, ...) load unless HARNESS_BUNDLED_PLUGINS=off.
-const PLUGIN_DIRS = [...(process.env.HARNESS_BUNDLED_PLUGINS === 'off' ? [] : [path.join(appRoot, 'plugins')]), ...(process.env.HARNESS_PLUGINS || '').split(path.delimiter).filter(Boolean)];
+const PLUGIN_DIRS = [...(process.env.HARNESS_BUNDLED_PLUGINS === 'off' ? [] : shippedPluginDirs(appRoot)), ...(process.env.HARNESS_PLUGINS || '').split(path.delimiter).filter(Boolean)];
 const num = (v: string | undefined) => (v !== undefined && v !== '' && Number.isFinite(Number(v)) ? Number(v) : undefined);
 
 async function main() {
@@ -46,7 +47,7 @@ async function main() {
   const harness = await createHarness({
     dataDir: DATA_DIR,
     plugins: PLUGIN_DIRS,
-    shippedPlugins: [path.join(appRoot, 'plugins')],
+    shippedPlugins: shippedPluginDirs(appRoot),
     // Studio, Operations, Engineering, DevOps: only the ones installed here (HARNESS_SOLUTIONS_MODE=all loads every one, as before).
     solutions: process.env.HARNESS_SOLUTIONS_MODE === 'all' ? 'all' : 'installed',
     installDir: PATHS.installDir,

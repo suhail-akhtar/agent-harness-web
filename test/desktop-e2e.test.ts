@@ -216,13 +216,19 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       await shot('context-panel', page.locator('[data-context-panel]'));
       await page.keyboard.press('Escape');
       // A second conversation, opened straight from the first: neither takes the other's draft.
+      // The conversation's marker comes before its composer has its draft: wait for it (a wrong draft still fails).
+      const draftIs = async (want: string, what: string) => {
+        const until = Date.now() + 5_000;
+        while (await box.inputValue() !== want && Date.now() < until) await page.waitForTimeout(100);
+        assert.equal(await box.inputValue(), want, what);
+      };
       const second = await api('POST', '/api/sessions', { title: 'Second conversation', runtime: 'local' });
       assert.equal(second.status, 201, JSON.stringify(second.body));
       const otherId = (second.body as { id: string }).id;
       await box.fill('draft for the first');
       await page.locator(`[data-session-row="${otherId}"] button`).first().click({ timeout: 15_000 });
       await page.waitForSelector(`[data-session="${otherId}"]`);
-      assert.equal(await box.inputValue(), '', 'the second conversation opens without the first one\'s draft');
+      await draftIs('', 'the second conversation opens without the first one\'s draft');
       await box.fill('draft for the second');
       await newChat();
       assert.equal(await box.inputValue(), '', 'a new chat starts clean');
@@ -231,11 +237,11 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       await page.waitForTimeout(2_000);
       await page.click(`[data-session-row="${sessionId}"] button`);
       await page.waitForSelector(`[data-session="${sessionId}"]`);
-      assert.equal(await box.inputValue(), 'draft for the first', 'back in the first conversation: its draft');
+      await draftIs('draft for the first', 'back in the first conversation: its draft');
       await page.waitForSelector('[data-workflow="ship-check"][data-status="succeeded"]', { timeout: 15_000 });
       await page.click(`[data-session-row="${otherId}"] button`);
       await page.waitForSelector(`[data-session="${otherId}"]`);
-      assert.equal(await box.inputValue(), 'draft for the second');
+      await draftIs('draft for the second', 'back in the second conversation: its draft');
       await newChat();
       assert.equal(await box.inputValue(), '', 'the unsent new-chat text is not kept');
       await page.click(`[data-session-row="${sessionId}"] button`);

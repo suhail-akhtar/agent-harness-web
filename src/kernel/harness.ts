@@ -66,6 +66,13 @@ export interface HarnessOptions {
    */
   pluginKeys?: string;
   /**
+   * Official publishers' public keys (.pem files or folders, separated like PATH): a plugin signed by one of
+   * them is shown as official and verified, and gets native UI, with or without a trust list; nothing else is
+   * refused because of them (a person's own plugins still load). Default: HARNESS_PUBLISHER_KEYS. The desktop
+   * app passes its product's keys (products/*.json "trustedKeys").
+   */
+  publisherKeys?: string;
+  /**
    * Signed plugins people can install: a folder, or the https URL of an
    * index.json ({ plugins: [{ name, version, description, url, sha256 }] },
    * made with `npm run plugin -- index`). Default: HARNESS_PLUGIN_CATALOGUE.
@@ -291,6 +298,8 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   const keysPath = opts.pluginKeys ?? process.env.HARNESS_PLUGIN_KEYS;
   const keys = keysPath ? await loadTrustedKeys(keysPath) : null;
   if (keys) log(`plugin signatures required (${keys.length} trusted key(s))`);
+  const publisherKeys = (await Promise.all((opts.publisherKeys ?? process.env.HARNESS_PUBLISHER_KEYS ?? '').split(path.delimiter).filter(Boolean)
+    .map((p) => loadTrustedKeys(p).catch((e: Error) => { log(`publisher keys ${p}: ${e.message}`); return []; })))).flat();
   const shipped = (opts.shippedPlugins ?? []).map((d) => path.resolve(d));
   const isShipped = (dir: string) => shipped.some((s) => dir === s || dir.startsWith(s + path.sep));
 
@@ -302,7 +311,15 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       if (!v.ok) throw new Error(`refused: ${v.reason}`);
       return `signed by ${v.keyName} (${v.keyId})`;
     }
-    return (await fs.stat(path.join(dir, SIG_FILE)).catch(() => null)) ? 'signed, not checked (no trust list)' : 'unsigned';
+    const signed = !!(await fs.stat(path.join(dir, SIG_FILE)).catch(() => null));
+    // Signed by an official publisher: verified (every file as signed). A signature that does not verify is not
+    // refused (there is no trust list): it is shown as what it is.
+    if (signed && publisherKeys.length) {
+      const v = await verifyPlugin(dir, publisherKeys);
+      if (v.ok) return `signed by ${v.keyName} (${v.keyId})`;
+      if (v.keyId && publisherKeys.some((k) => k.keyId === v.keyId)) return `signed, not verified: ${v.reason}`;
+    }
+    return signed ? 'signed, not checked (no trust list)' : 'unsigned';
   }
   const installDir = path.resolve(opts.installDir ?? path.join(opts.dataDir, 'plugins'));
   const sourceOf = (dir: string): PluginEntry['source'] => (isShipped(dir) ? 'bundled' : dir.startsWith(installDir + path.sep) ? 'installed' : 'env');
@@ -336,7 +353,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
    * official publisher: HARNESS_OFFICIAL_KEYS, key ids) and custom (everything else). Both get the whole
    * API and runtime; the tier is shown to people and to the plugin (api.tier).
    */
-  const officialKeys = new Set((process.env.HARNESS_OFFICIAL_KEYS ?? '').split(',').map((s) => s.trim()).filter(Boolean));
+  const officialKeys = new Set([...(process.env.HARNESS_OFFICIAL_KEYS ?? '').split(',').map((s) => s.trim()).filter(Boolean), ...publisherKeys.map((k) => k.keyId)]);
   const tierOf = (signature: string | undefined): 'official' | 'custom' => {
     if (signature === 'shipped with the harness') return 'official';
     const id = /^signed by .* \(([^)]+)\)$/.exec(signature ?? '')?.[1];

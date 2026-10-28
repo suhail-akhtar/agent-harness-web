@@ -11,10 +11,9 @@ import type { CompanionHub } from '../src/runtime/companion.ts';
 import type { ToolHost } from '../src/runtime/host.ts';
 import type { ToolContext } from '../src/tools/types.ts';
 import { FakeProvider, makeAgent, results, tempDir, testPicture } from './helpers.ts';
+import { pngStats } from './fixtures/desktop/png.ts';
 // @ts-expect-error plain JS module
 const lib = await import('../plugins/computer/lib.mjs');
-// @ts-expect-error plain JS module
-const { pngStats } = await import('../plugins/games3d/lib-png.mjs');
 
 // Computer use on the user's real desktop, through a companion started with --allow-desktop.
 
@@ -428,7 +427,7 @@ test('the real desktop of this computer: a screenshot of the screen, and the poi
     const fit = lib.shotSize(geom);
     const stats = pngStats(png);
     assert.deepEqual({ w: stats.width, h: stats.height }, fit, `a PNG of the ${geom.w}x${geom.h} screen, scaled to fit 1280x800`);
-    assert.equal(stats.blank, false, `the screen is not blank (${stats.colours} colours, spread ${stats.stddev})`);
+    assert.equal(stats.colours <= 2 || stats.stddev < 1.5, false, `the screen is not blank (${stats.colours} colours, spread ${stats.stddev})`);
     console.log(`real desktop: screen ${geom.w}x${geom.h}, screenshot ${stats.width}x${stats.height}, ${stats.colours} colours in a 64x64 sample, spread ${stats.stddev}`);
 
     const target = [Math.round(fit.w / 3), Math.round(fit.h / 3)];

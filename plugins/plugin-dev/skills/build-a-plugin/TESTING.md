@@ -10,10 +10,20 @@ npm run plugin -- test <plugin folder>        # from the harness checkout; agent
 
 `@harness/plugin-sdk` is importable from any folder there (nothing to install). Keep the tests in the
 plugin's own `test/` folder: they travel with it (Export, `pack`) and run wherever it is installed. A test
-that needs the harness itself (a whole server, its helpers) imports it by name, `@harness/core/src/...`
-(the harness's own files, wherever it is installed), and another plugin's module as
-`@harness/plugins/<name>/...`; the plugin's own files by relative path (`../lib/x.mjs`). The shipped
-solutions do the same: `plugins/aiops/test`, `plugins/games3d/test`, and the harness's suite runs them too.
+that needs more of the harness imports it from the test kit too, never from the harness's own files
+(`@harness/core/...`, which change between versions):
+
+- `@harness/plugin-sdk/testing`: `createHarness` (a whole harness with the plugin and others: `plugins:
+  [pluginDir('visual'), myDir]` or `shippedPlugins()`), `pluginDir(name)`, `LocalHost`, `DockerHost`,
+  `runGates`, `skillsIn`, `validateWorkflow`, `loadCases`/`runChecks`, `readManifest`, `readPluginUi`,
+  `validateUiManifest`, and fixtures (`tempDir`, `FakeProvider`, `testPicture`, `pngBytes`, `glbBytes`).
+- `@harness/plugin-sdk/testing/desktop`: how the desktop app shows the plugin (`buildRegistry`,
+  `describePlugin`, `registryAnswer`, `toolRendererContext`), and window screenshots (`capture`,
+  `assertNotBlank`). This needs the harness checkout.
+
+Import another plugin's module as `@harness/plugins/<name>/...`, and the plugin's own files by relative path
+(`../lib/x.mjs`). The solutions do the same: `solutions/studio` (games3d and its engines) has no import of
+the harness's files, and the harness's suite runs its tests too.
 
 Name slow integration tests (a real engine or browser, a stack of services in Docker, a desktop app)
 `*-real.test.ts`, `*-stack.test.ts`, `*-live.test.ts` or `*e2e*.test.ts`: the review runs the quick ones

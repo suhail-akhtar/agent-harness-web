@@ -157,6 +157,40 @@ test('every plugin as its own bundle (plugin bundles): one .tgz each, signed in 
   try { await assert.rejects(h2.plugins.importBundle(await pack(path.join(tampered, 'alpha'))), /Refused/); } finally { await h2.close(); }
 });
 
+test("an official publisher (publisherKeys, the desktop product's trustedKeys): its signed bundle is official and verified; a changed one says so; the person's own plugins still load", async () => {
+  const { signPlugin, generateKeyPair } = await import('../src/plugins/signing.ts');
+  const { unpack } = await import('../src/plugins/archive.ts');
+  const pair = generateKeyPair();
+  const keys = await tempDir();
+  await fs.writeFile(path.join(keys, 'acme.pub.pem'), pair.publicPem);
+  const src = await tempDir();
+  const official = await plugin(src, 'studio-like', '1.1.0');
+  await signPlugin(official, pair.privatePem);
+  const data = await pack(official);
+  const mine = path.join(await tempDir(), 'my-own');
+  await fs.mkdir(mine);
+  await fs.writeFile(path.join(mine, 'harness-plugin.json'), JSON.stringify({ name: 'my-own', version: '0.1.0', description: 'A plugin of the person\'s own, unsigned, for the tests.' }));
+  const changed = await tempDir();
+  await unpack(data, path.join(changed, 'studio-like'));
+  await fs.appendFile(path.join(changed, 'studio-like', 'index.mjs'), '\n// changed\n');
+  // No trust list (a person's own computer): nothing is refused for its signature.
+  const h = await createHarness({ dataDir: await tempDir(), plugins: [mine], publisherKeys: keys, backgroundWork: false, scheduler: false, search: null });
+  try {
+    const e = await h.plugins.importBundle(data, { allowUnsigned: true });
+    assert.match(e.signature ?? '', /^signed by acme \([0-9a-f]{16}\)$/);
+    const listed = h.plugins.list().find((p) => p.name === 'studio-like')!;
+    assert.equal(listed.tier, 'official', 'official: signed by a publisher of this product');
+    const own = h.plugins.list().find((p) => p.name === 'my-own')!;
+    assert.deepEqual([own.tier, !!own.loaded, own.signature], ['custom', true, 'unsigned'], "the person's own plugin loads, as custom");
+  } finally { await h.close(); }
+  const h2 = await createHarness({ dataDir: await tempDir(), plugins: [], publisherKeys: keys, backgroundWork: false, scheduler: false, search: null });
+  try {
+    const e = await h2.plugins.importBundle(await pack(path.join(changed, 'studio-like')), { allowUnsigned: true });
+    assert.match(e.signature ?? '', /^signed, not verified: /, 'changed after signing: not shown as verified');
+    assert.equal(h2.plugins.list().find((p) => p.name === 'studio-like')!.tier, 'custom');
+  } finally { await h2.close(); }
+});
+
 test('bundles over the API: administrators export, import, check, update and roll back; a member may not; plugins may not take these paths', async () => {
   const { createApp } = await import('../src/server/app.ts');
   const { UserStore } = await import('../src/server/users.ts');

@@ -12,7 +12,10 @@ export interface ProductProfile {
   plugins: { bundled: string[]; enabled: string[]; required: string[] };
   nav: { order: string[] };
   home: { cards: string[]; greeting?: string };
+  /** Official publishers' public keys (paths beside the profile): a plugin signed by one is official and verified. */
   trustedKeys?: string[];
+  /** The solutions this edition ships inside its engine (solutions/<name>: "studio"); the others install as bundles. */
+  solutions?: string[];
   policy?: { lock?: Record<string, unknown>; defaults?: Record<string, unknown> };
   /** solutions: the shipped solutions a new local engine starts with ("aiops", "devops", ... or "all"); people install others later. */
   server: { mode: 'local' | 'remote'; url?: string; solutions?: string[] };

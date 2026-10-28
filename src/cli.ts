@@ -6,6 +6,7 @@ import type { HarnessEvent, Message, TurnEndReason } from './core/types.ts';
 import { firstLine } from './graph/runner.ts';
 import { createHarness } from './kernel/harness.ts';
 import { ensureHome, harnessPaths } from './util/home.ts';
+import { shippedPluginDirs } from './plugins/shipped.ts';
 
 // Headless runs: one prompt, streamed to the terminal, for scripts and benchmarks.
 //   npm run cli -- --model deepseek-flash --runtime docker|local [--image allowed-image] [--dir path] [--mode bypass] "task"
@@ -87,8 +88,8 @@ async function main() {
     dataDir,
     // One job, then the process ends: its sandbox container goes too.
     releaseHosts: true,
-    plugins: [path.join(appRoot, 'plugins'), ...(process.env.HARNESS_PLUGINS || '').split(path.delimiter).filter(Boolean)],
-    shippedPlugins: [path.join(appRoot, 'plugins')],
+    plugins: [...shippedPluginDirs(appRoot), ...(process.env.HARNESS_PLUGINS || '').split(path.delimiter).filter(Boolean)],
+    shippedPlugins: shippedPluginDirs(appRoot),
     // Studio, Operations, Engineering, DevOps: only the ones installed here (HARNESS_SOLUTIONS_MODE=all loads every one, as before).
     solutions: process.env.HARNESS_SOLUTIONS_MODE === 'all' ? 'all' : 'installed',
     installDir: paths.installDir,

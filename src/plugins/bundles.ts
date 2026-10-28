@@ -15,11 +15,12 @@ import { signPlugin } from './signing.ts';
 
 export interface WrittenBundle { name: string; version: string; file: string; size: number; sha256: string; signed: boolean }
 
-export async function writeBundles(o: { from: string; out: string; base?: string; key?: string }): Promise<{ index: string; bundles: WrittenBundle[] }> {
+export async function writeBundles(o: { from: string | string[]; out: string; base?: string; key?: string }): Promise<{ index: string; bundles: WrittenBundle[] }> {
   await fs.mkdir(o.out, { recursive: true });
   const bundles: WrittenBundle[] = [];
   const entries: Record<string, unknown>[] = [];
-  for (const dir of await findPluginDirs(o.from)) {
+  const dirs = (await Promise.all((Array.isArray(o.from) ? o.from : [o.from]).map((f) => findPluginDirs(f)))).flat();
+  for (const dir of dirs) {
     const m = await readManifest(dir).catch(() => undefined);
     if (!m) continue;
     let src = dir, tmp: string | undefined;

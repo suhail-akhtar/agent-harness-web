@@ -40,6 +40,8 @@ export interface PluginEntry {
   loadedHere?: boolean;
   /** official: shipped with the harness or signed by an official publisher; custom: everything else. */
   tier?: 'official' | 'custom';
+  /** How the server admitted it: "shipped with the harness", "signed by <publisher> (<key id>)", "signed, not verified: ...", "unsigned". */
+  signature?: string;
   /** What its server code may reach (network hosts, secrets, the vault, sessions, routes, programs on the server). */
   permissions?: Record<string, unknown>;
   /** The bundle: display name, icon, publisher, tags, links, licence, changelog, harness versions (server plugins). */

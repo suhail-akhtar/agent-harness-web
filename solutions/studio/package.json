@@ -1,0 +1,19 @@
+{
+  "name": "@harness/studio",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Studio: games and 3D on the harness - browser games and 3D models, Blender, Godot, Unity and Unreal Engine - as one solution with its own version, tests, evals and docs.",
+  "license": "MIT",
+  "author": "Suhail Akhtar",
+  "homepage": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/solutions/studio",
+  "harness": {
+    "title": "Studio",
+    "core": ">=0.2.3 <0.3.0",
+    "plugins": ["games3d", "engine-blender", "engine-godot", "engine-unity", "engine-unreal"]
+  },
+  "scripts": {
+    "test": "node ../../scripts/test.mjs --solution=studio",
+    "bundles": "node ../../scripts/run.mjs ../../src/plugins/cli.ts bundles plugins --out ../../dist/studio"
+  }
+}

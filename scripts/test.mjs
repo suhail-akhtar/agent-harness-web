@@ -1,6 +1,8 @@
-// The test suite on every OS: finds test/**/*.test.ts and each plugin's plugins/<name>/test/**/*.test.ts itself (a quoted glob in an
-// npm script reaches cmd.exe with its quotes and matches nothing) and runs them.
-//   node scripts/test.mjs [--test-name-pattern=...] [files...]
+// The test suite on every OS: finds test/**/*.test.ts, each plugin's plugins/<name>/test/**/*.test.ts and each solution's
+// solutions/<solution>/test/** and solutions/<solution>/plugins/<name>/test/** itself (a quoted glob in an npm script
+// reaches cmd.exe with its quotes and matches nothing) and runs them.
+//   node scripts/test.mjs [--test-name-pattern=...] [--core | --solution=<name>] [files...]
+// --core: the core's tests and its plugins' only; --solution=studio: that solution's only.
 //
 // The end-to-end files (test/*e2e*.test.ts: Electron or a real browser) run after the rest, one
 // after another: never in parallel with each other or with the other tests (their timing checks
@@ -12,13 +14,19 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const flags = process.argv.slice(2).filter((a) => a.startsWith('--'));
+const ours = (a) => a === '--core' || a.startsWith('--solution=');
+const flags = process.argv.slice(2).filter((a) => a.startsWith('--') && !ours(a));
+const only = process.argv.includes('--core') ? 'core' : process.argv.find((a) => a.startsWith('--solution='))?.slice('--solution='.length);
 let files = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 if (!files.length) {
-  const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? (e.name === 'fixtures' ? [] : walk(path.join(d, e.name))) : e.name.endsWith('.test.ts') ? [path.join(d, e.name)] : []));
-  const pluginTests = fs.readdirSync(path.join(root, 'plugins'), { withFileTypes: true }).filter((e) => e.isDirectory() && fs.existsSync(path.join(root, 'plugins', e.name, 'test')))
-    .flatMap((e) => walk(path.join(root, 'plugins', e.name, 'test')));
-  files = [...walk(path.join(root, 'test')), ...pluginTests].map((f) => path.relative(root, f)).sort();
+  const walk = (d) => (fs.existsSync(d) ? fs.readdirSync(d, { withFileTypes: true }) : []).flatMap((e) => (e.isDirectory() ? (e.name === 'fixtures' ? [] : walk(path.join(d, e.name))) : e.name.endsWith('.test.ts') ? [path.join(d, e.name)] : []));
+  const subdirs = (d) => (fs.existsSync(d) ? fs.readdirSync(d, { withFileTypes: true }) : []).filter((e) => e.isDirectory()).map((e) => path.join(d, e.name));
+  const pluginTests = (dir) => subdirs(dir).flatMap((p) => walk(path.join(p, 'test')));
+  const core = [...walk(path.join(root, 'test')), ...pluginTests(path.join(root, 'plugins'))];
+  const solutions = subdirs(path.join(root, 'solutions')).filter((d) => !only || only === 'core' || path.basename(d) === only);
+  if (only && only !== 'core' && !solutions.length) { console.error(`no solution "${only}" in solutions/`); process.exit(2); }
+  const solutionTests = solutions.flatMap((d) => [...walk(path.join(d, 'test')), ...pluginTests(path.join(d, 'plugins'))]);
+  files = [...(only && only !== 'core' ? [] : core), ...(only === 'core' ? [] : solutionTests)].map((f) => path.relative(root, f)).sort();
 }
 const isElectron = (f) => /(^|[\\/])[^\\/]*e2e[^\\/]*\.test\.ts$/.test(f);
 const batches = [files.filter((f) => !isElectron(f)), ...files.filter(isElectron).map((f) => [f])].filter((b) => b.length);
