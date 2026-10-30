@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.5
 
 - **Every solution apart from the core**: Engineering (`solutions/engineering`: sdlc 1.2.0), DevOps
   (`solutions/devops`: devops 1.1.0) and Operations (`solutions/operations`: aiops 1.2.0) join Studio, each with its
