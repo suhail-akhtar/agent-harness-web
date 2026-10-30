@@ -64,7 +64,8 @@ export const promptTokens = (u: Usage): number => u.input + u.cacheRead + u.cach
 /** default asks; acceptEdits allows edits; auto: a model checks each call against the request; dontAsk: what would be asked is denied (unattended runs); plan: read only; bypass: no checks. */
 export type PermissionMode = 'default' | 'acceptEdits' | 'auto' | 'dontAsk' | 'plan' | 'bypass';
 
-export interface Todo { content: string; status: 'pending' | 'in_progress' | 'completed' }
+/** activeForm: the step as it is being done ("Running the tests"), shown while it is in progress. */
+export interface Todo { content: string; status: 'pending' | 'in_progress' | 'completed'; activeForm?: string }
 
 export type HarnessEvent =
   | { kind: 'turn_start'; turn: number; agent?: string }

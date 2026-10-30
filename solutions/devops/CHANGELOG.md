@@ -2,6 +2,10 @@
 
 DevOps's own versions, released apart from the core's (the core's are in the CHANGELOG.md at the top). Every plugin of DevOps carries the same version; `harness.core` in package.json is the core versions it runs on.
 
+## Unreleased
+
+- Its eval test reads the eval pack from `solutions/devops/evals` (it still looked in the core's old `evals/`).
+
 ## 1.1.0
 
 - DevOps is a solution of its own: `solutions/devops`, with its plugin (devops), its tests, its eval pack (devops).

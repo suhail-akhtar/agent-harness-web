@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { McpServerConfig } from '../plugins/api.ts';
-import { scrubbedEnv, type ToolHost } from '../runtime/host.ts';
+import { nodeEnv, scrubbedEnv, type ToolHost } from '../runtime/host.ts';
 import { assertPublicUrl } from '../tools/web.ts';
 import { HttpTransport, McpClient, StdioTransport, type Transport } from './client.ts';
 import { type McpEntry, qualifiedName } from './tools.ts';
@@ -71,7 +71,7 @@ async function connect(name: string, cfg: ServerMcpConfig, scope: 'server' | 'pr
     } else {
       // Never the server's whole environment: a server gets the provider keys only if its config passes them.
       const child = scope === 'server'
-        ? spawn(plan.command, plan.args, { cwd: cfg.cwd, env: scrubbedEnv(env), stdio: ['pipe', 'pipe', 'pipe'], shell: plan.shell })
+        ? spawn(plan.command, plan.args, { cwd: cfg.cwd, env: scrubbedEnv(plan.command === process.execPath ? { ...nodeEnv(), ...env } : env), stdio: ['pipe', 'pipe', 'pipe'], shell: plan.shell })
         : await host!.spawnStream!(cfg.command, args, env);
       client = new McpClient(new StdioTransport(child), opts);
     }

@@ -735,7 +735,7 @@ async function withEnv<T>(vars: Record<string, string>, fn: () => Promise<T>): P
 
 test('evals/devops: three cases load; each hidden check fails on the broken fixtures and passes on a reference fix', { skip: skipOps, timeout: 900_000 }, async () => {
   const { loadCases, runChecks } = await import('@harness/plugin-sdk/testing');
-  const cases = await loadCases(path.join(root, 'evals'), ['devops']);
+  const cases = await loadCases(path.join(pluginDir, '..', '..', 'evals'), ['devops']);
   assert.deepEqual(cases.map((c) => c.name).sort(), ['fix-ci', 'fix-k8s-manifests', 'fix-terraform']);
   const h = await createHarness({ dataDir: await tempDir(), plugins: [path.join(pluginDir)] });
   try {
@@ -764,7 +764,7 @@ test('evals/devops: three cases load; each hidden check fails on the broken fixt
 test('evals/devops dry run with FakeProvider: fix-terraform (a prompt) and fix-ci (the pipeline-fix workflow, local) end to end, judged by the hidden checks', { skip: skipOps, timeout: 900_000 }, async () => {
   const { loadCases, runEvals } = await import('@harness/plugin-sdk/testing');
   const { FakeProvider } = await import('@harness/plugin-sdk/testing');
-  const cases = (await loadCases(path.join(root, 'evals'), ['devops'])).filter((c) => c.name !== 'fix-k8s-manifests');
+  const cases = (await loadCases(path.join(pluginDir, '..', '..', 'evals'), ['devops'])).filter((c) => c.name !== 'fix-k8s-manifests');
   const out = await tempDir('hw-eval-out-');
   const scripts: Record<string, ConstructorParameters<typeof FakeProvider>[0]> = {
     'fix-terraform': [

@@ -283,16 +283,17 @@ export async function repin(file, address, port, confirmed, signal) {
 const isKey = (v) => /-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(v);
 
 async function askpassScript(dir) {
+  // In the desktop app execPath is the app itself: ELECTRON_RUN_AS_NODE runs it as Node (plain Node ignores it).
   const node = process.execPath;
   if (process.platform === 'win32') {
     const js = path.join(dir, 'askpass.cjs');
     await fs.writeFile(js, 'process.stdout.write((process.env.HW_OPS_ASKPASS || "") + "\\n")\n');
     const cmd = path.join(dir, 'askpass.cmd');
-    await fs.writeFile(cmd, `@"${node}" "${js}"\r\n`);
+    await fs.writeFile(cmd, `@set "ELECTRON_RUN_AS_NODE=1"\r\n@"${node}" "${js}"\r\n`);
     return cmd;
   }
   const sh = path.join(dir, 'askpass.sh');
-  await fs.writeFile(sh, `#!/bin/sh\nexec "${node}" -e 'process.stdout.write((process.env.HW_OPS_ASKPASS||"")+"\\n")'\n`, { mode: 0o700 });
+  await fs.writeFile(sh, `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "${node}" -e 'process.stdout.write((process.env.HW_OPS_ASKPASS||"")+"\\n")'\n`, { mode: 0o700 });
   return sh;
 }
 

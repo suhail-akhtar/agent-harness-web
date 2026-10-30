@@ -60,3 +60,16 @@ test('the sign-in page: a "Sign in" button when the server has single sign-on, t
   assert.deepEqual(signInChoices({ oidc: true, only: false, login: '/auth/login' }), { sso: '/auth/login', token: 'link', tokenLabel: 'Use an access token' });
   assert.deepEqual(signInChoices({ oidc: true, only: true, login: '/auth/login' }), { sso: '/auth/login', token: 'link', tokenLabel: 'Operator token' });
 });
+
+test('the activity line says what the agent is doing: the running tool, else thinking or writing, else the task in progress', async () => {
+  const { activityLine } = await import('../packages/client/src/timeline.ts');
+  const tool = (name: string, input: Record<string, unknown>, running = true) => ({ kind: 'tool' as const, key: name, id: name, name, input, running, activity: [] });
+  const todos = [{ content: 'Run E1', status: 'completed' }, { content: 'Write the report', status: 'in_progress', activeForm: 'Writing the report' }];
+  assert.equal(activityLine([tool('bash', { command: 'python x.py', description: 'Showing all result JSON files' })], todos), 'Showing all result JSON files');
+  assert.equal(activityLine([tool('bash', { command: 'python x.py' })]), 'Running python x.py');
+  assert.equal(activityLine([tool('monitor', { task_id: 'shell-85yenz' })]), 'Waiting for shell-85yenz');
+  assert.equal(activityLine([{ kind: 'assistant', key: 'a', text: '', reasoning: 'hm', streaming: true }]), 'Thinking');
+  // A finished tool is not what is happening now: the task in progress is.
+  assert.equal(activityLine([{ kind: 'user', key: 'u', text: 'go' }, tool('read', { path: 'a.ts' }, false)], todos), 'Writing the report');
+  assert.equal(activityLine([], []), 'Working');
+});

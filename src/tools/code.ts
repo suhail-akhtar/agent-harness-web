@@ -5,6 +5,7 @@ import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import type { Tool, ToolKind } from './types.ts';
 import { clipOrSpill, num, str } from './types.ts';
+import { nodeEnv } from '../runtime/host.ts';
 
 // run_script: the model writes a short JavaScript program that calls tools and
 // keeps only what matters - "code mode". Fetch ten pages and pull one number
@@ -67,7 +68,7 @@ return \`\${n} of \${files.length} files have TODOs\`;`,
     } else {
       const node = [process.execPath, '--permission', `--allow-fs-read=${RUNNER}`, '--disable-warning=ExperimentalWarning', RUNNER];
       const [cmd, ...args] = scriptNetworkIsolated() ? ['unshare', ...UNSHARE, ...node] : node;
-      child = spawn(cmd!, args, { stdio: ['pipe', 'pipe', 'pipe'], env: { PATH: process.env.PATH ?? '' }, windowsHide: true });
+      child = spawn(cmd!, args, { stdio: ['pipe', 'pipe', 'pipe'], env: { PATH: process.env.PATH ?? '', ...nodeEnv() }, windowsHide: true });
     }
     let stderr = '';
     child.stderr.on('data', (d) => { if (stderr.length < 4000) stderr += d; });

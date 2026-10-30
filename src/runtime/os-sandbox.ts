@@ -6,6 +6,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { proxyCredentialFile, type SandboxCredential } from './credentials.ts';
+import { nodeEnv } from './host.ts';
 
 // Commands that run on a real machine (a server folder, or the companion on
 // someone's computer) are contained by the operating system where it can:
@@ -240,7 +241,7 @@ export async function startLocalEgress(o: { policyFile: string; credentials?: Sa
     ALLOW_FILE: o.policyFile, PORT: '0', HOST: '127.0.0.1', PARENT_WATCH: '1', CREDENTIALS_STDIN: '1',
     // The bubblewrap bridge's address is the proxy too (a client may tunnel to it).
     SELF: `127.0.0.1:${BWRAP_PROXY_PORT},localhost:${BWRAP_PROXY_PORT}`,
-    ...(socket ? { SOCKET: socket } : {}), ...(o.upstream ? { UPSTREAM_PROXY: o.upstream } : {}),
+    ...(socket ? { SOCKET: socket } : {}), ...(o.upstream ? { UPSTREAM_PROXY: o.upstream } : {}), ...nodeEnv(),
   };
   const child = spawn(process.execPath, [PROXY_SCRIPT], { env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
   child.stdin.on('error', () => {});

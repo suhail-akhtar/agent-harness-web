@@ -2,6 +2,10 @@
 
 Operations's own versions, released apart from the core's (the core's are in the CHANGELOG.md at the top). Every plugin of Operations carries the same version; `harness.core` in package.json is the core versions it runs on.
 
+## Unreleased
+
+- SSH password logins work from the desktop app: the askpass helper ran the app's own executable without Electron's Node mode.
+
 ## 1.2.0
 
 - Operations is a solution of its own: `solutions/operations`, with its plugin (aiops), its tests, its eval pack (aiops) and its docs.

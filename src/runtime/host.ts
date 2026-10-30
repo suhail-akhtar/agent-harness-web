@@ -52,6 +52,15 @@ export function scrubbedEnv(extra: Record<string, string> = {}): NodeJS.ProcessE
   return { ...env, ...extra };
 }
 
+/**
+ * The environment that makes `process.execPath` run a script as Node. Inside the desktop app the engine is an
+ * Electron utility process, whose execPath is the app itself: without ELECTRON_RUN_AS_NODE a child started with it
+ * opens a second app (which meets the single-instance lock and exits 0) instead of running the script.
+ */
+export function nodeEnv(): Record<string, string> {
+  return process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {};
+}
+
 export interface ShellChoice { kind: 'bash' | 'powershell'; path: string; why: string }
 
 /**

@@ -27,7 +27,8 @@ export interface Config {
   me?: Me;
 }
 export interface Usage { input: number; cacheRead: number; cacheWrite: number; output: number; reasoning: number }
-export interface Todo { content: string; status: 'pending' | 'in_progress' | 'completed' }
+/** activeForm: the step as it is being done ("Running the tests"), shown while it is in progress. */
+export interface Todo { content: string; status: 'pending' | 'in_progress' | 'completed'; activeForm?: string }
 /** What fills a conversation's context: estimated parts; the messages are the rest of the provider's count of the last request. */
 export interface ContextBreakdown {
   model: string;

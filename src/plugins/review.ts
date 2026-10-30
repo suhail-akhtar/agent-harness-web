@@ -9,7 +9,7 @@ import { bundleInfo, HARNESS_VERSION } from './bundle.ts';
 import { readManifest } from './loader.ts';
 import { loadPlugin } from './testkit.ts';
 import { pluginTestFiles, runPluginTests } from './run-tests.ts';
-import { scrubbedEnv } from '../runtime/host.ts';
+import { nodeEnv, scrubbedEnv } from '../runtime/host.ts';
 
 // A deep review of a plugin folder, before it is trusted with a person's data: `npm run plugin --
 // check <dir> --deep`, the desktop app when a plugin is added, and agents (the plugin_review tool).
@@ -323,7 +323,7 @@ export async function reviewPlugin(dir: string, o: { runTests?: boolean; testTim
   if (await fs.stat(path.join(dir, 'tsconfig.json')).catch(() => null)) {
     const tsc = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'node_modules', 'typescript', 'bin', 'tsc');
     if (await fs.stat(tsc).catch(() => null)) {
-      const r = await runCapture(process.execPath, [tsc, '-p', dir, '--noEmit'], dir, 120_000);
+      const r = await runCapture(process.execPath, [tsc, '-p', dir, '--noEmit'], dir, 120_000, nodeEnv());
       if (r.code !== 0) add('warning', 'types', `Its types do not check (${r.output.split('\n').filter((l) => /error TS/.test(l)).length} errors): ${r.output.split('\n').find((l) => /error TS/.test(l))?.trim() ?? r.output.slice(0, 200)}`, 'Run the TypeScript compiler on it (tsc -p <dir>) and fix them.');
     }
   }
@@ -352,7 +352,7 @@ export function formatReview(r: Review): string {
  */
 export async function reviewInChild(dir: string, o: { timeoutMs?: number; runTests?: boolean } = {}): Promise<Review> {
   const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), 'cli.ts');
-  const r = await runCapture(process.execPath, ['--disable-warning=ExperimentalWarning', cli, 'check', dir, '--deep', '--json', ...(o.runTests === false ? ['--no-tests'] : [])], dir, o.timeoutMs ?? 8 * 60_000, { ELECTRON_RUN_AS_NODE: '1' });
+  const r = await runCapture(process.execPath, ['--disable-warning=ExperimentalWarning', cli, 'check', dir, '--deep', '--json', ...(o.runTests === false ? ['--no-tests'] : [])], dir, o.timeoutMs ?? 8 * 60_000, nodeEnv());
   const start = r.stdout.indexOf('{');
   try { return JSON.parse(r.stdout.slice(start)) as Review; } catch {
     return { ok: false, score: 0, plugin: path.basename(dir), version: '?', dir, adds: { tools: [], skills: [], agents: [], workflows: [], gates: [], routes: [], pages: 0 }, findings: [{ level: 'error', area: 'review', message: `The review did not finish: ${(r.output || `exit ${r.code}`).split('\n').filter(Boolean).slice(-5).join(' | ').slice(0, 600)}` }], durationMs: 0 };

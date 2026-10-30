@@ -2,11 +2,14 @@ import type { Tool, ToolContext, ToolOutcome } from './types.ts';
 import { clip, clipOrSpill, num, str } from './types.ts';
 import { runElevated } from '../runtime/elevate.ts';
 
+/** Extensions of source code and documents: what tee and echo/printf may not write. */
+const SOURCE = '(?:[cm]?[jt]sx?|py|rb|go|rs|java|kt|cs|cpp|cc|c|h|hpp|php|swift|scala|sh|md|html?|css|scss|json|ya?ml|toml|sql|vue|svelte)';
+
 /**
  * Shell commands that write file CONTENT the file tools should write instead.
  * Those go through write/edit so they get a checkpoint (undo), a diff, the
  * stale-file check and edit permissions - a sandboxed shell would otherwise
- * be a way around "ask before edits". Build steps, installers and redirects
+ * be a way around "ask before edits". Build steps, installers, logs and redirects
  * to /tmp or /dev are not affected. Returns the offending pattern, if any.
  */
 export function shellFileWrite(cmd: string): string | undefined {
@@ -17,9 +20,10 @@ export function shellFileWrite(cmd: string): string | undefined {
   m = /<<-?\s*['"]?\w+['"]?\s*>>?\s*([^\s|&;<>]+)/.exec(cmd);
   if (m && target(m[1])) return `heredoc > ${m[1]}`;
   if (/\b(sed|perl)\s+(?:-[a-zA-Z]*i\b|-i\S*|--in-place)/.test(cmd)) return 'in-place sed/perl edit';
-  m = /\btee\s+(?:-a\s+)?([^\s|&;<>]+)/.exec(cmd);
-  if (m && target(m[1]) && m[1] !== '-a') return `tee ${m[1]}`;
-  m = /\b(?:echo|printf)\b[^|;&]*?>>?\s*([^\s|&;<>]+\.(?:[cm]?[jt]sx?|py|rb|go|rs|java|kt|cs|cpp|cc|c|h|hpp|php|swift|scala|sh|md|html?|css|scss|json|ya?ml|toml|sql|vue|svelte))\b/.exec(cmd);
+  // tee and echo/printf count only when they write source or documents: `cmd | tee run.log` keeps a log, as `> run.log` does.
+  m = new RegExp(String.raw`\btee\s+(?:-a\s+)?([^\s|&;<>]+\.${SOURCE})\b`).exec(cmd);
+  if (m && target(m[1])) return `tee ${m[1]}`;
+  m = new RegExp(String.raw`\b(?:echo|printf)\b[^|;&]*?>>?\s*([^\s|&;<>]+\.${SOURCE})\b`).exec(cmd);
   if (m && target(m[1])) return `echo/printf > ${m[1]}`;
   return undefined;
 }
@@ -32,7 +36,7 @@ export const bashTool: Tool = {
   kind: 'exec', parallelSafe: false, remoteable: true,
   spec: {
     name: 'bash',
-    description: 'Run a shell command in the workspace and return its exit code and output. Use the file tools rather than cat/sed/grep/find to read, edit or search; writing file contents from the shell (cat > file, heredocs, sed -i, tee, echo > file.js) is refused - use write or edit, which record undo checkpoints and show diffs. Each call is a fresh shell (cd does not persist; use `cd dir && cmd`). Default timeout 120s, max 600s. Long output is trimmed: filter it (| tail -50, | grep). For servers, watchers and long jobs set run_in_background: it returns at once with a task id; read its output with task_output, wait for a line or its end with monitor, stop it with task_stop.',
+    description: 'Run a shell command in the workspace and return its exit code and output. Use the file tools rather than cat/sed/grep/find to read, edit or search; writing file contents from the shell (cat > file, heredocs, sed -i, tee or echo into a source file) is refused - use write or edit, which record undo checkpoints and show diffs. Each call is a fresh shell (cd does not persist; use `cd dir && cmd`). Default timeout 120s, max 600s. Long output is trimmed: filter it (| tail -50, | grep). For servers, watchers and long jobs set run_in_background: it returns at once with a task id; read its output with task_output, wait for a line or its end with monitor, stop it with task_stop.',
     input_schema: {
       type: 'object',
       properties: {
@@ -155,7 +159,7 @@ export const todoTool: Tool = {
   kind: 'meta', parallelSafe: false, remoteable: false,
   spec: {
     name: 'todo_write',
-    description: 'Keep a task list for multi-step work (3+ steps). Send the whole list each time. Exactly one item in_progress while working; mark items completed as soon as they are done. Skip it for simple tasks.',
+    description: 'A task list the user sees in the chat. For 3+ steps or several requests: write it first, keep one item in_progress (its activeForm: "Running the tests"), mark each completed once done. Send the whole list.',
     input_schema: {
       type: 'object',
       properties: {
@@ -163,7 +167,11 @@ export const todoTool: Tool = {
           type: 'array',
           items: {
             type: 'object',
-            properties: { content: { type: 'string' }, status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] } },
+            properties: {
+              content: { type: 'string' },
+              status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] },
+              activeForm: { type: 'string' },
+            },
             required: ['content', 'status'],
           },
         },
@@ -175,8 +183,11 @@ export const todoTool: Tool = {
   async run(input, ctx) {
     if (!Array.isArray(input.todos)) return { content: 'todos must be an array of {content, status}.', is_error: true };
     const todos = input.todos
-      .filter((t): t is { content: string; status: string } => !!t && typeof t === 'object' && typeof (t as { content?: unknown }).content === 'string')
-      .map((t) => ({ content: t.content, status: (['pending', 'in_progress', 'completed'].includes(t.status) ? t.status : 'pending') as 'pending' | 'in_progress' | 'completed' }));
+      .filter((t): t is { content: string; status: string; activeForm?: unknown } => !!t && typeof t === 'object' && typeof (t as { content?: unknown }).content === 'string')
+      .map((t) => {
+        const active = typeof t.activeForm === 'string' ? t.activeForm.trim() : '';
+        return { content: t.content, status: (['pending', 'in_progress', 'completed'].includes(t.status) ? t.status : 'pending') as 'pending' | 'in_progress' | 'completed', ...(active ? { activeForm: active } : {}) };
+      });
     ctx.setTodos(todos);
     const done = todos.filter((t) => t.status === 'completed').length;
     const open = todos.filter((t) => t.status !== 'completed');

@@ -176,6 +176,10 @@ test('desktop app end to end: the agent platform', { timeout: 15 * 60_000 }, asy
       await page.waitForSelector('[data-proposal][data-proposal-status="open"]', { timeout: 40_000 });
       await page.waitForSelector('[data-link][data-link-phase="started"]');
       await idle(agentsSession);
+      // The task list is a card in the conversation while some of it is open.
+      assert.equal(await page.locator('[data-task-card] li').count(), 3, 'the task card');
+      assert.equal(await page.locator('[data-task-card] li[data-todo-status="in_progress"]').count(), 1);
+      await shot('task-card', page.locator('[data-task-card]'));
       await page.waitForSelector('[data-link][data-link-phase="report"]', { timeout: 40_000 });
       await shot('proposal-and-report-cards', page.locator('[data-virtual-list]'));
       // Chapters: a floating table of contents.

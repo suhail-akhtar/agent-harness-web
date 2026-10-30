@@ -417,3 +417,36 @@ export function duration(ms: number): string {
   const m = Math.floor(s / 60);
   return `${m}m ${String(s % 60).padStart(2, '0')}s`;
 }
+
+/**
+ * What the agent is doing right now, in a few words, for the line under the transcript while a turn runs:
+ * the tool running (a command's own description first), else thinking or writing, else the task in progress.
+ */
+export function activityLine(items: Item[], todos: Array<{ content: string; status: string; activeForm?: string }> = []): string {
+  const clip = (t: string, n = 90) => (t.length > n ? `${t.slice(0, n - 1)}…` : t);
+  const s = (i: Record<string, unknown>, k: string) => (typeof i[k] === 'string' ? (i[k] as string).replace(/\s+/g, ' ').trim() : '');
+  for (let k = items.length - 1; k >= 0; k--) {
+    const it = items[k]!;
+    if (it.kind === 'tool' && it.running) {
+      const i = it.input;
+      switch (it.name) {
+        case 'bash': return clip(s(i, 'description') || `Running ${s(i, 'command')}`);
+        case 'read': return clip(`Reading ${s(i, 'path')}`);
+        case 'write': return clip(`Writing ${s(i, 'path')}`);
+        case 'edit': return clip(`Editing ${s(i, 'path')}`);
+        case 'glob': case 'grep': return clip(`Searching for ${s(i, 'pattern')}`);
+        case 'web_fetch': return clip(`Reading ${s(i, 'url')}`);
+        case 'web_search': return clip(`Searching the web for ${s(i, 'query')}`);
+        case 'agent': return clip(`Waiting for an agent: ${s(i, 'description') || 'its report'}`);
+        case 'monitor': return clip(`Waiting for ${s(i, 'task_id') || 'a background task'}`);
+        case 'run_script': return 'Running a script';
+        case 'ask_user': return 'Waiting for your answer';
+        default: return clip(`${it.name.replace(/_/g, ' ')} ${summarize(it.name, i)}`.trim());
+      }
+    }
+    if (it.kind === 'assistant' && it.streaming) return it.text ? 'Writing' : 'Thinking';
+    if (it.kind === 'user') break;
+  }
+  const now = todos.find((t) => t.status === 'in_progress');
+  return now ? clip(now.activeForm || now.content) : 'Working';
+}

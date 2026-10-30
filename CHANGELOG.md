@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- **run_script works in the desktop app**: it started its helper with the app's own executable, which opened a
+  second app (refused by the single-instance lock, exit 0) instead of running Node, so every call failed with
+  "the script process exited (0)". The same was true of plugin review's type check, .mcpb Node servers and the
+  network-allowlist proxy. They now ask Electron for Node mode (`nodeEnv()`).
+- **A task card and a live activity line in the conversation**: the agent's task list (todo_write) shows as a card
+  under the transcript while the turn runs or while some of it is open, and the line under it says what is
+  happening now ("Showing all result JSON files", "Waiting for shell-85yenz", "Thinking") and how long the turn has
+  run, instead of a bare "Working...". todo_write takes an `activeForm` ("Running the tests") for the step in
+  progress, and its description asks for a list on any task of three or more steps.
+- **bash**: `cmd | tee run.log` keeps a log again; tee and echo/printf are refused only when they write source or
+  documents (as `> run.log` was always allowed).
+- **Export**: an exported or copied conversation has the person's words only, without the context the harness adds
+  to the first message (environment, memory, skills) or reminders.
+
 ## 0.2.5
 
 - **Every solution apart from the core**: Engineering (`solutions/engineering`: sdlc 1.2.0), DevOps

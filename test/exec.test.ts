@@ -46,13 +46,14 @@ test('shell writes of file contents are steered to write/edit; ordinary commands
     'cat >> notes.md',
     "sed -i 's/a/b/' file.txt",
     'perl -pi -e s/a/b/ x.js',
-    'echo hi | tee out.txt',
+    'echo hi | tee out.js',
+    'npm test | tee -a README.md',
     "printf 'x' > src/app.ts",
     'echo "{}" > package.json',
   ]) assert.ok(shellFileWrite(c), c);
   for (const c of [
     'npm install', 'node test.js > /tmp/out.log 2>&1', 'cat stats.js', 'grep -n foo src/*.ts', 'echo done',
-    'make build 2>&1 | tail -20', 'ls > /dev/null', 'cat a.txt | tee /dev/stderr', 'git commit -m "update"', "sed -n '1,20p' file.txt",
+    'make build 2>&1 | tail -20', 'ls > /dev/null', 'cat a.txt | tee /dev/stderr', 'python -u e1.py | tee e1.log', 'node run.js 2>&1 | tee -a out.txt', 'git commit -m "update"', "sed -n '1,20p' file.txt",
   ]) assert.equal(shellFileWrite(c), undefined, c);
   const r = await bashTool.run({ command: "cat > x.js <<'EOF'\n1\nEOF" }, await ctx());
   assert.ok(r.is_error);
