@@ -236,6 +236,8 @@ export interface SessionDeps {
   dataDir: string; companions: CompanionHub; registry: Registry; mcp: McpManager;
   /** The person's own agents (src/agents/store.ts): in their conversations' catalogue of agents. */
   agentStore?: { active(owner: string | undefined): Promise<AgentDef[]> };
+  /** People's own MCP servers: their approved tools, in their conversations (src/mcp/servers.ts). */
+  userMcp?: { entries(owner: string | undefined): Promise<{ entries: McpEntry[]; status: McpStatus[] }> };
   /** Every trace span as it is written (OpenTelemetry export). */
   onSpan?: (sessionId: string, span: TraceSpan & { at: number }) => void;
   /** Memory across sessions: where it lives, and whether agents may change it. */
@@ -1466,7 +1468,10 @@ export class Session {
     // MCP: operator servers (shared) and the project's (this session's).
     const server = await this.deps.mcp.serverEntries(new Map([...reg.mcpServers].map(([k, v]) => [k, v])));
     const project = await this.deps.mcp.projectEntries(host, this.projectTrusted(host));
-    const entries: McpEntry[] = [...server.entries, ...project.entries];
+    // The person's own servers last: a name the operator's or the project's servers already use keeps theirs.
+    const user = await this.deps.userMcp?.entries(this.meta.owner).catch((e: Error) => ({ entries: [] as McpEntry[], status: [{ name: 'your servers', scope: 'user' as const, ok: false, tools: 0, error: e.message }] })) ?? { entries: [], status: [] };
+    const taken = new Set([...server.entries, ...project.entries].map((e) => e.qualified));
+    const entries: McpEntry[] = [...server.entries, ...project.entries, ...user.entries.filter((e) => !taken.has(e.qualified))];
     if (entries.length && entries.length <= MCP_INLINE_MAX) {
       const names = new Set(tools.map((t) => t.spec.name));
       for (const e of entries) if (!names.has(e.qualified)) tools.push(mcpTool(e));
@@ -1474,7 +1479,7 @@ export class Session {
       const d = deferredTools(entries);
       tools.push(d.search, d.call);
     }
-    const mcp = [...server.status, ...project.status];
+    const mcp = [...server.status, ...project.status, ...user.status];
     for (const st of mcp.filter((x) => !x.ok)) this.emit({ kind: 'notice', level: 'warn', text: `MCP server ${st.name} (${st.scope}) is not available: ${st.error}` });
     // Plugin tools wait behind load_tools, one line per plugin, until the session uses them (the tools stay in the toolbox).
     const groups = settings.efficiency.deferPluginTools ? pluginGroups(tools, (t) => reg.ownerOf(t), (p) => reg.plugins.find((x) => x.name === p)?.description) : [];

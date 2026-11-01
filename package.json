@@ -39,8 +39,11 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0",
     "@duckdb/node-api": "1.5.6-r.1",
+    "@modelcontextprotocol/client": "2.4.0",
+    "@modelcontextprotocol/server": "2.4.0",
     "preact": "^11.0.1",
-    "undici": "7.30.0"
+    "undici": "7.30.0",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

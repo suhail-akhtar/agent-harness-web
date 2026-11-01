@@ -10,7 +10,7 @@ import type { HarnessEvent } from '../core/types.ts';
 // last events for replay (Last-Event-ID), numbered from 1 each time the server starts.
 // With several servers on one data folder, each streams what happens on it.
 
-export const EVENT_TOPICS = ['sessions', 'session', 'approvals', 'schedules', 'inbox', 'plugins', 'notices', 'proposals', 'linked', 'artifacts', 'chapters', 'client', 'data', 'noticing'] as const;
+export const EVENT_TOPICS = ['sessions', 'session', 'approvals', 'schedules', 'inbox', 'plugins', 'notices', 'proposals', 'linked', 'artifacts', 'chapters', 'client', 'data', 'noticing', 'mcp'] as const;
 export type EventTopic = typeof EVENT_TOPICS[number];
 
 /** Who may see an event: everyone signed in, or whoever may use what `owner` owns (administrators see all of it). */

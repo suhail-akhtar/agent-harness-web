@@ -25,6 +25,7 @@ import { NOTHING_TO_REPORT } from '../core/schedule-runs.ts';
 import { followRun, followWorkflow } from '../core/schedule-track.ts';
 import { InboxStore } from '../core/inbox.ts';
 import { Noticer } from '../core/noticing.ts';
+import { UserMcp } from '../mcp/servers.ts';
 import { AgentStore } from '../agents/store.ts';
 import { decideAlert, digestBody, digestDue, inQuietHours, type NotifyPolicy } from '../core/initiative.ts';
 import { describeWatch, probeWatch, TRIAGE_SYSTEM } from '../core/watch.ts';
@@ -181,6 +182,8 @@ export interface Harness {
   noticer: Noticer;
   /** People's own agents (src/agents/store.ts). */
   agentStore: AgentStore;
+  /** People's own MCP servers (src/mcp/servers.ts). */
+  userMcp: UserMcp;
   /** Makes the digests that are due (a timer does, every minute; tests pass the time). */
   makeDigests(now?: number): Promise<void>;
   /** The key vault (absent when turned off). */
@@ -1119,8 +1122,10 @@ ${neutralizeTags(change).slice(0, 20_000)}
   }
   // People's own agents: in their conversations' catalogue of agents (src/agents/store.ts).
   const agentStore = new AgentStore(opts.dataDir);
+  // People's own MCP servers: in their conversations and agents (src/mcp/servers.ts).
+  const userMcp = new UserMcp({ dataDir: opts.dataDir, ...(vault ? { vault } : {}), onChange: (owner) => events.publish('mcp', { type: 'changed' }, { owner }), reserved: () => registry.mcpServers.keys() });
   const sessions = new SessionManager({
-    dataDir: opts.dataDir, companions, registry, mcp, agentStore, onSpan: otel ? (sid, span) => otel.record(sid, span) : undefined,
+    dataDir: opts.dataDir, companions, registry, mcp, agentStore, userMcp, onSpan: otel ? (sid, span) => otel.record(sid, span) : undefined,
     onEvent: (s, e) => { bridge.dispatch(s, e); events.fromSession(s, e); inboxFromSession(s, e); noticer.onEvent(s, e); }, onLifecycle: (type, s) => events.sessionChanged(type, s), changes: bridge.changes,
     memory: { root: path.resolve(opts.memoryDir ?? path.join(opts.dataDir, 'memory')), mode: memoryMode }, search, ...(opts.denyUrls?.length ? { denyUrls: opts.denyUrls } : {}), spend: opts.spend,
     publish: opts.publish === null ? undefined : opts.publish ?? publishFromEnv(),
@@ -1174,7 +1179,7 @@ ${neutralizeTags(change).slice(0, 20_000)}
   }
 
   return {
-    registry, sessions, companions, mcp, scheduler, inbox, noticer, agentStore, vault, dataDir: opts.dataDir, search: search?.backend, bridge, plugins, events, providerKeys, clients, data,
+    registry, sessions, companions, mcp, scheduler, inbox, noticer, agentStore, userMcp, vault, dataDir: opts.dataDir, search: search?.backend, bridge, plugins, events, providerKeys, clients, data,
     ...(leases ? { cluster: { id: leases.owner, url: leases.url, leases, ...(clusterCfg?.secret ? { secret: clusterCfg.secret } : {}), ...(clusterCfg?.peers ? { peers: clusterCfg.peers } : {}) } } : {}),
     mcpb: {
       list: () => installedMcpb(mcpbRoot),
@@ -1242,6 +1247,7 @@ ${neutralizeTags(change).slice(0, 20_000)}
       await leases?.close();
       await otel?.close();
       await mcp.closeAll();
+      await userMcp.closeAll();
       for (const c of registry.closers) await Promise.resolve(c()).catch(() => {});
     },
   };

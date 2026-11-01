@@ -17,6 +17,10 @@ export interface McpEntry {
   client: Pick<McpClient, 'callTool'>;
   /** Name the model uses: mcp__server__tool. */
   qualified: string;
+  /** The person's choice for this tool (allow: runs without asking; ask: always asks), over the server's read-only hint. */
+  kind?: 'read' | 'external';
+  /** Why a call is refused before it is asked about or run (the server changed this tool since it was approved). */
+  refused?: () => string | undefined | Promise<string | undefined>;
 }
 
 const MAX_RESULT = 40_000;
@@ -50,8 +54,8 @@ export function convertResult(r: McpCallResult): ToolOutcome {
 }
 
 export function mcpTool(e: McpEntry): Tool {
-  const readOnly = e.tool.annotations?.readOnlyHint === true;
-  return {
+  const readOnly = e.kind ? e.kind === 'read' : e.tool.annotations?.readOnlyHint === true;
+  const tool: Tool = {
     kind: readOnly ? 'read' : 'external',
     // Read-only or not, what a service returns is not the user's, and what it is sent leaves the session.
     untrusted: true,
@@ -64,6 +68,9 @@ export function mcpTool(e: McpEntry): Tool {
       return convertResult(await e.client.callTool(e.tool.name, input, ctx.signal));
     },
   };
+  // Refused before anyone is asked to allow it.
+  if (e.refused) tool.refuse = () => e.refused!();
+  return tool;
 }
 
 function score(e: McpEntry, words: string[]): number {

@@ -1,23 +1,28 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+import { Client, StreamableHTTPClientTransport, type FetchLike, type OAuthClientProvider, type Transport as SdkTransport } from '@modelcontextprotocol/client';
 
-// A Model Context Protocol client: JSON-RPC 2.0 over stdio (newline-delimited)
-// or streamable HTTP (POST, JSON or SSE response, Mcp-Session-Id). It implements
-// what a harness needs: initialize, tools/list (paged), tools/call.
+// A Model Context Protocol client, on the official TypeScript SDK (@modelcontextprotocol/client): both eras of the
+// protocol (2026-07-28, stateless with server/discover, and the 2025 initialize handshake, found by probing),
+// tools (paged, with list_changed), resources, prompts, progress, cancellation and OAuth for HTTP servers. The
+// harness's own transports carry it where a server's process runs somewhere the SDK cannot start it (a
+// sandbox, a companion on the person's computer, a scrubbed environment); HTTP is the SDK's transport.
 
-export const MCP_PROTOCOL_VERSION = '2025-06-18';
+export const MCP_PROTOCOL_VERSION = '2026-07-28';
+const CLIENT_INFO = { name: 'harness', version: '0.3.0' };
 
 type Msg = { jsonrpc: '2.0'; id?: number | string; method?: string; params?: unknown; result?: unknown; error?: { code: number; message: string; data?: unknown } };
 
 export interface SendOptions { timeoutMs?: number; signal?: AbortSignal }
 
+/** The harness's own transport shape (a process's stdio, a companion relay). */
 export interface Transport {
-  /** opts carry the request's own timeout and abort, so a long tool call is not cut at a transport default. */
   send(msg: Msg, opts?: SendOptions): Promise<void>;
   onMessage(cb: (msg: Msg) => void): void;
   onClose(cb: (reason: string) => void): void;
   close(): Promise<void>;
 }
 
+/** A server process's stdio: newline-delimited JSON-RPC; stray stdout lines are ignored, the last stderr kept. */
 export class StdioTransport implements Transport {
   private child: ChildProcessWithoutNullStreams;
   private handlers: ((m: Msg) => void)[] = [];
@@ -48,155 +53,170 @@ export class StdioTransport implements Transport {
   async close() { try { this.child.stdin.end(); this.child.kill('SIGTERM'); } catch { /* gone */ } }
 }
 
-export class HttpTransport implements Transport {
-  private url: string;
-  private headers: Record<string, string>;
-  private sessionId?: string;
-  private protocol?: string;
-  private handlers: ((m: Msg) => void)[] = [];
-  private closers: ((r: string) => void)[] = [];
-  constructor(url: string, headers: Record<string, string> = {}) {
-    this.url = url;
-    this.headers = headers;
+/** Streamable HTTP (the SDK's): sessions, SSE, reconnection; OAuth through `authProvider`; every request through `fetch`. */
+export class HttpTransport extends StreamableHTTPClientTransport {
+  constructor(url: string, headers: Record<string, string> = {}, o: { fetch?: FetchLike; authProvider?: OAuthClientProvider } = {}) {
+    super(new URL(url), { requestInit: { headers }, ...(o.fetch ? { fetch: o.fetch } : {}), ...(o.authProvider ? { authProvider: o.authProvider } : {}) });
   }
-  async send(msg: Msg, opts: SendOptions = {}) {
-    const timeout = AbortSignal.timeout(opts.timeoutMs ?? 120_000);
-    const res = await fetch(this.url, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        accept: 'application/json, text/event-stream',
-        ...(this.sessionId ? { 'mcp-session-id': this.sessionId } : {}),
-        ...(this.protocol ? { 'mcp-protocol-version': this.protocol } : {}),
-        ...this.headers,
-      },
-      body: JSON.stringify(msg),
-      signal: opts.signal ? AbortSignal.any([timeout, opts.signal]) : timeout,
-    });
-    // An expired session is a 404 (MCP spec): the client must start a new one, so report it closed.
-    if (res.status === 404 && this.sessionId) {
-      this.sessionId = undefined;
-      for (const c of this.closers) c('session expired (HTTP 404)');
-      return;
-    }
-    const sid = res.headers.get('mcp-session-id');
-    if (sid) this.sessionId = sid;
-    if (res.status === 202 || res.status === 204) return;
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      if (msg.id !== undefined) this.deliver({ jsonrpc: '2.0', id: msg.id, error: { code: res.status, message: `HTTP ${res.status}: ${text.slice(0, 300)}` } });
-      return;
-    }
-    const type = res.headers.get('content-type') ?? '';
-    if (type.includes('text/event-stream')) {
-      const text = await res.text();
-      for (const block of text.split(/\n\n/)) {
-        const data = block.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trimStart()).join('\n');
-        if (data) { try { this.deliver(JSON.parse(data)); } catch { /* keep-alive */ } }
-      }
-    } else {
-      const body = await res.json().catch(() => undefined);
-      for (const m of Array.isArray(body) ? body : body ? [body] : []) this.deliver(m as Msg);
+}
+
+/** One of the harness's transports, as the SDK's (start, send, close and the three callbacks). */
+function adapt(t: Transport): SdkTransport & { closedReason?: string } {
+  const sdk: SdkTransport & { closedReason?: string } = {
+    async start() { /* already running */ },
+    async send(message) { await t.send(message as Msg); },
+    async close() { await t.close(); },
+  };
+  t.onMessage((m) => sdk.onmessage?.(m as never));
+  t.onClose((reason) => { sdk.closedReason = reason; sdk.onclose?.(); });
+  return sdk;
+}
+const isSdk = (t: Transport | SdkTransport): t is SdkTransport => typeof (t as SdkTransport).start === 'function';
+
+/**
+ * What servers leave out that the spec has a safe default for, filled in on the way in, so a server that is
+ * nearly right still works (the SDK validates strictly): a missing tools capability, a server's missing version or name, a tool without
+ * an input schema (no arguments), an input schema without its "object" type. Nothing else is changed.
+ */
+function tolerant(m: Record<string, unknown>): Record<string, unknown> {
+  const r = m.result as Record<string, unknown> | undefined;
+  if (!r || typeof r !== 'object') return m;
+  // An initialize answer without the tools capability: tools are assumed (a server that has none answers the list empty or with an error).
+  if (typeof r.protocolVersion === 'string' && r.capabilities && typeof r.capabilities === 'object' && !(r.capabilities as Record<string, unknown>).tools) (r.capabilities as Record<string, unknown>).tools = {};
+  const info = r.serverInfo as Record<string, unknown> | undefined;
+  if (info && typeof info === 'object') {
+    if (typeof info.version !== 'string') info.version = '0';
+    if (typeof info.name !== 'string') info.name = 'server';
+  }
+  if (Array.isArray(r.tools)) {
+    for (const t of r.tools as Array<Record<string, unknown>>) {
+      if (!t || typeof t !== 'object') continue;
+      const s = t.inputSchema as Record<string, unknown> | undefined;
+      if (!s || typeof s !== 'object') t.inputSchema = { type: 'object' };
+      else if (s.type === undefined) s.type = 'object';
     }
   }
-  setProtocol(v: string) { this.protocol = v; }
-  private deliver(m: Msg) { for (const h of this.handlers) h(m); }
-  onMessage(cb: (m: Msg) => void) { this.handlers.push(cb); }
-  onClose(cb: (r: string) => void) { this.closers.push(cb); }
-  async close() {
-    if (this.sessionId) await fetch(this.url, { method: 'DELETE', headers: { 'mcp-session-id': this.sessionId, ...this.headers } }).catch(() => {});
-    for (const c of this.closers) c('closed');
-  }
+  return m;
+}
+
+/** A transport whose incoming messages pass through tolerant() (the same transport underneath). */
+function tolerate(inner: SdkTransport & { closedReason?: string }): SdkTransport & { closedReason?: string; inner: SdkTransport } {
+  const outer = {
+    inner,
+    start: () => inner.start(),
+    send: (m: Parameters<SdkTransport['send']>[0], o?: Parameters<SdkTransport['send']>[1]) => inner.send(m, o),
+    close: () => inner.close(),
+    get sessionId() { return inner.sessionId; },
+    get closedReason() { return inner.closedReason; },
+    setProtocolVersion: (v: string) => inner.setProtocolVersion?.(v),
+    setSupportedProtocolVersions: (v: string[]) => inner.setSupportedProtocolVersions?.(v),
+  } as SdkTransport & { closedReason?: string; inner: SdkTransport };
+  inner.onmessage = (m, extra) => outer.onmessage?.(tolerant(m as Record<string, unknown>) as never, extra);
+  inner.onclose = () => outer.onclose?.();
+  inner.onerror = (e) => outer.onerror?.(e);
+  return outer;
 }
 
 export interface McpTool {
   name: string;
+  title?: string;
   description?: string;
   inputSchema?: { type?: string; properties?: Record<string, unknown>; required?: string[] };
-  annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; title?: string };
+  outputSchema?: Record<string, unknown>;
+  annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; idempotentHint?: boolean; openWorldHint?: boolean; title?: string };
 }
 
-export interface McpContent { type: string; text?: string; data?: string; mimeType?: string; resource?: { text?: string; uri?: string; mimeType?: string } }
+export interface McpContent { type: string; text?: string; data?: string; mimeType?: string; uri?: string; name?: string; resource?: { text?: string; uri?: string; mimeType?: string; blob?: string } }
 export interface McpCallResult { content?: McpContent[]; isError?: boolean; structuredContent?: unknown }
+export interface McpResource { uri: string; name?: string; title?: string; description?: string; mimeType?: string }
+export interface McpPrompt { name: string; title?: string; description?: string; arguments?: Array<{ name: string; description?: string; required?: boolean }> }
 
 export class McpClient {
-  private transport: Transport;
-  private nextId = 1;
-  private pending = new Map<number, { resolve(v: unknown): void; reject(e: Error): void; timer: NodeJS.Timeout }>();
+  readonly sdk: Client;
+  private transport: SdkTransport & { closedReason?: string; inner: SdkTransport };
   private closedReason?: string;
   private callTimeoutMs: number;
+  private toolsChanged = new Set<() => void>();
   serverInfo?: { name?: string; version?: string };
   instructions?: string;
+  /** The protocol revision agreed (2026-07-28, or a 2025 one). */
+  protocol?: string;
 
-  constructor(transport: Transport, opts: { callTimeoutMs?: number } = {}) {
-    this.transport = transport;
+  constructor(transport: Transport | SdkTransport, opts: { callTimeoutMs?: number; legacy?: boolean } = {}) {
+    this.transport = tolerate(isSdk(transport) ? transport : adapt(transport));
     this.callTimeoutMs = opts.callTimeoutMs ?? 10 * 60_000;
-    transport.onMessage((m) => {
-      if (m.id !== undefined && (m.result !== undefined || m.error)) {
-        const p = this.pending.get(Number(m.id));
-        if (!p) return;
-        this.pending.delete(Number(m.id));
-        clearTimeout(p.timer);
-        if (m.error) p.reject(new Error(`MCP error ${m.error.code}: ${m.error.message}`));
-        else p.resolve(m.result);
-      } else if (m.method && m.id !== undefined) {
-        // Server-to-client requests (sampling, roots, elicitation) are not offered.
-        void this.transport.send({ jsonrpc: '2.0', id: m.id, error: { code: -32601, message: 'not supported by this client' } }).catch(() => {});
-      }
+    this.sdk = new Client(CLIENT_INFO, {
+      capabilities: {},
+      // A 2026 server is used as one, a 2025 one through initialize (probed: server/discover first).
+      versionNegotiation: { mode: opts.legacy ? 'legacy' : 'auto', probe: { timeoutMs: 10_000 } },
+      // A server that changes its tools says so: whoever holds this client hears it (and re-checks them).
+      // At once, not debounced, and not re-listed by the SDK: whoever holds this client re-lists (and must know before the next call).
+      listChanged: { tools: { autoRefresh: false, debounceMs: 0, onChanged: () => { for (const f of this.toolsChanged) f(); } } },
     });
-    transport.onClose((reason) => {
-      this.closedReason = reason;
-      for (const [, p] of this.pending) { clearTimeout(p.timer); p.reject(new Error(`MCP server closed: ${reason}`)); }
-      this.pending.clear();
-    });
-  }
-
-  request<T>(method: string, params: unknown, timeoutMs = 60_000, signal?: AbortSignal): Promise<T> {
-    if (this.closedReason) return Promise.reject(new Error(`MCP server is not running: ${this.closedReason}`));
-    const id = this.nextId++;
-    return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`MCP ${method} timed out after ${timeoutMs / 1000}s`)); }, timeoutMs);
-      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timer });
-      signal?.addEventListener('abort', () => {
-        if (!this.pending.delete(id)) return;
-        clearTimeout(timer);
-        void this.transport.send({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: id, reason: 'aborted' } }).catch(() => {});
-        reject(new Error('aborted'));
-      }, { once: true });
-      this.transport.send({ jsonrpc: '2.0', id, method, params }, { timeoutMs: timeoutMs + 5_000, signal }).catch((e) => { this.pending.delete(id); clearTimeout(timer); reject(e); });
-    });
+    this.sdk.onclose = () => { this.closedReason ??= this.transport.closedReason ?? 'the connection closed'; };
   }
 
   async initialize(): Promise<void> {
-    const r = await this.request<{ protocolVersion?: string; serverInfo?: { name?: string; version?: string }; instructions?: string }>('initialize', {
-      protocolVersion: MCP_PROTOCOL_VERSION,
-      capabilities: {},
-      clientInfo: { name: 'harness-web', version: '0.2.0' },
-    }, 30_000);
-    this.serverInfo = r.serverInfo;
-    this.instructions = r.instructions;
-    if (this.transport instanceof HttpTransport && r.protocolVersion) this.transport.setProtocol(r.protocolVersion);
-    await this.transport.send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+    try {
+      await this.sdk.connect(this.transport, { timeout: 30_000 } as never);
+    } catch (e) {
+      throw new Error(this.transport.closedReason ? `MCP server is not running: ${this.transport.closedReason}` : (e as Error).message);
+    }
+    this.serverInfo = this.sdk.getServerVersion();
+    this.instructions = this.sdk.getInstructions();
+    this.protocol = this.sdk.getNegotiatedProtocolVersion();
   }
 
   async listTools(): Promise<McpTool[]> {
-    const out: McpTool[] = [];
-    let cursor: string | undefined;
-    for (let page = 0; page < 50; page++) {
-      const r = await this.request<{ tools: McpTool[]; nextCursor?: string }>('tools/list', cursor ? { cursor } : {});
-      out.push(...(r.tools ?? []));
-      cursor = r.nextCursor;
-      if (!cursor) break;
+    try { return (await this.sdk.listTools()).tools as McpTool[]; } catch (e) {
+      // A server with no tools at all (it never had the capability).
+      if ((e as { code?: number }).code === -32601) return [];
+      throw this.explain(e, 'tools/list');
     }
-    return out;
   }
 
-  callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpCallResult> {
-    return this.request<McpCallResult>('tools/call', { name, arguments: args }, this.callTimeoutMs, signal);
+  /** Told when the server's tools changed (notifications/tools/list_changed). */
+  onToolsChanged(cb: () => void): () => void { this.toolsChanged.add(cb); return () => this.toolsChanged.delete(cb); }
+
+  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpCallResult> {
+    if (this.closedReason) throw new Error(`MCP server is not running: ${this.closedReason}`);
+    try {
+      return await this.sdk.callTool({ name, arguments: args }, { timeout: this.callTimeoutMs, resetTimeoutOnProgress: true, ...(signal ? { signal } : {}) }) as McpCallResult;
+    } catch (e) {
+      throw this.explain(e, 'tools/call', signal);
+    }
   }
 
-  /** The server process exited or the HTTP session expired: this client cannot be used again. */
+  /** An SDK error as the harness says it: a timeout with its length, an ended HTTP session (it reconnects next time). */
+  private explain(e: unknown, method: string, signal?: AbortSignal): Error {
+    const err = e as Error & { code?: number; status?: number; data?: { status?: number } };
+    if (signal?.aborted) return new Error('aborted');
+    if (this.closedReason) return new Error(`MCP server closed: ${this.closedReason}`);
+    if (err.code === -32001 || /timed? ?out/i.test(err.message ?? '')) return new Error(`MCP ${method} timed out after ${this.callTimeoutMs / 1000}s`);
+    // A session the server no longer knows (HTTP 404): this client is done; the next call starts a new session.
+    if ((err.status ?? err.data?.status) === 404 || /\b404\b/.test(err.message ?? '')) {
+      this.closedReason = 'session expired (HTTP 404)';
+      return new Error('MCP server closed: session expired (HTTP 404)');
+    }
+    return err instanceof Error ? err : new Error(String(e));
+  }
+
+  /** The HTTP transport underneath (for OAuth: finishAuth), when it is one. */
+  get http(): HttpTransport | undefined { return this.transport.inner instanceof HttpTransport ? this.transport.inner : undefined; }
+
+  get canListResources(): boolean { return !!this.sdk.getServerCapabilities()?.resources; }
+  get canListPrompts(): boolean { return !!this.sdk.getServerCapabilities()?.prompts; }
+  async listResources(): Promise<McpResource[]> { return this.canListResources ? (await this.sdk.listResources()).resources as McpResource[] : []; }
+  async readResource(uri: string, signal?: AbortSignal): Promise<{ contents: Array<{ uri: string; mimeType?: string; text?: string; blob?: string }> }> {
+    return await this.sdk.readResource({ uri }, signal ? { signal } : undefined) as never;
+  }
+  async listPrompts(): Promise<McpPrompt[]> { return this.canListPrompts ? (await this.sdk.listPrompts()).prompts as McpPrompt[] : []; }
+  async getPrompt(name: string, args: Record<string, string>, signal?: AbortSignal): Promise<{ description?: string; messages: Array<{ role: string; content: McpContent }> }> {
+    return await this.sdk.getPrompt({ name, arguments: args }, signal ? { signal } : undefined) as never;
+  }
+
+  /** The server process exited or the HTTP session ended: this client cannot be used again. */
   get closed(): boolean { return this.closedReason !== undefined; }
 
-  close(): Promise<void> { return this.transport.close(); }
+  async close(): Promise<void> { await this.sdk.close().catch(() => {}); }
 }

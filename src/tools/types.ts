@@ -162,6 +162,8 @@ export interface Tool {
    * Permissions, hooks and validation then apply to THAT tool.
    */
   resolve?(input: Record<string, unknown>): { tool: Tool; input: Record<string, unknown> } | { error: string };
+  /** Why this call is refused outright, before anyone is asked to allow it (an MCP tool its server changed since it was approved). */
+  refuse?(input: Record<string, unknown>): string | undefined | Promise<string | undefined>;
   /**
    * Whether its schema waits behind load_tools until the session needs it (src/tools/deferred.ts;
    * efficiency.deferPluginTools). Default: a plugin's tools wait, core tools do not; false keeps a

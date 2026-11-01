@@ -18,7 +18,8 @@ export const ui = {
       { id: 'memory', title: 'Memory', icon: 'memory', group: 'agent', order: 4, scope: 'account', component: 'Memory' },
       { id: 'vault', title: 'Vault', icon: 'vault', group: 'integrations', order: 1, scope: 'account', component: 'Vault' },
       { id: 'schedules', title: 'Schedules', icon: 'clock', group: 'integrations', order: 2, scope: 'account', component: 'Schedules' },
-      { id: 'mcp', title: 'MCP bundles', icon: 'plug', group: 'integrations', order: 3, scope: 'operator', component: 'McpBundles' },
+      { id: 'mcp-servers', title: 'MCP servers', icon: 'plug', group: 'integrations', order: 3, scope: 'account', component: 'McpServers' },
+      { id: 'mcp', title: 'MCP bundles', icon: 'box', group: 'integrations', order: 4, scope: 'operator', component: 'McpBundles' },
       { id: 'about', title: 'About', icon: 'info', group: 'admin', order: 99, scope: 'app', component: 'About' },
     ],
     views: [

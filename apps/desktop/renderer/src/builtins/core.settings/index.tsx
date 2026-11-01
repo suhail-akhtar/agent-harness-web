@@ -8,6 +8,7 @@ import { useApp } from '../../state/app';
 import { useData } from '../../state/data';
 import { About, AboutPage, Appearance, Application, General, Servers, Shortcuts } from './app-sections';
 import { Instructions, McpBundles, Memory, ModelsProviders, OnboardModel, OnboardProvider, Permissions, Schedules, Vault } from './server-sections';
+import { McpServers } from './McpServers';
 import { SEARCH_TEXT } from '../../shell/Overlays';
 import { meta, ui } from './manifest';
 import guide from './GUIDE.md?raw';
@@ -22,6 +23,7 @@ Object.assign(SEARCH_TEXT, {
   'core.settings:memory': 'memory remember forget',
   'core.settings:vault': 'secret token key vault',
   'core.settings:schedules': 'cron schedule trigger later',
+  'core.settings:mcp-servers': 'mcp server servers connect tools oauth sign in import claude desktop cursor vs code connector integration',
   'core.settings:mcp': 'mcp mcpb bundle extension server',
   'core.settings:shortcuts': 'keyboard keybinding shortcut chord',
   'core.settings:servers': 'remote server team sign in token local',
@@ -34,7 +36,7 @@ export const coreSettings: BuiltinPlugin = {
   ...meta,
   ui,
   guide,
-  components: { Appearance, General, Application, Shortcuts, Servers, ModelsProviders, Permissions, Instructions, Memory, Vault, Schedules, McpBundles, About, AboutPage, OnboardProvider, OnboardModel },
+  components: { Appearance, General, Application, Shortcuts, Servers, ModelsProviders, Permissions, Instructions, Memory, Vault, Schedules, McpServers, McpBundles, About, AboutPage, OnboardProvider, OnboardModel },
   handlers: {
     open: (args) => {
       const section = typeof (args as { section?: unknown } | undefined)?.section === 'string' ? (args as { section: string }).section : '';

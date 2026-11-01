@@ -740,6 +740,8 @@ export class Agent {
     const name = tool.spec.name;
     const offResolved = switchedOff(tool, name);
     if (offResolved) return finish(offResolved, true, undefined, undefined, name);
+    const refusal = await tool.refuse?.(input);
+    if (refusal) return finish(refusal, true, undefined, undefined, name);
     // A step's budget for an expensive tool (a workflow's toolBudget): asked in words, models still re-ran
     // the same playtest nine times in one step; past the budget the call is refused, and says why.
     const budget = this.cfg.toolBudget?.[name];

@@ -17,7 +17,7 @@ import { type McpEntry, qualifiedName } from './tools.ts';
 //             servers run where the session's tools run (inside the sandbox),
 //             and HTTP servers must be public addresses.
 
-export interface McpStatus { name: string; scope: 'server' | 'project'; ok: boolean; tools: number; error?: string }
+export interface McpStatus { name: string; scope: 'server' | 'project' | 'user'; ok: boolean; tools: number; error?: string; /** A person's server: tools that wait for their approval. */ pending?: number }
 
 const SECRET_NAME = /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|COOKIE|SESSION/i;
 

@@ -43,6 +43,8 @@ export interface DataState {
   scheduleTick: number;
   /** Bumped when noticing changed (a finding written down in practice, a detector turned off): its views read again. */
   noticingTick: number;
+  /** Bumped when the person's MCP servers change (a sign-in finished in the browser, a tool changed): their views read again. */
+  mcpTick: number;
   /** The agent inbox's open items (results, messages, suggestions), newest first; null before the first read or on a server without one. */
   inbox: InboxItem[] | null;
   serverPlugins: PluginInfo[];
@@ -62,7 +64,7 @@ export interface DataState {
 }
 
 export const useData = create<DataState>((set, get) => ({
-  me: null, config: null, models: [], providers: null, sessions: [], sessionsLoaded: false, approvals: [], scheduleTick: 0, noticingTick: 0, inbox: null, serverPlugins: [], devPlugins: [], pluginEpochs: {}, grants: {},
+  me: null, config: null, models: [], providers: null, sessions: [], sessionsLoaded: false, approvals: [], scheduleTick: 0, noticingTick: 0, mcpTick: 0, inbox: null, serverPlugins: [], devPlugins: [], pluginEpochs: {}, grants: {},
   registry: buildRegistry([]),
   eventsMode: 'stopped',
   async refreshModels() {
@@ -241,6 +243,10 @@ export function applyGlobal(e: GlobalEvent): void {
     }
     case 'noticing': {
       useData.setState({ noticingTick: d.noticingTick + 1 });
+      return;
+    }
+    case 'mcp': {
+      useData.setState({ mcpTick: d.mcpTick + 1 });
       return;
     }
     case 'schedules': {

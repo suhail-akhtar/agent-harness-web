@@ -81,6 +81,8 @@ test('MCP over streamable HTTP with a session id', async () => {
     let body = '';
     for await (const c of req) body += c;
     if (req.method === 'DELETE') { res.writeHead(204).end(); return; }
+    // No server-to-client stream here (the spec's answer to the client's GET).
+    if (req.method === 'GET') { res.writeHead(405).end(); return; }
     const m = JSON.parse(body);
     if (m.id === undefined) { res.writeHead(202).end(); return; }
     if (m.method !== 'initialize' && req.headers['mcp-session-id'] !== 'abc') { res.writeHead(400).end('no session'); return; }
@@ -503,6 +505,8 @@ test('MCP over HTTP: the per-server timeout applies to tool calls, and an expire
     let body = '';
     for await (const c of req) body += c;
     if (req.method === 'DELETE') { res.writeHead(204).end(); return; }
+    // No server-to-client stream here (the spec's answer to the client's GET).
+    if (req.method === 'GET') { res.writeHead(405).end(); return; }
     const m = JSON.parse(body);
     if (m.id === undefined) { res.writeHead(202).end(); return; }
     if (m.method === 'initialize') {

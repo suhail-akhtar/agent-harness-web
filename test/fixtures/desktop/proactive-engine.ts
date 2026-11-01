@@ -12,6 +12,8 @@
 //   "away"     -> a step of work, then the model service fails (the turn ends on an error)
 //   "makeagent"-> opens the agent builder filled in (desktop_command core.agents:new), then says so
 //   "delegate" -> hands a review to the person's security-reviewer agent (agent tool), then reports what it said
+//   "usemcp"   -> adds with the person's own MCP server "notes" (mcp__notes__add), has it change its tools
+//                 (mcp__notes__mutate), then tries the changed echo (refused), then says so
 // The agent builder's Generate (its system prompt) gets a drafted security reviewer as JSON.
 //   anything else -> a short reply
 import path from 'node:path';
@@ -68,6 +70,12 @@ export const SCRIPTS: Record<string, Step[]> = {
   delegate: [
     { calls: [{ name: 'agent', input: { description: 'security review', type: 'security-reviewer', prompt: 'Review the login change for security problems.' } }] },
     { text: 'The security reviewer looked at the login change.' },
+  ],
+  usemcp: [
+    { calls: [{ name: 'mcp__notes__add', input: { a: 20, b: 22 } }] },
+    { calls: [{ name: 'mcp__notes__mutate', input: {} }] },
+    { calls: [{ name: 'mcp__notes__echo', input: { text: 'after' } }] },
+    { text: 'The notes server added 20 and 22, then changed its tools.' },
   ],
   makeagent: [
     { calls: [{ name: 'desktop_command', input: { command: 'core.agents:new', args: { name: 'test-writer', description: 'Writes unit tests for a change and runs them.', prompt: 'Role: a test writer.', tools: ['read', 'write', 'bash'], permissionMode: 'acceptEdits' } } }] },

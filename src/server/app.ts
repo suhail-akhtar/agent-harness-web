@@ -46,6 +46,8 @@ import { tierOf, type LiveModel } from '../providers/catalog.ts';
 import { AgentDefError, agentToMarkdown, BUILTIN_AGENTS, INTERACTIVE_TOOLS, parseAgentFile } from '../agents/agents.ts';
 import { generateAgent } from '../agents/generate.ts';
 import { AgentStoreError, defOf } from '../agents/store.ts';
+import { parseMcpImport } from '../mcp/import.ts';
+import { McpServerError } from '../mcp/servers.ts';
 import type { AgentDef } from '../plugins/api.ts';
 import { skillsIn } from '../skills/skills.ts';
 
@@ -267,13 +269,16 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
   const desktopReady = sso && !sso.desktop ? desktop!.load().then(() => undefined, (e: Error) => console.error(`desktop sessions not loaded: ${e.message}`)) : Promise.resolve();
   const desktopSignIn = new DesktopSignIn();
   // An account's sessions use every operator-scope vault entry only when it is an administrator (as the server sees it now).
-  if (harness.vault && o.users) {
-    harness.vault.isAdmin = (id) => {
+  // The same answer for a person's own MCP servers (only an administrator's may be commands or private addresses).
+  if (o.users) {
+    const isAdmin = (id: string | undefined) => {
       if (id === undefined) return true;
       const u = o.users!.get(id);
       if (!u || u.disabled) return false;
       return u.sso && sso ? isSsoAdmin(sso.client.cfg, u.sso.email) : u.role === 'admin';
     };
+    if (harness.vault) harness.vault.isAdmin = isAdmin;
+    harness.userMcp.isAdmin = isAdmin;
   }
 
   function principalFor(token: string | undefined): Principal | undefined {
@@ -755,6 +760,21 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       const r = await harness.scheduler.fireTrigger(trig[1]!, text);
       if (!r) throw new HttpError(404, 'unknown or disabled trigger');
       return send(res, 202, { ok: r.result === 'started', result: r.result, ...(r.sessionId ? { session: r.sessionId } : {}) });
+    }
+
+    // ---- an MCP server's sign-in comes back here, in the person's browser (no harness sign-in: the single-use state is the proof) ----
+    if (p === '/api/mcp/oauth/callback' && method === 'GET') {
+      const esc = (t: string) => t.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+      const page = (status: number, title: string, text: string) => send(res, status, `<!doctype html><meta charset="utf-8"><title>${esc(title)}</title><body style="font:15px system-ui;margin:3em auto;max-width:32em"><h2>${esc(title)}</h2><p>${esc(text)}</p></body>`, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'" });
+      const state = url.searchParams.get('state') ?? '';
+      const code = url.searchParams.get('code') ?? '';
+      const err = url.searchParams.get('error');
+      if (err) return page(400, 'Sign-in was not completed', `The service said: ${err}${url.searchParams.get('error_description') ? ` (${url.searchParams.get('error_description')})` : ''}. Try again from the app.`);
+      if (!state || !code) return page(400, 'Sign-in was not completed', 'This address is missing what the service sends back. Start the sign-in again from the app.');
+      try {
+        const r = await harness.userMcp.finishSignIn(state, code, url.searchParams.get('iss') ?? undefined);
+        return page(200, `Signed in to ${r.server}`, 'You can close this tab and go back to the app.');
+      } catch (e) { return page(400, 'Sign-in was not completed', (e as Error).message); }
     }
 
     if (p === '/api/login' && method === 'POST') {
@@ -1561,7 +1581,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     if (p === '/api/agents/options' && method === 'GET') {
       return send(res, 200, {
         tools: delegableTools().map((t) => ({ name: t.spec.name, kind: t.kind, description: t.spec.description.split('\n')[0]!.slice(0, 200) })).sort((a, b) => a.name.localeCompare(b.name)),
-        mcpServers: [...registry.mcpServers.keys()].sort(),
+        mcpServers: [...new Set([...registry.mcpServers.keys(), ...(await harness.userMcp.list(me.id)).filter((x) => x.enabled).map((x) => x.name)])].sort(),
         skills: await serverSkills(),
         models: registry.listModels().filter((m) => m.available).map((m) => ({ id: m.id, label: m.label, provider: m.provider, efforts: m.efforts })),
       });
@@ -1597,7 +1617,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
           description: String(b.description ?? ''), model, provider: registry.provider(model),
           // The tools a delegated agent can use (not the ones that talk to the person or start sessions).
           tools: delegableTools().map((t) => ({ name: t.spec.name, description: t.spec.description })),
-          mcpServers: [...registry.mcpServers.keys()], skills: await serverSkills(), taken,
+          mcpServers: [...new Set([...registry.mcpServers.keys(), ...(await harness.userMcp.list(me.id)).filter((x) => x.enabled).map((x) => x.name)])], skills: await serverSkills(), taken,
         });
         o.spend?.add(me.id, r.costUsd);
         return send(res, 200, r);
@@ -1623,6 +1643,48 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         }
       } catch (e) { if (e instanceof AgentStoreError) throw new HttpError(e.status, e.message); throw e; }
       throw new HttpError(405, 'method not allowed');
+    }
+
+
+    // ---- the person's own MCP servers (src/mcp/servers.ts) ----
+    if (p.startsWith('/api/me/mcp')) {
+      const um = harness.userMcp;
+      try {
+        if (p === '/api/me/mcp' && method === 'GET') return send(res, 200, { servers: await um.list(me.id), admin: um.isAdmin(me.id) });
+        if (p === '/api/me/mcp' && method === 'POST') { const b = await readJson(req); return send(res, 201, await um.create(me.id, b.server ?? b, { source: 'app', ...(typeof b.enabled === 'boolean' ? { enabled: b.enabled } : {}) })); }
+        // A config from Claude Desktop, Claude Code, Cursor or VS Code: what it holds (preview), or added (apply).
+        if (p === '/api/me/mcp/import' && method === 'POST') {
+          const b = await readJson(req);
+          if (typeof b.text !== 'string' || !b.text.trim() || b.text.length > 500_000) throw new HttpError(400, 'text is the config (JSON)');
+          const r = parseMcpImport(b.text);
+          if (!b.apply) return send(res, 200, r);
+          const want = Array.isArray(b.names) ? new Set((b.names as unknown[]).map(String)) : undefined;
+          const added: string[] = [];
+          const errors = [...r.errors];
+          for (const it of r.servers) {
+            if (want && !want.has(it.config.name)) continue;
+            try { await um.create(me.id, it.config, { source: 'import', ...((it as { disabled?: boolean }).disabled ? { enabled: false } : {}) }); added.push(it.config.name); } catch (e) { errors.push(`${it.config.name}: ${(e as Error).message}`); }
+          }
+          return send(res, 200, { ...r, added, errors });
+        }
+        const m = /^\/api\/me\/mcp\/([a-z0-9][a-z0-9_-]{0,39})(?:\/(test|approve|tools|signin|signout))?$/.exec(p);
+        if (m) {
+          const name = m[1]!;
+          if (!m[2] && method === 'GET') return send(res, 200, await um.viewOf(me.id, name));
+          if (!m[2] && method === 'PUT') { const b = await readJson(req); const { expectVersion, ...rest } = (b.server ?? b) as Record<string, unknown>; return send(res, 200, await um.update(me.id, name, rest, typeof expectVersion === 'number' ? expectVersion : typeof b.expectVersion === 'number' ? b.expectVersion : undefined)); }
+          if (!m[2] && method === 'DELETE') { await um.remove(me.id, name); return send(res, 200, { ok: true }); }
+          if (m[2] === 'test' && method === 'POST') { limited(messageLimiter, me); return send(res, 200, await um.test(me.id, name)); }
+          if (m[2] === 'approve' && method === 'POST') { const b = await readJson(req); return send(res, 200, await um.approve(me.id, name, Array.isArray(b.tools) ? (b.tools as unknown[]).map(String) : undefined)); }
+          if (m[2] === 'tools' && method === 'PUT') { const b = await readJson(req); return send(res, 200, await um.setPolicies(me.id, name, (b.policies ?? b) as Record<string, unknown>)); }
+          if (m[2] === 'signin' && method === 'POST') {
+            limited(messageLimiter, me);
+            const base = process.env.HARNESS_PUBLIC_URL?.replace(/\/+$/, '') || `http://${req.headers.host ?? '127.0.0.1'}`;
+            return send(res, 200, await um.signIn(me.id, name, `${base}/api/mcp/oauth/callback`));
+          }
+          if (m[2] === 'signout' && method === 'POST') { await um.signOut(me.id, name); return send(res, 200, { ok: true }); }
+          throw new HttpError(405, 'method not allowed');
+        }
+      } catch (e) { if (e instanceof McpServerError) throw new HttpError(e.status, e.message); throw e; }
     }
 
     // ---- noticing: what the harness notices by itself (src/core/noticing.ts) ----

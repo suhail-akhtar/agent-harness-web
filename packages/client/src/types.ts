@@ -161,7 +161,7 @@ export interface HistoryPage { total?: number; after?: number; messages: Message
 export interface Approval { sessionId: string; requestId: string; kind: PendingRequest['kind']; /** The session's title. */ title?: string; summary?: string; tool?: string; at: number; request?: PendingRequest }
 
 /** The global stream (GET /api/events): `data:{seq,topic,payload}`. */
-export type EventTopic = 'sessions' | 'session' | 'approvals' | 'schedules' | 'inbox' | 'plugins' | 'notices' | 'proposals' | 'linked' | 'artifacts' | 'chapters' | 'client' | 'noticing';
+export type EventTopic = 'sessions' | 'session' | 'approvals' | 'schedules' | 'inbox' | 'plugins' | 'notices' | 'proposals' | 'linked' | 'artifacts' | 'chapters' | 'client' | 'noticing' | 'mcp';
 export interface GlobalEvent { seq: number; topic: EventTopic | string; payload: unknown }
 
 export interface Capabilities {
@@ -299,6 +299,35 @@ export interface AgentOptions {
   skills: Array<{ name: string; description: string }>;
   models: Array<{ id: string; label?: string; provider: string; efforts: Effort[] }>;
 }
+
+/** A tool's policy on a person's MCP server: auto (the server's read-only hint decides), allow, ask, block. */
+export type McpToolPolicy = 'auto' | 'allow' | 'ask' | 'block';
+/** What a person's MCP server is: a URL (http) or, for an administrator, a command (stdio). Secrets are ${vault:name}. */
+export interface McpServerConfig {
+  name: string; description?: string; type: 'http' | 'stdio';
+  url?: string; headers?: Record<string, string>;
+  command?: string; args?: string[]; env?: Record<string, string>; cwd?: string;
+  timeoutMs?: number; oauth?: { clientId?: string; clientSecret?: string; scope?: string };
+}
+/** A person's MCP server (GET /api/me/mcp). */
+export interface McpServerView extends McpServerConfig {
+  enabled: boolean; version: number; updatedAt: number; source?: string;
+  policies: Record<string, McpToolPolicy>;
+  /** The vault entries it uses. */
+  vault: string[];
+  signedIn: boolean;
+  /** As last seen (absent: not connected since the server started). */
+  status?: { ok: boolean; error?: string; needsSignIn?: boolean; tools: number; pending: number; protocol?: string; server?: string; checkedAt: number };
+}
+/** A tool on a person's server: approved, new, or changed since it was approved (new and changed wait for the person). */
+export interface McpToolView { name: string; title?: string; description?: string; readOnly: boolean; policy: McpToolPolicy; state: 'approved' | 'new' | 'changed' }
+/** Connecting to a server now (POST /api/me/mcp/:name/test). */
+export interface McpTestResult {
+  ok: boolean; error?: string; needsSignIn?: boolean; protocol?: string; serverInfo?: { name?: string; version?: string }; instructions?: string;
+  tools: McpToolView[]; resources: Array<{ uri: string; name?: string; description?: string }>; prompts: Array<{ name: string; description?: string }>;
+}
+/** What a pasted config holds (POST /api/me/mcp/import). */
+export interface McpImportResult { format: string; servers: Array<{ config: McpServerConfig; warnings: string[]; disabled?: boolean }>; vault: string[]; errors: string[]; added?: string[] }
 
 /** A schedule a finding offers: the person's own words, at the time they usually asked. */
 export interface NoticedDraft { title: string; prompt: string; cron?: string; timeZone?: string; folder?: string; model?: string }

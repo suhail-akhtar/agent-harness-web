@@ -13,7 +13,7 @@ import { GlobalEvents, sessionEvents, type Fetch } from './events.ts';
 import {
   isPending, PENDING_KINDS, type Approval, type FileTree, type SearchHit, type Attachment, type CatalogueEntry, type PluginReview, type PluginUpdateInfo, type PluginRevisionInfo, type Config, type Capabilities, type ContextBreakdown, type LiveProviderModels, type EffectiveSetting, type Effort, type FileContent, type FileEntry,
   type GitLogEntry, type GitStatus, type Health, type HarnessEvent, type HistoryPage, type McpBundle, type Me, type Mode, type ModelInfo, type PendingRequest, type PluginInfo, type SolutionImportInfo,
-  type ProviderInfo, type ProviderTest, type InboxItem, type Interruptions, type NoticingOverview, type NoticeDetector, type AgentDef, type AgentInfo, type AgentOptions, type AgentRecord, type Schedule, type ScheduleRun, type ScheduleStats, type WatchSpec, type SessionDetail, type SessionMeta, type SessionsPage, type TaskView, type VaultEntry, type VersionInfo, type WorkflowInfo, type WorkflowRunView,
+  type ProviderInfo, type ProviderTest, type InboxItem, type Interruptions, type NoticingOverview, type NoticeDetector, type AgentDef, type AgentInfo, type AgentOptions, type AgentRecord, type McpImportResult, type McpServerConfig, type McpServerView, type McpTestResult, type McpToolPolicy, type Schedule, type ScheduleRun, type ScheduleStats, type WatchSpec, type SessionDetail, type SessionMeta, type SessionsPage, type TaskView, type VaultEntry, type VersionInfo, type WorkflowInfo, type WorkflowRunView,
   type ArtifactContent, type ArtifactMeta, type Proposal, type TraceSpan,
 } from './types.ts';
 
@@ -355,6 +355,25 @@ export class HarnessClient {
     import: (text: string, name?: string) => this.post<AgentRecord>('/api/me/agents/import', { text, ...(name ? { name } : {}) }),
     /** A draft from a description (not saved). */
     generate: (description: string, model?: string) => this.post<{ draft: AgentDef; costUsd: number; dropped: string[] }>('/api/me/agents/generate', { description, ...(model ? { model } : {}) }),
+  };
+  /** The person's own MCP servers: connected by URL (or a command, for an administrator), signed in, their tools approved. */
+  mcp = {
+    list: () => this.get<{ servers: McpServerView[]; admin: boolean }>('/api/me/mcp'),
+    get: (name: string) => this.get<McpServerView>(`/api/me/mcp/${encodeURIComponent(name)}`),
+    create: (server: McpServerConfig & { enabled?: boolean }) => this.post<McpServerView>('/api/me/mcp', server),
+    /** A changed config, or only { enabled }; refused (409) when it changed since `expectVersion`. */
+    update: (name: string, change: Partial<McpServerConfig> & { enabled?: boolean }, expectVersion?: number) => this.put<McpServerView>(`/api/me/mcp/${encodeURIComponent(name)}`, { ...change, ...(expectVersion !== undefined ? { expectVersion } : {}) }),
+    remove: (name: string) => this.del<{ ok: boolean }>(`/api/me/mcp/${encodeURIComponent(name)}`),
+    /** Connects now: what it offers, and which tools wait for approval. */
+    test: (name: string) => this.post<McpTestResult>(`/api/me/mcp/${encodeURIComponent(name)}/test`, {}),
+    /** Approves the tools as the server describes them now (all new and changed ones, or those named). */
+    approve: (name: string, tools?: string[]) => this.post<McpTestResult>(`/api/me/mcp/${encodeURIComponent(name)}/approve`, tools ? { tools } : {}),
+    setPolicies: (name: string, policies: Record<string, McpToolPolicy>) => this.put<McpServerView>(`/api/me/mcp/${encodeURIComponent(name)}/tools`, { policies }),
+    /** The address to open in the browser to sign in (or ok: nothing to do). */
+    signIn: (name: string) => this.post<{ authorizeUrl?: string; ok?: boolean }>(`/api/me/mcp/${encodeURIComponent(name)}/signin`, {}),
+    signOut: (name: string) => this.post<{ ok: boolean }>(`/api/me/mcp/${encodeURIComponent(name)}/signout`, {}),
+    /** A Claude Desktop, Claude Code, Cursor or VS Code config: what it holds, or (apply) added. */
+    import: (text: string, o: { apply?: boolean; names?: string[] } = {}) => this.post<McpImportResult>('/api/me/mcp/import', { text, ...o }),
   };
   /** What the harness notices by itself: its mode, detectors, what it would have said in practice, what it observed. */
   noticing = {

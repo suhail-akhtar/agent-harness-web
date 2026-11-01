@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Your own MCP servers** (docs/agents-mcp/PLAN.md, phase 2): Settings > MCP servers.
+  - Connect a service by its address (or, for an administrator, a command), sign in through the browser (OAuth 2.1,
+    PKCE, dynamic registration, refresh; tokens sealed), or import the servers from a Claude Desktop, Claude Code,
+    Cursor or VS Code config. Keys are `${vault:name}` references; a key pasted into a config moves to one.
+  - Each tool is approved: its definition is pinned, and a server that later changes a tool or adds one gets nothing
+    past you until you approve it again (a changed tool is refused at once, even in a running conversation). Each
+    tool can be allowed, asked about or blocked.
+  - Their tools, documents and prompts reach your conversations and your agents (and only yours).
+  - A member's servers are public `https://` addresses only; commands are for administrators.
+  - The MCP client now runs on the official SDK (`@modelcontextprotocol/client` 2.4): the 2026-07-28 protocol first,
+    the 2025 handshake when a server only has that; resources, prompts, progress, cancellation, change notices.
+  - `/api/me/mcp` (add, edit, test, approve, tool policies, sign in and out, import), an `mcp` event topic.
+- A tool can be refused before anyone is asked to allow it (`Tool.refuse`).
 - **Scheduled work you can see** (proactive work, phases 0 and 1; plan in docs/proactive/PLAN.md):
   - The desktop's New schedule form made no schedule (it sent no target): it now says where each run happens,
     a new conversation each time (its model and folder) or the same one.
