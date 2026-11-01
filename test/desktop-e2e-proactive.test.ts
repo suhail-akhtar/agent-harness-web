@@ -379,8 +379,9 @@ test('desktop app end to end: proactive work', { timeout: 10 * 60_000 }, async (
       await page.click('[data-nav="core.scheduled:scheduled"]');
       await page.click('[data-scheduled] [data-schedule-new]');
       await page.waitForSelector('[data-schedule-form="new"] [data-schedule-templates]');
-      // While a dialog is open, toasts sit at the top, clear of its buttons.
-      assert.equal(await page.getAttribute('[data-toaster]', 'data-toaster'), 'top');
+      // While a dialog is open, toasts sit under its backdrop, never over its buttons.
+      assert.equal(await page.getAttribute('[data-toaster]', 'data-toaster'), 'under');
+      assert.ok(await page.evaluate(() => Number(getComputedStyle(document.querySelector('[data-toaster]')!).zIndex) < Number(getComputedStyle(document.querySelector('[role="dialog"]')!.parentElement!).zIndex)), 'below the dialog');
       await page.click('[data-template="briefing"]');
       assert.equal(await page.inputValue('[data-schedule-title]'), 'Morning briefing');
       assert.match(await page.inputValue('[data-schedule-prompt]'), /what changed since yesterday/);
@@ -396,7 +397,7 @@ test('desktop app end to end: proactive work', { timeout: 10 * 60_000 }, async (
       await page.waitForFunction(() => /^Every Monday and Thursday at 09:00/.test(document.querySelector('[data-when-words]')?.textContent ?? ''));
       await shot('schedule-dialog-new', page.locator('[role="dialog"]').last());
       await page.keyboard.press('Escape');
-      await page.waitForSelector('[data-toaster="bottom"]', { state: 'attached' });
+      await page.waitForSelector('[data-toaster="over"]', { state: 'attached' });
     });
 
     await step('workflows: a schedule that runs a workflow, picked with its inputs in a project folder; its run is the workflow\'s', async () => {
@@ -425,6 +426,67 @@ test('desktop app end to end: proactive work', { timeout: 10 * 60_000 }, async (
       const [run] = (await api('GET', `/api/schedules/${s.id}/runs`)).body as Array<{ sessionId: string }>;
       const wf = (await api('GET', `/api/sessions/${run!.sessionId}/workflows`)).body as { runs: Array<{ workflow: string; status: string }> };
       assert.deepEqual([wf.runs[0]!.workflow, wf.runs[0]!.status], ['daily-report', 'succeeded']);
+    });
+
+    await step('watches: a watch made in the dialog looks at once; a change to its folder, found with Check now, runs once with what changed; no change runs nothing', async () => {
+      const proj = (await api('GET', '/api/schedules')).body as Array<{ title: string; newSession?: { runtime: { path: string } } }>;
+      const folder = proj.find((x) => x.title === 'Daily sales report')!.newSession!.runtime.path;
+      fs.mkdirSync(path.join(folder, 'notes'), { recursive: true });
+      fs.writeFileSync(path.join(folder, 'notes', 'a.md'), 'first');
+      await page.click('[data-nav="core.scheduled:scheduled"]');
+      await page.click('[data-scheduled] [data-schedule-new]');
+      await page.waitForSelector('[data-schedule-form="new"]');
+      await page.click('[data-choice="trigger"] [data-value="change"]');
+      await page.waitForSelector('[data-watch-picker]');
+      await page.click('[data-choice="watch-kind"] [data-value="files"]');
+      await page.fill('[data-watch-paths]', 'notes');
+      await page.waitForFunction(() => document.querySelector('[data-when-words]')?.textContent === 'When notes change, checked every 5 minutes');
+      await page.fill('[data-schedule-title]', 'Notes watch');
+      await page.fill('[data-schedule-prompt]', 'Summarise what changed in the notes.');
+      await page.locator('[data-schedule-folder]').selectOption(folder);
+      await shot('schedule-dialog-watch', page.locator('[role="dialog"]').last());
+      await page.click('[data-schedule-create]');
+      await created();
+      const s = await scheduleNamed('Notes watch') as unknown as { id: string; watch: { kind: string; paths: string[]; everyMinutes: number } };
+      assert.deepEqual(s.watch, { kind: 'files', everyMinutes: 5, paths: ['notes'] });
+      await page.waitForFunction((id) => /Checked just now/.test(document.querySelector(`[data-schedule="${id}"] [data-schedule-watch]`)?.textContent ?? ''), s.id, { timeout: 15_000 });
+      assert.match(await rowText(s.id), /When notes change, checked every 5 minutes/);
+      await page.click(`[data-schedule="${s.id}"] [data-schedule-check]`);
+      await toastWith('No change');
+      assert.equal(((await api('GET', `/api/schedules/${s.id}/runs`)).body as unknown[]).length, 0, 'nothing ran');
+      fs.writeFileSync(path.join(folder, 'notes', 'b.md'), 'a new note');
+      await page.click(`[data-schedule="${s.id}"] [data-schedule-check]`);
+      await toastWith('It changed: a run started');
+      const end = Date.now() + 20_000;
+      let runs: Array<{ by: string; status: string; sessionId: string }> = [];
+      while (!(runs[0]?.status === 'completed')) { assert.ok(Date.now() < end, 'it ran'); await page.waitForTimeout(300); runs = (await api('GET', `/api/schedules/${s.id}/runs`)).body as typeof runs; }
+      assert.equal(runs.length, 1);
+      assert.equal(runs[0]!.by, 'watch');
+      assert.match(await history(runs[0]!.sessionId), /<watch_change>[\s\S]*Added: notes\/b\.md/);
+      await page.waitForSelector(`[data-runs="${s.id}"] [data-run]`);
+      assert.match(await page.locator(`[data-runs="${s.id}"] [data-run]`).first().innerText(), /on a change/);
+    });
+
+    await step('watches: a check that fails says why on the row; a watch template fills the dialog in as a watch', async () => {
+      const proj = (await api('GET', '/api/schedules')).body as Array<{ title: string; newSession?: { runtime: { path: string } } }>;
+      const folder = proj.find((x) => x.title === 'Daily sales report')!.newSession!.runtime.path;
+      const made = (await api('POST', '/api/schedules', { title: 'Commits', prompt: 'review', watch: { kind: 'git', everyMinutes: 15 }, newSession: { model: 'deepseek-flash', runtime: 'local', path: folder, mode: 'dontAsk' } })).body as { id: string };
+      await page.waitForSelector(`[data-schedule="${made.id}"]`);
+      await page.click(`[data-schedule="${made.id}"] [data-schedule-check]`);
+      await toastWith('the check failed: git:');
+      await page.waitForSelector(`[data-schedule="${made.id}"] [data-schedule-watch-error]`);
+      assert.match(await page.locator(`[data-schedule="${made.id}"] [data-schedule-watch-error]`).innerText(), /The last check failed: git: /);
+      await page.click('[data-scheduled] [data-schedule-new]');
+      await page.waitForSelector('[data-schedule-form="new"]');
+      await page.click('[data-template="tests"]');
+      assert.equal(await page.getAttribute('[data-choice="trigger"] [data-value="change"]', 'aria-checked'), 'true');
+      assert.equal(await page.getAttribute('[data-choice="watch-kind"] [data-value="command"]', 'aria-checked'), 'true');
+      assert.equal(await page.inputValue('[data-watch-command]'), 'npm test');
+      assert.equal(await page.inputValue('[data-watch-only-when]'), 'a test fails');
+      await page.waitForFunction(() => document.querySelector('[data-when-words]')?.textContent === 'When the output of `npm test` changes, checked every 30 minutes');
+      await page.click('[data-template="briefing"]');
+      assert.equal(await page.getAttribute('[data-choice="trigger"] [data-value="time"]', 'aria-checked'), 'true', 'a time template is at set times again');
+      await page.keyboard.press('Escape');
     });
 
     await step('agents set it up: asked in a chat, the agent schedules a routine for the person (after they allow it); it is on the Scheduled page in plain words', async () => {

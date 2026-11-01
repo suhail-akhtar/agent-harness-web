@@ -7,7 +7,7 @@
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import type { Schedule, WorkflowInfo } from '@harness/client';
+import type { Schedule, WatchSpec, WorkflowInfo } from '@harness/client';
 import { Button, Field, Icon, Input, Modal, Select, Textarea, cx, toast } from '@harness/ui';
 import { useData, client } from '../state/data';
 import { useApp } from '../state/app';
@@ -113,6 +113,59 @@ function WhenPicker({ when, set, zone }: { when: When; set: (w: When) => void; z
   );
 }
 
+/** A watch as the dialog edits it (paths as one line). */
+interface WatchDraft { kind: WatchSpec['kind']; command: string; paths: string; branch: string; url: string; match: string; everyMinutes: number; settleSeconds: number; onlyWhen: string }
+const WATCH_DEFAULT: WatchDraft = { kind: 'files', command: '', paths: '', branch: '', url: '', match: '', everyMinutes: 5, settleSeconds: 0, onlyWhen: '' };
+const KINDS: Array<{ id: WatchSpec['kind']; label: string }> = [{ id: 'files', label: 'Files in the folder' }, { id: 'command', label: "A command's output" }, { id: 'git', label: 'New commits' }, { id: 'url', label: 'A web page or API' }];
+const toDraft = (w?: WatchSpec): WatchDraft => (w ? { ...WATCH_DEFAULT, kind: w.kind, everyMinutes: w.everyMinutes ?? 5, command: w.command ?? '', paths: (w.paths ?? []).join(', '), branch: w.branch ?? '', url: w.url ?? '', match: w.match ?? '', settleSeconds: w.settleSeconds ?? 0, onlyWhen: w.onlyWhen ?? '' } : WATCH_DEFAULT);
+
+/** The watch a draft makes (undefined: not complete yet). */
+function toWatch(d: WatchDraft): WatchSpec | undefined {
+  const base = { kind: d.kind, everyMinutes: d.everyMinutes, ...(d.settleSeconds ? { settleSeconds: d.settleSeconds } : {}), ...(d.onlyWhen.trim() ? { onlyWhen: d.onlyWhen.trim() } : {}) };
+  if (d.kind === 'command') return d.command.trim() ? { ...base, command: d.command.trim() } : undefined;
+  if (d.kind === 'files') { const paths = d.paths.split(',').map((p) => p.trim()).filter(Boolean); return { ...base, ...(paths.length ? { paths } : {}) }; }
+  if (d.kind === 'git') return { ...base, ...(d.branch.trim() ? { branch: d.branch.trim() } : {}) };
+  return /^https?:\/\//i.test(d.url.trim()) ? { ...base, url: d.url.trim(), ...(d.match.trim() ? { match: d.match.trim() } : {}) } : undefined;
+}
+
+const EVERY = [1, 5, 15, 30, 60, 240, 1440].map((n) => ({ value: String(n), label: n === 1 ? 'minute' : n < 60 ? `${n} minutes` : n === 60 ? 'hour' : n === 1440 ? 'day' : `${n / 60} hours` }));
+const SETTLE = [{ value: '0', label: 'At the first change' }, { value: '60', label: 'Once quiet for a minute' }, { value: '300', label: 'Once quiet for 5 minutes' }, { value: '900', label: 'Once quiet for 15 minutes' }];
+
+/** What a watch looks at, how often, and when a change runs. */
+function WatchPicker({ d, set }: { d: WatchDraft; set: (d: WatchDraft) => void }) {
+  const [preview, setPreview] = useState<{ when?: string; error?: string } | null>(null);
+  const w = toWatch(d);
+  useEffect(() => {
+    let alive = true;
+    if (!w) { setPreview(null); return; }
+    const t = setTimeout(() => { client.schedules.preview({ watch: w }).then((p) => alive && setPreview(p)).catch(() => alive && setPreview(null)); }, 250);
+    return () => { alive = false; clearTimeout(t); };
+  }, [JSON.stringify(w)]);
+  return (
+    <div data-watch-picker>
+      <Choice name="watch-kind" label="What it watches" value={d.kind} options={KINDS} onChange={(kind) => set({ ...d, kind })} />
+      <div className="mt-3 grid gap-x-3 gap-y-1 md:grid-cols-2">
+        {d.kind === 'command' && <div className="md:col-span-2"><Field label="Command" help="Run in the folder; when its output or exit code changes, it runs"><Input className="font-mono" value={d.command} onChange={(e) => set({ ...d, command: e.target.value })} placeholder="npm test" data-watch-command /></Field></div>}
+        {d.kind === 'files' && <div className="md:col-span-2"><Field label="Paths (optional)" help="In the folder, comma-separated: src, docs/*.md. Empty: all of it"><Input value={d.paths} onChange={(e) => set({ ...d, paths: e.target.value })} placeholder="src, docs/*.md" data-watch-paths /></Field></div>}
+        {d.kind === 'git' && <Field label="Branch (optional)" help="Empty: the one checked out"><Input value={d.branch} onChange={(e) => set({ ...d, branch: e.target.value })} placeholder="main" data-watch-branch /></Field>}
+        {d.kind === 'url' && (
+          <>
+            <Field label="Address"><Input value={d.url} onChange={(e) => set({ ...d, url: e.target.value })} placeholder="https://status.example.com" data-watch-url /></Field>
+            <Field label="Only this part (optional)" help="A regular expression: only what it matches is compared"><Input className="font-mono" value={d.match} onChange={(e) => set({ ...d, match: e.target.value })} placeholder="All systems \w+" data-watch-match /></Field>
+          </>
+        )}
+        <Field label="Check every"><Select value={String(d.everyMinutes)} onChange={(v) => set({ ...d, everyMinutes: Number(v) })} options={EVERY} data-watch-every /></Field>
+        <Field label="Run" help="Changes in a row wait until it has been quiet this long"><Select value={String(d.settleSeconds)} onChange={(v) => set({ ...d, settleSeconds: Number(v) })} options={SETTLE} data-watch-settle /></Field>
+        <div className="md:col-span-2"><Field label="Only when (optional)" help="A small model with no tools checks each change against this first; a change that does not match costs no run"><Input value={d.onlyWhen} onChange={(e) => set({ ...d, onlyWhen: e.target.value })} placeholder="a test fails" data-watch-only-when /></Field></div>
+      </div>
+      <div className={cx('mt-1 flex items-start gap-2 rounded-lg px-3 py-2 text-[12.5px]', preview?.error ? 'bg-hx-danger/10 text-hx-danger' : 'bg-hx-hover text-hx-secondary')} data-when-preview aria-live="polite">
+        <Icon name={preview?.error ? 'alert' : 'eye'} size={14} className="mt-0.5 shrink-0" />
+        <span>{preview?.error ? preview.error : preview?.when ? <><b className="font-medium text-hx-primary" data-when-words>{preview.when}</b> · no model runs until it changes</> : d.kind === 'url' ? 'Give the address.' : d.kind === 'command' ? 'Give the command.' : 'Pick what it watches.'}</span>
+      </div>
+    </div>
+  );
+}
+
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return <section className="mb-5"><h3 className="mb-2 text-[11.5px] font-semibold uppercase tracking-wide text-hx-muted">{title}</h3>{children}</section>;
 }
@@ -125,6 +178,7 @@ function initial(edit?: Schedule, draft?: ScheduleDraft) {
     what: (edit?.workflow ?? draft?.workflow ? 'workflow' : 'prompt') as 'prompt' | 'workflow',
     workflow: edit?.workflow?.name ?? draft?.workflow?.name ?? '', input: { ...(edit?.workflow?.input ?? draft?.workflow?.input ?? {}) } as Record<string, string>,
     when, timeZone: edit?.timeZone ?? draft?.timeZone ?? '', misfire: edit?.misfire ?? 'once',
+    trigger: (edit?.watch ?? draft?.watch ? 'change' : 'time') as 'time' | 'change', watch: toDraft(edit?.watch ?? draft?.watch),
     maxCostUsd: edit?.maxCostUsd ? String(edit.maxCostUsd) : draft?.maxCostUsd ? String(draft.maxCostUsd) : '',
     target: 'new', sessionId: '', model: '', folder: SCRATCH,
     asks: (edit?.newSession?.mode as Asks | undefined) ?? draft?.asks ?? 'dontAsk',
@@ -150,7 +204,9 @@ export function ScheduleDialog({ open, edit, draft, onClose, onDone }: { open: b
   const set = (patch: Partial<typeof f>) => setF((x) => ({ ...x, ...patch }));
   const model = f.model || (models.some((m) => m.id === defaultModel) ? defaultModel : recommendedModel(models)?.id ?? models[0]?.id ?? '');
   const trigger = !!edit?.trigger;
-  const cron = toCron(f.when), once = toOnce(f.when);
+  const watching = f.trigger === 'change';
+  const cron = watching ? undefined : toCron(f.when), once = watching ? undefined : toOnce(f.when);
+  const watch = watching ? toWatch(f.watch) : undefined;
   const wf = workflows?.find((w) => w.name === f.workflow);
   const cost = f.maxCostUsd.trim() ? Number(f.maxCostUsd) : undefined;
   const waits = edit ? !!edit.sessionId || (edit.newSession?.mode ?? 'dontAsk') !== 'dontAsk' : f.target === 'existing' || f.asks !== 'dontAsk';
@@ -159,7 +215,8 @@ export function ScheduleDialog({ open, edit, draft, onClose, onDone }: { open: b
     f.what === 'prompt' && !f.prompt.trim() && 'what it should do',
     f.what === 'workflow' && !f.workflow && 'a workflow',
     f.what === 'workflow' && wf && Object.entries(wf.inputs).some(([k, v]) => v.required && !f.input[k]?.trim()) && 'the workflow\'s inputs',
-    !trigger && !cron && !once && 'when it runs',
+    !trigger && !watching && !cron && !once && 'when it runs',
+    watching && !watch && (f.watch.kind === 'url' ? 'an http(s) address' : 'the command'),
     !edit && f.target === 'new' && !model && 'a model',
     !edit && f.target === 'existing' && !f.sessionId && 'a conversation',
     cost !== undefined && !(cost > 0) && 'a spend limit above 0',
@@ -168,13 +225,13 @@ export function ScheduleDialog({ open, edit, draft, onClose, onDone }: { open: b
   const save = async () => {
     setBusy(true); setError('');
     try {
-      const timing = trigger ? {} : cron ? { cron, timeZone: f.timeZone.trim() || undefined } : once!;
+      const timing = trigger ? {} : watching ? { watch: watch! } : cron ? { cron, timeZone: f.timeZone.trim() || undefined } : once!;
       const workflow = f.what === 'workflow' ? { workflow: { name: f.workflow, input: Object.fromEntries(Object.entries(f.input).filter(([, v]) => v.trim())) } } : {};
       let s: Schedule;
       if (edit) {
         s = await client.schedules.update(edit.id, {
           title: f.title, ...(f.what === 'prompt' ? { prompt: f.prompt } : {}), ...workflow, ...timing,
-          ...(trigger ? {} : { timeZone: cron && f.timeZone.trim() ? f.timeZone.trim() : null, misfire: f.misfire as 'once' | 'skip' }),
+          ...(trigger || watching ? {} : { timeZone: cron && f.timeZone.trim() ? f.timeZone.trim() : null, misfire: f.misfire as 'once' | 'skip' }),
           maxCostUsd: cost ?? null, ...(waits ? { askTimeoutMinutes: waitMin } : {}),
         });
         toast('Saved', { kind: 'success' });
@@ -236,7 +293,12 @@ export function ScheduleDialog({ open, edit, draft, onClose, onDone }: { open: b
           )}
         </Section>
 
-        {!trigger && <Section title="When"><WhenPicker when={f.when} set={(when) => set({ when })} zone={f.timeZone.trim()} /></Section>}
+        {!trigger && (
+          <Section title="When">
+            {!edit && <div className="mb-3"><Choice name="trigger" label="When it runs" value={f.trigger} options={[{ id: 'time', label: 'At set times' }, { id: 'change', label: 'When something changes' }]} onChange={(trigger) => set({ trigger })} /></div>}
+            {watching ? <WatchPicker d={f.watch} set={(w) => set({ watch: w })} /> : <WhenPicker when={f.when} set={(when) => set({ when })} zone={f.timeZone.trim()} />}
+          </Section>
+        )}
 
         {!edit && (
           <Section title="Where">

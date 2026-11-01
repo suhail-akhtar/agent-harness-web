@@ -3,6 +3,7 @@ import { FileWatch, readJson, withFileLock, writeFileAtomic } from '../util/shar
 import path from 'node:path';
 import type { SessionMeta } from './session.ts';
 import { type RunEnd, type ScheduleRun, ScheduleRunLog } from './schedule-runs.ts';
+import { checkWatch, describeWatch, type Probe, type Triage, WatchError, type WatchSpec, type WatchState } from './watch.ts';
 
 // Scheduled prompts: "every weekday at 9, check the nightly build and fix what
 // broke", or "in 20 minutes, see whether the deploy finished". Like Claude Code's
@@ -48,6 +49,10 @@ export interface Schedule {
   workflow?: { name: string; input: Record<string, string> };
   /** The conversation whose agent set it up (the schedule tool), for that agent's list. */
   createdBy?: string;
+  /** It runs when this changes (checked without a model every few minutes) instead of at a time. */
+  watch?: WatchSpec;
+  /** What its watch last saw, and changes waiting to settle. */
+  watchState?: WatchState;
 }
 
 export class ScheduleError extends Error {}
@@ -206,8 +211,9 @@ export function describeCron(expr: string): string {
 }
 
 /** When a schedule runs, in words (its time zone named when it has one). */
-export function describeSchedule(s: Pick<Schedule, 'cron' | 'at' | 'timeZone' | 'triggerHash'>): string {
+export function describeSchedule(s: Pick<Schedule, 'cron' | 'at' | 'timeZone' | 'triggerHash' | 'watch'>): string {
   if (s.triggerHash) return 'When its URL is called';
+  if (s.watch) return describeWatch(s.watch);
   if (s.cron) { try { return `${describeCron(s.cron)}${s.timeZone ? ` (${s.timeZone})` : ''}`; } catch { return s.cron; } }
   return s.at ? `Once, at ${new Date(s.at).toISOString()}` : 'Once';
 }
@@ -291,6 +297,10 @@ export class Scheduler {
   }
   /** Every run's record: when, how it ended, what it cost, what it did. */
   readonly runs: ScheduleRunLog;
+  /** Makes one check of a watch (set by the server: it knows the folders and how to fetch). */
+  probe?: (s: Schedule) => Promise<Probe>;
+  /** A watch's filter: whether a change matters, by a small model with no tools (set by the server). */
+  triage?: (s: Schedule, change: string) => Promise<Triage>;
   /** Runs started here that have not ended yet (they end when their turn does). */
   private open = new Set<Promise<unknown>>();
 
@@ -359,23 +369,26 @@ export class Scheduler {
 
   get(id: string): Schedule | undefined { return this.items.get(id); }
 
-  async create(spec: { owner?: string; title?: string; prompt: string; cron?: string; at?: number; inMinutes?: number; sessionId?: string; newSession?: Schedule['newSession']; plugin?: string; timeZone?: string; misfire?: 'once' | 'skip'; maxCostUsd?: number; askTimeoutMinutes?: number; workflow?: Schedule['workflow']; createdBy?: string }, now = Date.now()): Promise<Schedule> {
+  async create(spec: { owner?: string; title?: string; prompt: string; cron?: string; at?: number; inMinutes?: number; sessionId?: string; newSession?: Schedule['newSession']; plugin?: string; timeZone?: string; misfire?: 'once' | 'skip'; maxCostUsd?: number; askTimeoutMinutes?: number; workflow?: Schedule['workflow']; createdBy?: string; watch?: unknown }, now = Date.now()): Promise<Schedule> {
     const workflow = checkWorkflow(spec.workflow);
+    let watch: WatchSpec | undefined;
+    try { watch = spec.watch === undefined || spec.watch === null ? undefined : checkWatch(spec.watch); } catch (e) { throw new ScheduleError((e as WatchError).message); }
     const prompt = spec.prompt?.trim() || (workflow ? `Run the workflow ${workflow.name}` : '');
     if (!prompt) throw new ScheduleError('a schedule needs a prompt');
     if (prompt.length > 20_000) throw new ScheduleError('the prompt is limited to 20,000 characters');
     const at = spec.at ?? (spec.inMinutes !== undefined ? now + Math.max(1, spec.inMinutes) * 60_000 : undefined);
-    if (!spec.cron === (at === undefined)) throw new ScheduleError('give either cron (repeating) or a time (at / in_minutes), not both or neither');
+    if (watch ? !!spec.cron || at !== undefined : !spec.cron === (at === undefined)) throw new ScheduleError(watch ? 'a watch runs when something changes: give no cron or time' : 'give either cron (repeating) or a time (at / in_minutes), not both or neither');
     if (at !== undefined && !(at > now)) throw new ScheduleError('that time has passed');
     if (!spec.sessionId && !spec.newSession) throw new ScheduleError('a schedule goes to a session, or makes a new one');
     checkTiming(spec, now);
-    const nextRun = spec.cron ? nextCron(spec.cron, now, spec.timeZone) : at;
+    // A watch: its first check (which sets what it compares against) is now.
+    const nextRun = watch ? now : spec.cron ? nextCron(spec.cron, now, spec.timeZone) : at;
     if (nextRun === undefined) throw new ScheduleError('that cron expression never matches');
     const s: Schedule = {
       id: crypto.randomBytes(6).toString('hex'), owner: spec.owner, title: (spec.title?.trim() || prompt.split('\n')[0]!).slice(0, 80), prompt,
       ...(spec.cron ? { cron: spec.cron.trim() } : { at }), ...(spec.sessionId ? { sessionId: spec.sessionId } : { newSession: spec.newSession }),
       ...(spec.cron && spec.timeZone ? { timeZone: spec.timeZone } : {}), ...(spec.misfire ? { misfire: spec.misfire } : {}), ...(spec.maxCostUsd ? { maxCostUsd: spec.maxCostUsd } : {}), ...(spec.askTimeoutMinutes ? { askTimeoutMinutes: spec.askTimeoutMinutes } : {}),
-      ...(workflow ? { workflow } : {}), ...(spec.createdBy ? { createdBy: spec.createdBy } : {}),
+      ...(workflow ? { workflow } : {}), ...(spec.createdBy ? { createdBy: spec.createdBy } : {}), ...(watch ? { watch } : {}),
       enabled: true, createdAt: now, nextRun, runs: 0, ...(spec.plugin ? { plugin: spec.plugin } : {}),
     };
     const made = await this.mutate(() => {
@@ -428,9 +441,15 @@ export class Scheduler {
    * Changes a schedule's title, prompt, timing or limits (not where it runs). A new time recomputes the
    * next run; `null` clears an optional field (the time zone, the cost limit).
    */
-  async update(id: string, patch: { title?: string; prompt?: string; cron?: string; at?: number; inMinutes?: number; timeZone?: string | null; misfire?: 'once' | 'skip'; maxCostUsd?: number | null; askTimeoutMinutes?: number | null; workflow?: Schedule['workflow'] }, now = Date.now()): Promise<Schedule | undefined> {
+  async update(id: string, patch: { title?: string; prompt?: string; cron?: string; at?: number; inMinutes?: number; timeZone?: string | null; misfire?: 'once' | 'skip'; maxCostUsd?: number | null; askTimeoutMinutes?: number | null; workflow?: Schedule['workflow']; watch?: unknown }, now = Date.now()): Promise<Schedule | undefined> {
     const cur = this.items.get(id);
     if (!cur) return undefined;
+    let watch: WatchSpec | undefined;
+    if (patch.watch !== undefined) {
+      if (!cur.watch) throw new ScheduleError('only a watch has a watch to change; make a new one');
+      try { watch = checkWatch(patch.watch); } catch (e) { throw new ScheduleError((e as WatchError).message); }
+    }
+    if (cur.watch && (patch.cron || patch.at !== undefined || patch.inMinutes !== undefined)) throw new ScheduleError('a watch runs when something changes: it has no time');
     const workflow = patch.workflow === undefined ? cur.workflow : checkWorkflow(patch.workflow);
     const at = patch.at ?? (patch.inMinutes !== undefined ? now + Math.max(1, patch.inMinutes) * 60_000 : undefined);
     if (cur.triggerHash && (patch.cron || at !== undefined || patch.timeZone)) throw new ScheduleError('a trigger runs when its URL is called; it has no time');
@@ -453,6 +472,12 @@ export class Scheduler {
       if (!s) return undefined;
       s.prompt = prompt;
       if (workflow) s.workflow = workflow;
+      if (watch) {
+        // What it watches changed: it compares against a new first look, soon.
+        const same = JSON.stringify({ ...s.watch, everyMinutes: 0, settleSeconds: 0, onlyWhen: '' }) === JSON.stringify({ ...watch, everyMinutes: 0, settleSeconds: 0, onlyWhen: '' });
+        s.watch = watch;
+        if (!same) { delete s.watchState; s.nextRun = now; } else if (s.nextRun === undefined || s.nextRun > now + watch.everyMinutes * 60_000) s.nextRun = now + watch.everyMinutes * 60_000;
+      }
       if (patch.title !== undefined) s.title = (patch.title.trim() || prompt.split('\n')[0]!).slice(0, 80);
       if (timing) {
         if (cron) { s.cron = cron; delete s.at; } else { s.at = at; delete s.cron; }
@@ -482,9 +507,10 @@ export class Scheduler {
       const s = this.items.get(id);
       if (!s) return undefined;
       // A one-time schedule that already ran (or whose time passed) has nothing left to run.
-      if (enabled && !s.cron && !s.triggerHash && (s.at === undefined || s.at <= now)) throw new Error('This one-time schedule has already run or its time has passed; create a new one.');
+      if (enabled && !s.cron && !s.triggerHash && !s.watch && (s.at === undefined || s.at <= now)) throw new Error('This one-time schedule has already run or its time has passed; create a new one.');
       s.enabled = enabled;
       if (enabled && s.cron) s.nextRun = nextCron(s.cron, now, s.timeZone);
+      if (enabled && s.watch) s.nextRun = now;
       if (enabled && !s.cron && s.at !== undefined) s.nextRun = s.at;
       return s;
     });
@@ -507,6 +533,7 @@ export class Scheduler {
       await this.sync(true);
       for (const due of [...this.items.values()]) {
         if (!due.enabled || due.nextRun === undefined || due.nextRun > now) continue;
+        if (due.watch) { const r = await this.checkWatchOf(due.id, now); if (r.fired) fired.push(r.fired); continue; }
         // Its plugin is switched off: skipped with a note, kept. A one-time schedule stays due (it runs when the plugin is back).
         const off = this.pluginOff?.(due);
         const missed = due.misfire === 'skip' && now - due.nextRun > MISFIRE_GRACE_MS ? `missed: it was due at ${new Date(due.nextRun).toISOString()}, while this server was not running` : undefined;
@@ -542,6 +569,74 @@ export class Scheduler {
       }
     } finally { this.ticking = false; }
     return fired;
+  }
+
+  /**
+   * One check of a watch: what it watches now against what it saw before; a change waits to settle
+   * (settleSeconds), passes its filter (onlyWhen) and then runs, with what changed (every change since
+   * the last run, batched). The first check only sets what later ones compare against. `force`: now,
+   * whatever its next check (Check now), and even while it is off.
+   */
+  async checkWatchOf(id: string, now = Date.now(), force = false): Promise<{ changed: boolean; fired?: Schedule; note?: string; state?: WatchState }> {
+    if (!this.probe) return { changed: false, note: 'watches are not available here' };
+    // One check of a watch at a time (Check now while its timer fires): both would see the same change and run
+    // twice. Check now waits for the check under way and says what it found; the timer skips.
+    const under = this.checking.get(id);
+    if (under) return force ? under : { changed: false, note: 'a check of this watch is already running' };
+    const p = this.checkWatchOnce(id, now, force).finally(() => this.checking.delete(id));
+    this.checking.set(id, p);
+    return p;
+  }
+  private checking = new Map<string, Promise<{ changed: boolean; fired?: Schedule; note?: string; state?: WatchState }>>();
+
+  private async checkWatchOnce(id: string, now: number, force: boolean): Promise<{ changed: boolean; fired?: Schedule; note?: string; state?: WatchState }> {
+    const claimed = await this.mutate(() => {
+      const s = this.items.get(id);
+      if (!s?.watch || (!force && (!s.enabled || s.nextRun === undefined || s.nextRun > now))) return undefined;
+      const copy = { ...s };
+      if (s.enabled) s.nextRun = now + s.watch.everyMinutes * 60_000;
+      return copy;
+    });
+    if (!claimed?.watch) return { changed: false };
+    let probe: Probe;
+    try { probe = await this.probe!(claimed); } catch (e) {
+      const msg = (e as Error).message.slice(0, 300);
+      const done = await this.mutate(() => { const s = this.items.get(id); if (s) s.watchState = { ...(s.watchState ?? {}), checkedAt: now, error: msg }; return s; });
+      this.tell('changed', done);
+      return { changed: false, note: `the check failed: ${msg}`, state: done?.watchState };
+    }
+    const prev = claimed.watchState ?? {};
+    const changed = !!prev.hash && probe.hash !== prev.hash;
+    const pending = changed
+      ? { firstAt: prev.pending?.firstAt ?? now, lastAt: now, changes: [...(prev.pending?.changes ?? []), probe.change ?? 'It changed.'].slice(-10) }
+      : prev.pending;
+    const ready = !!pending && now - pending.lastAt >= (claimed.watch.settleSeconds ?? 0) * 1000;
+    const save = (keep: WatchState['pending']) => this.mutate(() => {
+      const s = this.items.get(id);
+      if (s) s.watchState = { hash: probe.hash, seen: probe.seen, checkedAt: now, ...(keep ? { pending: keep } : {}) };
+      return s;
+    });
+    const saved = await save(ready ? undefined : pending);
+    // The window follows: a first look, a change waiting, a failed check that works again.
+    if (!ready || !pending) { if (changed || prev.error || !prev.hash) this.tell('changed', saved); return { changed, state: saved?.watchState }; }
+    const text = pending.changes.join('\n\n---\n\n');
+    // The filter: a change that does not matter is written down as skipped, and costs no run.
+    if (claimed.watch.onlyWhen && this.triage) {
+      let t: Triage;
+      try { t = await this.triage(claimed, text); } catch (e) { t = { fire: false, why: `the filter could not decide (${(e as Error).message.slice(0, 200)})` }; }
+      if (!t.fire) {
+        const note = `skipped: not "${claimed.watch.onlyWhen}": ${t.why}`;
+        const done = await this.mutate(() => { const s = this.items.get(id); if (s) { s.lastRun = now; s.lastResult = note; } return s; });
+        const record = await this.runs.start({ scheduleId: id, owner: claimed.owner, title: claimed.title, by: 'watch', startedAt: now, endedAt: now, status: 'skipped', reason: note, ...(t.costUsd ? { costUsd: t.costUsd } : {}), summary: text.slice(0, 280) }).catch(() => undefined);
+        this.tell('fired', done, { result: note, ...(record ? { record } : {}) });
+        return { changed, note, state: done?.watchState };
+      }
+    }
+    const r = await this.launch(claimed, text);
+    // Not run now (its conversation was busy, a limit): the change waits for the next check.
+    if (r.result !== 'started' && !/^failed/.test(r.result)) await save(pending);
+    const done = await this.record(id, now, r, 'watch');
+    return { changed, ...(done ? { fired: done } : {}), state: done?.watchState };
   }
 
   /** Runs one schedule now (the "run now" button), outside its timing. */

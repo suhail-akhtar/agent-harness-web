@@ -251,7 +251,13 @@ export interface Schedule {
   upcoming?: number[];
   /** The conversation whose agent set it up. */
   createdBy?: string;
+  /** It runs when this changes (checked without a model) instead of at a time. */
+  watch?: WatchSpec;
+  /** Its watch's last look: when, whether it failed, how many changes wait to run, whether it has looked yet. */
+  watchState?: { checkedAt?: number; error?: string; pending: number; seen: boolean };
 }
+/** What a watch looks at: a command's output, files in the folder, commits on a branch, a web page or API. */
+export interface WatchSpec { kind: 'command' | 'files' | 'git' | 'url'; command?: string; paths?: string[]; branch?: string; url?: string; match?: string; everyMinutes: number; settleSeconds?: number; onlyWhen?: string }
 /** What unattended work left for the person (GET /api/inbox). */
 export interface InboxItem {
   id: string; kind: 'result' | 'message' | 'suggestion'; title: string; body: string; at: number; level: 'info' | 'warn' | 'error';
@@ -260,7 +266,7 @@ export interface InboxItem {
 }
 /** One run of a schedule or trigger (GET /api/schedules/:id/runs, /api/schedule-runs). */
 export interface ScheduleRun {
-  id: string; scheduleId: string; title: string; by: 'schedule' | 'trigger' | 'manual';
+  id: string; scheduleId: string; title: string; by: 'schedule' | 'trigger' | 'manual' | 'watch';
   startedAt: number; endedAt?: number;
   status: 'running' | 'completed' | 'failed' | 'stopped' | 'skipped' | 'interrupted';
   reason?: string; sessionId?: string; costUsd?: number; summary?: string;

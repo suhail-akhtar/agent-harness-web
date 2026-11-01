@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { DEFAULT_WHEN, fromTiming, toCron, toOnce, type When } from '../apps/desktop/renderer/src/components/when.ts';
 import { TEMPLATES } from '../apps/desktop/renderer/src/builtins/core.scheduled/templates.ts';
 import { describeCron, nextCron } from '../src/core/scheduler.ts';
+import { checkWatch } from '../src/core/watch.ts';
 
 // The schedule dialog's picker: what the person picks becomes a cron (or a one-time run) the server
 // understands, and a schedule opened for editing shows as what was picked.
@@ -49,12 +50,15 @@ test('what is not complete makes no cron or time; a one-time choice is minutes f
   assert.deepEqual([back.freq, back.onceMode, back.at], ['once', 'at', '2030-01-02T09:30']);
 });
 
-test('every template is complete and makes a valid timing', () => {
+test('every template is complete and makes a valid timing or watch', () => {
   for (const t of TEMPLATES) {
-    const when = w(t.draft.when ?? {});
-    const cron = toCron(when), once = toOnce(when);
-    assert.ok(cron || once, `${t.id} has a timing`);
-    if (cron) assert.ok(nextCron(cron, Date.now()), `${t.id}: ${cron} runs`);
+    if (t.draft.watch) assert.doesNotThrow(() => checkWatch(t.draft.watch), `${t.id}: a valid watch`);
+    else {
+      const when = w(t.draft.when ?? {});
+      const cron = toCron(when), once = toOnce(when);
+      assert.ok(cron || once, `${t.id} has a timing`);
+      if (cron) assert.ok(nextCron(cron, Date.now()), `${t.id}: ${cron} runs`);
+    }
     assert.ok(t.draft.prompt && t.draft.prompt.length > 20, `${t.id} has a prompt`);
     assert.ok(['dontAsk', 'auto', 'acceptEdits', 'default'].includes(t.draft.asks!), `${t.id} says how it asks`);
   }

@@ -7,6 +7,7 @@ import type { Effort } from '../core/models.ts';
 import { type Session, SessionElsewhereError, type SessionMeta } from '../core/session.ts';
 import { checkScheduleTiming, describeSchedule, nextRuns, type Schedule } from '../core/scheduler.ts';
 import { InboxError } from '../core/inbox.ts';
+import { checkWatch, describeWatch } from '../core/watch.ts';
 import { type LeaseRecord, leaseUrlSig } from '../util/lease.ts';
 import type { PermissionMode } from '../core/types.ts';
 import type { Harness } from '../kernel/harness.ts';
@@ -1251,9 +1252,11 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       // A trigger's hash stays on the server: a list says it is a trigger.
       // When it runs in words, and (repeating ones) its next few runs.
       const view = (s: Schedule) => {
-        const { triggerHash, ...rest } = s;
+        // A watch's last look stays on the server: when it checked, whether that failed, how many changes wait.
+        const { triggerHash, watchState, ...rest } = s;
         const upcoming = s.enabled && s.cron ? (() => { try { return nextRuns(s.cron!, 3, s.timeZone); } catch { return []; } })() : [];
-        return { ...rest, when: describeSchedule(s), ...(upcoming.length ? { upcoming } : {}), ...(triggerHash ? { trigger: true } : {}) };
+        const watch = watchState ? { checkedAt: watchState.checkedAt, ...(watchState.error ? { error: watchState.error } : {}), pending: watchState.pending?.changes.length ?? 0, seen: !!watchState.hash } : undefined;
+        return { ...rest, when: describeSchedule(s), ...(upcoming.length ? { upcoming } : {}), ...(triggerHash ? { trigger: true } : {}), ...(watch ? { watchState: watch } : {}) };
       };
       const limit = Math.max(1, Math.min(Number(url.searchParams.get('limit') ?? 50) || 50, 500));
       // Runs of every schedule of the person's (administrators see their own too, as in the list).
@@ -1264,6 +1267,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         const b = await readJson(req);
         const tz = typeof b.timeZone === 'string' && b.timeZone.trim() ? b.timeZone.trim() : undefined;
         try {
+          if (b.watch && typeof b.watch === 'object') { const w = checkWatch(b.watch); return send(res, 200, { when: describeWatch(w), next: [] }); }
           if (typeof b.cron === 'string' && b.cron.trim()) {
             checkScheduleTiming({ cron: b.cron.trim(), timeZone: tz });
             const next = nextRuns(b.cron.trim(), 3, tz);
@@ -1292,7 +1296,14 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
           if (real && !o.localRoots.some((r) => real === r || real.startsWith(r + path.sep))) throw new HttpError(400, 'That folder is not under HARNESS_LOCAL_ROOTS.');
           if (real) ns.path = real;
         }
-        const timing = { ...(b.workflow && typeof b.workflow === 'object' ? { workflow: b.workflow as Schedule['workflow'] } : {}), ...(typeof b.timeZone === 'string' && b.timeZone ? { timeZone: b.timeZone } : {}), ...(b.misfire === 'once' || b.misfire === 'skip' ? { misfire: b.misfire as 'once' | 'skip' } : {}), ...(b.maxCostUsd !== undefined && b.maxCostUsd !== null && b.maxCostUsd !== '' ? { maxCostUsd: Number(b.maxCostUsd) } : {}), ...(b.askTimeoutMinutes !== undefined && b.askTimeoutMinutes !== null && b.askTimeoutMinutes !== '' ? { askTimeoutMinutes: Number(b.askTimeoutMinutes) } : {}) };
+        // A watch of a folder (a command, its files, its commits) looks at this computer: a folder like any local session's.
+        const folderWatch = b.watch && typeof b.watch === 'object' && ['command', 'files', 'git'].includes(String((b.watch as { kind?: unknown }).kind));
+        if (folderWatch) {
+          const rt = sessionId ? sessions.get(sessionId)?.meta.runtime : ns ? { kind: ns.runtime === 'local' ? 'local' : 'docker' } : undefined;
+          if (!rt || rt.kind !== 'local') throw new HttpError(400, 'A watch of a command, files or commits needs a folder on this computer (a local conversation or folder).');
+          if (!admin) throw new HttpError(403, 'Watches that run on this computer are for administrators.');
+        }
+        const timing = { ...(b.watch && typeof b.watch === 'object' ? { watch: b.watch } : {}), ...(b.workflow && typeof b.workflow === 'object' ? { workflow: b.workflow as Schedule['workflow'] } : {}), ...(typeof b.timeZone === 'string' && b.timeZone ? { timeZone: b.timeZone } : {}), ...(b.misfire === 'once' || b.misfire === 'skip' ? { misfire: b.misfire as 'once' | 'skip' } : {}), ...(b.maxCostUsd !== undefined && b.maxCostUsd !== null && b.maxCostUsd !== '' ? { maxCostUsd: Number(b.maxCostUsd) } : {}), ...(b.askTimeoutMinutes !== undefined && b.askTimeoutMinutes !== null && b.askTimeoutMinutes !== '' ? { askTimeoutMinutes: Number(b.askTimeoutMinutes) } : {}) };
         const newSession = ns ? {
           model: String(ns.model ?? registry.listModels().find((m) => m.available)?.id ?? ''),
           runtime: { kind: (ns.runtime === 'local' ? 'local' : 'docker') as SessionMeta['runtime']['kind'], network: (ns.network === 'full' ? 'full' : ns.network === 'allowlist' ? 'allowlist' : 'none') as SessionMeta['runtime']['network'], ...(typeof ns.path === 'string' && ns.path ? { path: ns.path } : {}) },
@@ -1306,10 +1317,12 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
             return send(res, 201, { ...view(t.schedule), token: t.token, url: `${base}/api/triggers/${t.token}` });
           }
           const s = await scheduler.create({ owner: me.id, title: typeof b.title === 'string' ? b.title : undefined, prompt: String(b.prompt ?? ''), cron: typeof b.cron === 'string' && b.cron ? b.cron : undefined, at: typeof b.at === 'string' ? Date.parse(b.at) : typeof b.at === 'number' ? b.at : undefined, inMinutes: typeof b.inMinutes === 'number' ? b.inMinutes : undefined, sessionId, newSession, ...timing });
+          // Its first look now, so a change made right after is seen.
+          if (s.watch) void scheduler.checkWatchOf(s.id).catch(() => {});
           return send(res, 201, view(s));
         } catch (e) { throw new HttpError(400, (e as Error).message); }
       }
-      const m = /^\/api\/schedules\/([0-9a-f]+)(\/run|\/enable|\/disable|\/runs)?$/.exec(p);
+      const m = /^\/api\/schedules\/([0-9a-f]+)(\/run|\/enable|\/disable|\/runs|\/check)?$/.exec(p);
       const s = m ? scheduler.get(m[1]!) : undefined;
       if (!s || !mine(s)) throw new HttpError(404, 'No such schedule.');
       const out = (x: Schedule | undefined) => (x ? view(x) : x);
@@ -1327,11 +1340,18 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
             ...(nul('maxCostUsd') ? { maxCostUsd: null } : b.maxCostUsd !== undefined ? { maxCostUsd: Number(b.maxCostUsd) } : {}),
             ...(nul('askTimeoutMinutes') ? { askTimeoutMinutes: null } : b.askTimeoutMinutes !== undefined ? { askTimeoutMinutes: Number(b.askTimeoutMinutes) } : {}),
             ...(b.workflow && typeof b.workflow === 'object' ? { workflow: b.workflow as Schedule['workflow'] } : {}),
+            ...(b.watch && typeof b.watch === 'object' ? { watch: b.watch } : {}),
           })));
         } catch (e) { throw new HttpError(400, (e as Error).message); }
       }
       if (m![2] === '/runs' && method === 'GET') return send(res, 200, await scheduler.runs.list({ scheduleId: s.id, all: true, limit }));
       if (m![2] === '/run' && method === 'POST') return send(res, 200, out(await scheduler.runNow(s.id)));
+      // A watch looks now: whether it changed, and the run it started.
+      if (m![2] === '/check' && method === 'POST') {
+        if (!s.watch) throw new HttpError(400, 'Only a watch is checked; Run now runs a schedule.');
+        const r = await scheduler.checkWatchOf(s.id, Date.now(), true);
+        return send(res, 200, { changed: r.changed, ...(r.note ? { note: r.note } : {}), ran: !!r.fired, schedule: out(scheduler.get(s.id)) });
+      }
       if ((m![2] === '/enable' || m![2] === '/disable') && method === 'POST') return send(res, 200, out(await scheduler.setEnabled(s.id, m![2] === '/enable').catch((e: Error) => { throw new HttpError(400, e.message); })));
       throw new HttpError(405, 'method not allowed');
     }

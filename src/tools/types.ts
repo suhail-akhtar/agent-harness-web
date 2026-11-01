@@ -25,6 +25,8 @@ export interface ScheduleSpec {
   asks?: 'refuse' | 'inbox';
   workflow?: { name: string; input: Record<string, string> };
   maxCostUsd?: number;
+  /** Instead of a time: run when this changes (checked without a model). */
+  watch?: Record<string, unknown>;
 }
 
 export interface ToolServices {

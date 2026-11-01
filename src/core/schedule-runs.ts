@@ -15,8 +15,8 @@ export interface ScheduleRun {
   scheduleId: string;
   owner?: string;
   title: string;
-  /** What started it: its time (a cron or a one-time schedule), its trigger URL, or Run now. */
-  by: 'schedule' | 'trigger' | 'manual';
+  /** What started it: its time (a cron or a one-time schedule), its trigger URL, Run now, or a change its watch saw. */
+  by: 'schedule' | 'trigger' | 'manual' | 'watch';
   startedAt: number;
   endedAt?: number;
   status: RunStatus;

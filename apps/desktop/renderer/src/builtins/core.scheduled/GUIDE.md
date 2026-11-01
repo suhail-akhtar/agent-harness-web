@@ -32,6 +32,11 @@ already told them, or offered work, has no separate result.
   `asks: "inbox"` when it will need approval for commands (it waits in their Inbox, else it is refused);
   `workflow` and `input` to run a workflow instead of a prompt. Then `run_now` with its id to try it
   once, and tell them what it found and when it runs next.
+- When they want something to happen when something changes ("tell me when the tests start failing",
+  "review new commits", "watch the status page"), make a watch instead of a time: `"watch": {"kind":
+  "command", "command": "npm test", "everyMinutes": 30, "onlyWhen": "a test fails"}` (kinds: `command`,
+  `files` with `paths`, `git` with `branch`, `url` with `match`). It checks without a model and runs only
+  when what it watches changes; `onlyWhen` lets a small model skip changes that do not matter.
 - To let them check it before it exists, open the dialog filled in instead:
   `desktop_command {"command":"core.scheduled:new","args":{"title":"…","prompt":"…","cron":"0 9 * * 1-5","asks":"dontAsk"}}`.
 - Write the prompt as a complete instruction for a run nobody watches: what to look at, what counts as

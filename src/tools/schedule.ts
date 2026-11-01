@@ -31,6 +31,7 @@ export const scheduleTool: Tool = {
         asks: { type: 'string', enum: ['refuse', 'inbox'] },
         workflow: { type: 'string' },
         input: { type: 'object', additionalProperties: { type: 'string' } },
+        watch: { type: 'object', description: 'Instead of a time: {kind: command|files|git|url, command, paths, url, everyMinutes, onlyWhen}' },
         id: { type: 'string' },
       },
       required: ['action'],
@@ -58,8 +59,10 @@ export const scheduleTool: Tool = {
       const s = await sch.create({
         prompt: str(input.prompt), cron: str(input.cron) || undefined, inMinutes: num(input.in_minutes), at,
         timeZone: str(input.time_zone) || undefined, newConversation: bool(input.new_conversation), asks: str(input.asks) === 'inbox' ? 'inbox' : 'refuse',
+        ...(input.watch && typeof input.watch === 'object' ? { watch: input.watch as Record<string, unknown> } : {}),
         ...(str(input.workflow) ? { workflow: { name: str(input.workflow), input: Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)])) } } : {}),
       });
+      if (s.watch) return { content: `Watching ${s.id}: ${describeSchedule(s)}${s.newSession ? ', each change run in a new conversation' : ', each change run here'}. Its first look is now; it runs only when what it watches changes. The user sees it on the Scheduled page${s.newSession ? ' and its results in their Inbox' : ''}.` };
       return { content: `Scheduled ${s.id}: ${s.cron ? `${describeSchedule(s)}, next run ${new Date(s.nextRun!).toISOString()}` : `once at ${new Date(s.nextRun!).toISOString()}`}${s.newSession ? ', each time in a new conversation' : ', here'}. The user sees it on the Scheduled page${s.newSession ? ' and its results in their Inbox; run_now tries it' : ''}.` };
     } catch (e) {
       return { content: (e as Error).message, is_error: true };

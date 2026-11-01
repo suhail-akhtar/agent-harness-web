@@ -63,7 +63,7 @@ export function RunRow({ run, showTitle }: { run: ScheduleRun; showTitle?: boole
           <span>{fmt(run.startedAt)}</span>
           {took && <span>· {took}</span>}
           {run.costUsd !== undefined && run.costUsd > 0 && <span>· {money(run.costUsd)}</span>}
-          {run.by !== 'schedule' && <span>· {run.by === 'manual' ? 'run now' : 'trigger'}</span>}
+          {run.by !== 'schedule' && <span>· {run.by === 'manual' ? 'run now' : run.by === 'watch' ? 'on a change' : 'trigger'}</span>}
           {run.notified && <span className="inline-flex items-center gap-0.5">· <Icon name="bell" size={11} /> told you</span>}
           {!!run.waited && <span data-run-waited>· asked you {run.waited === 1 ? 'once' : `${run.waited} times`}</span>}
         </div>
@@ -96,6 +96,15 @@ export function relative(t: number, now = Date.now()): string {
 }
 
 // The last result as an icon and a word (results start with how the run ended, in either case: "Stopped: ...").
+/** "just now", "5 min ago", "3 h ago", or the date. */
+export function relativePast(t: number, now = Date.now()): string {
+  const d = now - t;
+  if (d < 60_000) return 'just now';
+  if (d < 3600_000) return `${Math.round(d / 60_000)} min ago`;
+  if (d < 86_400_000) return `${Math.round(d / 3600_000)} h ago`;
+  return new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
 const LAST_ICON = (last: string) => /^completed: nothing/i.test(last) ? { icon: 'check', tone: 'text-hx-muted', label: 'Nothing to report' }
   : /^completed/i.test(last) ? { icon: 'check-circle', tone: 'text-hx-success', label: 'Completed' }
     : /^(started|running)/i.test(last) ? { icon: 'activity', tone: 'text-hx-accent-text', label: 'Running' }
@@ -108,16 +117,30 @@ function ScheduleItem({ s, onEdit, reload }: { s: Schedule; onEdit: () => void; 
   const last = s.lastResult;
   const li = last ? LAST_ICON(last) : undefined;
   const target = s.workflow ? `Workflow ${s.workflow.name}` : s.newSession ? 'A new conversation each time' : 'Into one conversation';
+  // A watch looks now: what it found, said in a toast.
+  const checkNow = () => void client.schedules.check(s.id).then((r) => {
+    toast(r.note ? r.note : r.ran ? 'It changed: a run started' : r.changed ? 'It changed: waiting until it is quiet' : 'No change', { kind: r.note && /failed/.test(r.note) ? 'warning' : 'info' });
+    if (r.ran) setOpen(true);
+    reload();
+  }).catch(fail);
+  const ws = s.watchState;
   const asks = s.newSession ? ({ dontAsk: 'never asks', auto: 'a checker decides', acceptEdits: 'asks you for commands', default: 'asks you' } as Record<string, string>)[s.newSession.mode ?? 'dontAsk'] : undefined;
   return (
     <div data-schedule={s.id} className={cx('rounded-xl border bg-hx-elevated', s.enabled ? 'border-hx-border-subtle' : 'border-dashed border-hx-border-subtle opacity-75')}>
       <div className="flex items-start gap-3 px-4 py-3">
-        <span className={cx('mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg', s.enabled ? 'bg-hx-accent-soft text-hx-accent-text' : 'bg-hx-hover text-hx-muted')}><Icon name={s.trigger ? 'link' : s.workflow ? 'workflow' : 'clock'} size={16} /></span>
+        <span className={cx('mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg', s.enabled ? 'bg-hx-accent-soft text-hx-accent-text' : 'bg-hx-hover text-hx-muted')}><Icon name={s.trigger ? 'link' : s.watch ? 'eye' : s.workflow ? 'workflow' : 'clock'} size={16} /></span>
         <button type="button" className="min-w-0 flex-1 text-left" onClick={() => setOpen(!open)} aria-expanded={open} data-schedule-toggle>
           <span className="block truncate text-[14px] font-medium">{s.title || s.prompt}</span>
           <span className="block truncate text-[12.5px] text-hx-secondary" data-schedule-when>{!s.cron && !s.trigger && s.at ? `Once, ${fmt(s.at)}` : s.when ?? timing(s)}</span>
           <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11.5px] text-hx-muted">
-            {s.enabled && s.nextRun && !s.trigger ? <span data-schedule-next><Icon name="calendar" size={11} className="mr-1 inline" />Next {relative(s.nextRun)}</span> : !s.enabled ? <span>Off</span> : null}
+            {s.watch ? (
+              <span data-schedule-watch className={ws?.error ? 'text-hx-danger' : undefined}>
+                <Icon name="eye" size={11} className="mr-1 inline" />
+                {ws?.error ? 'Last check failed' : ws?.checkedAt ? `Checked ${relativePast(ws.checkedAt)}` : 'First look soon'}
+                {ws?.pending ? ` · ${ws.pending} change${ws.pending === 1 ? '' : 's'} waiting` : ''}
+              </span>
+            ) : s.enabled && s.nextRun && !s.trigger ? <span data-schedule-next><Icon name="calendar" size={11} className="mr-1 inline" />Next {relative(s.nextRun)}</span> : null}
+            {!s.enabled && <span>Off</span>}
             <span>{target}</span>
             {asks && <span>{asks}</span>}
             {s.maxCostUsd ? <span>at most {money(s.maxCostUsd)} a run</span> : null}
@@ -126,14 +149,18 @@ function ScheduleItem({ s, onEdit, reload }: { s: Schedule; onEdit: () => void; 
         </button>
         <div className="flex shrink-0 items-center gap-1">
           <Tooltip label={s.enabled ? 'On: runs at its times' : 'Off: does not run'}><span><Switch checked={s.enabled} onChange={(v) => void client.schedules.setEnabled(s.id, v).then(reload).catch(fail)} label="Enabled" /></span></Tooltip>
-          <Button size="sm" variant="ghost" icon="play" onClick={() => void client.schedules.run(s.id).then(() => { setOpen(true); reload(); }).catch(fail)} aria-label="Run now">Run now</Button>
+          {s.watch
+            ? <Button size="sm" variant="ghost" icon="eye" onClick={checkNow} aria-label="Check now" data-schedule-check>Check now</Button>
+            : <Button size="sm" variant="ghost" icon="play" onClick={() => void client.schedules.run(s.id).then(() => { setOpen(true); reload(); }).catch(fail)} aria-label="Run now">Run now</Button>}
           <Menu placement="bottom-end" items={[
             { id: 'edit', label: 'Edit', icon: 'edit', onSelect: onEdit },
+            ...(s.watch ? [{ id: 'run', label: 'Run now, without a change', icon: 'play', onSelect: () => void client.schedules.run(s.id).then(() => { setOpen(true); reload(); }).catch(fail) }] : []),
             { id: 'open', label: 'Show its runs', icon: 'history', onSelect: () => setOpen(true) },
             { id: 'delete', label: 'Delete', icon: 'trash', danger: true, onSelect: () => setConfirm(true) },
           ]} trigger={({ ref, toggle }) => <IconButton ref={ref} size="sm" icon="more" label="More" onClick={toggle} data-schedule-menu />} />
         </div>
       </div>
+      {ws?.error && <div className="mx-4 mb-3 rounded-lg bg-hx-danger/10 px-3 py-1.5 text-[12px] text-hx-danger" data-schedule-watch-error>The last check failed: {ws.error}</div>}
       {last && /^(failed|stopped|interrupted|skipped)/i.test(last) && <div className="mx-4 mb-3 rounded-lg bg-hx-hover px-3 py-1.5 text-[12px] text-hx-secondary" data-schedule-last-reason>{last}</div>}
       {open && <div className="border-t border-hx-border-subtle"><Runs id={s.id} /></div>}
       <ConfirmDialog open={confirm} title={`Delete "${s.title}"?`} body="It stops running, and its run history goes with it. The conversations it made stay." confirmLabel="Delete" danger onAnswer={(yes) => { setConfirm(false); if (yes) void client.schedules.remove(s.id).then(reload).catch(fail); }} />

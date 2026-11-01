@@ -52,7 +52,18 @@
   - Schedules and triggers can run a workflow (`workflow: {name, input}`): its run is followed to its end, its approval
     steps wait in the Inbox. `GET /api/workflows?path=` lists the workflows a folder offers; `POST /api/schedules/preview`
     says what a timing means; schedules carry `when` (in words) and `upcoming` (their next runs).
-- Toasts move to the top while a dialog is open, so they never cover its buttons.
+- **Watches** (proactive work, phase 3): a schedule can run when something changes instead of at a time. A check with
+  no model every few minutes - a command's output and exit code, files in the folder (paths or globs), new commits on a
+  branch, a web page or API (its status and body, or what a regular expression matches) - and a run only on a change,
+  with what changed (files added, changed, removed; the new commits; before and now) fenced as data, the conversation
+  counting as having read outside content. Changes in a row can wait until it is quiet and run once, batched; an
+  "only when" filter lets a small model with no tools skip changes that do not matter (a skipped run with why). What a
+  watch saw is kept across restarts, so a change made while the app was closed runs at the next check; a change met by
+  a busy conversation waits for the next check; a failed check says why on its row; Check now looks at once (and waits
+  for a check already under way rather than running twice). Folder watches are for administrators, on this computer.
+  `watch` on schedules, `POST /api/schedules/:id/check`, the schedule tool's `watch`; the dialog's "When something
+  changes", and two watch templates (Watch the tests, Review new commits).
+- While a dialog is open, toasts sit under its backdrop (seen, dimmed), so they never cover its buttons.
 
 - **run_script works in the desktop app**: it started its helper with the app's own executable, which opened a
   second app (refused by the single-instance lock, exit 0) instead of running Node, so every call failed with
