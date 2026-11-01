@@ -63,6 +63,16 @@
   for a check already under way rather than running twice). Folder watches are for administrators, on this computer.
   `watch` on schedules, `POST /api/schedules/:id/check`, the schedule tool's `watch`; the dialog's "When something
   changes", and two watch templates (Watch the tests, Review new commits).
+- **When proactive work may interrupt you** (proactive work, phase 4): every update lands in the Inbox; whether it
+  also interrupts (a toast, a system notification) is decided in one place, by its schedule's "Tell me" (every time,
+  only when it matters - failures, messages, offers -, in my daily digest, or not at all: only its run history) and by
+  the person's limits (quiet hours when nothing interrupts, not even errors; a most a day, past which only errors do;
+  a daily digest of what waited). An update says why it waited ("in your quiet hours", "past your daily most"...).
+  Unattended work interrupts only through the Inbox (no second toast from a scheduled run's own warnings).
+  `GET/PUT /api/inbox/settings`, `notify` on schedules, a `digest` update kind. How useful each schedule has been (the
+  last 30 days: runs, what they found, updates opened, dismissed as not useful or left unread, cost:
+  `GET /api/schedules/stats`) is shown with its runs; a schedule whose updates are mostly unwanted offers to be quieter
+  (one click: only when it matters, the digest, or nothing) - it is never made louder, and never changed by itself.
 - While a dialog is open, toasts sit under its backdrop (seen, dimmed), so they never cover its buttons.
 
 - **run_script works in the desktop app**: it started its helper with the app's own executable, which opened a

@@ -3,6 +3,7 @@ import { FileWatch, readJson, withFileLock, writeFileAtomic } from '../util/shar
 import path from 'node:path';
 import type { SessionMeta } from './session.ts';
 import { type RunEnd, type ScheduleRun, ScheduleRunLog } from './schedule-runs.ts';
+import { NOTIFY_POLICIES, type NotifyPolicy } from './initiative.ts';
 import { checkWatch, describeWatch, type Probe, type Triage, WatchError, type WatchSpec, type WatchState } from './watch.ts';
 
 // Scheduled prompts: "every weekday at 9, check the nightly build and fix what
@@ -53,6 +54,8 @@ export interface Schedule {
   watch?: WatchSpec;
   /** What its watch last saw, and changes waiting to settle. */
   watchState?: WatchState;
+  /** What its results do: interrupt every time (default), only when it matters, go to the digest, or stay in its history. */
+  notify?: NotifyPolicy;
 }
 
 export class ScheduleError extends Error {}
@@ -67,7 +70,8 @@ const MAX_RUN_USD = 1000;
 
 /** The timing and limits a schedule may be made or changed with, checked. */
 export function checkScheduleTiming(spec: Parameters<typeof checkTiming>[0], now = Date.now()): void { checkTiming(spec, now); }
-function checkTiming(spec: { cron?: string; timeZone?: string; misfire?: string; maxCostUsd?: number; askTimeoutMinutes?: number }, now: number): void {
+function checkTiming(spec: { cron?: string; timeZone?: string; misfire?: string; maxCostUsd?: number; askTimeoutMinutes?: number; notify?: string }, now: number): void {
+  if (spec.notify !== undefined && !NOTIFY_POLICIES.includes(spec.notify as NotifyPolicy)) throw new ScheduleError(`notify is one of ${NOTIFY_POLICIES.join(', ')}`);
   if (spec.askTimeoutMinutes !== undefined && !(Number.isInteger(spec.askTimeoutMinutes) && spec.askTimeoutMinutes >= 1 && spec.askTimeoutMinutes <= 7 * 1440)) throw new ScheduleError('askTimeoutMinutes is a whole number of minutes from 1 to 10080 (a week)');
   if (spec.timeZone !== undefined && !validTimeZone(spec.timeZone)) throw new ScheduleError(`"${spec.timeZone}" is not a time zone this server knows (e.g. Europe/Berlin, America/New_York, UTC)`);
   if (spec.misfire !== undefined && spec.misfire !== 'once' && spec.misfire !== 'skip') throw new ScheduleError('misfire is once or skip');
@@ -369,7 +373,7 @@ export class Scheduler {
 
   get(id: string): Schedule | undefined { return this.items.get(id); }
 
-  async create(spec: { owner?: string; title?: string; prompt: string; cron?: string; at?: number; inMinutes?: number; sessionId?: string; newSession?: Schedule['newSession']; plugin?: string; timeZone?: string; misfire?: 'once' | 'skip'; maxCostUsd?: number; askTimeoutMinutes?: number; workflow?: Schedule['workflow']; createdBy?: string; watch?: unknown }, now = Date.now()): Promise<Schedule> {
+  async create(spec: { owner?: string; title?: string; prompt: string; cron?: string; at?: number; inMinutes?: number; sessionId?: string; newSession?: Schedule['newSession']; plugin?: string; timeZone?: string; misfire?: 'once' | 'skip'; maxCostUsd?: number; askTimeoutMinutes?: number; workflow?: Schedule['workflow']; createdBy?: string; watch?: unknown; notify?: NotifyPolicy }, now = Date.now()): Promise<Schedule> {
     const workflow = checkWorkflow(spec.workflow);
     let watch: WatchSpec | undefined;
     try { watch = spec.watch === undefined || spec.watch === null ? undefined : checkWatch(spec.watch); } catch (e) { throw new ScheduleError((e as WatchError).message); }
@@ -388,7 +392,7 @@ export class Scheduler {
       id: crypto.randomBytes(6).toString('hex'), owner: spec.owner, title: (spec.title?.trim() || prompt.split('\n')[0]!).slice(0, 80), prompt,
       ...(spec.cron ? { cron: spec.cron.trim() } : { at }), ...(spec.sessionId ? { sessionId: spec.sessionId } : { newSession: spec.newSession }),
       ...(spec.cron && spec.timeZone ? { timeZone: spec.timeZone } : {}), ...(spec.misfire ? { misfire: spec.misfire } : {}), ...(spec.maxCostUsd ? { maxCostUsd: spec.maxCostUsd } : {}), ...(spec.askTimeoutMinutes ? { askTimeoutMinutes: spec.askTimeoutMinutes } : {}),
-      ...(workflow ? { workflow } : {}), ...(spec.createdBy ? { createdBy: spec.createdBy } : {}), ...(watch ? { watch } : {}),
+      ...(workflow ? { workflow } : {}), ...(spec.createdBy ? { createdBy: spec.createdBy } : {}), ...(watch ? { watch } : {}), ...(spec.notify && spec.notify !== 'always' ? { notify: spec.notify } : {}),
       enabled: true, createdAt: now, nextRun, runs: 0, ...(spec.plugin ? { plugin: spec.plugin } : {}),
     };
     const made = await this.mutate(() => {
@@ -405,17 +409,17 @@ export class Scheduler {
    * URL (from Slack, a GitHub webhook, a phone shortcut). The token is returned once and
    * stored only as a hash.
    */
-  async createTrigger(spec: { owner?: string; title?: string; prompt: string; sessionId?: string; newSession?: Schedule['newSession']; maxCostUsd?: number; askTimeoutMinutes?: number; workflow?: Schedule['workflow'] }, now = Date.now()): Promise<{ schedule: Schedule; token: string }> {
+  async createTrigger(spec: { owner?: string; title?: string; prompt: string; sessionId?: string; newSession?: Schedule['newSession']; maxCostUsd?: number; askTimeoutMinutes?: number; workflow?: Schedule['workflow']; notify?: NotifyPolicy }, now = Date.now()): Promise<{ schedule: Schedule; token: string }> {
     const workflow = checkWorkflow(spec.workflow);
     const prompt = spec.prompt?.trim() || (workflow ? `Run the workflow ${workflow.name}` : '');
     if (!prompt) throw new ScheduleError('a trigger needs a prompt');
     if (!spec.sessionId && !spec.newSession) throw new ScheduleError('a trigger goes to a session, or makes a new one');
-    checkTiming({ maxCostUsd: spec.maxCostUsd, askTimeoutMinutes: spec.askTimeoutMinutes }, now);
+    checkTiming({ maxCostUsd: spec.maxCostUsd, askTimeoutMinutes: spec.askTimeoutMinutes, notify: spec.notify }, now);
     const token = `hwt_${crypto.randomBytes(24).toString('base64url')}`;
     const s: Schedule = {
       id: crypto.randomBytes(6).toString('hex'), owner: spec.owner, title: (spec.title?.trim() || prompt.split('\n')[0]!).slice(0, 80), prompt,
       ...(spec.sessionId ? { sessionId: spec.sessionId } : { newSession: spec.newSession }),
-      enabled: true, triggerHash: hashToken(token), createdAt: now, runs: 0, ...(spec.maxCostUsd ? { maxCostUsd: spec.maxCostUsd } : {}), ...(spec.askTimeoutMinutes ? { askTimeoutMinutes: spec.askTimeoutMinutes } : {}), ...(workflow ? { workflow } : {}),
+      enabled: true, triggerHash: hashToken(token), createdAt: now, runs: 0, ...(spec.maxCostUsd ? { maxCostUsd: spec.maxCostUsd } : {}), ...(spec.askTimeoutMinutes ? { askTimeoutMinutes: spec.askTimeoutMinutes } : {}), ...(workflow ? { workflow } : {}), ...(spec.notify && spec.notify !== 'always' ? { notify: spec.notify } : {}),
     };
     const made = await this.mutate(() => {
       if (this.list(spec.owner).length >= MAX_PER_OWNER) throw new ScheduleError(`at most ${MAX_PER_OWNER} schedules and triggers per person`);
@@ -441,7 +445,7 @@ export class Scheduler {
    * Changes a schedule's title, prompt, timing or limits (not where it runs). A new time recomputes the
    * next run; `null` clears an optional field (the time zone, the cost limit).
    */
-  async update(id: string, patch: { title?: string; prompt?: string; cron?: string; at?: number; inMinutes?: number; timeZone?: string | null; misfire?: 'once' | 'skip'; maxCostUsd?: number | null; askTimeoutMinutes?: number | null; workflow?: Schedule['workflow']; watch?: unknown }, now = Date.now()): Promise<Schedule | undefined> {
+  async update(id: string, patch: { title?: string; prompt?: string; cron?: string; at?: number; inMinutes?: number; timeZone?: string | null; misfire?: 'once' | 'skip'; maxCostUsd?: number | null; askTimeoutMinutes?: number | null; workflow?: Schedule['workflow']; watch?: unknown; notify?: NotifyPolicy }, now = Date.now()): Promise<Schedule | undefined> {
     const cur = this.items.get(id);
     if (!cur) return undefined;
     let watch: WatchSpec | undefined;
@@ -463,7 +467,7 @@ export class Scheduler {
     const maxCostUsd = patch.maxCostUsd === null ? undefined : patch.maxCostUsd ?? cur.maxCostUsd;
     const misfire = patch.misfire ?? cur.misfire;
     const askTimeoutMinutes = patch.askTimeoutMinutes === null ? undefined : patch.askTimeoutMinutes ?? cur.askTimeoutMinutes;
-    checkTiming({ cron, timeZone, misfire, maxCostUsd, askTimeoutMinutes }, now);
+    checkTiming({ cron, timeZone, misfire, maxCostUsd, askTimeoutMinutes, notify: patch.notify }, now);
     const timing = !cur.triggerHash && (!!patch.cron || at !== undefined || patch.timeZone !== undefined);
     const nextRun = !timing ? cur.nextRun : cron ? nextCron(cron, now, timeZone) : at;
     if (timing && nextRun === undefined) throw new ScheduleError('that cron expression never matches');
@@ -489,6 +493,7 @@ export class Scheduler {
       if (misfire) s.misfire = misfire; else delete s.misfire;
       if (maxCostUsd) s.maxCostUsd = maxCostUsd; else delete s.maxCostUsd;
       if (askTimeoutMinutes) s.askTimeoutMinutes = askTimeoutMinutes; else delete s.askTimeoutMinutes;
+      if (patch.notify) { if (patch.notify === 'always') delete s.notify; else s.notify = patch.notify; }
       return s;
     });
     this.tell('changed', done);

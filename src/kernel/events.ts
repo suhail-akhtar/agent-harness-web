@@ -78,7 +78,8 @@ export class EventHub {
       this.publish('approvals', { type: 'resolved', sessionId: s.meta.id, requestId: ev.requestId, at: Date.now(), decision: ev.decision }, owner);
     } else if (ev.kind === 'notice' && (ev.level !== 'info' || ev.notify)) {
       // Warnings and errors, and what the agent asked to tell the person (notify_user): they reach them wherever they are.
-      this.publish('notices', { level: ev.level, text: ev.text, sessionId: s.meta.id, ...(ev.notify ? { notify: true, title: s.meta.title } : {}) }, owner);
+      // From a scheduled run (nobody watching): its update in the inbox says it, interrupting by the person's rules.
+      this.publish('notices', { level: ev.level, text: ev.text, sessionId: s.meta.id, ...(ev.notify ? { notify: true, title: s.meta.title } : {}), ...(s.unattendedSchedule ? { scheduled: true } : {}) }, owner);
     } else if (ev.kind === 'session_proposal') {
       const { kind: _k, ...p } = ev;
       this.publish('proposals', { type: 'added', sessionId: s.meta.id, ...p }, owner);

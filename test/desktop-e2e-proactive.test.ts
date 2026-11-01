@@ -532,9 +532,85 @@ test('desktop app end to end: proactive work', { timeout: 10 * 60_000 }, async (
       assert.deepEqual([s.cron, s.newSession.mode], ['0 2 * * *', 'auto']);
     });
 
+    await step('phase 4: "Tell me: only when it matters": a plain result waits quietly in the Inbox and says why; it does not interrupt', async () => {
+      await page.click('[data-nav="core.scheduled:scheduled"]');
+      await page.click('[data-scheduled] [data-schedule-new]');
+      await page.waitForSelector('[data-schedule-form="new"]');
+      await page.fill('[data-schedule-title]', 'Plain report');
+      await page.fill('[data-schedule-prompt]', 'Write the plain report.');
+      await freq('once');
+      await page.fill('[data-when-in]', '60');
+      await page.click('[data-choice="notify"] [data-value="important"]');
+      assert.match(await page.locator('[data-notify-help]').innerText(), /other results wait quietly/);
+      await page.click('[data-schedule-create]');
+      await created();
+      const s = await scheduleNamed('Plain report') as unknown as { id: string; notify: string };
+      // (Its title has none of the engine's script words: it gets a plain reply.)
+      assert.equal(s.notify, 'important');
+      assert.match(await rowText(s.id), /tells you what matters/);
+      const toastsBefore = await page.$$eval('[data-toast]', (els) => els.map((e) => e.textContent ?? ''));
+      await runAndWait(s.id, '^completed');
+      await page.click('[data-nav="core.inbox:inbox"]');
+      const u = page.locator('[data-inbox-updates] [data-update]', { hasText: 'Plain report' });
+      await u.waitFor({ timeout: 15_000 });
+      assert.equal(await u.locator('[data-update-held]').getAttribute('data-update-held'), 'policy');
+      assert.match(await u.innerText(), /kept quiet by its schedule/);
+      const toastsAfter = await page.$$eval('[data-toast]', (els) => els.map((e) => e.textContent ?? ''));
+      assert.ok(!toastsAfter.some((t) => t.includes('Plain report') && !toastsBefore.includes(t)), 'no toast for it');
+    });
+
+    await step('phase 4: the person\'s limits in the Inbox: a daily most of 0 keeps the next update from interrupting ("past your daily most"); the limits are checked and saved', async () => {
+      await page.click('[data-inbox-updates] [data-updates-settings]');
+      await page.waitForSelector('[data-limits]');
+      await page.fill('[data-limits-quiet-from]', '22:00');
+      await page.click('[data-limits-save]');
+      await page.waitForSelector('[data-limits-error]');
+      assert.match(await page.locator('[data-limits-error]').innerText(), /quiet hours need both/);
+      await page.fill('[data-limits-quiet-from]', '');
+      await page.fill('[data-limits-max]', '0');
+      await page.fill('[data-limits-digest]', '08:30');
+      await page.click('[data-limits-save]');
+      await page.waitForSelector('[data-limits]', { state: 'detached' });
+      const saved = (await api('GET', '/api/inbox/settings')).body as { maxPerDay: number; digestAt: string; timeZone?: string };
+      assert.deepEqual([saved.maxPerDay, saved.digestAt], [0, '08:30']);
+      assert.ok(saved.timeZone, 'this computer\'s time zone');
+      const made = (await api('POST', '/api/schedules', { title: 'Over the limit', prompt: 'say hello', inMinutes: 60, newSession: { model: 'deepseek-flash', runtime: 'local', path: scratch, mode: 'dontAsk' } })).body as { id: string };
+      await api('POST', `/api/schedules/${made.id}/run`);
+      const u = page.locator('[data-inbox-updates] [data-update]', { hasText: 'Over the limit' });
+      await u.waitFor({ timeout: 15_000 });
+      assert.equal(await u.locator('[data-update-held]').getAttribute('data-update-held'), 'budget');
+      assert.match(await u.innerText(), /past your daily most/);
+      await shot('inbox-limits', page.locator('[data-inbox-updates]'));
+      await api('PUT', '/api/inbox/settings', {});
+    });
+
+    await step('phase 4: a schedule whose updates are mostly dismissed as not useful says so and offers to be quieter; one click moves it to the digest; its 30 days are shown', async () => {
+      const made = (await api('POST', '/api/schedules', { title: 'Noisy check', prompt: 'say hello', inMinutes: 60, newSession: { model: 'deepseek-flash', runtime: 'local', path: scratch, mode: 'dontAsk' } })).body as { id: string };
+      for (let i = 0; i < 4; i++) {
+        await api('POST', `/api/schedules/${made.id}/run`);
+        const end = Date.now() + 15_000;
+        while (((await api('GET', '/api/inbox?view=all')).body as { items: Array<{ title: string }> }).items.filter((x) => x.title === 'Noisy check').length < i + 1) { assert.ok(Date.now() < end, 'its update'); await page.waitForTimeout(200); }
+      }
+      const mine = ((await api('GET', '/api/inbox?view=all')).body as { items: Array<{ id: string; title: string }> }).items.filter((x) => x.title === 'Noisy check');
+      for (const it of mine.slice(0, 3)) await api('POST', `/api/inbox/${it.id}`, { action: 'dismiss', reason: 'not_useful' });
+      await page.click('[data-nav="core.scheduled:scheduled"]');
+      const banner = page.locator(`[data-schedule="${made.id}"] [data-schedule-quieter]`);
+      await banner.waitFor({ timeout: 15_000 });
+      assert.match(await banner.innerText(), /3 of its last 4 updates were dismissed as not useful or left unread\. Make it quieter\?/);
+      await openRuns(made.id);
+      await page.waitForSelector(`[data-schedule="${made.id}"] [data-schedule-stats]`);
+      assert.match(await page.locator(`[data-schedule="${made.id}"] [data-schedule-stats]`).innerText(), /Last 30 days: 4 runs[\s\S]*4 found something[\s\S]*0 of 4 updates opened[\s\S]*3 not useful/);
+      await shot('schedule-quieter', page.locator(`[data-schedule="${made.id}"]`));
+      await banner.locator('[data-quieter="digest"]').click();
+      await banner.waitFor({ state: 'detached', timeout: 15_000 });
+      assert.equal(((await api('GET', `/api/schedules/${made.id}`)).body as { notify: string }).notify, 'digest');
+      assert.match(await rowText(made.id), /in your digest/);
+    });
+
     await step('no errors in the window', async () => {
       // The refusal of the every-minute schedule is a 400 the window shows as a toast (Chromium logs it too).
-      assert.deepEqual(errors.filter((e) => !(e.phase.includes('every minute is refused') && /status of 400 .*\/api\/schedules\)/.test(e.text))), []);
+      // Refusals the window shows in its own dialogs (a 400 Chromium logs too): the every-minute schedule, half-set quiet hours.
+      assert.deepEqual(errors.filter((e) => !(e.phase.includes('every minute is refused') && /status of 400 .*\/api\/schedules\)/.test(e.text)) && !(e.phase.includes('limits in the Inbox') && /status of 400 .*\/api\/inbox\/settings\)/.test(e.text))), []);
     });
   } finally {
     await app.close().catch(() => {});

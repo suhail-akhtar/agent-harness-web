@@ -5,16 +5,19 @@
  * of updates that are not useful can be told apart from the ones that came at a bad time).
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import type { InboxItem } from '@harness/client';
-import { Badge, Button, Icon, IconButton, Menu, Tooltip, cx, toast, type MenuItem } from '@harness/ui';
+import type { Interruptions } from '@harness/client';
+import { Badge, Button, Field, Icon, IconButton, Input, Menu, Modal, Tooltip, cx, toast, type MenuItem } from '@harness/ui';
 import { useData, client } from '../../state/data';
 import { navigate, openSession } from '../../state/app';
 
 const fail = (e: unknown) => toast((e as Error).message, { kind: 'error' });
 
-const ICON: Record<InboxItem['kind'], string> = { result: 'clock', message: 'bell', suggestion: 'sparkles' };
-const KIND: Record<InboxItem['kind'], string> = { result: 'Scheduled run', message: 'Message', suggestion: 'Suggestion' };
+const ICON: Record<InboxItem['kind'], string> = { result: 'clock', message: 'bell', suggestion: 'sparkles', digest: 'inbox' };
+const KIND: Record<InboxItem['kind'], string> = { result: 'Scheduled run', message: 'Message', suggestion: 'Suggestion', digest: 'Digest' };
+/** Why an update did not interrupt (it waited here). */
+const HELD: Record<NonNullable<InboxItem['held']>, string> = { policy: 'kept quiet by its schedule', digest: 'for your digest', quiet: 'in your quiet hours', budget: 'past your daily most' };
 export const REASONS: Array<{ id: NonNullable<InboxItem['reason']>; label: string }> = [
   { id: 'not_useful', label: 'Not useful' }, { id: 'wrong', label: 'Wrong' }, { id: 'bad_timing', label: 'Bad timing' }, { id: 'other', label: 'Other reason' },
 ];
@@ -53,6 +56,7 @@ function UpdateRow({ item }: { item: InboxItem }) {
           {item.status === 'new' && <span className="h-2 w-2 rounded-full bg-hx-accent" aria-label="New" data-update-new />}
           <span className="font-medium text-hx-secondary">{KIND[item.kind]}</span>
           <span>{when(item.at)}</span>
+          {item.held && <span data-update-held={item.held}>· {HELD[item.held]}</span>}
         </div>
         <button type="button" onClick={open} className="mt-0.5 block max-w-full truncate text-left text-[13.5px] font-medium hover:underline" data-update-title>{item.title}</button>
         {item.body && <p className="mt-0.5 line-clamp-3 whitespace-pre-line text-[13px] text-hx-secondary" data-update-body>{item.body}</p>}
@@ -73,6 +77,7 @@ function UpdateRow({ item }: { item: InboxItem }) {
 /** The open updates, newest first; Mark all read. */
 export function InboxUpdates(): React.ReactElement | null {
   const items = useData((s) => s.inbox);
+  const [limits, setLimits] = useState(false);
   if (items === null) return null;
   const unread = items.filter((i) => i.status === 'new').length;
   return (
@@ -82,10 +87,45 @@ export function InboxUpdates(): React.ReactElement | null {
         {unread > 0 && <Badge tone="accent">{unread} new</Badge>}
         <span className="flex-1" />
         {unread > 0 && <Tooltip label="Mark every update read"><IconButton size="xs" icon="check" label="Mark all read" onClick={() => void client.inbox.readAll().catch(fail)} data-updates-read-all /></Tooltip>}
+        <Tooltip label="When updates may interrupt you"><IconButton size="xs" icon="settings" label="Interruptions" onClick={() => setLimits(true)} data-updates-settings /></Tooltip>
       </div>
+      <InterruptionsDialog open={limits} onClose={() => setLimits(false)} />
       {!items.length
         ? <p className="text-[13px] text-hx-muted" data-updates-empty>No updates. Results of scheduled runs, what agents tell you, and work they offer while you are away arrive here.</p>
         : <div className="space-y-2">{items.map((i) => <UpdateRow key={i.id} item={i} />)}</div>}
     </section>
+  );
+}
+
+const LOCAL_ZONE = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return ''; } })();
+
+/** The person's limits: quiet hours, a most a day, a digest time (their clock). */
+export function InterruptionsDialog({ open, onClose }: { open: boolean; onClose: () => void }): React.ReactElement {
+  const [f, setF] = useState({ quietFrom: '', quietTo: '', maxPerDay: '', digestAt: '' });
+  const [error, setError] = useState('');
+  useEffect(() => {
+    if (!open) return;
+    setError('');
+    client.inbox.settings().then((p) => setF({ quietFrom: p.quietFrom ?? '', quietTo: p.quietTo ?? '', maxPerDay: p.maxPerDay === undefined ? '' : String(p.maxPerDay), digestAt: p.digestAt ?? '' })).catch((e: Error) => setError(e.message));
+  }, [open]);
+  const save = async () => {
+    setError('');
+    const body: Interruptions = { timeZone: LOCAL_ZONE || undefined, ...(f.quietFrom || f.quietTo ? { quietFrom: f.quietFrom, quietTo: f.quietTo } : {}), ...(f.maxPerDay !== '' ? { maxPerDay: Number(f.maxPerDay) } : {}), ...(f.digestAt ? { digestAt: f.digestAt } : {}) };
+    try { await client.inbox.setSettings(body); toast('Saved', { kind: 'success' }); onClose(); } catch (e) { setError((e as Error).message); }
+  };
+  return (
+    <Modal open={open} onClose={onClose} title="When updates may interrupt you" size="md" footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" onClick={() => void save()} data-limits-save>Save</Button></>}>
+      <div data-limits>
+        <p className="mb-4 text-[12.5px] text-hx-secondary">Every update lands in your Inbox. These decide when one may also interrupt you with a notification. Each schedule can be quieter still (its "Tell me" setting).</p>
+        <div className="grid gap-x-3 md:grid-cols-2">
+          <Field label="Quiet from" help="Nothing interrupts, not even errors"><Input type="time" value={f.quietFrom} onChange={(e) => setF({ ...f, quietFrom: e.target.value })} data-limits-quiet-from /></Field>
+          <Field label="Quiet until"><Input type="time" value={f.quietTo} onChange={(e) => setF({ ...f, quietTo: e.target.value })} data-limits-quiet-to /></Field>
+          <Field label="At most a day" help="Empty: no limit. Errors still interrupt"><Input type="number" min={0} value={f.maxPerDay} onChange={(e) => setF({ ...f, maxPerDay: e.target.value })} placeholder="No limit" data-limits-max /></Field>
+          <Field label="Daily digest at" help="What waited, in one update"><Input type="time" value={f.digestAt} onChange={(e) => setF({ ...f, digestAt: e.target.value })} data-limits-digest /></Field>
+        </div>
+        <p className="text-[12px] text-hx-muted">Times are on this computer's clock{LOCAL_ZONE ? ` (${LOCAL_ZONE})` : ''}.</p>
+        {error && <p role="alert" className="mt-2 rounded-lg bg-hx-danger/10 px-3 py-2 text-[12.5px] text-hx-danger" data-limits-error>{error}</p>}
+      </div>
+    </Modal>
   );
 }

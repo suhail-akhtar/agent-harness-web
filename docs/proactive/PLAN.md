@@ -12,8 +12,8 @@ not an assistant that interrupts on its own judgement.
 | 2 | The agent inbox: results, messages and suggestions in one queue (read, snooze, dismiss with a reason; every response logged); unattended runs park what needs approval in the Inbox instead of refusing it (digests come with phase 4) | Done |
 | 2b | Easy setup: the schedule dialog (templates, plain timing with a preview of the next runs, a prompt or a workflow, where, approvals), the Scheduled page in plain words, agents setting routines up (schedule tool: new_conversation, asks, time_zone, workflow, run_now) or proposing them (core.scheduled:new); schedules that run workflows | Done |
 | 3 | Watches: a check with no model (a command's output, files, commits, a web page or API) and a run only on a change, settled and batched, past an optional filter (a small model with no tools), what changed fenced as data in a conversation that counts as having read outside content; durable across restarts; Check now; for people and agents. (Not done: a general durable event log for plugins' events, MCP resource notifications) | Done |
-| 4 | An initiative policy per automation and action class (silent, notify, question, review, act), an interruption budget, quiet hours and digests; acceptance rates from the person's responses; "act" only on the person's say-so | |
-| 5 | Optional: suggestions inside a conversation, only if the data from phase 4 supports them | |
+| 4 | When updates may interrupt: a per-schedule "Tell me" (every time, only when it matters, digest, nothing), the person's quiet hours, daily most and digest time, one place that decides (src/core/initiative.ts) with the reason an update waited; usefulness per schedule from runs and responses (opened, dismissed and why, left unread, cost) and an offer to be quieter when mostly unwanted, never louder by itself | Done |
+| 5 | Optional: suggestions inside a conversation, only if the data from phase 4 supports them (it now measures what that needs) | Not started (by design) |
 
 ## Conventions
 

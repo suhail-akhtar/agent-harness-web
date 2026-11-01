@@ -216,19 +216,21 @@ export function applyGlobal(e: GlobalEvent): void {
     // A plugin's server half signalled (api.signal): its badge sources read again (state/badges.ts); nothing else changed.
     case 'plugins': if (p.type === 'signal') return; void d.refreshPlugins(); return;
     case 'notices': {
-      // The agent asked to tell the person (notify_user): a toast here, and a system notification when the window is not in front.
-      if (p.notify === true) {
-        const text = String(p.text ?? '').replace(/^The agent says: /, '');
-        toast(`${p.title ? `${String(p.title)}: ` : ''}${text}`, { kind: 'info' });
-        void desktop.notify({ title: String(p.title ?? 'A conversation'), body: text.slice(0, 280), ...(typeof p.sessionId === 'string' ? { route: `core.chat:session?id=${p.sessionId}` } : {}) });
-        return;
-      }
+      // What an agent tells the person (notify_user), and what a scheduled run warns about, reach them as inbox
+      // updates (which interrupt by their rules): not again here.
+      if (p.notify === true || p.scheduled === true) return;
       if (p.level === 'error' || p.level === 'warn') toast(String(p.text ?? ''), { kind: p.level === 'error' ? 'error' : 'warning' });
       return;
     }
     case 'inbox': {
       // An item added or changed (read, snoozed, dismissed, done): the open list follows.
       const item = p.item as InboxItem | undefined;
+      // One that interrupts the person (by its schedule's policy and their limits): a toast, and a system
+      // notification when the window is not in front. The only way unattended work interrupts.
+      if (p.type === 'added' && item?.alert) {
+        toast(`${item.title}: ${item.body.split('\n')[0]}`, { kind: item.level === 'error' ? 'error' : item.level === 'warn' ? 'warning' : 'info' });
+        void desktop.notify({ title: item.title, body: item.body.slice(0, 280), route: item.sessionId ? `core.chat:session?id=${item.sessionId}` : 'core.inbox:inbox' });
+      }
       if (!item || !d.inbox) { void d.refreshInbox(); return; }
       const open = (item.status === 'new' || item.status === 'read') && !(item.snoozedUntil && item.snoozedUntil > Date.now());
       const rest = d.inbox.filter((x) => x.id !== item.id);
@@ -237,14 +239,10 @@ export function applyGlobal(e: GlobalEvent): void {
     }
     case 'schedules': {
       useData.setState({ scheduleTick: d.scheduleTick + 1 });
-      // A run that ended says how; one that found nothing to report stays quiet (it is in the run history).
-      const run = p.run as { status?: string; summary?: string; reason?: string; noOp?: boolean; sessionId?: string } | undefined;
-      const title = String(p.title ?? 'A schedule');
-      if (p.type === 'ended' && run) {
-        if (run.status === 'completed' && !run.noOp) toast(`${title}: ${run.summary || 'done'}`, { kind: 'info' });
-        // Stopped at a limit: the conversation's own warning already said why (and Stop was the person's).
-        else if (run.status === 'failed' || run.status === 'interrupted') toast(`${title}: ${run.reason ?? run.status}`, { kind: 'warning' });
-      } else if (p.type === 'fired' && run && run.status === 'skipped') toast(`${title} did not run: ${run.reason ?? 'skipped'}`, { kind: 'warning' });
+      // How a run ended reaches the person as an inbox update (interrupting by their rules). A run that could not
+      // start (a limit, a busy conversation) is said here; a watch whose filter skipped a change stays quiet.
+      const run = p.run as { status?: string; reason?: string; by?: string } | undefined;
+      if (p.type === 'fired' && run?.status === 'skipped' && run.by !== 'watch') toast(`${String(p.title ?? 'A schedule')} did not run: ${run.reason ?? 'skipped'}`, { kind: 'warning' });
       return;
     }
   }

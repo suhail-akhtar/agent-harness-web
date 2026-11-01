@@ -8,6 +8,8 @@ import { type Session, SessionElsewhereError, type SessionMeta } from '../core/s
 import { checkScheduleTiming, describeSchedule, nextRuns, type Schedule } from '../core/scheduler.ts';
 import { InboxError } from '../core/inbox.ts';
 import { checkWatch, describeWatch } from '../core/watch.ts';
+import { checkInterruptions, type NotifyPolicy } from '../core/initiative.ts';
+import { type ScheduleStats, scheduleStats } from '../core/schedule-stats.ts';
 import { type LeaseRecord, leaseUrlSig } from '../util/lease.ts';
 import type { PermissionMode } from '../core/types.ts';
 import type { Harness } from '../kernel/harness.ts';
@@ -1262,6 +1264,16 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       // Runs of every schedule of the person's (administrators see their own too, as in the list).
       if (p === '/api/schedule-runs' && method === 'GET') return send(res, 200, (await scheduler.runs.list({ limit: 500, all: true })).filter(mine).slice(0, limit));
       if (p === '/api/schedules' && method === 'GET') return send(res, 200, scheduler.list().filter(mine).map(view));
+      // How useful each schedule has been (the last 30 days): its runs, what they found, what the person did with it.
+      if (p === '/api/schedules/stats' && method === 'GET') {
+        await harness.inbox.sync();
+        const since = Date.now() - 30 * 86_400_000;
+        const runs = (await scheduler.runs.list({ all: true, limit: 500 })).filter((r) => r.startedAt >= since);
+        const feedback = (await harness.inbox.feedbackLog()).filter((f) => f.at >= since);
+        const out: Record<string, ScheduleStats> = {};
+        for (const s of scheduler.list().filter(mine)) out[s.id] = scheduleStats(runs.filter((r) => r.scheduleId === s.id), harness.inbox.ofSchedule(s.id).filter((i) => i.at >= since), feedback.filter((f) => f.scheduleId === s.id));
+        return send(res, 200, out);
+      }
       // What a schedule's timing means before it is made: in words, its next runs, or why it is refused.
       if (p === '/api/schedules/preview' && method === 'POST') {
         const b = await readJson(req);
@@ -1303,7 +1315,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
           if (!rt || rt.kind !== 'local') throw new HttpError(400, 'A watch of a command, files or commits needs a folder on this computer (a local conversation or folder).');
           if (!admin) throw new HttpError(403, 'Watches that run on this computer are for administrators.');
         }
-        const timing = { ...(b.watch && typeof b.watch === 'object' ? { watch: b.watch } : {}), ...(b.workflow && typeof b.workflow === 'object' ? { workflow: b.workflow as Schedule['workflow'] } : {}), ...(typeof b.timeZone === 'string' && b.timeZone ? { timeZone: b.timeZone } : {}), ...(b.misfire === 'once' || b.misfire === 'skip' ? { misfire: b.misfire as 'once' | 'skip' } : {}), ...(b.maxCostUsd !== undefined && b.maxCostUsd !== null && b.maxCostUsd !== '' ? { maxCostUsd: Number(b.maxCostUsd) } : {}), ...(b.askTimeoutMinutes !== undefined && b.askTimeoutMinutes !== null && b.askTimeoutMinutes !== '' ? { askTimeoutMinutes: Number(b.askTimeoutMinutes) } : {}) };
+        const timing = { ...(typeof b.notify === 'string' ? { notify: b.notify as NotifyPolicy } : {}), ...(b.watch && typeof b.watch === 'object' ? { watch: b.watch } : {}), ...(b.workflow && typeof b.workflow === 'object' ? { workflow: b.workflow as Schedule['workflow'] } : {}), ...(typeof b.timeZone === 'string' && b.timeZone ? { timeZone: b.timeZone } : {}), ...(b.misfire === 'once' || b.misfire === 'skip' ? { misfire: b.misfire as 'once' | 'skip' } : {}), ...(b.maxCostUsd !== undefined && b.maxCostUsd !== null && b.maxCostUsd !== '' ? { maxCostUsd: Number(b.maxCostUsd) } : {}), ...(b.askTimeoutMinutes !== undefined && b.askTimeoutMinutes !== null && b.askTimeoutMinutes !== '' ? { askTimeoutMinutes: Number(b.askTimeoutMinutes) } : {}) };
         const newSession = ns ? {
           model: String(ns.model ?? registry.listModels().find((m) => m.available)?.id ?? ''),
           runtime: { kind: (ns.runtime === 'local' ? 'local' : 'docker') as SessionMeta['runtime']['kind'], network: (ns.network === 'full' ? 'full' : ns.network === 'allowlist' ? 'allowlist' : 'none') as SessionMeta['runtime']['network'], ...(typeof ns.path === 'string' && ns.path ? { path: ns.path } : {}) },
@@ -1312,7 +1324,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         try {
           if (b.trigger === true) {
             // The URL is shown once: only its hash is kept.
-            const t = await scheduler.createTrigger({ owner: me.id, title: typeof b.title === 'string' ? b.title : undefined, prompt: String(b.prompt ?? ''), sessionId, newSession, ...(timing.maxCostUsd !== undefined ? { maxCostUsd: timing.maxCostUsd } : {}), ...(timing.askTimeoutMinutes !== undefined ? { askTimeoutMinutes: timing.askTimeoutMinutes } : {}), ...(timing.workflow ? { workflow: timing.workflow } : {}) });
+            const t = await scheduler.createTrigger({ owner: me.id, title: typeof b.title === 'string' ? b.title : undefined, prompt: String(b.prompt ?? ''), sessionId, newSession, ...(timing.maxCostUsd !== undefined ? { maxCostUsd: timing.maxCostUsd } : {}), ...(timing.askTimeoutMinutes !== undefined ? { askTimeoutMinutes: timing.askTimeoutMinutes } : {}), ...(timing.workflow ? { workflow: timing.workflow } : {}), ...(timing.notify ? { notify: timing.notify } : {}) });
             const base = process.env.HARNESS_PUBLIC_URL?.replace(/\/+$/, '') || `http://${req.headers.host ?? '127.0.0.1'}`;
             return send(res, 201, { ...view(t.schedule), token: t.token, url: `${base}/api/triggers/${t.token}` });
           }
@@ -1341,6 +1353,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
             ...(nul('askTimeoutMinutes') ? { askTimeoutMinutes: null } : b.askTimeoutMinutes !== undefined ? { askTimeoutMinutes: Number(b.askTimeoutMinutes) } : {}),
             ...(b.workflow && typeof b.workflow === 'object' ? { workflow: b.workflow as Schedule['workflow'] } : {}),
             ...(b.watch && typeof b.watch === 'object' ? { watch: b.watch } : {}),
+            ...(typeof b.notify === 'string' ? { notify: b.notify as NotifyPolicy } : {}),
           })));
         } catch (e) { throw new HttpError(400, (e as Error).message); }
       }
@@ -1500,6 +1513,11 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       await harness.inbox.sync();
       const view = url.searchParams.get('view') === 'all' ? 'all' : 'open';
       return send(res, 200, { items: harness.inbox.list(me.id, { view }).slice(0, 300), unread: harness.inbox.unread(me.id) });
+    }
+    // The person's limits on interruptions: quiet hours, a most a day, a digest time.
+    if (p === '/api/inbox/settings' && method === 'GET') return send(res, 200, await harness.inbox.interruptions(me.id));
+    if (p === '/api/inbox/settings' && method === 'PUT') {
+      try { return send(res, 200, await harness.inbox.setInterruptions(me.id, checkInterruptions(await readJson(req)))); } catch (e) { throw new HttpError(400, (e as Error).message); }
     }
     if (p === '/api/inbox/read-all' && method === 'POST') {
       await harness.inbox.sync(true);

@@ -6,7 +6,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import type { Schedule, ScheduleRun } from '@harness/client';
+import type { Schedule, ScheduleRun, ScheduleStats } from '@harness/client';
 import { duration, isMissing } from '@harness/client';
 import { create } from 'zustand';
 import { Badge, Button, ConfirmDialog, Icon, IconButton, InfoNote, Menu, Page, Spinner, Switch, Tooltip, cx, toast } from '@harness/ui';
@@ -111,7 +111,7 @@ const LAST_ICON = (last: string) => /^completed: nothing/i.test(last) ? { icon: 
       : /^failed/i.test(last) ? { icon: 'x-circle', tone: 'text-hx-danger', label: 'Failed' }
         : { icon: 'alert', tone: 'text-hx-warning', label: last.split(':')[0]!.replace(/^\w/, (c) => c.toUpperCase()) };
 
-function ScheduleItem({ s, onEdit, reload }: { s: Schedule; onEdit: () => void; reload: () => void }) {
+function ScheduleItem({ s, stats, onEdit, reload }: { s: Schedule; stats?: ScheduleStats; onEdit: () => void; reload: () => void }) {
   const [open, setOpen] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const last = s.lastResult;
@@ -125,6 +125,7 @@ function ScheduleItem({ s, onEdit, reload }: { s: Schedule; onEdit: () => void; 
   }).catch(fail);
   const ws = s.watchState;
   const asks = s.newSession ? ({ dontAsk: 'never asks', auto: 'a checker decides', acceptEdits: 'asks you for commands', default: 'asks you' } as Record<string, string>)[s.newSession.mode ?? 'dontAsk'] : undefined;
+  const tells = s.notify ? ({ important: 'tells you what matters', digest: 'in your digest', silent: 'tells you nothing' } as Record<string, string>)[s.notify] : undefined;
   return (
     <div data-schedule={s.id} className={cx('rounded-xl border bg-hx-elevated', s.enabled ? 'border-hx-border-subtle' : 'border-dashed border-hx-border-subtle opacity-75')}>
       <div className="flex items-start gap-3 px-4 py-3">
@@ -143,6 +144,7 @@ function ScheduleItem({ s, onEdit, reload }: { s: Schedule; onEdit: () => void; 
             {!s.enabled && <span>Off</span>}
             <span>{target}</span>
             {asks && <span>{asks}</span>}
+            {tells && <span data-schedule-tells>{tells}</span>}
             {s.maxCostUsd ? <span>at most {money(s.maxCostUsd)} a run</span> : null}
             {li && <span className={cx('inline-flex items-center gap-1', li.tone)} data-schedule-last title={last}><Icon name={li.icon} size={11} />{li.label}{s.lastRun ? ` ${relative(s.lastRun) === 'now' ? new Date(s.lastRun).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : ''}` : ''}</span>}
           </span>
@@ -162,7 +164,30 @@ function ScheduleItem({ s, onEdit, reload }: { s: Schedule; onEdit: () => void; 
       </div>
       {ws?.error && <div className="mx-4 mb-3 rounded-lg bg-hx-danger/10 px-3 py-1.5 text-[12px] text-hx-danger" data-schedule-watch-error>The last check failed: {ws.error}</div>}
       {last && /^(failed|stopped|interrupted|skipped)/i.test(last) && <div className="mx-4 mb-3 rounded-lg bg-hx-hover px-3 py-1.5 text-[12px] text-hx-secondary" data-schedule-last-reason>{last}</div>}
-      {open && <div className="border-t border-hx-border-subtle"><Runs id={s.id} /></div>}
+      {/* Mostly unwanted: it offers to be quieter (never louder, never by itself). */}
+      {stats?.quieter && (s.notify ?? 'always') !== 'digest' && s.notify !== 'silent' && (
+        <div className="mx-4 mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-hx-warning/30 bg-hx-warning/10 px-3 py-2 text-[12.5px]" data-schedule-quieter>
+          <span className="min-w-0 flex-1">{stats.quieter}. Make it quieter?</span>
+          {!s.notify && <Button size="sm" onClick={() => void client.schedules.update(s.id, { notify: 'important' }).then(reload).catch(fail)} data-quieter="important">Only when it matters</Button>}
+          <Button size="sm" onClick={() => void client.schedules.update(s.id, { notify: 'digest' }).then(reload).catch(fail)} data-quieter="digest">In my digest</Button>
+          {s.notify === 'important' && <Button size="sm" onClick={() => void client.schedules.update(s.id, { notify: 'silent' }).then(reload).catch(fail)} data-quieter="silent">Don't tell me</Button>}
+        </div>
+      )}
+      {open && (
+        <div className="border-t border-hx-border-subtle">
+          {stats && stats.runs + stats.skipped > 0 && (
+            <div className="flex flex-wrap gap-x-3 px-3 pt-2 text-[11.5px] text-hx-muted" data-schedule-stats>
+              <span>Last 30 days: {stats.runs} run{stats.runs === 1 ? '' : 's'}</span>
+              <span>{stats.found} found something</span>
+              {stats.updates > 0 && <span>{stats.opened} of {stats.updates} update{stats.updates === 1 ? '' : 's'} opened</span>}
+              {stats.notUseful > 0 && <span>{stats.notUseful} not useful</span>}
+              {stats.skipped > 0 && <span>{stats.skipped} skipped</span>}
+              {stats.costUsd > 0 && <span>{money(stats.costUsd)}</span>}
+            </div>
+          )}
+          <Runs id={s.id} />
+        </div>
+      )}
       <ConfirmDialog open={confirm} title={`Delete "${s.title}"?`} body="It stops running, and its run history goes with it. The conversations it made stay." confirmLabel="Delete" danger onAnswer={(yes) => { setConfirm(false); if (yes) void client.schedules.remove(s.id).then(reload).catch(fail); }} />
     </div>
   );
@@ -180,6 +205,7 @@ const ASK_AGENT = 'Set up a schedule for me: ';
 /** Every schedule and trigger of the person's, with New, Edit and their runs. */
 export function ScheduleManager({ embedded }: { embedded?: boolean }): React.ReactElement {
   const { value: list, error, reload } = useScheduled(() => client.schedules.list());
+  const { value: stats } = useScheduled(() => client.schedules.stats().catch(() => ({} as Record<string, ScheduleStats>)));
   const keepInTray = useApp((x) => x.prefs.keepInTray);
   const startAtLogin = useApp((x) => x.prefs.startAtLogin);
   const draft = useScheduleDialog((x) => x.draft);
@@ -221,7 +247,7 @@ export function ScheduleManager({ embedded }: { embedded?: boolean }): React.Rea
             </div>
           </div>
         )
-      ) : <div className="space-y-2" data-schedule-list>{list.map((s) => <ScheduleItem key={s.id} s={s} onEdit={() => setEditing(s)} reload={reload} />)}</div>}
+      ) : <div className="space-y-2" data-schedule-list>{list.map((s) => <ScheduleItem key={s.id} s={s} stats={stats?.[s.id]} onEdit={() => setEditing(s)} reload={reload} />)}</div>}
       {(embedded || list.length > 0) && (
         <div className="flex justify-end gap-2">
           {!embedded && <Button icon="sparkles" variant="ghost" onClick={() => prefill(ASK_AGENT, true)} data-schedule-ask-agent>Ask an agent to set it up</Button>}

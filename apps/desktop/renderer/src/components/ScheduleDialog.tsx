@@ -24,6 +24,13 @@ const FREQS: Array<{ id: Freq; label: string }> = [
   { id: 'once', label: 'Once' }, { id: 'minutes', label: 'Every few minutes' }, { id: 'hourly', label: 'Hourly' }, { id: 'daily', label: 'Daily' },
   { id: 'weekdays', label: 'Weekdays' }, { id: 'weekly', label: 'Weekly' }, { id: 'monthly', label: 'Monthly' }, { id: 'custom', label: 'Custom (cron)' },
 ];
+const NOTIFY: Array<{ id: NonNullable<Schedule['notify']>; label: string }> = [{ id: 'always', label: 'Every time' }, { id: 'important', label: 'Only when it matters' }, { id: 'digest', label: 'In my daily digest' }, { id: 'silent', label: 'Don\'t tell me' }];
+const NOTIFY_HELP: Record<NonNullable<Schedule['notify']>, string> = {
+  always: 'What it finds comes to your Inbox and interrupts you (within your quiet hours and daily most).',
+  important: 'Failures, what it tells you and work it offers interrupt you; other results wait quietly in your Inbox.',
+  digest: 'Its results wait for your daily digest; failures still interrupt you.',
+  silent: 'Its results stay in its run history; failures, messages and offers still reach your Inbox.',
+};
 const ASKS: Array<{ id: Asks; title: string; detail: string }> = [
   { id: 'dontAsk', title: 'Never stop to ask', detail: 'What needs approval is refused; the run goes on without it.' },
   { id: 'auto', title: 'A checker decides, I answer the rest', detail: 'A checking model approves safe steps; the others wait for you in the Inbox.' },
@@ -183,6 +190,7 @@ function initial(edit?: Schedule, draft?: ScheduleDraft) {
     target: 'new', sessionId: '', model: '', folder: SCRATCH,
     asks: (edit?.newSession?.mode as Asks | undefined) ?? draft?.asks ?? 'dontAsk',
     waitHours: edit?.askTimeoutMinutes ? String(edit.askTimeoutMinutes / 60) : '8',
+    notify: (edit?.notify ?? 'always') as NonNullable<Schedule['notify']>,
   };
 }
 
@@ -232,7 +240,7 @@ export function ScheduleDialog({ open, edit, draft, onClose, onDone }: { open: b
         s = await client.schedules.update(edit.id, {
           title: f.title, ...(f.what === 'prompt' ? { prompt: f.prompt } : {}), ...workflow, ...timing,
           ...(trigger || watching ? {} : { timeZone: cron && f.timeZone.trim() ? f.timeZone.trim() : null, misfire: f.misfire as 'once' | 'skip' }),
-          maxCostUsd: cost ?? null, ...(waits ? { askTimeoutMinutes: waitMin } : {}),
+          maxCostUsd: cost ?? null, ...(waits ? { askTimeoutMinutes: waitMin } : {}), notify: f.notify,
         });
         toast('Saved', { kind: 'success' });
       } else {
@@ -241,7 +249,7 @@ export function ScheduleDialog({ open, edit, draft, onClose, onDone }: { open: b
           : { sessionId: f.sessionId };
         s = await client.schedules.create({
           title: f.title.trim() || undefined, prompt: f.what === 'prompt' ? f.prompt : '', ...workflow, ...timing, ...where,
-          misfire: f.misfire as 'once' | 'skip', ...(cost ? { maxCostUsd: cost } : {}), ...(waits ? { askTimeoutMinutes: waitMin } : {}),
+          misfire: f.misfire as 'once' | 'skip', ...(cost ? { maxCostUsd: cost } : {}), ...(waits ? { askTimeoutMinutes: waitMin } : {}), notify: f.notify,
         });
         toast(`Scheduled: ${s.when ?? s.title}`, { kind: 'success' });
       }
@@ -336,6 +344,11 @@ export function ScheduleDialog({ open, edit, draft, onClose, onDone }: { open: b
             Wait for my answer up to <Input type="number" min={0.1} step={0.5} className="w-20" value={f.waitHours} onChange={(e) => set({ waitHours: e.target.value })} data-schedule-wait /> hours, then refuse and go on.
           </div>
         )}
+
+        <Section title="Tell me">
+          <Choice name="notify" label="Tell me" value={f.notify} options={NOTIFY} onChange={(notify) => set({ notify })} />
+          <p className="mt-1.5 text-[12px] text-hx-muted" data-notify-help>{NOTIFY_HELP[f.notify]}</p>
+        </Section>
 
         <button type="button" className="mb-2 inline-flex items-center gap-1 text-[12.5px] text-hx-secondary hover:text-hx-primary" onClick={() => setMore(!more)} aria-expanded={more} data-schedule-more>
           <Icon name={more ? 'chevron-down' : 'chevron-right'} size={13} />More options

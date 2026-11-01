@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { FileWatch, readJson, withFileLock, writeFileAtomic } from '../util/shared-file.ts';
+import { dayOf, type Held, type Interruptions } from './initiative.ts';
 
 // The agent inbox: what work done without the person watching left for them, in one queue they own.
 // A scheduled or triggered run's outcome (result), what an agent told them (message), and work an agent
@@ -9,7 +10,7 @@ import { FileWatch, readJson, withFileLock, writeFileAtomic } from '../util/shar
 // read, snoozed or dismissed with a reason; every response is written to a feedback log, so how useful
 // each kind of item is can be measured (which items get opened, which dismissed, and why).
 
-export type InboxKind = 'result' | 'message' | 'suggestion';
+export type InboxKind = 'result' | 'message' | 'suggestion' | 'digest';
 export type DismissReason = 'not_useful' | 'wrong' | 'bad_timing' | 'other';
 export const DISMISS_REASONS: DismissReason[] = ['not_useful', 'wrong', 'bad_timing', 'other'];
 
@@ -34,6 +35,9 @@ export interface InboxItem {
   resolvedAt?: number;
   reason?: DismissReason;
   note?: string;
+  /** It interrupted the person (a toast, a system notification); else why it waited (src/core/initiative.ts). */
+  alert?: boolean;
+  held?: Held;
 }
 
 export type InboxAction = 'read' | 'unread' | 'open' | 'snooze' | 'dismiss' | 'done';
@@ -152,7 +156,45 @@ export class InboxStore {
     return [...this.items.values()].find((i) => i.proposalId === proposalId);
   }
 
-  /** The feedback log, oldest first (for measuring; Phase 4 reads it). */
+  /** Updates that interrupted the owner today (on their clock). */
+  alertsToday(owner: string | undefined, tz?: string, now = Date.now()): number {
+    const today = dayOf(now, tz);
+    return [...this.items.values()].filter((i) => i.owner === owner && i.alert && dayOf(i.at, tz) === today).length;
+  }
+
+  /** Every item of a schedule's (its results, messages, suggestions), newest first. */
+  ofSchedule(scheduleId: string): InboxItem[] {
+    return [...this.items.values()].filter((i) => i.scheduleId === scheduleId).sort((a, b) => b.at - a.at);
+  }
+
+  // ---- each person's limits on interruptions, and when their last digest was made ----
+
+  private get settingsFile() { return path.join(path.dirname(this.file), 'inbox-settings.json'); }
+  private async settings(): Promise<Record<string, { prefs?: Interruptions; lastDigestAt?: number }>> {
+    return readJson(this.settingsFile, {});
+  }
+  async interruptions(owner: string | undefined): Promise<Interruptions> { return (await this.settings())[owner ?? '']?.prefs ?? {}; }
+  async setInterruptions(owner: string | undefined, prefs: Interruptions): Promise<Interruptions> {
+    await withFileLock(this.settingsFile, async () => {
+      const all = await this.settings();
+      all[owner ?? ''] = { ...(all[owner ?? ''] ?? {}), prefs };
+      await writeFileAtomic(this.settingsFile, JSON.stringify(all, null, 1));
+    });
+    return prefs;
+  }
+  /** Everyone with a digest time, with when their last digest was made. */
+  async digestOwners(): Promise<Array<{ owner: string | undefined; prefs: Interruptions; lastDigestAt?: number }>> {
+    return Object.entries(await this.settings()).filter(([, v]) => v.prefs?.digestAt).map(([k, v]) => ({ owner: k || undefined, prefs: v.prefs!, ...(v.lastDigestAt ? { lastDigestAt: v.lastDigestAt } : {}) }));
+  }
+  async markDigest(owner: string | undefined, at: number): Promise<void> {
+    await withFileLock(this.settingsFile, async () => {
+      const all = await this.settings();
+      all[owner ?? ''] = { ...(all[owner ?? ''] ?? {}), lastDigestAt: at };
+      await writeFileAtomic(this.settingsFile, JSON.stringify(all, null, 1));
+    });
+  }
+
+  /** The feedback log, oldest first (for measuring how useful each kind of update is). */
   async feedbackLog(): Promise<InboxFeedback[]> {
     const text = await fs.readFile(this.feedbackFile, 'utf8').catch(() => '');
     return text.split('\n').filter(Boolean).flatMap((l) => { try { return [JSON.parse(l) as InboxFeedback]; } catch { return []; } });

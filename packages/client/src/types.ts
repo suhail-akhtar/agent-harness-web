@@ -255,12 +255,20 @@ export interface Schedule {
   watch?: WatchSpec;
   /** Its watch's last look: when, whether it failed, how many changes wait to run, whether it has looked yet. */
   watchState?: { checkedAt?: number; error?: string; pending: number; seen: boolean };
+  /** What its results do: interrupt every time (absent), only when it matters, go to the digest, or stay in its history. */
+  notify?: 'always' | 'important' | 'digest' | 'silent';
 }
+/** How useful a schedule has been, the last 30 days (GET /api/schedules/stats). */
+export interface ScheduleStats { runs: number; found: number; failed: number; skipped: number; updates: number; opened: number; dismissed: number; notUseful: number; ignored: number; costUsd: number; quieter?: string }
+/** The person's limits on interruptions (GET/PUT /api/inbox/settings). */
+export interface Interruptions { quietFrom?: string; quietTo?: string; timeZone?: string; maxPerDay?: number; digestAt?: string }
 /** What a watch looks at: a command's output, files in the folder, commits on a branch, a web page or API. */
 export interface WatchSpec { kind: 'command' | 'files' | 'git' | 'url'; command?: string; paths?: string[]; branch?: string; url?: string; match?: string; everyMinutes: number; settleSeconds?: number; onlyWhen?: string }
 /** What unattended work left for the person (GET /api/inbox). */
 export interface InboxItem {
-  id: string; kind: 'result' | 'message' | 'suggestion'; title: string; body: string; at: number; level: 'info' | 'warn' | 'error';
+  id: string; kind: 'result' | 'message' | 'suggestion' | 'digest'; title: string; body: string; at: number; level: 'info' | 'warn' | 'error';
+  /** It interrupted the person; else why it waited (its schedule's policy, the digest, quiet hours, the day's most). */
+  alert?: boolean; held?: 'policy' | 'digest' | 'quiet' | 'budget';
   status: 'new' | 'read' | 'dismissed' | 'done'; sessionId?: string; scheduleId?: string; runId?: string; proposalId?: string;
   readAt?: number; snoozedUntil?: number; resolvedAt?: number; reason?: 'not_useful' | 'wrong' | 'bad_timing' | 'other'; note?: string;
 }

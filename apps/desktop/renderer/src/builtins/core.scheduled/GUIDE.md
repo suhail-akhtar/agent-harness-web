@@ -51,6 +51,13 @@ already told them, or offered work, has no separate result.
 - Activity (`core.activity:activity`) lists the latest runs across schedules under what is running.
 - Settings > Schedules is the same list.
 
+## When it interrupts the person
+
+Every update lands in their Inbox. Whether it also interrupts them is theirs to set: each schedule's
+"Tell me" (every time, only when it matters, in their daily digest, or not at all) and their quiet hours,
+daily most and digest time (Inbox > Updates > Interruptions). Respect it: do not use `notify_user` to tell
+them what a run found when it is routine; end with `[nothing to report]` when nothing needs them.
+
 ## Good to know
 
 - Schedules run only while the app (or server) runs. The desktop app keeps them running when its

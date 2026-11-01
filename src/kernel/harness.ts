@@ -24,6 +24,7 @@ import { type Schedule, Scheduler } from '../core/scheduler.ts';
 import { NOTHING_TO_REPORT } from '../core/schedule-runs.ts';
 import { followRun, followWorkflow } from '../core/schedule-track.ts';
 import { InboxStore } from '../core/inbox.ts';
+import { decideAlert, digestBody, digestDue, inQuietHours, type NotifyPolicy } from '../core/initiative.ts';
 import { describeWatch, probeWatch, TRIAGE_SYSTEM } from '../core/watch.ts';
 import { assertPublicUrl } from '../tools/web.ts';
 import { costOf } from '../core/models.ts';
@@ -174,6 +175,8 @@ export interface Harness {
   scheduler?: Scheduler;
   /** The agent inbox: results of unattended runs, what agents told the person, suggestions; their responses. */
   inbox: InboxStore;
+  /** Makes the digests that are due (a timer does, every minute; tests pass the time). */
+  makeDigests(now?: number): Promise<void>;
   /** The key vault (absent when turned off). */
   vault?: VaultStore;
   /** Several servers on one data folder (absent: a single server). */
@@ -977,6 +980,37 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   // The agent inbox: what work done without the person watching left for them.
   const inbox = await new InboxStore(opts.dataDir).load();
   inbox.onChange = (type, item) => events.inboxEvent(type, item);
+  /**
+   * An update for the person: into their inbox, interrupting them or not by its schedule's policy, their quiet
+   * hours and how often they were interrupted today (src/core/initiative.ts). A schedule that keeps its results to
+   * itself (silent) leaves only what matters (failures, messages, offers).
+   */
+  const deliver = async (spec: Parameters<InboxStore['add']>[0], policy: NotifyPolicy = 'always') => {
+    try {
+      const prefs = await inbox.interruptions(spec.owner);
+      const d = decideAlert({ kind: spec.kind, level: spec.level ?? 'info' }, policy, prefs, inbox.alertsToday(spec.owner, prefs.timeZone));
+      if (d.held === 'policy' && policy === 'silent') return;
+      await inbox.add({ ...spec, alert: d.alert, ...(d.held ? { held: d.held } : {}) });
+    } catch (e) { log(`inbox: ${(e as Error).message}`); }
+  };
+  // The digest: once a day at each person's time, what waited for them since the last one, in one update.
+  const digestTimer = setInterval(() => { void makeDigests(); }, 60_000);
+  digestTimer.unref();
+  let digesting = false;
+  async function makeDigests(now = Date.now()): Promise<void> {
+    if (digesting) return;
+    digesting = true;
+    try {
+      if (leases && !(await leases.acquire('inbox-digest')).ok) return;
+      await inbox.sync(true);
+      for (const o of await inbox.digestOwners()) {
+        if (!digestDue(o.prefs, o.lastDigestAt, now)) continue;
+        const waited = inbox.list(o.owner, { now }).filter((i) => i.status === 'new' && !i.alert && i.kind !== 'digest' && i.at > (o.lastDigestAt ?? 0));
+        await inbox.markDigest(o.owner, now);
+        if (waited.length) await inbox.add({ kind: 'digest', owner: o.owner, title: 'Your digest', body: digestBody(waited), level: waited.some((i) => i.level !== 'info') ? 'warn' : 'info', alert: !inQuietHours(o.prefs, now) });
+      }
+    } catch (e) { log(`inbox digest: ${(e as Error).message}`); } finally { digesting = false; }
+  }
   if (scheduler) {
     // A watch's folder: its new conversations' folder on this computer, or its conversation's.
     const folderOf = (s: Schedule) => {
@@ -1024,7 +1058,7 @@ ${neutralizeTags(change).slice(0, 20_000)}
     // and not a completed one that already reached them (what it told them, or work it offered, is there).
     const r = run?.record;
     if (type === 'ended' && r && !(r.status === 'completed' && (r.noOp || r.notified || r.proposed))) {
-      void inbox.add({ kind: 'result', owner: s.owner, title: s.title, body: r.status === 'completed' ? r.summary || 'Done.' : r.reason ?? r.status, level: r.status === 'completed' ? 'info' : r.status === 'failed' ? 'error' : 'warn', scheduleId: s.id, runId: r.id, ...(r.sessionId ? { sessionId: r.sessionId } : {}) }).catch((e: Error) => log(`inbox: ${e.message}`));
+      void deliver({ kind: 'result', owner: s.owner, title: s.title, body: r.status === 'completed' ? r.summary || 'Done.' : r.reason ?? r.status, level: r.status === 'completed' ? 'info' : r.status === 'failed' ? 'error' : 'warn', scheduleId: s.id, runId: r.id, ...(r.sessionId ? { sessionId: r.sessionId } : {}) }, s.notify);
     }
   };
   // A schedule made for a plugin (by a session the plugin started) is skipped while the plugin is off.
@@ -1057,8 +1091,8 @@ ${neutralizeTags(change).slice(0, 20_000)}
   registry.baseUrlFor = (id) => providerKeys.baseUrl(id);
   /** What a session leaves in its owner's inbox: what the agent told them, and work it offered while nobody was watching. */
   function inboxFromSession(s: Session, e: HarnessEvent): void {
-    const add = (spec: Parameters<InboxStore['add']>[0]) => { void inbox.add(spec).catch((err: Error) => log(`inbox: ${err.message}`)); };
     const scheduleId = s.unattendedSchedule;
+    const add = (spec: Parameters<InboxStore['add']>[0]) => { void deliver(spec, scheduleId ? scheduler?.get(scheduleId)?.notify : 'always'); };
     if (e.kind === 'notice' && e.notify) add({ kind: 'message', owner: s.meta.owner, title: s.meta.title, body: e.text.replace(/^The agent says: /, ''), sessionId: s.meta.id, ...(scheduleId ? { scheduleId } : {}) });
     else if (e.kind === 'session_proposal' && scheduleId) add({ kind: 'suggestion', owner: s.meta.owner, title: e.title, body: e.brief, sessionId: s.meta.id, scheduleId, proposalId: e.id });
     else if (e.kind === 'proposal_resolved') {
@@ -1176,7 +1210,9 @@ ${neutralizeTags(change).slice(0, 20_000)}
       pluginsChanged(p.name, 'installed');
       return p;
     },
+    makeDigests,
     async close() {
+      clearInterval(digestTimer);
       // Runs stopped by the shutdown are written down as interrupted (not as stopped by the person).
       scheduler?.stop({ closing: true });
       await data.stop();
