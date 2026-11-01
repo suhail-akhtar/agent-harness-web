@@ -87,6 +87,15 @@ test('signals: repeated calls and errors, reverts, test thrash, progress markers
   assert.equal(s.filesChanged, 1);
   assert.equal(assess(s).health, 'bad');
   assert.equal(normalizeError('Error: line 12 in "foo.js" at 0xff'), 'Error: line # in "…" at #');
+  // The bash tool's own lines are not the error: two different failures of a command differ, the same one matches.
+  const bash = (code: number, err: string) => `exit code: ${code}\nstderr:\n${err}`;
+  assert.notEqual(normalizeError(bash(1, 'Error: config.json is missing')), normalizeError(bash(1, 'TypeError: x is not a function')));
+  assert.equal(normalizeError(bash(1, 'Error: port 3000 in use')), normalizeError(bash(2, 'Error: port 3001 in use')));
+  assert.equal(normalizeError(bash(1, 'Error: config.json is missing')), 'Error: config.json is missing');
+  assert.equal(normalizeError('exit code: 1\n(no output)'), 'exit code: # (no output)', 'nothing else to go by');
+  const b = new ProgressTracker();
+  for (let i = 1; i <= 5; i++) b.record(i, [{ name: 'bash', input: { command: `node step${i}.js` }, content: bash(1, `Error: step ${['one', 'two', 'three', 'four', 'five'][i - 1]} failed differently`), isError: true }], []);
+  assert.ok(b.signals().repeatedError.count < 5, 'five different errors are not "the same error 5 times"');
   const nudges = t.takeNudges();
   assert.equal(nudges.filter((n) => /without changing anything/.test(n)).length, 1, 'once per pattern');
   assert.ok(nudges.some((n) => /failed 4 times in a row/.test(n)));

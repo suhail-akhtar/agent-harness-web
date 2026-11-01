@@ -13,7 +13,7 @@ import { GlobalEvents, sessionEvents, type Fetch } from './events.ts';
 import {
   isPending, PENDING_KINDS, type Approval, type FileTree, type SearchHit, type Attachment, type CatalogueEntry, type PluginReview, type PluginUpdateInfo, type PluginRevisionInfo, type Config, type Capabilities, type ContextBreakdown, type LiveProviderModels, type EffectiveSetting, type Effort, type FileContent, type FileEntry,
   type GitLogEntry, type GitStatus, type Health, type HarnessEvent, type HistoryPage, type McpBundle, type Me, type Mode, type ModelInfo, type PendingRequest, type PluginInfo, type SolutionImportInfo,
-  type ProviderInfo, type ProviderTest, type InboxItem, type Interruptions, type Schedule, type ScheduleRun, type ScheduleStats, type WatchSpec, type SessionDetail, type SessionMeta, type SessionsPage, type TaskView, type VaultEntry, type VersionInfo, type WorkflowInfo, type WorkflowRunView,
+  type ProviderInfo, type ProviderTest, type InboxItem, type Interruptions, type NoticingOverview, type NoticeDetector, type Schedule, type ScheduleRun, type ScheduleStats, type WatchSpec, type SessionDetail, type SessionMeta, type SessionsPage, type TaskView, type VaultEntry, type VersionInfo, type WorkflowInfo, type WorkflowRunView,
   type ArtifactContent, type ArtifactMeta, type Proposal, type TraceSpan,
 } from './types.ts';
 
@@ -328,11 +328,21 @@ export class HarnessClient {
   /** The agent inbox: results of unattended runs, what agents told the person, suggestions. */
   inbox = {
     list: (view: 'open' | 'all' = 'open') => this.get<{ items: InboxItem[]; unread: number }>(`/api/inbox?view=${view}`),
-    act: (id: string, action: 'read' | 'unread' | 'open' | 'snooze' | 'dismiss', o: { reason?: InboxItem['reason']; note?: string; until?: number } = {}) => this.post<InboxItem>(`/api/inbox/${id}`, { action, ...o }),
+    /** accept: what a finding offered, done (its message sent to its conversation as the person's). */
+    act: (id: string, action: 'read' | 'unread' | 'open' | 'snooze' | 'dismiss' | 'accept', o: { reason?: InboxItem['reason']; note?: string; until?: number } = {}) => this.post<InboxItem>(`/api/inbox/${id}`, { action, ...o }),
     readAll: () => this.post<{ read: number }>('/api/inbox/read-all'),
     /** The person's limits on interruptions: quiet hours, a most a day, a digest time. */
     settings: () => this.get<Interruptions>('/api/inbox/settings'),
     setSettings: (b: Interruptions) => this.put<Interruptions>('/api/inbox/settings', b),
+  };
+  /** What the harness notices by itself: its mode, detectors, what it would have said in practice, what it observed. */
+  noticing = {
+    get: () => this.get<NoticingOverview>('/api/noticing'),
+    set: (b: { mode?: NoticingOverview['mode']; detectors?: Partial<Record<NoticeDetector, boolean>> }) => this.put<NoticingOverview>('/api/noticing', b),
+    /** Forgets what was observed (its activity log); findings and choices stay. */
+    clear: () => this.post<{ cleared: number }>('/api/noticing/clear'),
+    /** Looks at the person's schedules now. */
+    check: () => this.post<NoticingOverview>('/api/noticing/check'),
   };
   schedules = {
     list: () => this.get<Schedule[]>('/api/schedules'),

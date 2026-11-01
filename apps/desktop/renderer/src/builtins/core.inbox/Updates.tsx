@@ -11,11 +11,14 @@ import type { Interruptions } from '@harness/client';
 import { Badge, Button, Field, Icon, IconButton, Input, Menu, Modal, Tooltip, cx, toast, type MenuItem } from '@harness/ui';
 import { useData, client } from '../../state/data';
 import { navigate, openSession } from '../../state/app';
+import { NoticingDialog, PracticeBanner, acceptFinding, useNoticing } from './Noticing';
 
 const fail = (e: unknown) => toast((e as Error).message, { kind: 'error' });
 
-const ICON: Record<InboxItem['kind'], string> = { result: 'clock', message: 'bell', suggestion: 'sparkles', digest: 'inbox' };
-const KIND: Record<InboxItem['kind'], string> = { result: 'Scheduled run', message: 'Message', suggestion: 'Suggestion', digest: 'Digest' };
+const ICON: Record<InboxItem['kind'], string> = { result: 'clock', message: 'bell', suggestion: 'sparkles', digest: 'inbox', noticed: 'eye' };
+const KIND: Record<InboxItem['kind'], string> = { result: 'Scheduled run', message: 'Message', suggestion: 'Suggestion', digest: 'Digest', noticed: 'Noticed' };
+/** What noticed it (src/core/noticing.ts DETECTORS). */
+const DETECTOR: Record<string, string> = { away_failure: 'failed while you were away', routine_health: 'a schedule in trouble', stuck: 'the same failure again', repeated_task: 'a task you repeat' };
 /** Why an update did not interrupt (it waited here). */
 const HELD: Record<NonNullable<InboxItem['held']>, string> = { policy: 'kept quiet by its schedule', digest: 'for your digest', quiet: 'in your quiet hours', budget: 'past your daily most' };
 export const REASONS: Array<{ id: NonNullable<InboxItem['reason']>; label: string }> = [
@@ -33,7 +36,7 @@ const when = (t: number) => {
 /** Tomorrow at 9:00 on this computer's clock. */
 const tomorrowNine = () => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0); return d.getTime(); };
 
-function UpdateRow({ item }: { item: InboxItem }) {
+function UpdateRow({ item, onNoticing }: { item: InboxItem; onNoticing: () => void }) {
   const [busy, setBusy] = useState(false);
   const act = (action: 'read' | 'unread' | 'open' | 'snooze' | 'dismiss', o: { reason?: InboxItem['reason']; until?: number } = {}) => client.inbox.act(item.id, action, o).catch(fail);
   const open = () => { void act('open'); if (item.sessionId) openSession(item.sessionId); else if (item.scheduleId) navigate({ view: 'core.scheduled:scheduled' }); };
@@ -57,11 +60,14 @@ function UpdateRow({ item }: { item: InboxItem }) {
           <span className="font-medium text-hx-secondary">{KIND[item.kind]}</span>
           <span>{when(item.at)}</span>
           {item.held && <span data-update-held={item.held}>· {HELD[item.held]}</span>}
+          {item.detector && DETECTOR[item.detector] && <button type="button" className="hover:underline" onClick={onNoticing} data-update-detector={item.detector}>· {DETECTOR[item.detector]}</button>}
         </div>
         <button type="button" onClick={open} className="mt-0.5 block max-w-full truncate text-left text-[13.5px] font-medium hover:underline" data-update-title>{item.title}</button>
         {item.body && <p className="mt-0.5 line-clamp-3 whitespace-pre-line text-[13px] text-hx-secondary" data-update-body>{item.body}</p>}
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
           {item.kind === 'suggestion' && <Button size="sm" variant="primary" icon="play" disabled={busy} onClick={() => void start()} data-update-start>Start</Button>}
+          {item.kind === 'noticed' && item.draft && <Button size="sm" variant="primary" icon="calendar" onClick={() => void acceptFinding(item).catch(fail)} data-update-setup>Set it up…</Button>}
+          {item.kind === 'noticed' && item.action && <Button size="sm" variant="primary" disabled={busy} onClick={() => { setBusy(true); void acceptFinding(item).catch(fail).finally(() => setBusy(false)); }} data-update-accept>{item.action.label}</Button>}
           {(item.sessionId || item.scheduleId) && <Button size="sm" variant="ghost" icon="arrow-right" onClick={open} data-update-open>{item.sessionId ? 'Open conversation' : 'Open schedule'}</Button>}
           {item.status === 'new'
             ? <Button size="sm" variant="ghost" icon="check" onClick={() => void act('read')} data-update-read>Mark read</Button>
@@ -78,6 +84,8 @@ function UpdateRow({ item }: { item: InboxItem }) {
 export function InboxUpdates(): React.ReactElement | null {
   const items = useData((s) => s.inbox);
   const [limits, setLimits] = useState(false);
+  const [noticing, setNoticing] = useState(false);
+  const [overview] = useNoticing(!noticing);
   if (items === null) return null;
   const unread = items.filter((i) => i.status === 'new').length;
   return (
@@ -87,12 +95,15 @@ export function InboxUpdates(): React.ReactElement | null {
         {unread > 0 && <Badge tone="accent">{unread} new</Badge>}
         <span className="flex-1" />
         {unread > 0 && <Tooltip label="Mark every update read"><IconButton size="xs" icon="check" label="Mark all read" onClick={() => void client.inbox.readAll().catch(fail)} data-updates-read-all /></Tooltip>}
+        {overview && overview.enabled && <Tooltip label={`Noticing: ${overview.mode === 'on' ? 'on' : overview.mode === 'practice' ? 'practising quietly' : 'off'}`}><IconButton size="xs" icon={overview.mode === 'off' ? 'eye-off' : 'eye'} label="Noticing" onClick={() => setNoticing(true)} data-updates-noticing /></Tooltip>}
         <Tooltip label="When updates may interrupt you"><IconButton size="xs" icon="settings" label="Interruptions" onClick={() => setLimits(true)} data-updates-settings /></Tooltip>
       </div>
       <InterruptionsDialog open={limits} onClose={() => setLimits(false)} />
+      <NoticingDialog open={noticing} onClose={() => setNoticing(false)} />
+      <PracticeBanner o={overview} onReview={() => setNoticing(true)} />
       {!items.length
         ? <p className="text-[13px] text-hx-muted" data-updates-empty>No updates. Results of scheduled runs, what agents tell you, and work they offer while you are away arrive here.</p>
-        : <div className="space-y-2">{items.map((i) => <UpdateRow key={i.id} item={i} />)}</div>}
+        : <div className="space-y-2">{items.map((i) => <UpdateRow key={i.id} item={i} onNoticing={() => setNoticing(true)} />)}</div>}
     </section>
   );
 }

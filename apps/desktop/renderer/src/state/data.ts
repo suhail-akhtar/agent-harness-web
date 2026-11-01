@@ -41,6 +41,8 @@ export interface DataState {
   approvals: Approval[];
   /** Bumped when a schedule changed or one of its runs started or ended: schedule views read again. */
   scheduleTick: number;
+  /** Bumped when noticing changed (a finding written down in practice, a detector turned off): its views read again. */
+  noticingTick: number;
   /** The agent inbox's open items (results, messages, suggestions), newest first; null before the first read or on a server without one. */
   inbox: InboxItem[] | null;
   serverPlugins: PluginInfo[];
@@ -60,7 +62,7 @@ export interface DataState {
 }
 
 export const useData = create<DataState>((set, get) => ({
-  me: null, config: null, models: [], providers: null, sessions: [], sessionsLoaded: false, approvals: [], scheduleTick: 0, inbox: null, serverPlugins: [], devPlugins: [], pluginEpochs: {}, grants: {},
+  me: null, config: null, models: [], providers: null, sessions: [], sessionsLoaded: false, approvals: [], scheduleTick: 0, noticingTick: 0, inbox: null, serverPlugins: [], devPlugins: [], pluginEpochs: {}, grants: {},
   registry: buildRegistry([]),
   eventsMode: 'stopped',
   async refreshModels() {
@@ -235,6 +237,10 @@ export function applyGlobal(e: GlobalEvent): void {
       const open = (item.status === 'new' || item.status === 'read') && !(item.snoozedUntil && item.snoozedUntil > Date.now());
       const rest = d.inbox.filter((x) => x.id !== item.id);
       useData.setState({ inbox: open ? [item, ...rest].sort((a, b) => b.at - a.at) : rest });
+      return;
+    }
+    case 'noticing': {
+      useData.setState({ noticingTick: d.noticingTick + 1 });
       return;
     }
     case 'schedules': {

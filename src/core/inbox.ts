@@ -8,9 +8,10 @@ import { dayOf, type Held, type Interruptions } from './initiative.ts';
 // A scheduled or triggered run's outcome (result), what an agent told them (message), and work an agent
 // offered to do while nobody was watching (suggestion: a proposal they start or dismiss). Each item is
 // read, snoozed or dismissed with a reason; every response is written to a feedback log, so how useful
-// each kind of item is can be measured (which items get opened, which dismissed, and why).
+// each kind of item is can be measured (which items get opened, which dismissed, and why). What the
+// harness noticed by itself (src/core/noticing.ts) is its own kind, with the detector that noticed it.
 
-export type InboxKind = 'result' | 'message' | 'suggestion' | 'digest';
+export type InboxKind = 'result' | 'message' | 'suggestion' | 'digest' | 'noticed';
 export type DismissReason = 'not_useful' | 'wrong' | 'bad_timing' | 'other';
 export const DISMISS_REASONS: DismissReason[] = ['not_useful', 'wrong', 'bad_timing', 'other'];
 
@@ -38,12 +39,25 @@ export interface InboxItem {
   /** It interrupted the person (a toast, a system notification); else why it waited (src/core/initiative.ts). */
   alert?: boolean;
   held?: Held;
+  /** Noticed by the harness: which detector, the finding's fingerprint (for muting and cooldowns), and its project folder. */
+  detector?: string;
+  fingerprint?: string;
+  project?: string;
+  /** Shown in its conversation (a quiet line by the message box) as well as here. */
+  inline?: boolean;
+  /** A schedule it offers to set up, for the person to check and make (nothing is made without them). */
+  draft?: NoticedDraft;
+  /** A message it offers to send to its conversation, by the person's click. */
+  action?: { label: string; prompt: string };
 }
+
+/** A schedule a finding offers: the person's own words, at the time they usually asked. */
+export interface NoticedDraft { title: string; prompt: string; cron?: string; timeZone?: string; folder?: string; model?: string }
 
 export type InboxAction = 'read' | 'unread' | 'open' | 'snooze' | 'dismiss' | 'done';
 
 /** One response of the person's to an item (the feedback log). */
-export interface InboxFeedback { at: number; itemId: string; kind: InboxKind; action: InboxAction; owner?: string; scheduleId?: string; sessionId?: string; reason?: DismissReason; note?: string; latencyMs: number }
+export interface InboxFeedback { at: number; itemId: string; kind: InboxKind; action: InboxAction; owner?: string; scheduleId?: string; sessionId?: string; detector?: string; reason?: DismissReason; note?: string; latencyMs: number }
 
 const MAX_PER_OWNER = Number(process.env.HARNESS_INBOX_MAX ?? 500);
 
@@ -139,7 +153,7 @@ export class InboxStore {
       return { ...i };
     });
     if (!done) return undefined;
-    await this.feedback({ at: now, itemId: id, kind: done.kind, action, owner: done.owner, ...(done.scheduleId ? { scheduleId: done.scheduleId } : {}), ...(done.sessionId ? { sessionId: done.sessionId } : {}), ...(action === 'dismiss' && o.reason ? { reason: o.reason as DismissReason } : {}), ...(action === 'dismiss' && o.note ? { note: o.note.slice(0, 500) } : {}), latencyMs: Math.max(0, now - done.at) });
+    await this.feedback({ at: now, itemId: id, kind: done.kind, action, owner: done.owner, ...(done.scheduleId ? { scheduleId: done.scheduleId } : {}), ...(done.sessionId ? { sessionId: done.sessionId } : {}), ...(done.detector ? { detector: done.detector } : {}), ...(action === 'dismiss' && o.reason ? { reason: o.reason as DismissReason } : {}), ...(action === 'dismiss' && o.note ? { note: o.note.slice(0, 500) } : {}), latencyMs: Math.max(0, now - done.at) });
     this.tell('changed', done);
     return done;
   }
@@ -154,6 +168,11 @@ export class InboxStore {
   /** The item of a proposal (a suggestion), to follow what became of it. */
   byProposal(proposalId: string): InboxItem | undefined {
     return [...this.items.values()].find((i) => i.proposalId === proposalId);
+  }
+
+  /** What the harness noticed for the owner (by one detector, or all), newest first. */
+  noticed(owner: string | undefined, detector?: string): InboxItem[] {
+    return [...this.items.values()].filter((i) => i.owner === owner && i.kind === 'noticed' && (!detector || i.detector === detector)).sort((a, b) => b.at - a.at);
   }
 
   /** Updates that interrupted the owner today (on their clock). */

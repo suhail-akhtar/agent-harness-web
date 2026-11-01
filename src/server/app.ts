@@ -1523,6 +1523,16 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       await harness.inbox.sync(true);
       return send(res, 200, { read: await harness.inbox.readAll(me.id) });
     }
+    // ---- noticing: what the harness notices by itself (src/core/noticing.ts) ----
+    if (p === '/api/noticing' && method === 'GET') { await harness.inbox.sync(); return send(res, 200, await harness.noticer.overview(me.id)); }
+    if (p === '/api/noticing' && method === 'PUT') {
+      try { await harness.noticer.setSettings(me.id, await readJson(req)); } catch (e) { throw new HttpError(400, (e as Error).message); }
+      return send(res, 200, await harness.noticer.overview(me.id));
+    }
+    // Forget what was observed (the activity log of fingerprints); findings and choices stay.
+    if (p === '/api/noticing/clear' && method === 'POST') return send(res, 200, { cleared: await harness.noticer.clear(me.id) });
+    // Look at the person's schedules now (it does every hour, and when a run ends).
+    if (p === '/api/noticing/check' && method === 'POST') { await harness.noticer.checkRoutines(me.id); return send(res, 200, await harness.noticer.overview(me.id)); }
     const ib = /^\/api\/inbox\/(in_[a-f0-9]{12})$/.exec(p);
     if (ib && method === 'POST') {
       await harness.inbox.sync(true);
@@ -1531,7 +1541,23 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       if (!item || !ownsIt(me, item.owner)) throw new HttpError(404, 'No such inbox item.');
       const b = await readJson(req);
       const action = String(b.action ?? '');
-      if (!['read', 'unread', 'open', 'snooze', 'dismiss'].includes(action)) throw new HttpError(400, 'action is read, unread, open, snooze or dismiss');
+      if (!['read', 'unread', 'open', 'snooze', 'dismiss', 'accept'].includes(action)) throw new HttpError(400, 'action is read, unread, open, snooze, dismiss or accept');
+      // accept: what a finding offered, done by the person's click. Its message goes to its conversation as the
+      // person's (the text is the finding's own, kept here: nothing the client sends), or a schedule it offered was made.
+      if (action === 'accept') {
+        if (item.kind !== 'noticed' || (item.status !== 'new' && item.status !== 'read')) throw new HttpError(400, 'only an open finding is accepted');
+        if (item.action) {
+          const s = item.sessionId ? sessions.get(item.sessionId) : undefined;
+          if (!s || !ownsIt(me, s.meta.owner)) throw new HttpError(404, 'its conversation is gone');
+          limited(messageLimiter, me);
+          const over = o.spend?.over(s.meta.owner);
+          if (over) throw new HttpError(429, over);
+          if (s.status === 'idle') capped('running', s.meta.owner);
+          harness.noticer.expect(s.meta.id, item.action.prompt);
+          await s.send(item.action.prompt, { origin: 'person' });
+        }
+        return send(res, 200, await harness.inbox.act(item.id, 'done'));
+      }
       let done;
       try {
         done = await harness.inbox.act(item.id, action as 'read', { ...(typeof b.reason === 'string' ? { reason: b.reason } : {}), ...(typeof b.note === 'string' ? { note: b.note } : {}), ...(typeof b.until === 'number' ? { until: b.until } : {}) });

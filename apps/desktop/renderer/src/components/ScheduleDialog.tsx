@@ -39,7 +39,7 @@ const ASKS: Array<{ id: Asks; title: string; detail: string }> = [
 ];
 
 /** A row of choices, one selected (radio semantics). */
-function Choice<T extends string>({ value, options, onChange, label, name }: { value: T; options: Array<{ id: T; label: string }>; onChange: (v: T) => void; label: string; name: string }) {
+export function Choice<T extends string>({ value, options, onChange, label, name }: { value: T; options: Array<{ id: T; label: string }>; onChange: (v: T) => void; label: string; name: string }) {
   return (
     <div role="radiogroup" aria-label={label} className="flex flex-wrap gap-1.5" data-choice={name}>
       {options.map((o) => (
@@ -187,7 +187,7 @@ function initial(edit?: Schedule, draft?: ScheduleDraft) {
     when, timeZone: edit?.timeZone ?? draft?.timeZone ?? '', misfire: edit?.misfire ?? 'once',
     trigger: (edit?.watch ?? draft?.watch ? 'change' : 'time') as 'time' | 'change', watch: toDraft(edit?.watch ?? draft?.watch),
     maxCostUsd: edit?.maxCostUsd ? String(edit.maxCostUsd) : draft?.maxCostUsd ? String(draft.maxCostUsd) : '',
-    target: 'new', sessionId: '', model: '', folder: SCRATCH,
+    target: 'new', sessionId: '', model: draft?.model ?? '', folder: draft?.folder ?? SCRATCH,
     // A checker approves safe steps and the rest wait for the person: never asking leaves most tasks half done.
     asks: (edit?.newSession?.mode as Asks | undefined) ?? draft?.asks ?? 'auto',
     waitHours: edit?.askTimeoutMinutes ? String(edit.askTimeoutMinutes / 60) : '8',
@@ -211,7 +211,7 @@ export function ScheduleDialog({ open, edit, draft, onClose, onDone }: { open: b
   useEffect(() => { if (open && f.what === 'workflow') client.schedules.workflows(folderPath).then(setWorkflows).catch(() => setWorkflows([])); }, [open, f.what, folderPath]);
   const zones = useMemo(() => ZONES.map((z) => <option key={z} value={z} />), []);
   const set = (patch: Partial<typeof f>) => setF((x) => ({ ...x, ...patch }));
-  const model = f.model || (models.some((m) => m.id === defaultModel) ? defaultModel : recommendedModel(models)?.id ?? models[0]?.id ?? '');
+  const model = (f.model && models.some((m) => m.id === f.model) ? f.model : '') || (models.some((m) => m.id === defaultModel) ? defaultModel : recommendedModel(models)?.id ?? models[0]?.id ?? '');
   const trigger = !!edit?.trigger;
   const watching = f.trigger === 'change';
   const cron = watching ? undefined : toCron(f.when), once = watching ? undefined : toOnce(f.when);
@@ -315,7 +315,7 @@ export function ScheduleDialog({ open, edit, draft, onClose, onDone }: { open: b
             <div className="mt-3">
               {f.target === 'new' ? (
                 <div className="grid gap-x-3 md:grid-cols-2">
-                  <Field label="Folder" help="Its files and commands"><Select value={f.folder} onChange={(v) => set({ folder: v })} options={[{ value: SCRATCH, label: 'A scratch folder' }, ...projects.map((p) => ({ value: p.path, label: p.name }))]} data-schedule-folder /></Field>
+                  <Field label="Folder" help="Its files and commands"><Select value={f.folder} onChange={(v) => set({ folder: v })} options={[{ value: SCRATCH, label: 'A scratch folder' }, ...projects.map((p) => ({ value: p.path, label: p.name })), ...(f.folder !== SCRATCH && !projects.some((p) => p.path === f.folder) ? [{ value: f.folder, label: f.folder }] : [])]} data-schedule-folder /></Field>
                   <Field label="Model"><Select value={model} onChange={(v) => set({ model: v })} options={models.map((m) => ({ value: m.id, label: m.label ?? m.id }))} data-schedule-model /></Field>
                 </div>
               ) : (

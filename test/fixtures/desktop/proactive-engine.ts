@@ -8,6 +8,8 @@
 //   "offer"    -> offers work (start_session own_initiative: "Fix the flaky test"), then "Offered a fix."
 //   "routine"  -> sets up a schedule for the person (schedule tool: weekdays at 9, a new conversation each time), then says so
 //   "propose"  -> opens the New schedule dialog filled in (desktop_command core.scheduled:new), then says so
+//   "stuck"    -> runs a command that fails the same way twice (config.json is missing), then says so
+//   "away"     -> a step of work, then the model service fails (the turn ends on an error)
 //   anything else -> a short reply
 import path from 'node:path';
 import { createHarness } from '../../../src/kernel/harness.ts';
@@ -23,7 +25,8 @@ const ROOTS = (process.env.HARNESS_LOCAL_ROOTS ?? '').split(path.delimiter).filt
 const PLUGINS = (process.env.HARNESS_PLUGINS ?? '').split(path.delimiter).filter(Boolean);
 
 type Call = { name: string; input: Record<string, unknown> };
-type Step = { text?: string; calls?: Call[]; costly?: boolean };
+type Step = { text?: string; calls?: Call[]; costly?: boolean; fail?: string };
+const FAILING = { name: 'bash', input: { command: `node -e "console.error('Error: config.json is missing'); process.exit(3)"` } };
 
 const textOf = (b: Block[]) => b.filter((x) => x.type === 'text').map((x) => (x as { text: string }).text).join('\n');
 const stripped = (t: string) => t.replace(/<(system-reminder|environment|skills|instructions|memory)>[\s\S]*?<\/\1>/g, '').trim();
@@ -50,6 +53,15 @@ export const SCRIPTS: Record<string, Step[]> = {
     { calls: [{ name: 'start_session', input: { title: 'Fix the flaky test', prompt: 'Fix the flaky test in parser.test.ts.', context: 'fresh', initiation: 'own_initiative', share_workspace: true } }] },
     { text: 'Offered a fix for the flaky test.' },
   ],
+  stuck: [
+    { calls: [FAILING] },
+    { calls: [FAILING] },
+    { text: 'The app does not start: config.json is missing.' },
+  ],
+  away: [
+    { calls: [{ name: 'glob', input: { pattern: '*' } }] },
+    { fail: 'the model service is down' },
+  ],
   costly: [
     { calls: [{ name: 'glob', input: { pattern: '*' } }], costly: true },
     { calls: [{ name: 'glob', input: { pattern: '*' } }], costly: true },
@@ -68,6 +80,7 @@ class ScriptedProvider implements Provider {
     const key = Object.keys(SCRIPTS).find((k) => new RegExp(`\\b${k}\\b`, 'i').test(prompt));
     const step = msgs.slice(at + 1).filter((m: Message) => m.role === 'assistant').length;
     const s = key ? SCRIPTS[key]![step] : undefined;
+    if (s?.fail) throw new Error(s.fail);
     const content: Block[] = [];
     if (!s) content.push({ type: 'text', text: key ? 'Done.' : 'Hello from the proactive engine.' });
     else {

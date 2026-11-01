@@ -41,6 +41,8 @@ export interface WatchState {
   pending?: { firstAt: number; lastAt: number; changes: string[] };
   /** Why the last check could not be made. */
   error?: string;
+  /** Since when its checks have failed (the first of the failures in a row). */
+  errorSince?: number;
 }
 
 export class WatchError extends Error {}

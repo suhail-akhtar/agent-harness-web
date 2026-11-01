@@ -21,6 +21,9 @@ export interface ScheduleDraft {
   maxCostUsd?: number;
   /** It runs when this changes instead of at a time. */
   watch?: WatchSpec;
+  /** Its new conversations' folder and model (what something it noticed was about). */
+  folder?: string;
+  model?: string;
 }
 
 export interface Template { id: string; title: string; icon: string; blurb: string; draft: ScheduleDraft }

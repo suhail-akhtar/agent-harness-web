@@ -176,6 +176,11 @@ export class ClientPresence {
     };
   }
 
+  /** Whether the session's owner has it open now (a client listening to this session's own stream, not just the app being open). */
+  watching(sessionId: string, owner: string | undefined): boolean {
+    return CLIENT_KINDS.some((kind) => (this.session.get(ClientPresence.key(sessionId, kind, owner)) ?? 0) > 0);
+  }
+
   /** Whether a client of this kind, signed in as the session's owner, is listening to it now. */
   attached(sessionId: string, kind: ClientKind, owner: string | undefined): boolean {
     return (this.session.get(ClientPresence.key(sessionId, kind, owner)) ?? 0) > 0 || (this.global.get(ClientPresence.key(kind, owner)) ?? 0) > 0;

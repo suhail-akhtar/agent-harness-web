@@ -80,6 +80,30 @@
   let a checker approve their steps (the rest wait in the Inbox) instead of refusing everything; the schedule tool says
   that `asks` is about approvals, not notifications (the model had read "only tell me if it matters" as "never ask").
 - While a dialog is open, toasts sit under its backdrop (seen, dimmed), so they never cover its buttons.
+- **Noticing: what the harness notices by itself** (proactive work, phase 5; design and evidence in
+  docs/proactive/NOTICING.md): without anything set up, four fixed detectors notice what needs the person. A long
+  conversation that stopped on an error or a limit while nobody had it open (to the Inbox, as a warning). A schedule
+  that keeps failing, being skipped or hitting its spend limit, or a watch that cannot check. The same command failing
+  the same way 3 times over more than one turn, with no edits in between (one quiet line by that conversation's message
+  box; "Find the cause" sends its own message, as the person's). A task asked for on 3 days in 14 (a schedule offered
+  in the person's own words, at their usual time, in that folder; "Set it up…" opens the schedule dialog filled in).
+  - No model watches: every session's events are counted into `activity.jsonl` as fingerprints (a command's and an
+    error's hash, whether it passed, a prompt's word hashes), never their text, kept 14 days. Scheduled, triggered,
+    plugin and sub-agent work is not observed.
+  - Gates before anything is shown: muted by a dismissal, a 72-hour cooldown, already in the Inbox, held back to
+    measure (10%, `HARNESS_NOTICE_HOLDOUT`), at most 3 a day (more are dropped, not queued) and at most 1 interruption a
+    day; findings are their own Inbox kind (`noticed`), in the digest unless a warning.
+  - It starts in practice: findings are written down, not shown; after 7 days (`HARNESS_NOTICE_PRACTICE_DAYS`) the
+    Inbox offers a review of what it would have said. Off, practice or on, and each detector on or off, in the Noticing
+    panel (the eye in the Inbox's Updates), with each detector's measures and what it observed (and Forget).
+  - Dismissals only make it quieter ("wrong" mutes that finding for good, "not useful" that detector in that folder for
+    30 days, "bad timing" a day); a detector whose findings are mostly unwanted moves to the digest, then turns itself
+    off and says so; only the person turns it on again. The feedback log says which detector.
+  - `GET/PUT /api/noticing`, `POST /api/noticing/clear`, `POST /api/noticing/check`, `POST /api/inbox/:id` with
+    `accept`, a `noticing` event topic.
+- **"The same error" is the error, not the bash tool's lines**: a failure's gist skipped nothing, so every failed command
+  with output on stderr read as `exit code: # stderr:`, and the progress review counted different failures as "the same
+  error N times" (a signal towards stopping or restarting a run). It now reads the error past those lines.
 
 - **run_script works in the desktop app**: it started its helper with the app's own executable, which opened a
   second app (refused by the single-instance lock, exit 0) instead of running Node, so every call failed with

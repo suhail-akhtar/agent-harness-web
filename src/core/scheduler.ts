@@ -606,7 +606,7 @@ export class Scheduler {
     let probe: Probe;
     try { probe = await this.probe!(claimed); } catch (e) {
       const msg = (e as Error).message.slice(0, 300);
-      const done = await this.mutate(() => { const s = this.items.get(id); if (s) s.watchState = { ...(s.watchState ?? {}), checkedAt: now, error: msg }; return s; });
+      const done = await this.mutate(() => { const s = this.items.get(id); if (s) s.watchState = { ...(s.watchState ?? {}), checkedAt: now, error: msg, errorSince: s.watchState?.error ? s.watchState.errorSince ?? now : now }; return s; });
       this.tell('changed', done);
       return { changed: false, note: `the check failed: ${msg}`, state: done?.watchState };
     }

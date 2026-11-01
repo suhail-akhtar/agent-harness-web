@@ -24,6 +24,7 @@ import { type Schedule, Scheduler } from '../core/scheduler.ts';
 import { NOTHING_TO_REPORT } from '../core/schedule-runs.ts';
 import { followRun, followWorkflow } from '../core/schedule-track.ts';
 import { InboxStore } from '../core/inbox.ts';
+import { Noticer } from '../core/noticing.ts';
 import { decideAlert, digestBody, digestDue, inQuietHours, type NotifyPolicy } from '../core/initiative.ts';
 import { describeWatch, probeWatch, TRIAGE_SYSTEM } from '../core/watch.ts';
 import { assertPublicUrl } from '../tools/web.ts';
@@ -175,6 +176,8 @@ export interface Harness {
   scheduler?: Scheduler;
   /** The agent inbox: results of unattended runs, what agents told the person, suggestions; their responses. */
   inbox: InboxStore;
+  /** What the harness notices by itself from the person's work (src/core/noticing.ts). */
+  noticer: Noticer;
   /** Makes the digests that are due (a timer does, every minute; tests pass the time). */
   makeDigests(now?: number): Promise<void>;
   /** The key vault (absent when turned off). */
@@ -979,7 +982,14 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   late.vault = vault;
   // The agent inbox: what work done without the person watching left for them.
   const inbox = await new InboxStore(opts.dataDir).load();
-  inbox.onChange = (type, item) => events.inboxEvent(type, item);
+  // Noticing: what the harness notices by itself from the person's work, without a schedule (src/core/noticing.ts).
+  const noticer = await new Noticer({
+    dataDir: opts.dataDir, inbox, scheduler, log,
+    kindOf: (name) => BUILTIN_TOOLS.find((t) => t.spec.name === name)?.kind ?? registry.tools.get(name)?.kind,
+    watching: (sid, owner) => clients.watching(sid, owner),
+    onChange: (owner) => events.noticingEvent(owner),
+  }).load();
+  inbox.onChange = (type, item) => { events.inboxEvent(type, item); noticer.onInbox(type, item); };
   /**
    * An update for the person: into their inbox, interrupting them or not by its schedule's policy, their quiet
    * hours and how often they were interrupted today (src/core/initiative.ts). A schedule that keeps its results to
@@ -1054,6 +1064,7 @@ ${neutralizeTags(change).slice(0, 20_000)}
   }
   if (scheduler) scheduler.onEvent = (type, s, run) => {
     events.scheduleEvent(type, s, run);
+    if (type === 'ended') void noticer.checkRoutineOf(s.id);
     // A run that ended with something for the person is a result in their inbox: not one that found nothing,
     // and not a completed one that already reached them (what it told them, or work it offered, is there).
     const r = run?.record;
@@ -1105,7 +1116,7 @@ ${neutralizeTags(change).slice(0, 20_000)}
   }
   const sessions = new SessionManager({
     dataDir: opts.dataDir, companions, registry, mcp, onSpan: otel ? (sid, span) => otel.record(sid, span) : undefined,
-    onEvent: (s, e) => { bridge.dispatch(s, e); events.fromSession(s, e); inboxFromSession(s, e); }, onLifecycle: (type, s) => events.sessionChanged(type, s), changes: bridge.changes,
+    onEvent: (s, e) => { bridge.dispatch(s, e); events.fromSession(s, e); inboxFromSession(s, e); noticer.onEvent(s, e); }, onLifecycle: (type, s) => events.sessionChanged(type, s), changes: bridge.changes,
     memory: { root: path.resolve(opts.memoryDir ?? path.join(opts.dataDir, 'memory')), mode: memoryMode }, search, ...(opts.denyUrls?.length ? { denyUrls: opts.denyUrls } : {}), spend: opts.spend,
     publish: opts.publish === null ? undefined : opts.publish ?? publishFromEnv(),
     sandboxCredentials, scheduler, vault, leases,
@@ -1117,6 +1128,7 @@ ${neutralizeTags(change).slice(0, 20_000)}
   // Runs a stopped server left open: interrupted, unless their conversation is still at work (here, or on another server).
   await scheduler?.closeInterrupted(async (sid) => !!sid && (sessions.statusOf(sid) === 'running' || !!(await sessions.heldElsewhere(sid)))).catch((e: Error) => log(`schedules: ${e.message}`));
   scheduler?.start();
+  noticer.start();
   if (opts.backgroundWork ?? process.env.HARNESS_DATA_SCHEDULE !== 'off') data.start(async (home, doc, sub) => {
     const { exportDoc } = await import('../data/export.ts');
     const r = await exportDoc(data, home, doc, sub.format, {});
@@ -1157,7 +1169,7 @@ ${neutralizeTags(change).slice(0, 20_000)}
   }
 
   return {
-    registry, sessions, companions, mcp, scheduler, inbox, vault, dataDir: opts.dataDir, search: search?.backend, bridge, plugins, events, providerKeys, clients, data,
+    registry, sessions, companions, mcp, scheduler, inbox, noticer, vault, dataDir: opts.dataDir, search: search?.backend, bridge, plugins, events, providerKeys, clients, data,
     ...(leases ? { cluster: { id: leases.owner, url: leases.url, leases, ...(clusterCfg?.secret ? { secret: clusterCfg.secret } : {}), ...(clusterCfg?.peers ? { peers: clusterCfg.peers } : {}) } } : {}),
     mcpb: {
       list: () => installedMcpb(mcpbRoot),
@@ -1215,6 +1227,7 @@ ${neutralizeTags(change).slice(0, 20_000)}
     makeDigests,
     async close() {
       clearInterval(digestTimer);
+      noticer.close();
       // Runs stopped by the shutdown are written down as interrupted (not as stopped by the person).
       scheduler?.stop({ closing: true });
       await data.stop();

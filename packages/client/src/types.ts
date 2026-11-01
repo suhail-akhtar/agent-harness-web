@@ -161,7 +161,7 @@ export interface HistoryPage { total?: number; after?: number; messages: Message
 export interface Approval { sessionId: string; requestId: string; kind: PendingRequest['kind']; /** The session's title. */ title?: string; summary?: string; tool?: string; at: number; request?: PendingRequest }
 
 /** The global stream (GET /api/events): `data:{seq,topic,payload}`. */
-export type EventTopic = 'sessions' | 'session' | 'approvals' | 'schedules' | 'inbox' | 'plugins' | 'notices' | 'proposals' | 'linked' | 'artifacts' | 'chapters' | 'client';
+export type EventTopic = 'sessions' | 'session' | 'approvals' | 'schedules' | 'inbox' | 'plugins' | 'notices' | 'proposals' | 'linked' | 'artifacts' | 'chapters' | 'client' | 'noticing';
 export interface GlobalEvent { seq: number; topic: EventTopic | string; payload: unknown }
 
 export interface Capabilities {
@@ -266,11 +266,31 @@ export interface Interruptions { quietFrom?: string; quietTo?: string; timeZone?
 export interface WatchSpec { kind: 'command' | 'files' | 'git' | 'url'; command?: string; paths?: string[]; branch?: string; url?: string; match?: string; everyMinutes: number; settleSeconds?: number; onlyWhen?: string }
 /** What unattended work left for the person (GET /api/inbox). */
 export interface InboxItem {
-  id: string; kind: 'result' | 'message' | 'suggestion' | 'digest'; title: string; body: string; at: number; level: 'info' | 'warn' | 'error';
+  id: string; kind: 'result' | 'message' | 'suggestion' | 'digest' | 'noticed'; title: string; body: string; at: number; level: 'info' | 'warn' | 'error';
   /** It interrupted the person; else why it waited (its schedule's policy, the digest, quiet hours, the day's most). */
   alert?: boolean; held?: 'policy' | 'digest' | 'quiet' | 'budget';
   status: 'new' | 'read' | 'dismissed' | 'done'; sessionId?: string; scheduleId?: string; runId?: string; proposalId?: string;
   readAt?: number; snoozedUntil?: number; resolvedAt?: number; reason?: 'not_useful' | 'wrong' | 'bad_timing' | 'other'; note?: string;
+  /** Noticed by the harness itself: which detector; shown in its conversation too (inline); a schedule it offers (draft); a message it offers to send (action). */
+  detector?: NoticeDetector; fingerprint?: string; project?: string; inline?: boolean;
+  draft?: NoticedDraft; action?: { label: string; prompt: string };
+}
+/** A schedule a finding offers: the person's own words, at the time they usually asked. */
+export interface NoticedDraft { title: string; prompt: string; cron?: string; timeZone?: string; folder?: string; model?: string }
+export type NoticeDetector = 'away_failure' | 'routine_health' | 'stuck' | 'repeated_task';
+/** What the harness notices by itself, its detectors and what it observed (GET /api/noticing). */
+export interface NoticingOverview {
+  enabled: boolean;
+  /** off: nothing observed; practice: findings written down, not shown; on: shown. */
+  mode: 'off' | 'practice' | 'on';
+  practiceSince?: number; practiceDays: number;
+  /** Practice ran its days: time to look at what it would have said. */
+  ready: boolean;
+  detectors: Array<{ id: NoticeDetector; title: string; blurb: string; enabled: boolean; state: 'on' | 'digest' | 'off'; why?: string; stats: { shown: number; acted: number; notUseful: number; badTiming: number; ignored: number; holdout: number; selfFound: number; practice: number } }>;
+  practice: Array<{ at: number; detector: NoticeDetector; title: string; body: string; level: 'info' | 'warn' | 'error'; sessionId?: string; scheduleId?: string; draft?: NoticedDraft }>;
+  observed: { commands: number; failed: number; edits: number; turns: number; typed: number; projects: number; since?: number; days: number };
+  today: { shown: number; alerts: number };
+  limits: { perDay: number; alertsPerDay: number; keepDays: number };
 }
 /** One run of a schedule or trigger (GET /api/schedules/:id/runs, /api/schedule-runs). */
 export interface ScheduleRun {

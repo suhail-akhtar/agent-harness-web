@@ -23,6 +23,7 @@ import { recommendedModel } from '../../state/recommend';
 import { CostByModel } from '../../components/CostByModel';
 import { ContextMeter } from '../../components/ContextPanel';
 import { ActivityLine, TaskCard } from './Progress';
+import { NoticedStrip } from '../core.inbox/Noticing';
 
 const EFFORT_RANK: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 /** Think on: at least "high", when the model offers it. */
@@ -215,6 +216,7 @@ export function Session({ params }: { params: Record<string, string> }): React.R
       )}
       {todos.length > 0 && (running || todos.some((t) => t.status !== 'completed')) && <TaskCard todos={todos} />}
       {running && !s.pending.length && <ActivityLine items={s.live.items} todos={todos} style={workingPref} />}
+      <NoticedStrip sessionId={id} running={running} />
       <Composer draftKey={`s:${id}`} value={value} onChange={(v) => void patch(v)} onSend={send} running={running} onStop={stop} sessionId={id} queued={queue} onUnqueue={(i) => setQueue((q) => q.filter((_, j) => j !== i))} autoFocus />
     </div>
   );

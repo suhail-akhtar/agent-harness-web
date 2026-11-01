@@ -10,7 +10,7 @@ import type { HarnessEvent } from '../core/types.ts';
 // last events for replay (Last-Event-ID), numbered from 1 each time the server starts.
 // With several servers on one data folder, each streams what happens on it.
 
-export const EVENT_TOPICS = ['sessions', 'session', 'approvals', 'schedules', 'inbox', 'plugins', 'notices', 'proposals', 'linked', 'artifacts', 'chapters', 'client', 'data'] as const;
+export const EVENT_TOPICS = ['sessions', 'session', 'approvals', 'schedules', 'inbox', 'plugins', 'notices', 'proposals', 'linked', 'artifacts', 'chapters', 'client', 'data', 'noticing'] as const;
 export type EventTopic = typeof EVENT_TOPICS[number];
 
 /** Who may see an event: everyone signed in, or whoever may use what `owner` owns (administrators see all of it). */
@@ -114,6 +114,11 @@ export class EventHub {
   /** An inbox item was added or changed (read, snoozed, dismissed): its owner's windows follow. */
   inboxEvent(type: 'added' | 'changed', item: InboxItem): void {
     this.publish('inbox', { type, item }, { owner: item.owner });
+  }
+
+  /** Noticing changed for its owner (a finding written down in practice, a detector turned off): its views read again. */
+  noticingEvent(owner: string | undefined): void {
+    this.publish('noticing', { type: 'changed' }, { owner });
   }
 
   /** When a waiting request was asked (now, for one this server did not see asked). */

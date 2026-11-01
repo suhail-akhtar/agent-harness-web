@@ -65,3 +65,15 @@ them what a run found when it is routine; end with `[nothing to report]` when no
 - A cron may have a time zone; without one it is the app's. A run missed while the app was closed
   runs once when it is back, unless the schedule says to skip missed runs.
 - A schedule may have a spend limit per run; the run stops there and says so.
+
+## Noticing (what the harness notices by itself)
+
+Without anything set up, the harness notices a few things in the person's work and leaves them in the
+Inbox as "Noticed" updates: a long conversation that stopped on an error or a limit while nobody had it
+open, a schedule that keeps failing (or being skipped, or hitting its spend limit) or a watch that cannot
+check, the same command failing the same way three times (a line by that conversation's message box), and
+a task they asked for on three different days (it offers a schedule in their own words). No model watches:
+it counts fingerprints, never the text. It starts in practice (written down, not shown) until the person
+turns it on; they choose off, practice or on, and each detector, in the Noticing panel (the eye in Inbox >
+Updates). If they ask why they saw something, or how to make it quieter, point them there: dismissing a
+finding as "not useful" mutes that kind in that folder, "wrong" mutes that finding for good.

@@ -110,14 +110,22 @@ function stable(v: unknown): string {
   return JSON.stringify(v);
 }
 
-/** A failure's gist: numbers, paths' line numbers, ids and quotes flattened, so "the same error" matches. */
+/** The bash tool's own lines around a command's output (src/tools/exec.ts): not part of the error. */
+const WRAPPER = /^(exit code: \S+|stdout:|stderr:|\(no output\)|Timed out after .*\(the command was killed\)\.)$/i;
+
+/**
+ * A failure's gist: its first two lines (past the bash tool's "exit code: N" and "stderr:"), with numbers,
+ * paths' line numbers, ids and quotes flattened, so "the same error" matches and different errors do not.
+ */
 export function normalizeError(text: string): string {
-  const first = text.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 2).join(' ');
+  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+  const own = lines.filter((l) => !WRAPPER.test(l));
+  const first = (own.length ? own : lines).slice(0, 2).join(' ');
   return squash(first.replace(/0x[0-9a-f]+/gi, '#').replace(/\d+/g, '#').replace(/(["'`]).{0,80}?\1/g, '"…"')).slice(0, 160);
 }
 
 /** A command as run, without the output trimming that does not change what it runs. */
-const normCmd = (c: string) => squash(c.replace(/\s*\|\s*(head|tail|grep|less|more)\b[^|;&]*/g, '').replace(/\s*2>&1/g, '')).slice(0, 200);
+export const normCmd = (c: string) => squash(c.replace(/\s*\|\s*(head|tail|grep|less|more)\b[^|;&]*/g, '').replace(/\s*2>&1/g, '')).slice(0, 200);
 
 /** The steps of one turn: calls, results, files and checks, turned into signals. */
 export class ProgressTracker {
