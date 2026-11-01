@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **Scheduled work you can see** (proactive work, phases 0 and 1; plan in docs/proactive/PLAN.md):
+  - The desktop's New schedule form made no schedule (it sent no target): it now says where each run happens,
+    a new conversation each time (its model and folder) or the same one.
+  - Scheduled, triggered and plugin-started runs respect the daily spend limit (they checked concurrency only).
+  - `notify_user` reaches the person: a toast and a system notification with the conversation's title (it stayed
+    inside its conversation).
+  - Every run is written down: how it ended (completed, failed, stopped, skipped, interrupted), when, how long, its
+    cost, a line of what it said, its tool calls and actions, whether it told the person, whether it found nothing
+    (`[nothing to report]`), and its conversation. `GET /api/schedules/:id/runs`, `GET /api/schedule-runs`; the
+    `schedules` events say when a run starts and ends.
+  - A Scheduled page (every schedule and trigger, next run, last result, each run's record; New, Edit, Run now,
+    on/off, Delete), the same list in Settings > Schedules, and the latest runs on Activity. A finished run says
+    what it found in a toast; one that found nothing stays quiet.
+  - Schedules: a time zone for the cron (daylight saving: a skipped time does not run, a repeated one runs once),
+    a missed run runs once or is skipped (`misfire`), at most one run every 5 minutes
+    (`HARNESS_SCHEDULE_MIN_MINUTES`), a spend limit per run (`maxCostUsd`), and `PATCH /api/schedules/:id`. A run
+    cut off by a shutdown is interrupted, not "stopped by the person". A trigger's hash no longer leaves the server.
+  - The app says schedules stop when the window closes (unless it keeps running in the tray) and when the computer
+    restarts (unless it starts at login), with a button for each.
+
 - **run_script works in the desktop app**: it started its helper with the app's own executable, which opened a
   second app (refused by the single-instance lock, exit 0) instead of running Node, so every call failed with
   "the script process exited (0)". The same was true of plugin review's type check, .mcpb Node servers and the

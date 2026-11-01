@@ -56,7 +56,8 @@ export function registerIpc(ctx: DesktopContext): { grants: JsonFile<Grants> } {
     ...(process.env.HARNESS_DESKTOP_TEST === '1' ? { test: true } : {}),
   }));
   h('app:openDataFolder', () => shell.openPath(ctx.paths.dataDir));
-  h('app:setLoginItem', (on: boolean) => { try { app.setLoginItemSettings({ openAtLogin: !!on }); } catch { /* unsupported */ } return app.getLoginItemSettings().openAtLogin; });
+  // Under the end-to-end tests (HARNESS_DESKTOP_TEST) the computer's login items are never touched.
+  h('app:setLoginItem', (on: boolean) => { if (process.env.HARNESS_DESKTOP_TEST === '1') return !!on; try { app.setLoginItemSettings({ openAtLogin: !!on }); } catch { /* unsupported */ } return app.getLoginItemSettings().openAtLogin; });
   let sleepBlock: number | null = null;
   h('app:busy', (busy: boolean) => {
     const want = !!busy && ctx.prefs.get().preventSleep;

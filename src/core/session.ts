@@ -628,6 +628,10 @@ export class Session {
 
   // ---------- persistence ----------
 
+  /** A limit on what the next turn may cost (a scheduled run's maxCostUsd): set before it starts, cleared after. */
+  private runCap?: { usd: number; from: number };
+  capNextTurn(usd: number | undefined): void { this.runCap = usd ? { usd, from: this.meta.cost } : undefined; }
+
   /** Outside content is about to enter (a trigger's payload): the session counts as having read untrusted content. */
   markUntrusted(): void {
     this.meta.tainted = true;
@@ -1560,7 +1564,7 @@ export class Session {
         this.scheduleSave();
       },
       // 0 is "no limit" (the desktop's No limit, or HARNESS_MAX_COST_USD=0 on a server).
-      overBudget: () => ((this.settings?.maxCostUsd ?? 0) > 0 && this.meta.cost >= this.settings!.maxCostUsd ? `Stopped: this conversation reached its spend limit of $${this.settings!.maxCostUsd.toFixed(2)}. Raise it in Settings (Application > Spend limit per conversation, or HARNESS_MAX_COST_USD on a server), then say "continue".` : undefined) ?? this.deps.spend?.over(this.meta.owner),
+      overBudget: () => (this.runCap && this.meta.cost - this.runCap.from >= this.runCap.usd ? `Stopped: this scheduled run reached its spend limit of $${this.runCap.usd.toFixed(2)} ($${(this.meta.cost - this.runCap.from).toFixed(4)} spent).` : undefined) ?? ((this.settings?.maxCostUsd ?? 0) > 0 && this.meta.cost >= this.settings!.maxCostUsd ? `Stopped: this conversation reached its spend limit of $${this.settings!.maxCostUsd.toFixed(2)}. Raise it in Settings (Application > Spend limit per conversation, or HARNESS_MAX_COST_USD on a server), then say "continue".` : undefined) ?? this.deps.spend?.over(this.meta.owner),
       getMode: () => this.meta.mode,
       rules: () => this.rules(),
       requestPermission: (tool, input, summary, suggestion, agent) => this.askPermission(tool, input, summary, suggestion, agent),

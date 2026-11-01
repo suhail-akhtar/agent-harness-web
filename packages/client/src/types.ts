@@ -230,7 +230,27 @@ export interface GitStatus { repo: boolean; branch?: string; upstream?: string; 
 export interface GitLogEntry { hash: string; subject: string; author?: string; email?: string; at?: number }
 
 export interface VaultEntry { name: string; kind?: string; scope?: string; description?: string; updatedAt?: number; createdAt?: number; backend?: string; rotateBy?: number; allow?: string[] }
-export interface Schedule { id: string; title?: string; prompt: string; cron?: string; at?: number; enabled: boolean; nextRun?: number | null; lastRun?: number | null; lastResult?: string; runs?: number; sessionId?: string; newSession?: { model: string; runtime: { kind: string; path?: string; network?: string }; mode?: string }; trigger?: boolean; triggerHash?: string }
+/** A schedule or trigger (GET /api/schedules). A trigger's secret URL is shown once, when it is made. */
+export interface Schedule {
+  id: string; title?: string; prompt: string; cron?: string; at?: number; enabled: boolean;
+  nextRun?: number | null; lastRun?: number | null; lastResult?: string; runs?: number; createdAt?: number;
+  sessionId?: string; newSession?: { model: string; runtime: { kind: string; path?: string; network?: string }; mode?: string };
+  trigger?: boolean; url?: string;
+  /** The IANA time zone its cron is read in (absent: the server's). */
+  timeZone?: string;
+  /** A run missed while the server was down: once (run it when back, the default) or skip. */
+  misfire?: 'once' | 'skip';
+  /** The most one run may cost, in USD. */
+  maxCostUsd?: number;
+}
+/** One run of a schedule or trigger (GET /api/schedules/:id/runs, /api/schedule-runs). */
+export interface ScheduleRun {
+  id: string; scheduleId: string; title: string; by: 'schedule' | 'trigger' | 'manual';
+  startedAt: number; endedAt?: number;
+  status: 'running' | 'completed' | 'failed' | 'stopped' | 'skipped' | 'interrupted';
+  reason?: string; sessionId?: string; costUsd?: number; summary?: string;
+  tools?: number; actions?: number; notified?: boolean; noOp?: boolean;
+}
 export interface McpBundle { name: string; version: string; description?: string; installedAt?: number }
 export interface EffectiveSetting { key: string; value: unknown; source: 'default' | 'operator' | 'account' | 'project' | string; scope?: string; locked?: boolean; max?: number; layers?: Array<{ source: string; value: unknown }> }
 

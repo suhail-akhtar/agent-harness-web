@@ -1,5 +1,6 @@
 import type { Session } from '../core/session.ts';
 import type { Schedule } from '../core/scheduler.ts';
+import type { ScheduleRun } from '../core/schedule-runs.ts';
 import type { HarnessEvent } from '../core/types.ts';
 
 // One stream for everything a person may see across the server (GET /api/events):
@@ -103,9 +104,9 @@ export class EventHub {
     this.publish('sessions', { type, session: { ...s.meta, status: s.status } }, { owner: s.meta.owner });
   }
 
-  scheduleEvent(type: 'fired' | 'changed', s: Schedule, run?: { sessionId?: string; result: string }): void {
-    // Never the trigger's hash or the prompt's full text: what a list needs.
-    this.publish('schedules', { type, id: s.id, title: s.title, enabled: s.enabled, ...(s.cron ? { cron: s.cron } : {}), ...(s.nextRun ? { nextRun: s.nextRun } : {}), ...(s.lastRun ? { lastRun: s.lastRun } : {}), ...(s.lastResult ? { lastResult: s.lastResult } : {}), ...(s.triggerHash ? { trigger: true } : {}), ...(run?.sessionId ?? s.sessionId ? { sessionId: run?.sessionId ?? s.sessionId } : {}), ...(run ? { result: run.result } : {}) }, { owner: s.owner });
+  scheduleEvent(type: 'fired' | 'changed' | 'ended', s: Schedule, run?: { sessionId?: string; result: string; record?: ScheduleRun }): void {
+    // Never the trigger's hash or the prompt's full text: what a list needs. A run's record when it starts and ends.
+    this.publish('schedules', { type, id: s.id, title: s.title, enabled: s.enabled, ...(s.cron ? { cron: s.cron } : {}), ...(s.nextRun ? { nextRun: s.nextRun } : {}), ...(s.lastRun ? { lastRun: s.lastRun } : {}), ...(s.lastResult ? { lastResult: s.lastResult } : {}), ...(s.triggerHash ? { trigger: true } : {}), ...(run?.sessionId ?? s.sessionId ? { sessionId: run?.sessionId ?? s.sessionId } : {}), ...(run ? { result: run.result } : {}), ...(run?.record ? { run: run.record } : {}) }, { owner: s.owner });
   }
 
   /** When a waiting request was asked (now, for one this server did not see asked). */

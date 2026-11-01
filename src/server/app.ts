@@ -5,6 +5,7 @@ import https from 'node:https';
 import path from 'node:path';
 import type { Effort } from '../core/models.ts';
 import { type Session, SessionElsewhereError, type SessionMeta } from '../core/session.ts';
+import type { Schedule } from '../core/scheduler.ts';
 import { type LeaseRecord, leaseUrlSig } from '../util/lease.ts';
 import type { PermissionMode } from '../core/types.ts';
 import type { Harness } from '../kernel/harness.ts';
@@ -1239,12 +1240,17 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     }
 
     // ---- schedules: prompts that run later, each person's own ----
-    if (p === '/api/schedules' || p.startsWith('/api/schedules/')) {
+    if (p === '/api/schedules' || p.startsWith('/api/schedules/') || p === '/api/schedule-runs') {
       const scheduler = harness.scheduler;
       if (!scheduler) throw new HttpError(404, 'Scheduling is turned off on this server.');
       await Promise.all([scheduler.sync(), sessions.sync()]);
       const mine = (s: { owner?: string }) => mayUse(me, s.owner);
-      if (p === '/api/schedules' && method === 'GET') return send(res, 200, scheduler.list().filter(mine));
+      // A trigger's hash stays on the server: a list says it is a trigger.
+      const view = (s: Schedule) => { const { triggerHash, ...rest } = s; return { ...rest, ...(triggerHash ? { trigger: true } : {}) }; };
+      const limit = Math.max(1, Math.min(Number(url.searchParams.get('limit') ?? 50) || 50, 500));
+      // Runs of every schedule of the person's (administrators see their own too, as in the list).
+      if (p === '/api/schedule-runs' && method === 'GET') return send(res, 200, (await scheduler.runs.list({ limit: 500, all: true })).filter(mine).slice(0, limit));
+      if (p === '/api/schedules' && method === 'GET') return send(res, 200, scheduler.list().filter(mine).map(view));
       if (p === '/api/schedules' && method === 'POST') {
         const b = await readJson(req);
         const sessionId = typeof b.sessionId === 'string' ? b.sessionId : undefined;
@@ -1261,6 +1267,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
           if (real && !o.localRoots.some((r) => real === r || real.startsWith(r + path.sep))) throw new HttpError(400, 'That folder is not under HARNESS_LOCAL_ROOTS.');
           if (real) ns.path = real;
         }
+        const timing = { ...(typeof b.timeZone === 'string' && b.timeZone ? { timeZone: b.timeZone } : {}), ...(b.misfire === 'once' || b.misfire === 'skip' ? { misfire: b.misfire as 'once' | 'skip' } : {}), ...(b.maxCostUsd !== undefined && b.maxCostUsd !== null && b.maxCostUsd !== '' ? { maxCostUsd: Number(b.maxCostUsd) } : {}) };
         const newSession = ns ? {
           model: String(ns.model ?? registry.listModels().find((m) => m.available)?.id ?? ''),
           runtime: { kind: (ns.runtime === 'local' ? 'local' : 'docker') as SessionMeta['runtime']['kind'], network: (ns.network === 'full' ? 'full' : ns.network === 'allowlist' ? 'allowlist' : 'none') as SessionMeta['runtime']['network'], ...(typeof ns.path === 'string' && ns.path ? { path: ns.path } : {}) },
@@ -1269,20 +1276,36 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         try {
           if (b.trigger === true) {
             // The URL is shown once: only its hash is kept.
-            const t = await scheduler.createTrigger({ owner: me.id, title: typeof b.title === 'string' ? b.title : undefined, prompt: String(b.prompt ?? ''), sessionId, newSession });
+            const t = await scheduler.createTrigger({ owner: me.id, title: typeof b.title === 'string' ? b.title : undefined, prompt: String(b.prompt ?? ''), sessionId, newSession, ...(timing.maxCostUsd !== undefined ? { maxCostUsd: timing.maxCostUsd } : {}) });
             const base = process.env.HARNESS_PUBLIC_URL?.replace(/\/+$/, '') || `http://${req.headers.host ?? '127.0.0.1'}`;
-            return send(res, 201, { ...t.schedule, token: t.token, url: `${base}/api/triggers/${t.token}` });
+            return send(res, 201, { ...view(t.schedule), token: t.token, url: `${base}/api/triggers/${t.token}` });
           }
-          const s = await scheduler.create({ owner: me.id, title: typeof b.title === 'string' ? b.title : undefined, prompt: String(b.prompt ?? ''), cron: typeof b.cron === 'string' && b.cron ? b.cron : undefined, at: typeof b.at === 'string' ? Date.parse(b.at) : typeof b.at === 'number' ? b.at : undefined, inMinutes: typeof b.inMinutes === 'number' ? b.inMinutes : undefined, sessionId, newSession });
-          return send(res, 201, s);
+          const s = await scheduler.create({ owner: me.id, title: typeof b.title === 'string' ? b.title : undefined, prompt: String(b.prompt ?? ''), cron: typeof b.cron === 'string' && b.cron ? b.cron : undefined, at: typeof b.at === 'string' ? Date.parse(b.at) : typeof b.at === 'number' ? b.at : undefined, inMinutes: typeof b.inMinutes === 'number' ? b.inMinutes : undefined, sessionId, newSession, ...timing });
+          return send(res, 201, view(s));
         } catch (e) { throw new HttpError(400, (e as Error).message); }
       }
-      const m = /^\/api\/schedules\/([0-9a-f]+)(\/run|\/enable|\/disable)?$/.exec(p);
+      const m = /^\/api\/schedules\/([0-9a-f]+)(\/run|\/enable|\/disable|\/runs)?$/.exec(p);
       const s = m ? scheduler.get(m[1]!) : undefined;
       if (!s || !mine(s)) throw new HttpError(404, 'No such schedule.');
+      const out = (x: Schedule | undefined) => (x ? view(x) : x);
       if (!m![2] && method === 'DELETE') return send(res, 200, { ok: await scheduler.remove(s.id) });
-      if (m![2] === '/run' && method === 'POST') return send(res, 200, await scheduler.runNow(s.id));
-      if ((m![2] === '/enable' || m![2] === '/disable') && method === 'POST') return send(res, 200, await scheduler.setEnabled(s.id, m![2] === '/enable').catch((e: Error) => { throw new HttpError(400, e.message); }));
+      if (!m![2] && method === 'GET') return send(res, 200, view(s));
+      if (!m![2] && method === 'PATCH') {
+        const b = await readJson(req);
+        const nul = (k: string) => b[k] === null || b[k] === '';
+        try {
+          return send(res, 200, out(await scheduler.update(s.id, {
+            ...(typeof b.title === 'string' ? { title: b.title } : {}), ...(typeof b.prompt === 'string' ? { prompt: b.prompt } : {}),
+            ...(typeof b.cron === 'string' && b.cron ? { cron: b.cron } : {}), ...(typeof b.at === 'string' ? { at: Date.parse(b.at) } : typeof b.at === 'number' ? { at: b.at } : {}), ...(typeof b.inMinutes === 'number' ? { inMinutes: b.inMinutes } : {}),
+            ...(nul('timeZone') ? { timeZone: null } : typeof b.timeZone === 'string' ? { timeZone: b.timeZone } : {}),
+            ...(b.misfire === 'once' || b.misfire === 'skip' ? { misfire: b.misfire } : {}),
+            ...(nul('maxCostUsd') ? { maxCostUsd: null } : b.maxCostUsd !== undefined ? { maxCostUsd: Number(b.maxCostUsd) } : {}),
+          })));
+        } catch (e) { throw new HttpError(400, (e as Error).message); }
+      }
+      if (m![2] === '/runs' && method === 'GET') return send(res, 200, await scheduler.runs.list({ scheduleId: s.id, all: true, limit }));
+      if (m![2] === '/run' && method === 'POST') return send(res, 200, out(await scheduler.runNow(s.id)));
+      if ((m![2] === '/enable' || m![2] === '/disable') && method === 'POST') return send(res, 200, out(await scheduler.setEnabled(s.id, m![2] === '/enable').catch((e: Error) => { throw new HttpError(400, e.message); })));
       throw new HttpError(405, 'method not allowed');
     }
 

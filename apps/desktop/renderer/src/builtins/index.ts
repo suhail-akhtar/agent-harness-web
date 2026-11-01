@@ -10,8 +10,9 @@ import { corePlugins } from './core.plugins';
 import { coreActivity, coreInbox, coreProjects, coreShell } from './small';
 import { coreArtifacts } from './core.artifacts';
 import { coreAgents } from './core.agents';
+import { coreScheduled } from './core.scheduled';
 import { coreDiagrams } from './diagrams';
 import { coreDashboards } from './dashboards';
 import { coreGallery } from './gallery';
 
-export const BUILTINS: BuiltinPlugin[] = [coreShell, coreChat, coreInbox, coreActivity, coreProjects, coreArtifacts, coreAgents, corePlugins, coreSettings, coreDiagrams, coreDashboards, coreGallery];
+export const BUILTINS: BuiltinPlugin[] = [coreShell, coreChat, coreInbox, coreScheduled, coreActivity, coreProjects, coreArtifacts, coreAgents, corePlugins, coreSettings, coreDiagrams, coreDashboards, coreGallery];

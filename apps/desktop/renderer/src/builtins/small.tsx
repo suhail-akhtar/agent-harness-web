@@ -14,6 +14,7 @@ import type { BuiltinPlugin } from '../state/data';
 import { useData, client } from '../state/data';
 import { useApp, navigate, openSession, setCrumb, NARROW_PX } from '../state/app';
 import { desktop } from '../bridge';
+import { RecentRuns } from './core.scheduled/Scheduled';
 import { PendingCard, respondFor } from '../components/Pending';
 import { fmtCost } from './core.chat/Transcript';
 import { PluginHome } from './plugin-home';
@@ -289,7 +290,7 @@ function Activity() {
   const stop = (id: string) => void client.sessions.abort(id).then(() => toast('Stopped')).catch((e: Error) => toast(e.message, { kind: 'error' }));
   return (
     <Page data-activity title="Activity">
-        {!active.length ? <PageState kind="empty" icon="activity" title="Nothing is running" detail="Conversations at work, and their background shells, sub-agents and workflow runs, show here." /> : active.map((s) => (
+        {!active.length ? <PageState kind="empty" icon="activity" title="Nothing is running" detail="Conversations at work, and their background shells, sub-agents and workflow runs, show here; below them, the latest scheduled runs." /> : active.map((s) => (
           <div key={s.id} data-activity-session={s.id} className="mb-3 rounded-xl border border-hx-border-subtle bg-hx-elevated p-3">
             <div className="flex items-center gap-2">
               {s.status === 'running' ? <Spinner className="text-hx-accent-text" /> : <Icon name="clock" size={15} className="text-hx-warning" />}
@@ -303,6 +304,7 @@ function Activity() {
             ))}
           </div>
         ))}
+        <RecentRuns />
     </Page>
   );
 }

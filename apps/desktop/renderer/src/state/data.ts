@@ -39,6 +39,8 @@ export interface DataState {
   sessions: SessionMeta[];
   sessionsLoaded: boolean;
   approvals: Approval[];
+  /** Bumped when a schedule changed or one of its runs started or ended: schedule views read again. */
+  scheduleTick: number;
   serverPlugins: PluginInfo[];
   devPlugins: DevPluginInfo[];
   /** Bumped when a plugin folder loaded in the app changes on disk: its frames load again. */
@@ -55,7 +57,7 @@ export interface DataState {
 }
 
 export const useData = create<DataState>((set, get) => ({
-  me: null, config: null, models: [], providers: null, sessions: [], sessionsLoaded: false, approvals: [], serverPlugins: [], devPlugins: [], pluginEpochs: {}, grants: {},
+  me: null, config: null, models: [], providers: null, sessions: [], sessionsLoaded: false, approvals: [], scheduleTick: 0, serverPlugins: [], devPlugins: [], pluginEpochs: {}, grants: {},
   registry: buildRegistry([]),
   eventsMode: 'stopped',
   async refreshModels() {
@@ -220,6 +222,17 @@ export function applyGlobal(e: GlobalEvent): void {
       if (p.level === 'error' || p.level === 'warn') toast(String(p.text ?? ''), { kind: p.level === 'error' ? 'error' : 'warning' });
       return;
     }
-    case 'schedules': if (p.type === 'fired') toast(`Scheduled: ${String(p.title ?? 'a prompt')} ran`, { kind: 'info' }); return;
+    case 'schedules': {
+      useData.setState({ scheduleTick: d.scheduleTick + 1 });
+      // A run that ended says how; one that found nothing to report stays quiet (it is in the run history).
+      const run = p.run as { status?: string; summary?: string; reason?: string; noOp?: boolean; sessionId?: string } | undefined;
+      const title = String(p.title ?? 'A schedule');
+      if (p.type === 'ended' && run) {
+        if (run.status === 'completed' && !run.noOp) toast(`${title}: ${run.summary || 'done'}`, { kind: 'info' });
+        // Stopped at a limit: the conversation's own warning already said why (and Stop was the person's).
+        else if (run.status === 'failed' || run.status === 'interrupted') toast(`${title}: ${run.reason ?? run.status}`, { kind: 'warning' });
+      } else if (p.type === 'fired' && run && run.status === 'skipped') toast(`${title} did not run: ${run.reason ?? 'skipped'}`, { kind: 'warning' });
+      return;
+    }
   }
 }

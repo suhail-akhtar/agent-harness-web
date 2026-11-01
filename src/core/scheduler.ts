@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { FileWatch, readJson, withFileLock, writeFileAtomic } from '../util/shared-file.ts';
 import path from 'node:path';
 import type { SessionMeta } from './session.ts';
+import { type RunEnd, type ScheduleRun, ScheduleRunLog } from './schedule-runs.ts';
 
 // Scheduled prompts: "every weekday at 9, check the nightly build and fix what
 // broke", or "in 20 minutes, see whether the deploy finished". Like Claude Code's
@@ -15,8 +16,14 @@ export interface Schedule {
   owner?: string;
   title: string;
   prompt: string;
-  /** Five-field cron (minute hour day-of-month month day-of-week), in the server's time zone. */
+  /** Five-field cron (minute hour day-of-month month day-of-week), in `timeZone` (else the server's). */
   cron?: string;
+  /** An IANA time zone ("Europe/Berlin") the cron is read in; absent: the server's. */
+  timeZone?: string;
+  /** A run missed while the server was down: run it once when it is back (default), or skip it. */
+  misfire?: 'once' | 'skip';
+  /** The most one run may cost (USD): the run is stopped there. */
+  maxCostUsd?: number;
   /** Run once at this time (ms). */
   at?: number;
   /** The session the prompt goes to; absent: a new session each run, made from `newSession`. */
@@ -38,6 +45,22 @@ export class ScheduleError extends Error {}
 
 const FIELDS: [number, number][] = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 6]];
 const MAX_PER_OWNER = Number(process.env.HARNESS_MAX_SCHEDULES ?? 50);
+/** The shortest time between two runs of a repeating schedule, in minutes: each run can cost a whole session. */
+const MIN_GAP = Number(process.env.HARNESS_SCHEDULE_MIN_MINUTES ?? 5);
+/** How late a run may start and still count as on time (the tick is every 30 s); later is a missed run. */
+const MISFIRE_GRACE_MS = 3 * 60_000;
+const MAX_RUN_USD = 1000;
+
+/** The timing and limits a schedule may be made or changed with, checked. */
+function checkTiming(spec: { cron?: string; timeZone?: string; misfire?: string; maxCostUsd?: number }, now: number): void {
+  if (spec.timeZone !== undefined && !validTimeZone(spec.timeZone)) throw new ScheduleError(`"${spec.timeZone}" is not a time zone this server knows (e.g. Europe/Berlin, America/New_York, UTC)`);
+  if (spec.misfire !== undefined && spec.misfire !== 'once' && spec.misfire !== 'skip') throw new ScheduleError('misfire is once or skip');
+  if (spec.maxCostUsd !== undefined && !(Number.isFinite(spec.maxCostUsd) && spec.maxCostUsd > 0 && spec.maxCostUsd <= MAX_RUN_USD)) throw new ScheduleError(`maxCostUsd is a number of dollars above 0 and at most ${MAX_RUN_USD}`);
+  if (spec.cron) {
+    const gap = cronGapMinutes(spec.cron, spec.timeZone, now);
+    if (gap < MIN_GAP) throw new ScheduleError(`that runs every ${gap} minute${gap === 1 ? '' : 's'}; a schedule may run at most every ${MIN_GAP} minutes (HARNESS_SCHEDULE_MIN_MINUTES)`);
+  }
+}
 
 /** The values one cron field allows ("*", "5", "1-5", "*\/15", "1,3,5", "9-17/2"). */
 function field(spec: string, [lo, hi]: [number, number]): Set<number> {
@@ -57,28 +80,86 @@ function field(spec: string, [lo, hi]: [number, number]): Set<number> {
   return out;
 }
 
-/** A cron expression as a test on a time (minute resolution). Day-of-week 7 is Sunday too. */
-export function parseCron(expr: string): (d: Date) => boolean {
+/** A clock reading: the date and time a moment shows on a wall clock somewhere. */
+interface Wall { y: number; mo: number; d: number; h: number; mi: number; dow: number }
+const formats = new Map<string, Intl.DateTimeFormat>();
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/** Whether the name is a time zone this runtime knows ("Europe/Berlin", "UTC"). */
+export function validTimeZone(tz: string): boolean {
+  try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return true; } catch { return false; }
+}
+
+/** The wall clock at `t` in the time zone (the server's own without one). */
+function wallClock(t: number, tz?: string): Wall {
+  if (!tz) { const d = new Date(t); return { y: d.getFullYear(), mo: d.getMonth() + 1, d: d.getDate(), h: d.getHours(), mi: d.getMinutes(), dow: d.getDay() }; }
+  let f = formats.get(tz);
+  if (!f) { f = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', weekday: 'short' }); formats.set(tz, f); }
+  const p: Record<string, string> = {};
+  for (const x of f.formatToParts(t)) p[x.type] = x.value;
+  return { y: Number(p.year), mo: Number(p.month), d: Number(p.day), h: Number(p.hour) % 24, mi: Number(p.minute), dow: WEEKDAYS.indexOf(p.weekday!) };
+}
+
+interface Cron { min: Set<number>; hour: Set<number>; dom: Set<number>; mon: Set<number>; dow: Set<number>; domAny: boolean; dowAny: boolean }
+
+function compileCron(expr: string): Cron {
   const parts = expr.trim().split(/\s+/);
   if (parts.length !== 5) throw new ScheduleError('cron needs five fields: minute hour day-of-month month day-of-week (e.g. "0 9 * * 1-5")');
   const [min, hour, dom, mon, dow] = parts.map((p, i) => field(i === 4 ? p.replace(/\b7\b/g, '0') : p, FIELDS[i]!));
-  // As in cron: when both day fields are restricted, either one matching is enough.
-  const domAny = parts[2] === '*', dowAny = parts[4] === '*';
-  return (d) => min!.has(d.getMinutes()) && hour!.has(d.getHours()) && mon!.has(d.getMonth() + 1)
-    && (domAny || dowAny ? dom!.has(d.getDate()) && dow!.has(d.getDay()) : dom!.has(d.getDate()) || dow!.has(d.getDay()));
+  return { min: min!, hour: hour!, dom: dom!, mon: mon!, dow: dow!, domAny: parts[2] === '*', dowAny: parts[4] === '*' };
 }
 
-/** The first minute after `after` that the expression matches (within about a year). */
-export function nextCron(expr: string, after: number): number | undefined {
-  const test = parseCron(expr);
-  const d = new Date(after);
-  d.setSeconds(0, 0);
-  d.setMinutes(d.getMinutes() + 1);
-  for (let i = 0; i < 527_040; i++) {
-    if (test(d)) return d.getTime();
-    d.setMinutes(d.getMinutes() + 1);
+// As in cron: when both day fields are restricted, either one matching is enough.
+const dayMatches = (c: Cron, w: Wall) => c.mon.has(w.mo) && (c.domAny || c.dowAny ? c.dom.has(w.d) && c.dow.has(w.dow) : c.dom.has(w.d) || c.dow.has(w.dow));
+
+/** A cron expression as a test on a time (minute resolution, the server's time zone). Day-of-week 7 is Sunday too. */
+export function parseCron(expr: string): (d: Date) => boolean {
+  const c = compileCron(expr);
+  return (d) => { const w = wallClock(d.getTime()); return c.min.has(w.mi) && c.hour.has(w.h) && dayMatches(c, w); };
+}
+
+const wallKey = (w: Wall) => ((w.y * 100 + w.mo) * 100 + w.d) * 10_000 + w.h * 100 + w.mi;
+const HORIZON_MS = 4 * 366 * 86_400_000;
+
+/**
+ * The first minute after `after` that the expression matches on the wall clock of `tz` (the server's
+ * time zone without one), within four years (so the 29th of February is found). Daylight saving: a time
+ * the clocks skip does not run that day, and a time they repeat runs once.
+ */
+export function nextCron(expr: string, after: number, tz?: string): number | undefined {
+  const c = compileCron(expr);
+  const since = wallKey(wallClock(after, tz));
+  let t = Math.floor(after / 60_000) * 60_000 + 60_000;
+  const minutes = [...c.min].sort((a, b) => a - b);
+  while (t - after <= HORIZON_MS) {
+    const w = wallClock(t, tz);
+    const left = 1440 - (w.h * 60 + w.mi);
+    // Whole days and hours are skipped in steps that never cross a daylight-saving change unseen
+    // (clocks change on the hour or half hour): to an hour before midnight, then by half hours.
+    if (!dayMatches(c, w)) { t += (left > 90 ? left - 60 : Math.max(1, 30 - (w.mi % 30))) * 60_000; continue; }
+    if (!c.hour.has(w.h)) { t += Math.max(1, 30 - (w.mi % 30)) * 60_000; continue; }
+    if (!c.min.has(w.mi) || wallKey(w) <= since) {
+      const next = minutes.find((m) => m > w.mi);
+      const toHalf = 30 - (w.mi % 30);
+      t += Math.max(1, Math.min(next === undefined ? 60 - w.mi : next - w.mi, toHalf)) * 60_000;
+      continue;
+    }
+    return t;
   }
   return undefined;
+}
+
+/** The shortest time between two runs of a cron expression, in minutes (over its next runs). */
+export function cronGapMinutes(expr: string, tz?: string, from = Date.now()): number {
+  let gap = Infinity;
+  let at = nextCron(expr, from, tz);
+  for (let i = 0; i < 12 && at !== undefined; i++) {
+    const n = nextCron(expr, at, tz);
+    if (n === undefined) break;
+    gap = Math.min(gap, (n - at) / 60_000);
+    at = n;
+  }
+  return gap;
 }
 
 export interface ScheduleRunner {
@@ -86,9 +167,15 @@ export interface ScheduleRunner {
    * Sends the prompt; returns which session it went to, or why it did not run.
    * `outside` is text a trigger brought from outside (a chat message, a webhook):
    * it goes with the prompt as data, and the session counts as having read untrusted content.
+   * `finished`: settles with how the run ended (its turn's end), when it started.
    */
-  run(s: Schedule, outside?: string): Promise<{ sessionId?: string; result: string }>;
+  run(s: Schedule, outside?: string): Promise<LaunchResult>;
 }
+
+export interface LaunchResult { sessionId?: string; result: string; finished?: Promise<RunEnd> }
+
+/** A run's record status from what launching it said. */
+const startStatus = (result: string): ScheduleRun['status'] => (result === 'started' ? 'running' : /^failed/.test(result) ? 'failed' : 'skipped');
 
 const hashToken = (t: string) => crypto.createHash('sha256').update(t).digest('hex');
 
@@ -114,15 +201,19 @@ export class Scheduler {
    * server): it is skipped, with the reason as its last result, and kept.
    */
   pluginOff?: (s: Schedule) => string | undefined;
-  /** Told of every change and run here (the server's global event stream). */
-  onEvent?: (type: 'fired' | 'changed', s: Schedule, run?: { sessionId?: string; result: string }) => void;
-  private tell(type: 'fired' | 'changed', s: Schedule | undefined, run?: { sessionId?: string; result: string }): void {
+  /** Told of every change and run here (the server's global event stream): fired when a run starts, ended with its record when it ends. */
+  onEvent?: (type: 'fired' | 'changed' | 'ended', s: Schedule, run?: { sessionId?: string; result: string; record?: ScheduleRun }) => void;
+  private tell(type: 'fired' | 'changed' | 'ended', s: Schedule | undefined, run?: { sessionId?: string; result: string; record?: ScheduleRun }): void {
     if (!s) return;
     try { this.onEvent?.(type, s, run); } catch { /* a listener never breaks the scheduler */ }
   }
+  /** Every run's record: when, how it ended, what it cost, what it did. */
+  readonly runs: ScheduleRunLog;
+  /** Runs started here that have not ended yet (they end when their turn does). */
+  private open = new Set<Promise<unknown>>();
 
   /** The runner, unless the schedule's owner can no longer run work. */
-  private async launch(s: Schedule, outside?: string): Promise<{ sessionId?: string; result: string }> {
+  private async launch(s: Schedule, outside?: string): Promise<LaunchResult> {
     if (s.owner && this.ownerActive && !this.ownerActive(s.owner)) return { result: 'not run: its owner\'s account is disabled' };
     const busy = s.owner ? this.mayRun?.(s.owner, s) : undefined;
     if (busy) return { result: `not run: ${busy}` };
@@ -133,6 +224,7 @@ export class Scheduler {
 
   constructor(dataDir: string, runner: ScheduleRunner, log: (m: string) => void = () => {}) {
     this.file = path.join(dataDir, 'schedules.json');
+    this.runs = new ScheduleRunLog(dataDir);
     this.runner = runner;
     this.log = log;
     this.watch = new FileWatch(this.file);
@@ -175,7 +267,9 @@ export class Scheduler {
     void this.tick();
   }
 
-  stop(): void { clearInterval(this.timer); }
+  /** The server is shutting down: turns it stops now end their runs as interrupted. */
+  private closing = false;
+  stop(o: { closing?: boolean } = {}): void { clearInterval(this.timer); if (o.closing) this.closing = true; }
 
   list(owner?: string): Schedule[] {
     return [...this.items.values()].filter((s) => owner === undefined || s.owner === owner).sort((a, b) => (a.nextRun ?? Infinity) - (b.nextRun ?? Infinity));
@@ -183,19 +277,21 @@ export class Scheduler {
 
   get(id: string): Schedule | undefined { return this.items.get(id); }
 
-  async create(spec: { owner?: string; title?: string; prompt: string; cron?: string; at?: number; inMinutes?: number; sessionId?: string; newSession?: Schedule['newSession']; plugin?: string }, now = Date.now()): Promise<Schedule> {
+  async create(spec: { owner?: string; title?: string; prompt: string; cron?: string; at?: number; inMinutes?: number; sessionId?: string; newSession?: Schedule['newSession']; plugin?: string; timeZone?: string; misfire?: 'once' | 'skip'; maxCostUsd?: number }, now = Date.now()): Promise<Schedule> {
     const prompt = spec.prompt?.trim();
     if (!prompt) throw new ScheduleError('a schedule needs a prompt');
     if (prompt.length > 20_000) throw new ScheduleError('the prompt is limited to 20,000 characters');
     const at = spec.at ?? (spec.inMinutes !== undefined ? now + Math.max(1, spec.inMinutes) * 60_000 : undefined);
     if (!spec.cron === (at === undefined)) throw new ScheduleError('give either cron (repeating) or a time (at / in_minutes), not both or neither');
-    if (at !== undefined && at <= now) throw new ScheduleError('that time has passed');
+    if (at !== undefined && !(at > now)) throw new ScheduleError('that time has passed');
     if (!spec.sessionId && !spec.newSession) throw new ScheduleError('a schedule goes to a session, or makes a new one');
-    const nextRun = spec.cron ? nextCron(spec.cron, now) : at;
+    checkTiming(spec, now);
+    const nextRun = spec.cron ? nextCron(spec.cron, now, spec.timeZone) : at;
     if (nextRun === undefined) throw new ScheduleError('that cron expression never matches');
     const s: Schedule = {
       id: crypto.randomBytes(6).toString('hex'), owner: spec.owner, title: (spec.title?.trim() || prompt.split('\n')[0]!).slice(0, 80), prompt,
       ...(spec.cron ? { cron: spec.cron.trim() } : { at }), ...(spec.sessionId ? { sessionId: spec.sessionId } : { newSession: spec.newSession }),
+      ...(spec.cron && spec.timeZone ? { timeZone: spec.timeZone } : {}), ...(spec.misfire ? { misfire: spec.misfire } : {}), ...(spec.maxCostUsd ? { maxCostUsd: spec.maxCostUsd } : {}),
       enabled: true, createdAt: now, nextRun, runs: 0, ...(spec.plugin ? { plugin: spec.plugin } : {}),
     };
     const made = await this.mutate(() => {
@@ -212,15 +308,16 @@ export class Scheduler {
    * URL (from Slack, a GitHub webhook, a phone shortcut). The token is returned once and
    * stored only as a hash.
    */
-  async createTrigger(spec: { owner?: string; title?: string; prompt: string; sessionId?: string; newSession?: Schedule['newSession'] }, now = Date.now()): Promise<{ schedule: Schedule; token: string }> {
+  async createTrigger(spec: { owner?: string; title?: string; prompt: string; sessionId?: string; newSession?: Schedule['newSession']; maxCostUsd?: number }, now = Date.now()): Promise<{ schedule: Schedule; token: string }> {
     const prompt = spec.prompt?.trim();
     if (!prompt) throw new ScheduleError('a trigger needs a prompt');
     if (!spec.sessionId && !spec.newSession) throw new ScheduleError('a trigger goes to a session, or makes a new one');
+    checkTiming({ maxCostUsd: spec.maxCostUsd }, now);
     const token = `hwt_${crypto.randomBytes(24).toString('base64url')}`;
     const s: Schedule = {
       id: crypto.randomBytes(6).toString('hex'), owner: spec.owner, title: (spec.title?.trim() || prompt.split('\n')[0]!).slice(0, 80), prompt,
       ...(spec.sessionId ? { sessionId: spec.sessionId } : { newSession: spec.newSession }),
-      enabled: true, triggerHash: hashToken(token), createdAt: now, runs: 0,
+      enabled: true, triggerHash: hashToken(token), createdAt: now, runs: 0, ...(spec.maxCostUsd ? { maxCostUsd: spec.maxCostUsd } : {}),
     };
     const made = await this.mutate(() => {
       if (this.list(spec.owner).length >= MAX_PER_OWNER) throw new ScheduleError(`at most ${MAX_PER_OWNER} schedules and triggers per person`);
@@ -238,14 +335,56 @@ export class Scheduler {
     const s = [...this.items.values()].find((x) => x.triggerHash && crypto.timingSafeEqual(Buffer.from(x.triggerHash), Buffer.from(h)));
     if (!s || !s.enabled) return undefined;
     const r = await this.launch(s, outside.slice(0, 20_000));
-    await this.record(s.id, now, r);
-    return r;
+    await this.record(s.id, now, r, 'trigger');
+    return { ...(r.sessionId ? { sessionId: r.sessionId } : {}), result: r.result };
+  }
+
+  /**
+   * Changes a schedule's title, prompt, timing or limits (not where it runs). A new time recomputes the
+   * next run; `null` clears an optional field (the time zone, the cost limit).
+   */
+  async update(id: string, patch: { title?: string; prompt?: string; cron?: string; at?: number; inMinutes?: number; timeZone?: string | null; misfire?: 'once' | 'skip'; maxCostUsd?: number | null }, now = Date.now()): Promise<Schedule | undefined> {
+    const cur = this.items.get(id);
+    if (!cur) return undefined;
+    const at = patch.at ?? (patch.inMinutes !== undefined ? now + Math.max(1, patch.inMinutes) * 60_000 : undefined);
+    if (cur.triggerHash && (patch.cron || at !== undefined || patch.timeZone)) throw new ScheduleError('a trigger runs when its URL is called; it has no time');
+    const prompt = patch.prompt === undefined ? cur.prompt : patch.prompt.trim();
+    if (!prompt) throw new ScheduleError('a schedule needs a prompt');
+    if (prompt.length > 20_000) throw new ScheduleError('the prompt is limited to 20,000 characters');
+    if (patch.cron && at !== undefined) throw new ScheduleError('give either cron (repeating) or a time (at / in_minutes), not both');
+    if (at !== undefined && !(at > now)) throw new ScheduleError('that time has passed');
+    const cron = patch.cron?.trim() || (at !== undefined ? undefined : cur.cron);
+    const timeZone = patch.timeZone === null ? undefined : patch.timeZone ?? cur.timeZone;
+    const maxCostUsd = patch.maxCostUsd === null ? undefined : patch.maxCostUsd ?? cur.maxCostUsd;
+    const misfire = patch.misfire ?? cur.misfire;
+    checkTiming({ cron, timeZone, misfire, maxCostUsd }, now);
+    const timing = !cur.triggerHash && (!!patch.cron || at !== undefined || patch.timeZone !== undefined);
+    const nextRun = !timing ? cur.nextRun : cron ? nextCron(cron, now, timeZone) : at;
+    if (timing && nextRun === undefined) throw new ScheduleError('that cron expression never matches');
+    const done = await this.mutate(() => {
+      const s = this.items.get(id);
+      if (!s) return undefined;
+      s.prompt = prompt;
+      if (patch.title !== undefined) s.title = (patch.title.trim() || prompt.split('\n')[0]!).slice(0, 80);
+      if (timing) {
+        if (cron) { s.cron = cron; delete s.at; } else { s.at = at; delete s.cron; }
+        if (cron && timeZone) s.timeZone = timeZone; else delete s.timeZone;
+        s.nextRun = nextRun;
+        // A new time for a one-time schedule that already ran makes it run again.
+        if (!cron) s.enabled = true;
+      }
+      if (misfire) s.misfire = misfire; else delete s.misfire;
+      if (maxCostUsd) s.maxCostUsd = maxCostUsd; else delete s.maxCostUsd;
+      return s;
+    });
+    this.tell('changed', done);
+    return done;
   }
 
   async remove(id: string): Promise<boolean> {
     const s = this.items.get(id);
     const ok = await this.mutate(() => this.items.delete(id));
-    if (ok) this.tell('changed', s && { ...s, enabled: false });
+    if (ok) { this.tell('changed', s && { ...s, enabled: false }); await this.runs.forget(id).catch(() => {}); }
     return ok;
   }
 
@@ -256,7 +395,7 @@ export class Scheduler {
       // A one-time schedule that already ran (or whose time passed) has nothing left to run.
       if (enabled && !s.cron && !s.triggerHash && (s.at === undefined || s.at <= now)) throw new Error('This one-time schedule has already run or its time has passed; create a new one.');
       s.enabled = enabled;
-      if (enabled && s.cron) s.nextRun = nextCron(s.cron, now);
+      if (enabled && s.cron) s.nextRun = nextCron(s.cron, now, s.timeZone);
       if (enabled && !s.cron && s.at !== undefined) s.nextRun = s.at;
       return s;
     });
@@ -267,7 +406,8 @@ export class Scheduler {
   /**
    * Runs what is due. A run is one at a time per schedule; a one-time schedule ends
    * after it. Each run is claimed on disk first (its next time moved on), so with
-   * several servers it fires once even if the leadership changes hands.
+   * several servers it fires once even if the leadership changes hands. A run missed
+   * while the server was down runs once now, or is skipped (misfire: skip).
    */
   async tick(now = Date.now()): Promise<Schedule[]> {
     if (this.ticking) return [];
@@ -280,18 +420,21 @@ export class Scheduler {
         if (!due.enabled || due.nextRun === undefined || due.nextRun > now) continue;
         // Its plugin is switched off: skipped with a note, kept. A one-time schedule stays due (it runs when the plugin is back).
         const off = this.pluginOff?.(due);
-        if (off) {
-          const note = `skipped: ${off}`;
-          if (due.cron || due.lastResult !== note) {
+        const missed = due.misfire === 'skip' && now - due.nextRun > MISFIRE_GRACE_MS ? `missed: it was due at ${new Date(due.nextRun).toISOString()}, while this server was not running` : undefined;
+        if (off || missed) {
+          const note = off ? `skipped: ${off}` : `skipped: ${missed}`;
+          if (due.cron || missed || due.lastResult !== note) {
             const skipped = await this.mutate(() => {
               const s = this.items.get(due.id);
               if (!s) return undefined;
-              if (s.cron) s.nextRun = nextCron(s.cron, now);
+              if (s.cron) s.nextRun = nextCron(s.cron, now, s.timeZone);
+              else if (missed) { s.enabled = false; s.nextRun = undefined; }
               s.lastRun = now;
               s.lastResult = note;
               return s;
             });
-            this.tell('fired', skipped, { result: note });
+            const record = skipped ? await this.runs.start({ scheduleId: due.id, owner: due.owner, title: due.title, by: 'schedule', startedAt: now, endedAt: now, status: 'skipped', reason: note }).catch(() => undefined) : undefined;
+            this.tell('fired', skipped, { result: note, ...(record ? { record } : {}) });
           }
           continue;
         }
@@ -299,13 +442,13 @@ export class Scheduler {
           const s = this.items.get(due.id);
           if (!s || !s.enabled || s.nextRun === undefined || s.nextRun > now) return undefined;
           const copy = { ...s };
-          if (s.cron) s.nextRun = nextCron(s.cron, now);
+          if (s.cron) s.nextRun = nextCron(s.cron, now, s.timeZone);
           else { s.enabled = false; s.nextRun = undefined; }
           return copy;
         });
         if (!claimed) continue;
         const r = await this.launch(claimed);
-        const done = await this.record(claimed.id, now, r);
+        const done = await this.record(claimed.id, now, r, 'schedule');
         if (done) fired.push(done);
       }
     } finally { this.ticking = false; }
@@ -318,11 +461,28 @@ export class Scheduler {
     const s = this.items.get(id);
     if (!s) return undefined;
     const r = await this.launch(s);
-    return this.record(id, now, r);
+    return this.record(id, now, r, 'manual');
   }
 
-  /** Writes down a run's outcome. */
-  private async record(id: string, now: number, r: { sessionId?: string; result: string }): Promise<Schedule | undefined> {
+  /** Runs written down as running that no longer are (their server stopped): ended as interrupted. */
+  async closeInterrupted(stillRunning: (sessionId: string | undefined) => Promise<boolean>, now = Date.now()): Promise<number> {
+    let n = 0;
+    for (const r of await this.runs.list({ status: 'running', all: true, limit: 500 })) {
+      if (await stillRunning(r.sessionId)) continue;
+      const rec = await this.runs.finish(r, { status: 'interrupted', reason: 'interrupted: the server stopped before the run ended', endedAt: now });
+      await this.mutate(() => { const x = this.items.get(r.scheduleId); if (x && x.lastRun === r.startedAt) x.lastResult = describeRun(rec); return x; });
+      n++;
+    }
+    return n;
+  }
+
+  /** Waits until the runs started by this scheduler have ended and been written down (tests, shutdown). */
+  async settled(): Promise<void> {
+    while (this.open.size) await Promise.all([...this.open]);
+  }
+
+  /** Writes down a run: the schedule's last run, and its record (ended already, or when its turn ends). */
+  private async record(id: string, now: number, r: LaunchResult, by: ScheduleRun['by']): Promise<Schedule | undefined> {
     const done = await this.mutate(() => {
       const s = this.items.get(id);
       if (!s) return undefined;
@@ -332,7 +492,39 @@ export class Scheduler {
       if (r.sessionId && !s.sessionId && s.newSession) this.log(`schedule ${s.id} ran in new session ${r.sessionId}`);
       return s;
     });
-    this.tell('fired', done, r);
+    if (!done) return done;
+    const status = startStatus(r.result);
+    const record = await this.runs.start({ scheduleId: id, owner: done.owner, title: done.title, by, startedAt: now, status, ...(status !== 'running' ? { reason: r.result, endedAt: now } : {}), ...(r.sessionId ? { sessionId: r.sessionId } : {}) }).catch((e: Error) => { this.log(`schedule ${id}: its run could not be written down: ${e.message}`); return undefined; });
+    this.tell('fired', done, { sessionId: r.sessionId, result: r.result, ...(record ? { record } : {}) });
+    if (record && r.finished) this.track(done, record, r.finished);
     return done;
   }
+
+  /** When a started run ends: its record gets the outcome, and the schedule's last result says it. */
+  private track(s: Schedule, run: ScheduleRun, finished: Promise<RunEnd>): void {
+    const p: Promise<void> = finished
+      .catch((e: Error): RunEnd => ({ status: 'failed', reason: `failed: ${e.message}` }))
+      .then((end): RunEnd => (this.closing && end.status === 'stopped' ? { ...end, status: 'interrupted', reason: 'interrupted: the server stopped before the run ended' } : end))
+      .then(async (end) => {
+        const rec = await this.runs.finish(run, end);
+        const result = describeRun(rec);
+        const now = await this.mutate(() => {
+          const x = this.items.get(s.id);
+          // Only the latest run speaks for the schedule.
+          if (x && x.lastRun === run.startedAt) x.lastResult = result;
+          return x;
+        });
+        this.tell('ended', now ?? s, { ...(rec.sessionId ? { sessionId: rec.sessionId } : {}), result, record: rec });
+      })
+      .catch((e: Error) => this.log(`schedule ${s.id}: the end of its run could not be written down: ${e.message}`))
+      .finally(() => { this.open.delete(p); });
+    this.open.add(p);
+  }
+}
+
+/** A run's outcome in a few words, for the schedule's last result. */
+export function describeRun(r: ScheduleRun): string {
+  if (r.status === 'completed') return r.noOp ? 'completed: nothing to report' : 'completed';
+  // A reason that already names how it ended ("Stopped: this scheduled run reached ...", "skipped: ...") is said once.
+  return r.reason && r.reason.toLowerCase().startsWith(`${r.status}:`) ? r.reason : `${r.status}${r.reason ? `: ${r.reason}` : ''}`;
 }

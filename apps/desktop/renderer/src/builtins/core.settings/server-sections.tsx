@@ -4,13 +4,13 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import type { Delegation, EffectiveSetting, McpBundle, ProviderInfo, Schedule, SessionMeta, VaultEntry } from '@harness/client';
+import type { Delegation, EffectiveSetting, McpBundle, ProviderInfo, SessionMeta, VaultEntry } from '@harness/client';
 import { isMissing } from '@harness/client';
 import { Badge, Button, EmptyState, Field, Icon, IconButton, Input, InfoNote, Select, Spinner, Switch, Textarea, cx, toast, SecretInput, Checkbox } from '@harness/ui';
 import { useData, client } from '../../state/data';
 import { useApp } from '../../state/app';
 import { recommendedModel } from '../../state/recommend';
-import { ScheduleForm } from '../../components/ScheduleForm';
+import { ScheduleManager } from '../core.scheduled/Scheduled';
 
 const fail = (e: unknown) => toast((e as Error).message, { kind: 'error' });
 function useLoad<T>(f: () => Promise<T>, deps: unknown[] = []): [T | null, string, () => void] {
@@ -310,35 +310,7 @@ export function Vault(): React.ReactElement {
 }
 
 export function Schedules(): React.ReactElement {
-  const [list, err, reload] = useLoad(() => client.schedules.list());
-  const keepInTray = useApp((x) => x.prefs.keepInTray);
-  if (err) return <InfoNote>{err}</InfoNote>;
-  if (!list) return <Spinner />;
-  return (
-    <div data-section="schedules">
-      {list.some((s) => s.enabled) && !keepInTray && (
-        <InfoNote>
-          <span data-schedules-tray-note>Schedules run only while this app is open. Closing the window quits it unless it keeps running in the tray.</span>{' '}
-          <Button size="sm" onClick={() => useApp.getState().setPrefs({ keepInTray: true })}>Keep running in the tray</Button>
-        </InfoNote>
-      )}
-      {!list.length ? <p className="mb-3 text-[13px] text-hx-muted">Nothing scheduled.</p> : (
-        <div className="mb-4 divide-y divide-hx-border-subtle rounded-xl border border-hx-border-subtle">
-          {list.map((s: Schedule) => (
-            <div key={s.id} data-schedule={s.id} className="flex items-center gap-2 px-3 py-2 text-[13px]">
-              <Icon name="clock" size={14} className="text-hx-muted" />
-              <span className="min-w-0 flex-1"><span className="block truncate">{s.title || s.prompt}</span><span className="block text-[11.5px] text-hx-muted">{s.cron ?? (s.at ? new Date(s.at).toLocaleString() : 'trigger')}{s.nextRun ? ` · next ${new Date(s.nextRun).toLocaleString()}` : ''}{s.lastResult ? ` · last: ${s.lastResult}` : ''}</span></span>
-              <Switch checked={s.enabled} onChange={(v) => void client.schedules.setEnabled(s.id, v).then(reload).catch(fail)} label="Enabled" />
-              <IconButton size="xs" icon="play" label="Run now" onClick={() => void client.schedules.run(s.id).then(() => { toast('Started'); reload(); }).catch(fail)} />
-              <IconButton size="xs" icon="trash" tone="danger" label="Delete" onClick={() => void client.schedules.remove(s.id).then(reload).catch(fail)} />
-            </div>
-          ))}
-        </div>
-      )}
-      <h3 className="mb-1 text-[12px] font-medium uppercase tracking-wide text-hx-muted">New schedule</h3>
-      <ScheduleForm onCreated={reload} />
-    </div>
-  );
+  return <div data-section="schedules"><ScheduleManager embedded /></div>;
 }
 
 export function McpBundles(): React.ReactElement {

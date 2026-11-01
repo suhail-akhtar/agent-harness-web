@@ -154,7 +154,7 @@ test('background work: its schedules are skipped with a note and kept, its route
   try {
     const s = await t.session();
     const sch = t.harness.scheduler!;
-    const made = await sch.create({ prompt: 'check the widgets', cron: '* * * * *', sessionId: s.meta.id, plugin: 'widgets' });
+    const made = await sch.create({ prompt: 'check the widgets', cron: '*/5 * * * *', sessionId: s.meta.id, plugin: 'widgets' });
     const once = await sch.create({ prompt: 'one widget report', inMinutes: 1, sessionId: s.meta.id, plugin: 'widgets' });
     const plain = await sch.create({ prompt: 'not the plugin\'s', inMinutes: 1, newSession: { model: 'deepseek-flash', runtime: { kind: 'local', network: 'none', path: t.work } } });
     await sch.remove(plain.id);
@@ -174,7 +174,7 @@ test('background work: its schedules are skipped with a note and kept, its route
     assert.match(JSON.stringify(r.body), /Widget Works is switched off/);
     assert.equal((await t.call('POST', '/api/plugins/nobody/hook')).status, 404, 'an unknown plugin is still not found');
     assert.equal(await t.harness.bridge.lease('widgets', 'watch'), false, 'its loops stop');
-    await sch.tick(Date.now() + 3 * 60_000);
+    await sch.tick(Date.now() + 6 * 60_000);
     const skipped = sch.get(made.id)!;
     assert.match(skipped.lastResult!, /^skipped: Widget Works is switched off on this server; switch it on to use the schedule "check the widgets"\.$/);
     assert.equal(skipped.enabled, true, 'kept');
@@ -188,7 +188,7 @@ test('background work: its schedules are skipped with a note and kept, its route
     assert.equal((await t.call('POST', '/api/plugins/widgets/hook')).status, 200);
     assert.equal(await t.harness.bridge.lease('widgets', 'watch'), true);
     await sch.remove(made.id);
-    await sch.tick(Date.now() + 3 * 60_000);
+    await sch.tick(Date.now() + 6 * 60_000);
     assert.equal(sch.get(once.id)!.lastResult, 'started', 'back on: it runs');
     await until(() => t.harness.sessions.statusOf(s.meta.id) === 'idle' && t.fake.requests.length === 1);
   } finally { await t.close(); }

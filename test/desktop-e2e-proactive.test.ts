@@ -90,15 +90,26 @@ test('desktop app end to end: proactive work', { timeout: 10 * 60_000 }, async (
     });
 
     let schedId = '';
+    let scratch = '';
+    const rowText = (id: string) => page.locator(`[data-schedule="${id}"]`).innerText();
+    const lastIs = (id: string, re: string) => page.waitForFunction(([i, r]) => new RegExp(r).test(document.querySelector(`[data-schedule="${i}"] [data-schedule-last]`)?.textContent ?? ''), [id, re] as const, { timeout: 20_000 });
+    const runAndWait = async (id: string, re: string) => { await page.click(`[data-schedule="${id}"] button[aria-label="Run now"]`); await lastIs(id, re); };
+    // Its runs (Run now opens them already).
+    const openRuns = async (id: string) => { if (!(await page.locator(`[data-schedule="${id}"] [data-runs], [data-schedule="${id}"] [data-runs-empty]`).count())) await page.click(`[data-schedule="${id}"] [data-schedule-toggle]`); };
+
     await step('phase 0: a schedule made in Settings runs in a new conversation in its folder, unattended; the tray note says it stops with the window', async () => {
       await openSettings('core.settings:schedules');
-      await page.waitForSelector('[data-section="schedules"] [data-schedule-form]');
+      await page.waitForSelector('[data-section="schedules"] [data-schedule-manager]');
       assert.equal(await page.locator('[data-schedules-tray-note]').count(), 0, 'no note while nothing is scheduled');
-      await page.fill('[data-schedule-form] input >> nth=0', 'Build check');
+      await page.click('[data-section="schedules"] [data-schedule-new]');
+      await page.waitForSelector('[data-schedule-form="new"]');
+      await page.fill('[data-schedule-title]', 'Build check');
       await page.fill('[data-schedule-prompt]', 'Check the build and notify me.');
       await page.fill('[data-schedule-minutes]', '30');
       await page.locator('[data-schedule-model]').selectOption('deepseek-flash');
+      await shot('schedules-form', page.locator('[role="dialog"]').last());
       await page.click('[data-schedule-create]');
+      await page.waitForSelector('[data-schedule-form="new"]', { state: 'detached' });
       await page.waitForSelector('[data-section="schedules"] [data-schedule]', { timeout: 15_000 });
       schedId = (await page.getAttribute('[data-section="schedules"] [data-schedule]', 'data-schedule'))!;
       const made = (await api('GET', '/api/schedules')).body as Array<{ id: string; title: string; newSession?: { model: string; mode: string; runtime: { kind: string; path?: string } } }>;
@@ -107,27 +118,30 @@ test('desktop app end to end: proactive work', { timeout: 10 * 60_000 }, async (
       assert.equal(s.newSession?.model, 'deepseek-flash');
       assert.equal(s.newSession?.mode, 'dontAsk');
       assert.equal(s.newSession?.runtime.kind, 'local');
-      assert.ok(s.newSession?.runtime.path && fs.existsSync(s.newSession.runtime.path), 'a real scratch folder');
+      scratch = s.newSession!.runtime.path!;
+      assert.ok(scratch && fs.existsSync(scratch), 'a real scratch folder');
       await page.waitForSelector('[data-schedules-tray-note]');
-      await shot('schedules-form');
     });
 
-    await step('phase 0: running it now starts the conversation; what the agent tells the person arrives as a toast', async () => {
+    await step('phase 0: running it now starts the conversation; what the agent tells the person arrives as a toast; the row says the run completed', async () => {
       await page.click(`[data-schedule="${schedId}"] button[aria-label="Run now"]`);
       await toastWith('The build is green.');
       const sessions = (await api('GET', '/api/sessions')).body as Array<{ id: string; title: string; mode: string }>;
       const run = sessions.find((x) => x.title === 'Scheduled: Build check');
       assert.ok(run, 'a conversation for the run');
       assert.equal(run!.mode, 'dontAsk');
-      await page.waitForFunction((id) => (document.querySelector(`[data-schedule="${id}"]`)?.textContent ?? '').includes('last: started'), schedId, { timeout: 15_000 });
+      await lastIs(schedId, '^completed$');
+      await toastWith('Build check: Checked the build and told you: it is green.');
     });
 
     await step('phase 0: the same conversation each time: the run goes into the chosen conversation', async () => {
       const target = (await api('POST', '/api/sessions', { title: 'Release notes', model: 'deepseek-flash', runtime: 'local' })).body as { id: string };
       assert.ok(target.id, JSON.stringify(target));
+      await page.click('[data-section="schedules"] [data-schedule-new]');
+      await page.waitForSelector('[data-schedule-form="new"]');
       await page.locator('[data-schedule-target]').selectOption('existing');
       await page.waitForSelector(`[data-schedule-session] option[value="${target.id}"]`, { state: 'attached', timeout: 15_000 });
-      await page.fill('[data-schedule-form] input >> nth=0', 'Into release notes');
+      await page.fill('[data-schedule-title]', 'Into release notes');
       await page.fill('[data-schedule-prompt]', 'Add today to the notes.');
       await page.fill('[data-schedule-minutes]', '60');
       await page.locator('[data-schedule-session]').selectOption(target.id);
@@ -136,19 +150,112 @@ test('desktop app end to end: proactive work', { timeout: 10 * 60_000 }, async (
       const list = (await api('GET', '/api/schedules')).body as Array<{ id: string; title: string; sessionId?: string }>;
       const into = list.find((x) => x.title === 'Into release notes')!;
       assert.equal(into.sessionId, target.id);
-      await page.click(`[data-schedule="${into.id}"] button[aria-label="Run now"]`);
-      const end = Date.now() + 20_000;
-      while (!(await history(target.id)).includes('Add today to the notes.')) { assert.ok(Date.now() < end, 'the run reached the conversation'); await page.waitForTimeout(300); }
+      await runAndWait(into.id, '^completed');
+      assert.match(await history(target.id), /Add today to the notes\./);
     });
 
     await step('phase 0: keeping the app in the tray removes the note', async () => {
       await page.click('[data-section="schedules"] button:has-text("Keep running in the tray")');
       await page.waitForSelector('[data-schedules-tray-note]', { state: 'detached' });
       assert.equal(((await invoke('prefs:get')) as { keepInTray: boolean }).keepInTray, true);
+      // Then: they would still stop when the computer restarts, unless the app starts at login.
+      await page.click('[data-schedules-login-note] button:has-text("Start the app at login")');
+      await page.waitForSelector('[data-schedules-login-note]', { state: 'detached' });
+      assert.equal(((await invoke('prefs:get')) as { startAtLogin: boolean }).startAtLogin, true);
+      await invoke('prefs:set', { startAtLogin: false });
+      await invoke('app:setLoginItem', false).catch(() => {});
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('[data-settings]', { state: 'detached' });
+    });
+
+    await step('phase 1: the Scheduled page lists every schedule; a run\'s record shows how it ended, what it said, that it told the person, and opens its conversation', async () => {
+      await page.click('[data-nav="core.scheduled:scheduled"]');
+      await page.waitForSelector('[data-scheduled] [data-schedule-list]');
+      assert.equal(await page.locator('[data-scheduled] [data-schedule]').count(), 2);
+      await page.click(`[data-schedule="${schedId}"] [data-schedule-toggle]`);
+      const row = page.locator(`[data-runs="${schedId}"] [data-run]`).first();
+      await row.waitFor();
+      assert.equal(await row.getAttribute('data-run-status'), 'completed');
+      const text = await row.innerText();
+      assert.match(text, /Completed/);
+      assert.match(text, /Checked the build and told you: it is green\./);
+      assert.match(text, /told you/);
+      assert.match(text, /run now/);
+      await shot('scheduled-page');
+      const runs = (await api('GET', `/api/schedules/${schedId}/runs`)).body as Array<{ sessionId: string; costUsd: number; tools: number; notified: boolean }>;
+      assert.equal(runs.length, 1);
+      assert.equal(runs[0]!.tools, 1);
+      assert.equal(runs[0]!.notified, true);
+      await row.locator('button[aria-label="Open its conversation"]').click();
+      await page.waitForSelector(`[data-session="${runs[0]!.sessionId}"]`);
+    });
+
+    await step('phase 1: editing a schedule: a cron in a time zone and a spend limit; the next run is computed in that zone', async () => {
+      await page.click('[data-nav="core.scheduled:scheduled"]');
+      await page.click(`[data-schedule="${schedId}"] button[aria-label="Edit"]`);
+      await page.waitForSelector('[data-schedule-form="edit"]');
+      assert.equal(await page.inputValue('[data-schedule-title]'), 'Build check');
+      await page.fill('[data-schedule-cron]', '0 9 * * 1-5');
+      await page.fill('[data-schedule-tz]', 'Asia/Tokyo');
+      await page.locator('[data-schedule-misfire]').selectOption('skip');
+      await page.fill('[data-schedule-cost]', '0.5');
+      await page.click('[data-schedule-create]');
+      await page.waitForSelector('[data-schedule-form="edit"]', { state: 'detached' });
+      await page.waitForFunction((id) => /0 9 \* \* 1-5 \(Asia\/Tokyo\)/.test(document.querySelector(`[data-schedule="${id}"] [data-schedule-when]`)?.textContent ?? ''), schedId);
+      assert.match(await rowText(schedId), /at most \$0\.50 a run/);
+      const s = (await api('GET', `/api/schedules/${schedId}`)).body as { cron: string; timeZone: string; misfire: string; maxCostUsd: number; nextRun: number; enabled: boolean };
+      assert.deepEqual([s.cron, s.timeZone, s.misfire, s.maxCostUsd, s.enabled], ['0 9 * * 1-5', 'Asia/Tokyo', 'skip', 0.5, true]);
+      const next = new Date(s.nextRun);
+      assert.equal(`${next.getUTCHours()}:${next.getUTCMinutes()}`, '0:0', '9:00 in Tokyo is midnight UTC');
+      assert.ok([1, 2, 3, 4, 5].includes(new Date(s.nextRun + 9 * 3600_000).getUTCDay()), 'a weekday in Tokyo');
+    });
+
+    await step('phase 1: a schedule that would run every minute is refused, and says why', async () => {
+      await page.click('[data-scheduled] [data-schedule-new]');
+      await page.waitForSelector('[data-schedule-form="new"]');
+      await page.fill('[data-schedule-prompt]', 'too often');
+      await page.fill('[data-schedule-cron]', '* * * * *');
+      await page.click('[data-schedule-create]');
+      await toastWith('a schedule may run at most every 5 minutes');
+      assert.equal(await page.locator('[data-schedule-form="new"]').count(), 1, 'the form stays open to fix it');
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('[data-schedule-form="new"]', { state: 'detached' });
+      assert.equal(((await api('GET', '/api/schedules')).body as unknown[]).length, 2);
+    });
+
+    await step('phase 1: a run that finds nothing is marked so and stays quiet; a run over its spend limit stops and says so', async () => {
+      const quiet = (await api('POST', '/api/schedules', { title: 'Quiet check', prompt: 'quiet please', inMinutes: 60, newSession: { model: 'deepseek-flash', runtime: 'local', path: scratch, mode: 'dontAsk' } })).body as { id: string };
+      const costly = (await api('POST', '/api/schedules', { title: 'Costly job', prompt: 'costly work', inMinutes: 60, maxCostUsd: 0.01, newSession: { model: 'deepseek-flash', runtime: 'local', path: scratch, mode: 'dontAsk' } })).body as { id: string };
+      await page.waitForSelector(`[data-schedule="${quiet.id}"]`);
+      await runAndWait(quiet.id, 'nothing to report');
+      await openRuns(quiet.id);
+      await page.waitForSelector(`[data-runs="${quiet.id}"] [data-run]`);
+      assert.match(await page.locator(`[data-runs="${quiet.id}"] [data-run]`).innerText(), /Nothing to report[\s\S]*All quiet\./);
+      await runAndWait(costly.id, '^Stopped: this scheduled run');
+      await toastWith('Stopped: this scheduled run reached its spend limit of $0.01');
+      await openRuns(costly.id);
+      const c = page.locator(`[data-runs="${costly.id}"] [data-run]`);
+      await c.waitFor();
+      assert.equal(await c.getAttribute('data-run-status'), 'stopped');
+      assert.match(await c.innerText(), /spend limit of \$0\.01/);
+      const toasts = await page.$$eval('[data-toast]', (els) => els.map((e) => e.textContent ?? ''));
+      assert.ok(!toasts.some((t) => t.includes('All quiet')), 'nothing to report: no toast');
+      assert.equal(toasts.filter((t) => t.includes('spend limit of $0.01')).length, 1, 'one warning for the stopped run, not two');
+      await shot('scheduled-runs');
+    });
+
+    await step('phase 1: Activity lists the latest scheduled runs across schedules', async () => {
+      await page.click('[data-nav="core.activity:activity"]');
+      await page.waitForSelector('[data-activity] [data-recent-runs] [data-run]');
+      const rows = await page.$$eval('[data-recent-runs] [data-run]', (els) => els.map((e) => [e.getAttribute('data-run-status'), e.textContent ?? '']));
+      assert.equal(rows.length, 4);
+      assert.match(rows[0]![1], /Costly job/, 'newest first');
+      assert.deepEqual(rows.map((r) => r[0]), ['stopped', 'completed', 'completed', 'completed']);
     });
 
     await step('no errors in the window', async () => {
-      assert.deepEqual(errors, []);
+      // The refusal of the every-minute schedule is a 400 the window shows as a toast (Chromium logs it too).
+      assert.deepEqual(errors.filter((e) => !(e.phase.includes('every minute is refused') && /status of 400 .*\/api\/schedules\)/.test(e.text))), []);
     });
   } finally {
     await app.close().catch(() => {});

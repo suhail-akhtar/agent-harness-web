@@ -13,7 +13,7 @@ import { GlobalEvents, sessionEvents, type Fetch } from './events.ts';
 import {
   isPending, PENDING_KINDS, type Approval, type FileTree, type SearchHit, type Attachment, type CatalogueEntry, type PluginReview, type PluginUpdateInfo, type PluginRevisionInfo, type Config, type Capabilities, type ContextBreakdown, type LiveProviderModels, type EffectiveSetting, type Effort, type FileContent, type FileEntry,
   type GitLogEntry, type GitStatus, type Health, type HarnessEvent, type HistoryPage, type McpBundle, type Me, type Mode, type ModelInfo, type PendingRequest, type PluginInfo, type SolutionImportInfo,
-  type ProviderInfo, type ProviderTest, type Schedule, type SessionDetail, type SessionMeta, type SessionsPage, type TaskView, type VaultEntry, type VersionInfo, type WorkflowInfo, type WorkflowRunView,
+  type ProviderInfo, type ProviderTest, type Schedule, type ScheduleRun, type SessionDetail, type SessionMeta, type SessionsPage, type TaskView, type VaultEntry, type VersionInfo, type WorkflowInfo, type WorkflowRunView,
   type ArtifactContent, type ArtifactMeta, type Proposal, type TraceSpan,
 } from './types.ts';
 
@@ -327,12 +327,20 @@ export class HarnessClient {
   };
   schedules = {
     list: () => this.get<Schedule[]>('/api/schedules'),
+    get: (id: string) => this.get<Schedule>(`/api/schedules/${id}`),
     /** Goes to `sessionId`, or makes a new session each run from `newSession` (one of the two). */
-    create: (b: { title?: string; prompt: string; cron?: string; at?: string; inMinutes?: number; sessionId?: string; newSession?: { model: string; runtime: 'local' | 'docker'; path?: string; network?: 'none' | 'allowlist' | 'full'; mode?: string }; trigger?: boolean }) => this.post<Schedule>('/api/schedules', b),
+    create: (b: { title?: string; prompt: string; cron?: string; at?: string; inMinutes?: number; sessionId?: string; newSession?: { model: string; runtime: 'local' | 'docker'; path?: string; network?: 'none' | 'allowlist' | 'full'; mode?: string }; trigger?: boolean; timeZone?: string; misfire?: 'once' | 'skip'; maxCostUsd?: number }) => this.post<Schedule & { token?: string; url?: string }>('/api/schedules', b),
+    /** Its title, prompt, timing or limits; null (or '') clears the time zone or the cost limit. */
+    update: (id: string, b: { title?: string; prompt?: string; cron?: string; at?: string; inMinutes?: number; timeZone?: string | null; misfire?: 'once' | 'skip'; maxCostUsd?: number | null }) => this.patch<Schedule>(`/api/schedules/${id}`, b),
     remove: (id: string) => this.del<{ ok: boolean }>(`/api/schedules/${id}`),
-    run: (id: string) => this.post<unknown>(`/api/schedules/${id}/run`),
+    run: (id: string) => this.post<Schedule>(`/api/schedules/${id}/run`),
     setEnabled: (id: string, on: boolean) => this.post<Schedule>(`/api/schedules/${id}/${on ? 'enable' : 'disable'}`),
+    /** Its runs, newest first. */
+    runs: (id: string, limit = 50) => this.get<ScheduleRun[]>(`/api/schedules/${id}/runs?limit=${limit}`),
+    /** The runs of all of the person's schedules and triggers, newest first. */
+    allRuns: (limit = 50) => this.get<ScheduleRun[]>(`/api/schedule-runs?limit=${limit}`),
   };
+
   mcpb = {
     list: () => this.get<McpBundle[]>('/api/mcpb'),
     install: (bundleBase64: string, userConfig: Record<string, unknown> = {}) => this.post<McpBundle>('/api/mcpb', { bundle: bundleBase64, userConfig }),

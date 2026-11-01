@@ -53,7 +53,7 @@ test('the desktop\'s schedule form: what it sent before (no target) is refused; 
     assert.equal(s!.mode, 'dontAsk');
     const session = t.harness.sessions.get(s!.id)!;
     await until(() => session.status === 'idle' && session.history.length >= 2, 'the run');
-    assert.match(JSON.stringify(session.history[0]), /Scheduled task \\"Morning\\", run 1\.\)\\n\\nsummarise the folder/);
+    assert.match(JSON.stringify(session.history[0]), /Scheduled task \\"Morning\\", run 1\. Nobody is watching[^)]*\)\\n\\nsummarise the folder/);
     // The same conversation each time: the run goes into it, and no new one is made.
     const target = await t.harness.sessions.create({ model: 'deepseek-flash', mode: 'default', runtime: { kind: 'local', network: 'none', path: t.work } });
     const same = await t.call('op', 'POST', '/api/schedules', { title: 'Into it', prompt: 'carry on', inMinutes: 30, sessionId: target.meta.id });
