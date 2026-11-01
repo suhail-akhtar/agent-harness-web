@@ -56,7 +56,7 @@ const CHARTS = new Set(['bar', 'column', 'line', 'area', 'combo', 'ribbon', 'wat
 
 export function BiVisual(p: VisualProps): React.ReactElement {
   const { v, result, error } = p;
-  if (error) return <div data-visual-error className="flex h-full items-center justify-center p-3 text-center text-[12px] text-hx-danger"><span><Icon name="alert" size={14} className="mr-1 inline" />{error}</span></div>;
+  if (error) return <div data-visual-error className="flex h-full items-center justify-center p-3 text-center text-small text-hx-danger"><span><Icon name="alert" size={14} className="mr-1 inline" />{error}</span></div>;
   if (['text', 'image', 'button'].includes(v.type)) return <StaticVisual {...p} />;
   if (v.type === 'fence' && v.options?.fence?.source) return <div className="h-full overflow-auto">{p.renderFence?.(v.options.fence.lang, v.options.fence.source)}</div>;
   if (!result) return <div className="flex h-full items-center justify-center" data-visual-loading><span className="h-1 w-16 animate-pulse rounded bg-hx-border" /></div>;
@@ -72,7 +72,7 @@ export function BiVisual(p: VisualProps): React.ReactElement {
     case 'narrative': return <Narrative {...p} result={result} />;
     case 'fence': return <div className="h-full overflow-auto">{p.renderFence?.(v.options?.fence?.lang ?? 'json', JSON.stringify({ columns: result.columns.map((c) => c.name), rows: result.rows, options: v.options }))}</div>;
   }
-  return <div className="p-2 text-[12px] text-hx-muted">{v.type}</div>;
+  return <div className="p-2 text-small text-hx-muted">{v.type}</div>;
 }
 
 // ---------------- charts ----------------
@@ -117,10 +117,10 @@ function ChartVisual(p: VisualProps & { result: QueryResult }): React.ReactEleme
     return () => { ro.disconnect(); inst.current?.dispose(); inst.current = undefined; p.chartRef?.(null); };
   }, []);
   if (!p.result.rows.length) return <Empty />;
-  return <>{err && <div className="p-2 text-[12px] text-hx-danger">{err}</div>}<div ref={host} data-chart="bi" data-rows={p.result.rowCount} className="h-full min-h-[80px] w-full" /></>;
+  return <>{err && <div className="p-2 text-small text-hx-danger">{err}</div>}<div ref={host} data-chart="bi" data-rows={p.result.rowCount} className="h-full min-h-[80px] w-full" /></>;
 }
 const sameSel = (a?: FilterSpec[], b?: FilterSpec[]) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
-const Empty = () => <div data-visual-empty className="flex h-full items-center justify-center text-[12px] text-hx-muted">No data for this selection</div>;
+const Empty = () => <div data-visual-empty className="flex h-full items-center justify-center text-small text-hx-muted">No data for this selection</div>;
 
 /** Filled map (GeoJSON regions matched to the first dim) or points (lat/lon dims) on the GeoJSON's shapes; no tiles. */
 async function mapOption(echarts: typeof import('echarts'), p: VisualProps & { result: QueryResult }, source?: string): Promise<Record<string, unknown>> {
@@ -155,8 +155,8 @@ function Cards({ v, result }: VisualProps & { result: QueryResult }) {
     return (
       <div className="flex h-full flex-col justify-center px-3" data-card>
         <div className="truncate text-[clamp(20px,4.2cqw,40px)] font-semibold tabular-nums leading-tight text-hx-primary" data-card-value={String(result.rows[0]![i])}>{fmtCell(v, c, result.rows[0]![i]!)}</div>
-        {(!v.title || v.title !== c.label) && <div className="truncate text-[12px] text-hx-muted">{c.label}</div>}
-        {ms.slice(1).map(([c2, i2]) => <div key={c2.name} className="truncate text-[12px] text-hx-secondary">{c2.label}: <b className="tabular-nums">{fmtCell(v, c2, result.rows[0]![i2]!)}</b></div>)}
+        {(!v.title || v.title !== c.label) && <div className="truncate text-small text-hx-muted">{c.label}</div>}
+        {ms.slice(1).map(([c2, i2]) => <div key={c2.name} className="truncate text-small text-hx-secondary">{c2.label}: <b className="tabular-nums">{fmtCell(v, c2, result.rows[0]![i2]!)}</b></div>)}
       </div>
     );
   }
@@ -164,8 +164,8 @@ function Cards({ v, result }: VisualProps & { result: QueryResult }) {
     <div className="grid h-full auto-rows-min grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-2 overflow-auto p-1" data-multicard>
       {result.rows.slice(0, 60).map((row, r) => (
         <div key={r} className="rounded-lg border border-hx-border-subtle p-2">
-          <div className="truncate text-[11.5px] font-medium text-hx-muted">{dims.map(([c, i]) => fmtCell(v, c, row[i]!)).join(' · ') || v.title}</div>
-          {ms.map(([c, i]) => <div key={c.name} className="flex items-baseline justify-between gap-2"><span className="truncate text-[11px] text-hx-muted">{c.label}</span><span className="text-[15px] font-semibold tabular-nums">{fmtCell(v, c, row[i]!)}</span></div>)}
+          <div className="truncate text-caption font-medium text-hx-muted">{dims.map(([c, i]) => fmtCell(v, c, row[i]!)).join(' · ') || v.title}</div>
+          {ms.map(([c, i]) => <div key={c.name} className="flex items-baseline justify-between gap-2"><span className="truncate text-tiny text-hx-muted">{c.label}</span><span className="text-body-lg font-semibold tabular-nums">{fmtCell(v, c, row[i]!)}</span></div>)}
         </div>
       ))}
     </div>
@@ -195,9 +195,9 @@ function Kpi({ v, result }: VisualProps & { result: QueryResult }) {
   return (
     <div className="flex h-full flex-col justify-between px-3 py-1" data-kpi>
       <div>
-        {(!v.title || period >= 0) && <div className="truncate text-[12px] text-hx-muted">{v.title ? '' : c.label}{period >= 0 && <span data-kpi-period>{v.title ? '' : ' · '}{formatValue(row[period]!, result.columns[period]!.format, result.columns[period]!.grain)}</span>}</div>}
+        {(!v.title || period >= 0) && <div className="truncate text-small text-hx-muted">{v.title ? '' : c.label}{period >= 0 && <span data-kpi-period>{v.title ? '' : ' · '}{formatValue(row[period]!, result.columns[period]!.format, result.columns[period]!.grain)}</span>}</div>}
         <div className="truncate text-[clamp(20px,4cqw,36px)] font-semibold tabular-nums" data-kpi-value={String(row[main])}>{fmtCell(v, c, row[main]!)}</div>
-        {target !== null && <div className="flex flex-wrap items-center gap-2 text-[12px]">
+        {target !== null && <div className="flex flex-wrap items-center gap-2 text-small">
           <span className="text-hx-muted">Target {formatValue(target, t >= 0 ? result.columns[t]!.format : c.format)}</span>
           {delta !== null && <span className={good ? 'text-hx-success' : 'text-hx-danger'} data-kpi-delta>{good ? '▲' : '▼'} {formatValue(delta, 'percent:1')}</span>}
         </div>}
@@ -261,7 +261,7 @@ function Table({ v, result, onSelect, selection, onContext }: VisualProps & { re
   if (!rows.length) return <Empty />;
   return (
     <div className="h-full overflow-auto" data-bi-table>
-      <table className="w-full border-collapse text-[12.5px]">
+      <table className="w-full border-collapse text-small">
         <thead className="sticky top-0 z-10 bg-hx-elevated"><tr>{cols.map(([c, i]) => (
           <th key={c.name} scope="col" aria-sort={sort?.i === i ? (sort.desc ? 'descending' : 'ascending') : 'none'} className={cx('cursor-pointer select-none whitespace-nowrap border-b border-hx-border px-2 py-1 font-medium text-hx-secondary hover:text-hx-primary', c.role === 'measure' ? 'text-right' : 'text-left')} onClick={() => setSort((s) => (s?.i === i ? { i, desc: !s.desc } : { i, desc: c.role === 'measure' }))}>{c.label}{sort?.i === i ? (sort.desc ? ' ▾' : ' ▴') : ''}</th>
         ))}</tr></thead>
@@ -272,7 +272,7 @@ function Table({ v, result, onSelect, selection, onContext }: VisualProps & { re
         })}</tbody>
         {total && <tfoot className="sticky bottom-0 bg-hx-elevated font-semibold"><tr>{cols.map(([c, i], k) => <td key={c.name} className={cx('border-t border-hx-border px-2 py-1', c.role === 'measure' && 'text-right tabular-nums')}>{k === 0 && c.role !== 'measure' ? 'Total' : c.role === 'measure' ? fmtCell(v, c, total[i]!) : ''}</td>)}</tr></tfoot>}
       </table>
-      {result.truncated && <div className="p-1 text-[11px] text-hx-muted">Showing the first {result.rowCount} rows.</div>}
+      {result.truncated && <div className="p-1 text-tiny text-hx-muted">Showing the first {result.rowCount} rows.</div>}
     </div>
   );
 }
@@ -315,7 +315,7 @@ function Matrix({ v, result }: VisualProps & { result: QueryResult }) {
   const vals = (l: Line, k: Scalar[]) => (colKeys.length ? l.cells.get(JSON.stringify(k)) : l.total);
   return (
     <div className="h-full overflow-auto" data-bi-matrix>
-      <table className="w-full border-collapse text-[12.5px]">
+      <table className="w-full border-collapse text-small">
         <thead className="sticky top-0 z-10 bg-hx-elevated"><tr><th className="border-b border-hx-border px-2 py-1 text-left font-medium text-hx-secondary">{rd.map(([c]) => c.label).join(' / ')}</th>{header.map((h, i) => <th key={i} className="whitespace-nowrap border-b border-hx-border px-2 py-1 text-right font-medium text-hx-secondary">{h.label}</th>)}{colKeys.length > 0 && ms.map(([m]) => <th key={`t-${m.name}`} className="border-b border-hx-border px-2 py-1 text-right font-semibold">Total{ms.length > 1 ? ` ${m.label}` : ''}</th>)}</tr></thead>
         <tbody>{visible.map((l) => {
           const key = JSON.stringify(l.path);
@@ -355,7 +355,7 @@ function Slicer({ v, result, onSlicer, slicerValue }: VisualProps & { result: Qu
     const isDate = /DATE|TIME/.test(c.type);
     const apply = (a: string, b: string) => onSlicer?.(s.field, a || b ? { field: s.field, op: 'between', value: isDate ? a || String(nums[0]) : Number(a || nums[0]), to: isDate ? b || String(nums.at(-1)) : Number(b || nums.at(-1)) } : null);
     return (
-      <div className="flex h-full flex-col justify-center gap-1 px-2 text-[12px]" data-slicer="range">
+      <div className="flex h-full flex-col justify-center gap-1 px-2 text-small" data-slicer="range">
         <div className="flex items-center gap-1">
           <input aria-label={`${c.label} from`} type={isDate ? 'date' : 'number'} defaultValue={String(lo ?? '')} placeholder={formatValue(nums[0] ?? null, c.format, c.grain)} className="w-0 min-w-0 flex-1 rounded border border-hx-border bg-hx-bg px-1.5 py-1" onBlur={(e) => apply(e.target.value, String(hi ?? ''))} />
           <span className="text-hx-muted">to</span>
@@ -368,7 +368,7 @@ function Slicer({ v, result, onSlicer, slicerValue }: VisualProps & { result: Qu
     const cur = slicerValue?.op === 'relative' ? `${slicerValue.n}-${slicerValue.unit}` : '';
     return (
       <div className="flex h-full items-center px-2" data-slicer="relative">
-        <select aria-label={c.label} value={cur} className="w-full rounded border border-hx-border bg-hx-bg px-2 py-1 text-[12.5px]" onChange={(e) => { const [n, unit] = e.target.value.split('-'); onSlicer?.(s.field, e.target.value ? { field: s.field, op: 'relative', n: Number(n), unit: unit as 'day', current: true } : null); }}>
+        <select aria-label={c.label} value={cur} className="w-full rounded border border-hx-border bg-hx-bg px-2 py-1 text-small" onChange={(e) => { const [n, unit] = e.target.value.split('-'); onSlicer?.(s.field, e.target.value ? { field: s.field, op: 'relative', n: Number(n), unit: unit as 'day', current: true } : null); }}>
           <option value="">All time</option>
           {[['7', 'day'], ['30', 'day'], ['3', 'month'], ['6', 'month'], ['12', 'month'], ['1', 'year'], ['2', 'year']].map(([n, u]) => <option key={`${n}-${u}`} value={`${n}-${u}`}>Last {n} {u}{n === '1' ? '' : 's'}</option>)}
         </select>
@@ -378,25 +378,25 @@ function Slicer({ v, result, onSlicer, slicerValue }: VisualProps & { result: Qu
   if (style === 'dropdown') {
     return (
       <div className="flex h-full flex-col gap-1 px-2 py-1" data-slicer="dropdown">
-        <select aria-label={c.label} multiple={s.multi !== false} value={values.filter((x) => sel.has(JSON.stringify(x))).map((x) => JSON.stringify(x))} className="min-h-0 w-full flex-1 rounded border border-hx-border bg-hx-bg px-1 py-0.5 text-[12.5px]" onChange={(e) => set([...e.target.selectedOptions].map((o) => JSON.parse(o.value) as Scalar))}>
+        <select aria-label={c.label} multiple={s.multi !== false} value={values.filter((x) => sel.has(JSON.stringify(x))).map((x) => JSON.stringify(x))} className="min-h-0 w-full flex-1 rounded border border-hx-border bg-hx-bg px-1 py-0.5 text-small" onChange={(e) => set([...e.target.selectedOptions].map((o) => JSON.parse(o.value) as Scalar))}>
           {values.map((x) => <option key={JSON.stringify(x)} value={JSON.stringify(x)}>{formatValue(x, c.format, c.grain) || '(blank)'}</option>)}
         </select>
-        {sel.size > 0 && <button type="button" className="self-start text-[11px] text-hx-accent-text hover:underline" onClick={() => set([])}>Clear</button>}
+        {sel.size > 0 && <button type="button" className="self-start text-tiny text-hx-accent-text hover:underline" onClick={() => set([])}>Clear</button>}
       </div>
     );
   }
-  if (style === 'buttons') return <div className="flex h-full flex-wrap content-start gap-1 overflow-auto p-1" data-slicer="buttons">{values.map((x) => <button key={JSON.stringify(x)} type="button" aria-pressed={sel.has(JSON.stringify(x))} onClick={() => toggle(x)} className={cx('rounded-full border px-2.5 py-0.5 text-[12px]', sel.has(JSON.stringify(x)) ? 'border-hx-accent bg-hx-accent text-hx-on-accent' : 'border-hx-border hover:bg-hx-hover')}>{formatValue(x, c.format, c.grain) || '(blank)'}</button>)}</div>;
+  if (style === 'buttons') return <div className="flex h-full flex-wrap content-start gap-1 overflow-auto p-1" data-slicer="buttons">{values.map((x) => <button key={JSON.stringify(x)} type="button" aria-pressed={sel.has(JSON.stringify(x))} onClick={() => toggle(x)} className={cx('rounded-full border px-2.5 py-0.5 text-small', sel.has(JSON.stringify(x)) ? 'border-hx-accent bg-hx-accent text-hx-on-accent' : 'border-hx-border hover:bg-hx-hover')}>{formatValue(x, c.format, c.grain) || '(blank)'}</button>)}</div>;
   const shown = values.filter((x) => !q || String(x).toLowerCase().includes(q.toLowerCase()));
   return (
     <div className="flex h-full flex-col" data-slicer="list">
-      {values.length > 8 && <input aria-label={`Search ${c.label}`} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" className="mx-1 mb-1 rounded border border-hx-border bg-hx-bg px-1.5 py-0.5 text-[12px]" />}
+      {values.length > 8 && <input aria-label={`Search ${c.label}`} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" className="mx-1 mb-1 rounded border border-hx-border bg-hx-bg px-1.5 py-0.5 text-small" />}
       <div className="min-h-0 flex-1 overflow-auto px-1">{shown.map((x) => (
-        <label key={JSON.stringify(x)} className="flex cursor-pointer items-center gap-1.5 rounded px-1 py-0.5 text-[12.5px] hover:bg-hx-hover">
+        <label key={JSON.stringify(x)} className="flex cursor-pointer items-center gap-1.5 rounded px-1 py-0.5 text-small hover:bg-hx-hover">
           <input type="checkbox" checked={sel.has(JSON.stringify(x))} onChange={() => toggle(x)} className="accent-[var(--hx-accent)]" />
           <span className="truncate">{formatValue(x, c.format, c.grain) || '(blank)'}</span>
         </label>
       ))}</div>
-      {sel.size > 0 && <button type="button" className="mx-2 mb-1 self-start text-[11px] text-hx-accent-text hover:underline" onClick={() => set([])}>Clear</button>}
+      {sel.size > 0 && <button type="button" className="mx-2 mb-1 self-start text-tiny text-hx-accent-text hover:underline" onClick={() => set([])}>Clear</button>}
     </div>
   );
 }
@@ -409,12 +409,12 @@ function Decomp({ v, result, onDecomp, decompPath }: VisualProps & { result: Que
   const m = result.columns.find((c) => c.role === 'measure');
   const max = Math.max(1e-9, ...result.rows.map((r) => Math.abs(Number(r[1] ?? 0))));
   return (
-    <div className="flex h-full flex-col gap-1 overflow-auto p-2 text-[12.5px]" data-decomp>
+    <div className="flex h-full flex-col gap-1 overflow-auto p-2 text-small" data-decomp>
       <div className="flex flex-wrap items-center gap-1">
         <button type="button" className="rounded-md border border-hx-border px-2 py-0.5 font-semibold" onClick={() => onDecomp?.([])}>{m?.label ?? 'Total'}: {formatValue(e.total ?? null, m?.format)}</button>
         {path.map((p0, i) => <React.Fragment key={i}><span className="text-hx-muted">›</span><button type="button" className="rounded-md bg-hx-accent-soft px-2 py-0.5" onClick={() => onDecomp?.(path.slice(0, i + 1))}>{p0.dim.split('.').pop()}: {String(p0.value)}</button></React.Fragment>)}
       </div>
-      {e.next && <div className="text-[11.5px] text-hx-muted" data-decomp-next={e.next}>Split by <b>{e.next.split('.').pop()}</b> (largest spread{e.spread?.[1] ? `; next: ${e.spread[1].dim.split('.').pop()}` : ''})</div>}
+      {e.next && <div className="text-caption text-hx-muted" data-decomp-next={e.next}>Split by <b>{e.next.split('.').pop()}</b> (largest spread{e.spread?.[1] ? `; next: ${e.spread[1].dim.split('.').pop()}` : ''})</div>}
       <div className="space-y-0.5">{result.rows.map((r, i) => (
         <button key={i} type="button" className="flex w-full items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-hx-hover" onClick={() => e.next && onDecomp?.([...path, { dim: e.next, value: r[0]! }])}>
           <span className="w-28 shrink-0 truncate">{String(r[0] ?? '(blank)')}</span>
@@ -422,14 +422,14 @@ function Decomp({ v, result, onDecomp, decompPath }: VisualProps & { result: Que
           <span className="w-20 shrink-0 text-right tabular-nums">{formatValue(r[1] ?? null, m?.format)}</span>
         </button>
       ))}</div>
-      {result.method && <div className="mt-auto text-[10.5px] text-hx-muted">{result.method}</div>}
+      {result.method && <div className="mt-auto text-micro text-hx-muted">{result.method}</div>}
     </div>
   );
 }
 
 function Drivers({ result }: VisualProps & { result: QueryResult }) {
   return (
-    <div className="flex h-full flex-col gap-1 overflow-auto p-2 text-[12.5px]" data-drivers>
+    <div className="flex h-full flex-col gap-1 overflow-auto p-2 text-small" data-drivers>
       {result.rows.map((r, i) => { const ratio = Number(r[4] ?? 1); const up = ratio >= 1; return (
         <div key={i} className="flex items-center gap-2">
           <span className="w-40 shrink-0 truncate"><span className="text-hx-muted">{String(r[0]).split('.').pop()} =</span> {String(r[1])}</span>
@@ -438,25 +438,25 @@ function Drivers({ result }: VisualProps & { result: QueryResult }) {
           <span className="w-14 shrink-0 text-right text-hx-muted tabular-nums">{formatValue(r[3] ?? null, 'integer')}</span>
         </div>
       ); })}
-      {result.method && <div className="mt-auto text-[10.5px] text-hx-muted">{result.method}</div>}
+      {result.method && <div className="mt-auto text-micro text-hx-muted">{result.method}</div>}
     </div>
   );
 }
 
 function Narrative({ result, renderMarkdown }: VisualProps & { result: QueryResult }) {
   const e = (result.extra ?? {}) as { text?: string; refs?: Array<{ measure: string; formatted: string; filters: FilterSpec[] }> };
-  if (!e.text) return <div className="p-2 text-[12px] text-hx-muted">No narrative yet: ask the agent to summarise, or write one with {'{{Measure}}'} placeholders.</div>;
+  if (!e.text) return <div className="p-2 text-small text-hx-muted">No narrative yet: ask the agent to summarise, or write one with {'{{Measure}}'} placeholders.</div>;
   return (
-    <div className="h-full overflow-auto p-2 text-[13px] leading-relaxed" data-narrative>
+    <div className="h-full overflow-auto p-2 text-body leading-relaxed" data-narrative>
       {renderMarkdown ? renderMarkdown(e.text) : e.text}
-      {!!e.refs?.length && <div className="mt-2 flex flex-wrap gap-1 text-[10.5px] text-hx-muted" aria-label="Where the numbers come from">{e.refs.map((r, i) => <span key={i} title={r.filters.map((f) => `${f.field} = ${String(f.value)}`).join(', ') || 'all rows'} className="rounded bg-hx-code px-1">{r.formatted} = {r.measure}{r.filters.length ? ` [${r.filters.map((f) => String(f.value)).join(', ')}]` : ''}</span>)}</div>}
+      {!!e.refs?.length && <div className="mt-2 flex flex-wrap gap-1 text-micro text-hx-muted" aria-label="Where the numbers come from">{e.refs.map((r, i) => <span key={i} title={r.filters.map((f) => `${f.field} = ${String(f.value)}`).join(', ') || 'all rows'} className="rounded bg-hx-code px-1">{r.formatted} = {r.measure}{r.filters.length ? ` [${r.filters.map((f) => String(f.value)).join(', ')}]` : ''}</span>)}</div>}
     </div>
   );
 }
 
 function StaticVisual({ v, renderMarkdown, onButton }: VisualProps) {
   const o = v.options ?? {};
-  if (v.type === 'image') return o.url ? <img src={o.url} alt={o.alt ?? v.title ?? ''} className="h-full w-full object-contain" /> : <div className="p-2 text-[12px] text-hx-muted">No image</div>;
-  if (v.type === 'button') return <div className="flex h-full items-center justify-center p-1"><button type="button" data-bi-button className="w-full rounded-lg bg-hx-accent px-3 py-1.5 text-[13px] font-medium text-hx-on-accent hover:bg-hx-accent-hover" onClick={() => onButton?.(o.button)}>{o.button?.label ?? 'Button'}</button></div>;
-  return <div className="h-full overflow-auto px-2 py-1 text-[13px]" data-bi-text>{renderMarkdown ? renderMarkdown(o.markdown ?? '') : o.markdown}</div>;
+  if (v.type === 'image') return o.url ? <img src={o.url} alt={o.alt ?? v.title ?? ''} className="h-full w-full object-contain" /> : <div className="p-2 text-small text-hx-muted">No image</div>;
+  if (v.type === 'button') return <div className="flex h-full items-center justify-center p-1"><button type="button" data-bi-button className="w-full rounded-lg bg-hx-accent px-3 py-1.5 text-body font-medium text-hx-on-accent hover:bg-hx-accent-hover" onClick={() => onButton?.(o.button)}>{o.button?.label ?? 'Button'}</button></div>;
+  return <div className="h-full overflow-auto px-2 py-1 text-body" data-bi-text>{renderMarkdown ? renderMarkdown(o.markdown ?? '') : o.markdown}</div>;
 }

@@ -26,22 +26,22 @@ export function useParsed<T>(parse: () => T, deps: unknown[]): { value?: T; erro
 }
 
 export function Arriving({ what }: { what: string }): React.ReactElement {
-  return <p className="p-2 text-[11.5px] text-hx-muted">{what} arriving…</p>;
+  return <p className="p-2 text-caption text-hx-muted">{what} arriving…</p>;
 }
 
 export function Notes({ notes }: { notes: string[] }): React.ReactElement | null {
   if (!notes.length) return null;
-  return <div data-bio-truncated className="mb-1.5 rounded-md bg-hx-warning/10 px-2 py-1 text-[11.5px] text-hx-warning">{notes.join(' ')}</div>;
+  return <div data-bio-truncated className="mb-1.5 rounded-md bg-hx-warning-soft px-2 py-1 text-caption text-hx-warning">{notes.join(' ')}</div>;
 }
 
 export function Stat({ label, value }: { label: string; value: React.ReactNode }): React.ReactElement {
-  return <span className="inline-flex items-baseline gap-1 rounded-md bg-hx-code px-1.5 py-0.5 text-[11.5px]"><span className="text-hx-muted">{label}</span><span className="font-medium tabular-nums text-hx-primary">{value}</span></span>;
+  return <span className="inline-flex items-baseline gap-1 rounded-md bg-hx-code px-1.5 py-0.5 text-caption"><span className="text-hx-muted">{label}</span><span className="font-medium tabular-nums text-hx-primary">{value}</span></span>;
 }
 
 export function Toggle({ on, onChange, children, label }: { on: boolean; onChange: (v: boolean) => void; children: React.ReactNode; label?: string }): React.ReactElement {
   return (
     <button type="button" aria-pressed={on} aria-label={label} onClick={() => onChange(!on)}
-      className={`rounded-md border px-1.5 py-0.5 text-[11.5px] transition-colors ${on ? 'border-hx-accent bg-hx-accent-soft text-hx-accent-text' : 'border-hx-border text-hx-secondary hover:bg-hx-hover'}`}>
+      className={`rounded-md border px-1.5 py-0.5 text-caption transition-colors ${on ? 'border-hx-accent bg-hx-accent-soft text-hx-accent-text' : 'border-hx-border text-hx-secondary hover:bg-hx-hover'}`}>
       {children}
     </button>
   );
@@ -52,7 +52,7 @@ export function Seg<T extends string>({ value, options, onChange, label }: { val
     <span role="group" aria-label={label} className="inline-flex rounded-md bg-hx-pill p-0.5">
       {options.map(([v, l]) => (
         <button key={v} type="button" aria-pressed={v === value} onClick={() => onChange(v)}
-          className={`rounded px-1.5 py-0.5 text-[11.5px] ${v === value ? 'bg-hx-elevated font-medium text-hx-primary shadow-sm' : 'text-hx-muted hover:text-hx-primary'}`}>{l}</button>
+          className={`rounded px-1.5 py-0.5 text-caption ${v === value ? 'bg-hx-elevated font-medium text-hx-primary shadow-sm' : 'text-hx-muted hover:text-hx-primary'}`}>{l}</button>
       ))}
     </span>
   );

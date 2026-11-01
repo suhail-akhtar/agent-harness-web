@@ -27,7 +27,7 @@ export function DiffView({ before, after, ops: given, path, collapsedLines = 400
   let shown = 0;
   return (
     <div ref={box} data-block="diff" data-diff-mode={mode} className="my-2 overflow-hidden rounded-xl border border-hx-border-subtle">
-      <div className="flex items-center gap-2 border-b border-hx-border-subtle bg-hx-code px-3 py-1 text-[11.5px] text-hx-muted">
+      <div className="flex items-center gap-2 border-b border-hx-border-subtle bg-hx-code px-3 py-1 text-caption text-hx-muted">
         {path && <span className="truncate font-mono text-hx-secondary">{path}</span>}
         <span className="text-[var(--hx-diff-add-gutter)]">+{st.added}</span>
         <span className="text-[var(--hx-diff-remove-gutter)]">−{st.removed}</span>
@@ -39,14 +39,14 @@ export function DiffView({ before, after, ops: given, path, collapsedLines = 400
         )}
       </div>
       <div className="max-h-[520px] overflow-auto">
-        {!hs.length && <div className="px-3 py-2 text-[12px] text-hx-muted">No changes</div>}
+        {!hs.length && <div className="px-3 py-2 text-small text-hx-muted">No changes</div>}
         {hs.map((h, hi) => {
           if (!all && shown >= collapsedLines) return null;
           const rows = mode === 'split' ? splitRows(h.ops) : null;
           shown += h.ops.length;
           return (
             <div key={hi}>
-              {h.skippedBefore > 0 && <div className="bg-hx-surface px-3 py-0.5 text-[11px] text-hx-muted">⋯ {h.skippedBefore} unchanged line{h.skippedBefore === 1 ? '' : 's'}</div>}
+              {h.skippedBefore > 0 && <div className="bg-hx-surface px-3 py-0.5 text-tiny text-hx-muted">⋯ {h.skippedBefore} unchanged line{h.skippedBefore === 1 ? '' : 's'}</div>}
               {rows ? rows.map((r, i) => (
                 <div key={i} className="grid grid-cols-2">
                   <Line op={r.left} side="a" split />
@@ -56,7 +56,7 @@ export function DiffView({ before, after, ops: given, path, collapsedLines = 400
             </div>
           );
         })}
-        {!all && total > collapsedLines && <button type="button" onClick={() => setAll(true)} className="w-full border-t border-hx-border-subtle py-1 text-[11.5px] text-hx-muted hover:bg-hx-hover">Show all {total} lines</button>}
+        {!all && total > collapsedLines && <button type="button" onClick={() => setAll(true)} className="w-full border-t border-hx-border-subtle py-1 text-caption text-hx-muted hover:bg-hx-hover">Show all {total} lines</button>}
       </div>
     </div>
   );
@@ -75,6 +75,6 @@ function Line({ op, side, split }: { op?: Op; side?: 'a' | 'b'; split?: boolean 
 /** A ```diff block or git output: one DiffView per file. */
 export function PatchView({ source }: { source: string }): React.ReactElement {
   const files = useMemo(() => parseUnifiedDiff(source), [source]);
-  if (!files.length) return <pre className="my-2 overflow-auto rounded-xl bg-hx-code p-3 font-mono text-[12px]">{source}</pre>;
+  if (!files.length) return <pre className="my-2 overflow-auto rounded-xl bg-hx-code p-3 font-mono text-small">{source}</pre>;
   return <>{files.map((f, i) => <DiffView key={i} path={f.path} ops={f.ops} />)}</>;
 }

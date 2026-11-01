@@ -8,7 +8,7 @@
 import React, { useEffect, useState } from 'react';
 import type { InboxItem } from '@harness/client';
 import type { Interruptions } from '@harness/client';
-import { Badge, Button, Field, Icon, IconButton, Input, Menu, Modal, Tooltip, cx, toast, type MenuItem } from '@harness/ui';
+import { Badge, Button, Field, Icon, IconButton, Input, Menu, Modal, Tooltip, cx, toast, type MenuItem, Card, IconTile, Section, Callout, type Tone } from '@harness/ui';
 import { useData, client } from '../../state/data';
 import { navigate, openSession } from '../../state/app';
 import { NoticingDialog, PracticeBanner, acceptFinding, useNoticing } from './Noticing';
@@ -50,20 +50,20 @@ function UpdateRow({ item, onNoticing }: { item: InboxItem; onNoticing: () => vo
     { id: 'tomorrow', label: 'Until tomorrow, 9:00', icon: 'calendar', onSelect: () => void act('snooze', { until: tomorrowNine() }) },
   ];
   const dismiss: MenuItem[] = REASONS.map((r) => ({ id: r.id, label: r.label, onSelect: () => void act('dismiss', { reason: r.id }) }));
-  const tone = item.level === 'error' ? 'text-hx-danger' : item.level === 'warn' ? 'text-hx-warning' : item.kind === 'suggestion' ? 'text-hx-accent-text' : 'text-hx-muted';
+  const tone: Tone = item.level === 'error' ? 'danger' : item.level === 'warn' ? 'warning' : item.kind === 'suggestion' ? 'accent' : 'neutral';
   return (
-    <div data-update={item.id} data-update-kind={item.kind} data-update-status={item.status} className={cx('flex gap-3 rounded-xl border p-3', item.status === 'new' ? 'border-hx-border bg-hx-elevated' : 'border-hx-border-subtle')}>
-      <Icon name={item.level === 'error' || item.level === 'warn' ? 'alert' : ICON[item.kind]} size={16} className={cx('mt-0.5 shrink-0', tone)} />
+    <Card padding="sm" data-update={item.id} data-update-kind={item.kind} data-update-status={item.status} className={cx('flex gap-3', item.status === 'new' && 'border-hx-border')}>
+      <IconTile icon={item.level === 'error' || item.level === 'warn' ? 'alert' : ICON[item.kind]} tone={tone} size="sm" />
       <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-x-2 text-[12px] text-hx-muted">
+        <div className="flex flex-wrap items-center gap-x-2 text-small text-hx-muted">
           {item.status === 'new' && <span className="h-2 w-2 rounded-full bg-hx-accent" aria-label="New" data-update-new />}
           <span className="font-medium text-hx-secondary">{KIND[item.kind]}</span>
           <span>{when(item.at)}</span>
           {item.held && <span data-update-held={item.held}>· {HELD[item.held]}</span>}
           {item.detector && DETECTOR[item.detector] && <button type="button" className="hover:underline" onClick={onNoticing} data-update-detector={item.detector}>· {DETECTOR[item.detector]}</button>}
         </div>
-        <button type="button" onClick={open} className="mt-0.5 block max-w-full truncate text-left text-[13.5px] font-medium hover:underline" data-update-title>{item.title}</button>
-        {item.body && <p className="mt-0.5 line-clamp-3 whitespace-pre-line text-[13px] text-hx-secondary" data-update-body>{item.body}</p>}
+        <button type="button" onClick={open} className="mt-0.5 block max-w-full truncate text-left text-body font-medium hover:underline" data-update-title>{item.title}</button>
+        {item.body && <p className="mt-0.5 line-clamp-3 whitespace-pre-line text-body text-hx-secondary" data-update-body>{item.body}</p>}
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
           {item.kind === 'suggestion' && <Button size="sm" variant="primary" icon="play" disabled={busy} onClick={() => void start()} data-update-start>Start</Button>}
           {item.kind === 'noticed' && item.draft && <Button size="sm" variant="primary" icon="calendar" onClick={() => void acceptFinding(item).catch(fail)} data-update-setup>Set it up…</Button>}
@@ -76,7 +76,7 @@ function UpdateRow({ item, onNoticing }: { item: InboxItem; onNoticing: () => vo
           <Menu items={dismiss} trigger={({ ref, toggle }) => <Button ref={ref} size="sm" variant="ghost" icon="x" onClick={toggle} data-update-dismiss>Dismiss</Button>} />
         </div>
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -89,22 +89,18 @@ export function InboxUpdates(): React.ReactElement | null {
   if (items === null) return null;
   const unread = items.filter((i) => i.status === 'new').length;
   return (
-    <section data-inbox-updates className="mb-8">
-      <div className="mb-2 flex items-center gap-2">
-        <h2 className="text-[12px] font-medium uppercase tracking-wide text-hx-muted">Updates</h2>
-        {unread > 0 && <Badge tone="accent">{unread} new</Badge>}
-        <span className="flex-1" />
-        {unread > 0 && <Tooltip label="Mark every update read"><IconButton size="xs" icon="check" label="Mark all read" onClick={() => void client.inbox.readAll().catch(fail)} data-updates-read-all /></Tooltip>}
-        {overview && overview.enabled && <Tooltip label={`Noticing: ${overview.mode === 'on' ? 'on' : overview.mode === 'practice' ? 'practising quietly' : 'off'}`}><IconButton size="xs" icon={overview.mode === 'off' ? 'eye-off' : 'eye'} label="Noticing" onClick={() => setNoticing(true)} data-updates-noticing /></Tooltip>}
-        <Tooltip label="When updates may interrupt you"><IconButton size="xs" icon="settings" label="Interruptions" onClick={() => setLimits(true)} data-updates-settings /></Tooltip>
-      </div>
+    <Section data-inbox-updates title={<>Updates{unread > 0 && <Badge tone="accent" className="ml-2 normal-case tracking-normal">{unread} new</Badge>}</>} actions={<>
+      {unread > 0 && <Tooltip label="Mark every update read"><IconButton size="sm" icon="check" label="Mark all read" onClick={() => void client.inbox.readAll().catch(fail)} data-updates-read-all /></Tooltip>}
+      {overview && overview.enabled && <Tooltip label={`Noticing: ${overview.mode === 'on' ? 'on' : overview.mode === 'practice' ? 'practising quietly' : 'off'}`}><IconButton size="sm" icon={overview.mode === 'off' ? 'eye-off' : 'eye'} label="Noticing" onClick={() => setNoticing(true)} data-updates-noticing /></Tooltip>}
+      <Tooltip label="When updates may interrupt you"><IconButton size="sm" icon="settings" label="Interruptions" onClick={() => setLimits(true)} data-updates-settings /></Tooltip>
+    </>}>
       <InterruptionsDialog open={limits} onClose={() => setLimits(false)} />
       <NoticingDialog open={noticing} onClose={() => setNoticing(false)} />
       <PracticeBanner o={overview} onReview={() => setNoticing(true)} />
       {!items.length
-        ? <p className="text-[13px] text-hx-muted" data-updates-empty>No updates. Results of scheduled runs, what agents tell you, and work they offer while you are away arrive here.</p>
+        ? <p className="text-body text-hx-muted" data-updates-empty>No updates. Results of scheduled runs, what agents tell you, and work they offer while you are away arrive here.</p>
         : <div className="space-y-2">{items.map((i) => <UpdateRow key={i.id} item={i} onNoticing={() => setNoticing(true)} />)}</div>}
-    </section>
+    </Section>
   );
 }
 
@@ -127,15 +123,15 @@ export function InterruptionsDialog({ open, onClose }: { open: boolean; onClose:
   return (
     <Modal open={open} onClose={onClose} title="When updates may interrupt you" size="md" footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" onClick={() => void save()} data-limits-save>Save</Button></>}>
       <div data-limits>
-        <p className="mb-4 text-[12.5px] text-hx-secondary">Every update lands in your Inbox. These decide when one may also interrupt you with a notification. Each schedule can be quieter still (its "Tell me" setting).</p>
+        <p className="mb-4 text-small text-hx-secondary">Every update lands in your Inbox. These decide when one may also interrupt you with a notification. Each schedule can be quieter still (its "Tell me" setting).</p>
         <div className="grid gap-x-3 md:grid-cols-2">
           <Field label="Quiet from" help="Nothing interrupts, not even errors"><Input type="time" value={f.quietFrom} onChange={(e) => setF({ ...f, quietFrom: e.target.value })} data-limits-quiet-from /></Field>
           <Field label="Quiet until"><Input type="time" value={f.quietTo} onChange={(e) => setF({ ...f, quietTo: e.target.value })} data-limits-quiet-to /></Field>
           <Field label="At most a day" help="Empty: no limit. Errors still interrupt"><Input type="number" min={0} value={f.maxPerDay} onChange={(e) => setF({ ...f, maxPerDay: e.target.value })} placeholder="No limit" data-limits-max /></Field>
           <Field label="Daily digest at" help="What waited, in one update"><Input type="time" value={f.digestAt} onChange={(e) => setF({ ...f, digestAt: e.target.value })} data-limits-digest /></Field>
         </div>
-        <p className="text-[12px] text-hx-muted">Times are on this computer's clock{LOCAL_ZONE ? ` (${LOCAL_ZONE})` : ''}.</p>
-        {error && <p role="alert" className="mt-2 rounded-lg bg-hx-danger/10 px-3 py-2 text-[12.5px] text-hx-danger" data-limits-error>{error}</p>}
+        <p className="text-small text-hx-muted">Times are on this computer's clock{LOCAL_ZONE ? ` (${LOCAL_ZONE})` : ''}.</p>
+        {error && <Callout tone="danger" className="mt-2" data-limits-error>{error}</Callout>}
       </div>
     </Modal>
   );

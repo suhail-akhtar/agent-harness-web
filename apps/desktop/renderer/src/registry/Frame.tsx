@@ -44,7 +44,7 @@ export function PluginFrame(p: FrameProps): React.ReactElement {
 }
 
 function FrameNote({ icon, text }: { icon: string; text: string }) {
-  return <div className="flex items-center gap-2 rounded-lg border border-hx-border-subtle p-3 text-[12.5px] text-hx-muted"><Icon name={icon} size={15} />{text}</div>;
+  return <div className="flex items-center gap-2 rounded-lg border border-hx-border-subtle p-3 text-small text-hx-muted"><Icon name={icon} size={15} />{text}</div>;
 }
 
 export function TrustGate({ plugin, displayName, declared, changed, uiHash, onSkip }: { plugin: string; displayName: string; declared: Capability[]; changed: boolean; uiHash: string; onSkip: () => void }): React.ReactElement {
@@ -59,12 +59,12 @@ export function TrustGate({ plugin, displayName, declared, changed, uiHash, onSk
       <div className="flex items-center gap-3">
         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-hx-accent-soft text-hx-accent-text"><Icon name="shield" size={20} /></div>
         <div>
-          <div className="text-[14px] font-semibold text-hx-primary">{displayName} {changed ? 'changed and asks again' : 'asks for access'}</div>
-          <div className="text-[12px] text-hx-muted">It runs in an isolated frame. It can only do what you allow here.</div>
+          <div className="text-body-lg font-semibold text-hx-primary">{displayName} {changed ? 'changed and asks again' : 'asks for access'}</div>
+          <div className="text-small text-hx-muted">It runs in an isolated frame. It can only do what you allow here.</div>
         </div>
       </div>
       <ul className="mt-4 space-y-1.5">
-        {declared.map((c) => <li key={c} className="flex items-start gap-2 text-[13px] text-hx-secondary"><Icon name="check" size={14} className="mt-0.5 text-hx-accent-text" />{CAPABILITY_TEXT[c] ?? c}</li>)}
+        {declared.map((c) => <li key={c} className="flex items-start gap-2 text-body text-hx-secondary"><Icon name="check" size={14} className="mt-0.5 text-hx-accent-text" />{CAPABILITY_TEXT[c] ?? c}</li>)}
       </ul>
       <div className="mt-5 flex justify-end gap-2">
         <Button variant="ghost" onClick={onSkip}>Run without access</Button>

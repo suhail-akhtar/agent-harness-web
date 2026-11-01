@@ -46,12 +46,12 @@ export function PathwayView({ source, streaming }: { source: string; streaming?:
     <div data-pathway={p.nodes.length} className="space-y-1.5">
       <Notes notes={p.notes} />
       <div className="flex flex-wrap items-center gap-1.5">
-        {p.title && <span className="mr-1 text-[13px] font-semibold text-hx-primary">{p.title}</span>}
+        {p.title && <span className="mr-1 text-body font-semibold text-hx-primary">{p.title}</span>}
         <Stat label="nodes" value={p.nodes.length} />
         <Stat label="interactions" value={p.edges.length} />
       </div>
       <GraphvizView source={dot} streaming={streaming} />
-      <div data-pathway-legend className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px] text-hx-secondary">
+      <div data-pathway-legend className="flex flex-wrap items-center gap-x-3 gap-y-1 text-caption text-hx-secondary">
         {usedN.map((t) => <span key={t} className="inline-flex items-center gap-1"><svg width={20} height={14} aria-hidden><NodeGlyph type={t} fill={th.fills[t]} stroke={th.muted} /></svg>{t}</span>)}
         {usedE.map((t) => <span key={t} className="inline-flex items-center gap-1"><svg width={20} height={14} aria-hidden><EdgeGlyph type={t} color={th.edges[t]} /></svg>{t}</span>)}
       </div>
@@ -74,7 +74,7 @@ export function BioPlotView({ source, streaming, format }: { source: string; str
     <div data-bioplot={kind} className="space-y-1">
       <Notes notes={p.notes} />
       <Viz key={dark ? 'd' : 'l'} source={spec} streaming={streaming} />
-      <div className="text-[11.5px] text-hx-muted">{p.summary}</div>
+      <div className="text-caption text-hx-muted">{p.summary}</div>
     </div>
   );
 }
@@ -138,7 +138,7 @@ function HeatmapSvg({ h }: { h: Heatmap }) {
         <text x={gx + 160} y={legendY + 21} fontSize={9.5} textAnchor="end" fill="var(--hx-text-muted)">{h.diverging ? m.toFixed(2) : h.max.toFixed(2)}</text>
         <text x={gx + 170} y={legendY + 8} fontSize={10} fill="var(--hx-text-secondary)">{h.scale === 'row' ? 'row z-score' : h.scale === 'col' ? 'column z-score' : 'value'}</text>
       </svg>
-      <div className="min-h-[18px] text-[11.5px] text-hx-secondary">
+      <div className="min-h-[18px] text-caption text-hx-secondary">
         {hover ? `${h.rows[h.rowOrder[hover[0]]!]} × ${h.cols[h.colOrder[hover[1]]!]}: ${hv ?? 'missing'}${h.scale !== 'none' && hs !== null ? ` (z ${hs})` : ''}`
           : <span className="text-hx-muted">{fmt(nr)} rows × {fmt(nc)} columns{h.rowTree || h.colTree ? ` · clustered (${[h.rowTree && 'rows', h.colTree && 'columns'].filter(Boolean).join(' and ')}, average linkage, Euclidean)` : ''}</span>}
       </div>

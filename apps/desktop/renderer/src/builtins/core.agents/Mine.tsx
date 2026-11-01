@@ -8,11 +8,10 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import type { AgentDef, AgentInfo, AgentOptions, AgentRecord, Effort } from '@harness/client';
-import { Badge, Button, CheckboxGroup, EmptyState, Field, Icon, IconButton, Input, Menu, Modal, Page, Select, Switch, Textarea, Tooltip, cx, toast, type MenuItem } from '@harness/ui';
+import { Badge, Button, CheckboxGroup, EmptyState, Field, Icon, IconButton, Input, Menu, Modal, Page, Select, Switch, Textarea, Tooltip, cx, toast, type MenuItem, ChoiceGroup, Card, IconTile, Meta, Section, OptionCards, Callout } from '@harness/ui';
 import { client, clientInfo, useData } from '../../state/data';
 import { navigate, openSession, useApp } from '../../state/app';
 import { scratchFolder, desktop } from '../../bridge';
-import { Choice } from '../../components/ScheduleDialog';
 import { create } from 'zustand';
 
 const fail = (e: unknown) => toast((e as Error).message, { kind: 'error' });
@@ -54,33 +53,33 @@ function AgentCard({ a, onEdit, reload }: { a: AgentInfo; onEdit?: () => void; r
   ] : [];
   const tools = a.tools ? `${a.tools.length} tool${a.tools.length === 1 ? '' : 's'}` : 'all tools';
   return (
-    <div data-agent-card={a.name} data-agent-source={a.source} className={cx('flex flex-col rounded-xl border bg-hx-elevated p-3.5', mine && rec.enabled === false ? 'border-hx-border-subtle opacity-70' : 'border-hx-border-subtle hover:border-hx-border')}>
-      <div className="flex items-start gap-2">
-        <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-hx-accent-soft" style={a.color ? { background: a.color.startsWith('#') ? `${a.color}22` : undefined, color: a.color } : undefined}><Icon name="bot" size={15} className="text-hx-accent-text" /></span>
+    <Card data-agent-card={a.name} data-agent-source={a.source} className="flex flex-col" muted={mine && rec.enabled === false}>
+      <div className="flex items-start gap-2.5">
+        <IconTile icon="bot" tone={a.source === 'user' ? 'accent' : 'neutral'} />
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-1.5"><span className="truncate text-[13.5px] font-semibold">{a.name}</span>
+          <div className="flex flex-wrap items-center gap-1.5"><span className="truncate text-body font-semibold">{a.name}</span>
             {a.source !== 'user' && <Badge>{a.source === 'builtin' ? 'built in' : a.plugin ?? 'plugin'}</Badge>}
-            {mine && <span className="text-[11px] text-hx-muted">v{rec.version}</span>}
+            {mine && <span className="text-tiny text-hx-muted">v{rec.version}</span>}
           </div>
-          <p className="mt-0.5 line-clamp-2 text-[12.5px] text-hx-secondary">{a.description}</p>
+          <p className="mt-0.5 line-clamp-2 text-small text-hx-secondary">{a.description}</p>
         </div>
         {mine && <Tooltip label={rec.enabled ? 'On: in your conversations' : 'Off: in none'}><Switch checked={rec.enabled} label={`${a.name}: ${rec.enabled ? 'on' : 'off'}`} onChange={(v) => void client.agents.update(a.name, { enabled: v }).then(reload).catch(fail)} /></Tooltip>}
       </div>
-      <div className="mt-2 flex flex-wrap gap-x-2.5 gap-y-1 text-[11.5px] text-hx-muted" data-agent-facts>
-        <span>{a.model ?? 'the conversation\'s model'}</span><span>{tools}</span>
-        {a.mcpServers?.length ? <span>MCP: {a.mcpServers.join(', ')}</span> : null}
-        {a.skills?.length ? <span>skills: {a.skills.join(', ')}</span> : null}
-        {a.permissionMode && <span>{MODES.find((m) => m.id === a.permissionMode)?.label.toLowerCase()}</span>}
-        {a.background && <span>background</span>}{a.isolation && <span>own worktree</span>}
-        {a.modelInvocable === false && <span>only you start it</span>}
-      </div>
-      <div className="mt-3 flex items-center gap-1.5">
+      <Meta className="mt-2.5" data-agent-facts items={[
+        a.model ?? "the conversation's model", tools,
+        a.mcpServers?.length ? `MCP: ${a.mcpServers.join(', ')}` : null,
+        a.skills?.length ? `skills: ${a.skills.join(', ')}` : null,
+        a.permissionMode ? MODES.find((m) => m.id === a.permissionMode)?.label.toLowerCase() : null,
+        a.background ? 'background' : null, a.isolation ? 'own worktree' : null,
+        a.modelInvocable === false ? 'only you start it' : null,
+      ]} />
+      <div className="mt-3 flex items-center gap-1.5 border-t border-hx-border-subtle pt-3">
         {a.userInvocable !== false && (!mine || rec.enabled) && <Button size="sm" icon="chat" onClick={() => void chatWith(a).catch(fail)} data-agent-chat>Chat</Button>}
         {mine && <Button size="sm" variant="ghost" icon="edit" onClick={onEdit} data-agent-edit>Edit</Button>}
         <span className="flex-1" />
         {mine && <Menu items={menu} trigger={({ ref, toggle }) => <IconButton ref={ref} size="sm" icon="more" label="More" onClick={toggle} data-agent-more />} />}
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -108,19 +107,19 @@ export function YourAgents({ embedded }: { embedded?: boolean }): React.ReactEle
   const body = (
     <div data-your-agents>
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <p className="min-w-0 flex-1 text-[13px] text-hx-secondary">Specialists with their own instructions, model, tools, MCP servers and limits. In any conversation the agent can hand work to them (several at once); you can also talk to one directly.</p>
+        <p className="min-w-0 flex-1 text-body text-hx-secondary">Specialists with their own instructions, model, tools, MCP servers and limits. In any conversation the agent can hand work to them (several at once); you can also talk to one directly.</p>
         <Button icon="upload" variant="ghost" onClick={importFile} data-agents-import>Import</Button>
         <Button icon="plus" variant="primary" onClick={() => useAgentEditor.getState().open()} data-agents-new>New agent</Button>
       </div>
-      {error && <p role="alert" className="mb-3 text-[13px] text-hx-danger">{error}</p>}
-      {list === null ? <p className="text-[13px] text-hx-muted">Loading…</p> : (
+      {error && <Callout tone="danger" className="mb-4">{error}</Callout>}
+      {list === null ? <p className="text-body text-hx-muted">Loading…</p> : (
         <>
           {!mine.length
             ? <EmptyState icon="bot" title="No agents of your own yet" action={<Button variant="primary" icon="sparkles" onClick={() => useAgentEditor.getState().open()} data-agents-make>Make one</Button>}>Describe one (a reviewer, a researcher, a test writer…) and it is drafted for you to check, or import an agent file from Claude Code, Cursor or Copilot.</EmptyState>
             : <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3" data-agents-mine>{mine.map((a) => <AgentCard key={a.name} a={a} reload={reload} onEdit={() => useAgentEditor.getState().open({ edit: a as AgentRecord })} />)}</div>}
           {others.length > 0 && (
             <>
-              <h3 className="mb-2 mt-7 text-[11.5px] font-semibold uppercase tracking-wide text-hx-muted">Built in and from plugins</h3>
+              <h2 className="mb-2.5 mt-8 text-tiny font-semibold uppercase tracking-wide text-hx-muted">Built in and from plugins</h2>
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3" data-agents-others>{others.map((a) => <AgentCard key={`${a.source}:${a.name}`} a={a} reload={reload} />)}</div>
             </>
           )}
@@ -129,7 +128,7 @@ export function YourAgents({ embedded }: { embedded?: boolean }): React.ReactEle
       <AgentEditor open={editing !== null || draft !== null} edit={editing ?? undefined} draft={draft ?? undefined} onClose={() => useAgentEditor.getState().close()} onSaved={() => void reload()} />
     </div>
   );
-  return embedded ? body : <Page title="Your agents" width="wide">{body}</Page>;
+  return embedded ? body : <Page title="Your agents">{body}</Page>;
 }
 
 /** On the Agents home: the person's own agents (a few), New, and the way to all of them. */
@@ -142,13 +141,13 @@ export function YourAgentsSection(): React.ReactElement {
   return (
     <section className="mb-7" data-home-section="your-agents">
       <div className="mb-2 flex items-center gap-2">
-        <h2 className="text-[12px] font-medium uppercase tracking-wide text-hx-muted">Your agents</h2>
+        <h2 className="text-tiny font-semibold uppercase tracking-wide text-hx-muted">Your agents</h2>
         <span className="flex-1" />
         <Button size="sm" variant="ghost" icon="plus" onClick={() => useAgentEditor.getState().open()} data-home-agent-new>New agent</Button>
         <Button size="sm" variant="ghost" icon="bot" onClick={() => navigate({ view: 'core.agents:mine' })}>All</Button>
       </div>
       {mine === null ? null : !mine.length
-        ? <p className="rounded-xl border border-dashed border-hx-border-subtle p-4 text-[13px] text-hx-muted">Make specialists of your own (a reviewer, a researcher, a test writer): the agent hands them work, several at once.</p>
+        ? <p className="rounded-xl border border-dashed border-hx-border-subtle p-4 text-body text-hx-muted">Make specialists of your own (a reviewer, a researcher, a test writer): the agent hands them work, several at once.</p>
         : <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{mine.slice(0, 6).map((a) => <AgentCard key={a.name} a={{ ...a, source: 'user' }} reload={reload} onEdit={() => useAgentEditor.getState().open({ edit: a })} />)}</div>}
       <AgentEditor open={editing !== null || draft !== null} edit={editing ?? undefined} draft={draft ?? undefined} onClose={() => useAgentEditor.getState().close()} onSaved={() => void reload()} />
     </section>
@@ -180,8 +179,9 @@ const fromForm = (f: Form): AgentDef => ({
   ...(!f.modelInvocable ? { modelInvocable: false } : {}), ...(!f.userInvocable ? { userInvocable: false } : {}), ...(f.color ? { color: f.color } : {}),
 });
 
-function Section({ title, children, help }: { title: string; children: React.ReactNode; help?: string }) {
-  return <section className="mb-5"><h3 className="mb-1 text-[11.5px] font-semibold uppercase tracking-wide text-hx-muted">{title}</h3>{help && <p className="mb-2 text-[12px] text-hx-muted">{help}</p>}{children}</section>;
+/** A section of the builder: the kit's Section (dense), its help as its description. */
+function Part({ title, children, help }: { title: string; children: React.ReactNode; help?: string }) {
+  return <Section dense title={title} description={help}>{children}</Section>;
 }
 /** The builder: describe and Generate, or fill it in; Save makes a new version (refused when it changed meanwhile). */
 export function AgentEditor({ open, edit, draft, onClose, onSaved }: { open: boolean; edit?: AgentRecord; draft?: Partial<AgentDef>; onClose: () => void; onSaved?: (a: AgentRecord) => void }): React.ReactElement {
@@ -231,85 +231,83 @@ export function AgentEditor({ open, edit, draft, onClose, onSaved }: { open: boo
     if (!edit) return;
     try { const r = await client.agents.restore(edit.name, v); toast(`Version ${v} is current again (as version ${r.version})`, { kind: 'success' }); onSaved?.(r); onClose(); } catch (e) { setError((e as Error).message); }
   };
-  const modeHelp = MODES.find((m) => m.id === f.mode)?.help;
   return (
     <Modal open={open} onClose={onClose} title={edit ? `Edit ${edit.name}` : 'New agent'} size="xl"
       footer={<>
-        {missing && <span className="mr-auto text-[12px] text-hx-muted" data-agent-missing>Still needs {missing}</span>}
+        {missing && <span className="mr-auto text-small text-hx-muted" data-agent-missing>Still needs {missing}</span>}
         <Button variant="ghost" onClick={onClose}>Cancel</Button>
         <Button variant="primary" disabled={!!missing || !!busy} onClick={() => void save()} data-agent-save>{busy === 'save' ? 'Saving…' : edit ? 'Save' : 'Make agent'}</Button>
       </>}>
       <div data-agent-form={edit ? 'edit' : 'new'}>
-        <Section title="Describe it" help="Say what it is for, in your words. Generate drafts the rest (instructions, the fewest tools, autonomy, limits) for you to check: nothing is saved until you do.">
+        <Part title="Describe it" help="Say what it is for, in your words. Generate drafts the rest (instructions, the fewest tools, autonomy, limits) for you to check: nothing is saved until you do.">
           <div className="flex gap-2">
             <Textarea rows={2} className="flex-1" value={describe} onChange={(e) => setDescribe(e.target.value)} placeholder="Reviews my pull requests for security problems and explains each one with a fix" data-agent-describe />
             <Button icon="sparkles" disabled={describe.trim().length < 10 || !!busy} onClick={() => void generate()} data-agent-generate>{busy === 'generate' ? 'Drafting…' : 'Generate'}</Button>
           </div>
-          {note && <p className="mt-1.5 text-[12px] text-hx-success" data-agent-note>{note}</p>}
-        </Section>
+            {note && <Callout tone="success" className="mt-2" data-agent-note>{note}</Callout>}
+        </Part>
 
-        <Section title="Who it is">
+        <Part title="Who it is">
           <div className="grid gap-x-3 md:grid-cols-[1fr_2fr]">
             <Field label="Name" help="Letters, digits, - and _"><Input value={f.name} onChange={(e) => set({ name: e.target.value })} placeholder="security-reviewer" data-agent-name /></Field>
             <Field label="When to use it" help="The orchestrator chooses agents by this: what it does and what it returns"><Input value={f.description} onChange={(e) => set({ description: e.target.value })} placeholder="Reviews changes for security problems; returns each finding with a fix" data-agent-description /></Field>
           </div>
           <Field label="Instructions" help="Its role, the steps it follows, how it checks its work, what it never does, and the shape of its report">
-            <Textarea rows={9} className="font-mono text-[12.5px]" value={f.prompt} onChange={(e) => set({ prompt: e.target.value })} placeholder={'Role: …\nProcedure: 1. … 2. …\nChecks: …\nNever: …\nReport: …'} data-agent-prompt />
+            <Textarea rows={9} className="font-mono text-small" value={f.prompt} onChange={(e) => set({ prompt: e.target.value })} placeholder={'Role: …\nProcedure: 1. … 2. …\nChecks: …\nNever: …\nReport: …'} data-agent-prompt />
           </Field>
-        </Section>
+        </Part>
 
-        <Section title="Model">
+        <Part title="Model">
           <div className="grid gap-x-3 md:grid-cols-2">
             <Field label="Model" help="Another company's model only runs when you allowed it (Settings > Delegation)"><Select value={f.model} onChange={(v) => set({ model: v })} options={[{ value: '', label: 'The conversation\'s model' }, ...(opts?.models ?? []).map((m) => ({ value: m.id, label: m.label ?? m.id })), ...(f.model && opts && !opts.models.some((m) => m.id === f.model) ? [{ value: f.model, label: `${f.model} (not available here)` }] : [])]} data-agent-model /></Field>
             <Field label="Effort"><Select value={f.effort} onChange={(v) => set({ effort: v as Form['effort'] })} options={[{ value: '', label: 'The model\'s default' }, ...(['low', 'medium', 'high', 'xhigh', 'max'] as const).map((e) => ({ value: e, label: e }))]} data-agent-effort /></Field>
           </div>
-        </Section>
+        </Part>
 
-        <Section title="Tools" help="The fewer, the safer and the better it chooses.">
-          <Choice name="agent-tools" label="Tools" value={f.toolsMode} options={[{ id: 'all', label: 'All tools' }, { id: 'some', label: 'Only these' }]} onChange={(toolsMode) => set({ toolsMode })} />
+        <Part title="Tools" help="The fewer, the safer and the better it chooses.">
+          <ChoiceGroup name="agent-tools" label="Tools" value={f.toolsMode} options={[{ id: 'all', label: 'All tools' }, { id: 'some', label: 'Only these' }]} onChange={(toolsMode) => set({ toolsMode })} />
           {f.toolsMode === 'some' && (
             <div className="mt-3 space-y-3">
-              {byKind.map(([kind, items]) => <div key={kind}><div className="mb-1 text-[12px] font-medium text-hx-secondary">{KIND_LABEL[kind] ?? kind}</div><CheckboxGroup mono name={kind} items={items} value={f.tools} onChange={(tools) => set({ tools })} /></div>)}
+              {byKind.map(([kind, items]) => <div key={kind}><div className="mb-1 text-small font-medium text-hx-secondary">{KIND_LABEL[kind] ?? kind}</div><CheckboxGroup mono name={kind} items={items} value={f.tools} onChange={(tools) => set({ tools })} /></div>)}
             </div>
           )}
           <div className="mt-3"><Field label="Never these" help="Comma-separated; * matches anything (mcp__github__delete_*)"><Input value={f.disallowed} onChange={(e) => set({ disallowed: e.target.value })} placeholder="bash, mcp__github__delete_*" data-agent-disallowed /></Field></div>
-        </Section>
+        </Part>
 
-        <Section title="MCP servers" help="Services it may use through MCP. Add servers in Settings > MCP servers.">
-          <Choice name="agent-servers" label="MCP servers" value={f.serversMode} options={[{ id: 'all', label: 'Those of the conversation' }, { id: 'some', label: 'Only these' }]} onChange={(serversMode) => set({ serversMode })} />
-          {f.serversMode === 'some' && <div className="mt-3">{opts?.mcpServers.length ? <CheckboxGroup mono name="servers" items={opts.mcpServers.map((s) => ({ id: s, label: s }))} value={f.servers} onChange={(servers) => set({ servers })} /> : <p className="text-[12.5px] text-hx-muted">No MCP server on this server yet: it gets none.</p>}</div>}
-        </Section>
+        <Part title="MCP servers" help="Services it may use through MCP. Add servers in Settings > MCP servers.">
+          <ChoiceGroup name="agent-servers" label="MCP servers" value={f.serversMode} options={[{ id: 'all', label: 'Those of the conversation' }, { id: 'some', label: 'Only these' }]} onChange={(serversMode) => set({ serversMode })} />
+          {f.serversMode === 'some' && <div className="mt-3">{opts?.mcpServers.length ? <CheckboxGroup mono name="servers" items={opts.mcpServers.map((s) => ({ id: s, label: s }))} value={f.servers} onChange={(servers) => set({ servers })} /> : <p className="text-small text-hx-muted">No MCP server on this server yet: it gets none.</p>}</div>}
+        </Part>
 
         {(opts?.skills.length ?? 0) > 0 && (
-          <Section title="Skills" help="Procedures it starts with loaded (their instructions in its brief).">
+          <Part title="Skills" help="Procedures it starts with loaded (their instructions in its brief).">
             <CheckboxGroup mono name="skills" items={opts!.skills.map((s) => ({ id: s.name, label: s.name, hint: s.description }))} value={f.skills} onChange={(skills) => set({ skills })} />
-          </Section>
+          </Part>
         )}
 
-        <Section title="Autonomy" help="Never more than the conversation it works in allows.">
-          <Choice name="agent-mode" label="Autonomy" value={f.mode} options={MODES.map((m) => ({ id: m.id, label: m.label }))} onChange={(mode) => set({ mode })} />
-          {modeHelp && <p className="mt-1.5 text-[12px] text-hx-muted" data-agent-mode-help>{modeHelp}</p>}
-        </Section>
+        <Part title="Autonomy" help="Never more than the conversation it works in allows.">
+          <OptionCards name="agent-mode" label="Autonomy" value={f.mode} options={MODES.map((m) => ({ id: m.id, title: m.label, detail: m.help }))} onChange={(mode) => set({ mode })} />
+        </Part>
 
-        <Section title="Limits and how it runs">
+        <Part title="Limits and how it runs">
           <div className="grid gap-x-3 md:grid-cols-2">
             <Field label="Steps at most" help="Each step is a model call; it stops there"><Input type="number" min={1} max={1000} value={f.maxTurns} onChange={(e) => set({ maxTurns: e.target.value })} placeholder="No limit of its own" data-agent-max-turns /></Field>
             <Field label="Spend at most a run (USD)"><Input type="number" min={0} step="0.01" value={f.maxCostUsd} onChange={(e) => set({ maxCostUsd: e.target.value })} placeholder="No limit of its own" data-agent-max-cost /></Field>
           </div>
-          <div className="space-y-2 text-[12.5px]">
+          <div className="space-y-2 text-small">
             <label className="flex items-center gap-2"><Switch checked={f.worktree} onChange={(worktree) => set({ worktree })} label="Its own git worktree" /> Its own git worktree (where the folder is a repository: parallel agents never edit the same files)</label>
             <label className="flex items-center gap-2"><Switch checked={f.background} onChange={(background) => set({ background })} label="In the background" /> In the background by default (the conversation carries on; its report arrives when it finishes)</label>
             <label className="flex items-center gap-2"><Switch checked={f.modelInvocable} onChange={(modelInvocable) => set({ modelInvocable })} label="The orchestrator may use it" /> The agent in a conversation may hand work to it</label>
             <label className="flex items-center gap-2"><Switch checked={f.userInvocable} onChange={(userInvocable) => set({ userInvocable })} label="You may chat with it" /> You may start a conversation with it</label>
           </div>
-        </Section>
+        </Part>
 
         {edit && versions.length > 0 && (
-          <Section title="Earlier versions">
+          <Part title="Earlier versions">
             <div className="flex flex-wrap gap-1.5" data-agent-versions>{versions.slice(0, 8).map((v) => <Button key={v.version} size="sm" variant="ghost" onClick={() => void restore(v.version)} data-agent-restore={v.version}>v{v.version} · {new Date(v.at).toLocaleDateString()}</Button>)}</div>
-          </Section>
+          </Part>
         )}
-        {error && <p role="alert" className="rounded-lg bg-hx-danger/10 px-3 py-2 text-[12.5px] text-hx-danger" data-agent-error>{error}</p>}
+        {error && <Callout tone="danger" data-agent-error>{error}</Callout>}
       </div>
     </Modal>
   );

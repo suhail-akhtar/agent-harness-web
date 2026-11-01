@@ -14,7 +14,7 @@ import type { DesktopPrefs } from '@desk/prefs';
 
 const set = (patch: Partial<DesktopPrefs>) => useApp.getState().setPrefs(patch);
 const Section = ({ title, children }: { title?: string; children: React.ReactNode }) => (
-  <section className="mb-6">{title && <h3 className="mb-1 text-[12px] font-medium uppercase tracking-wide text-hx-muted">{title}</h3>}<div className="divide-y divide-hx-border-subtle">{children}</div></section>
+  <section className="mb-6">{title && <h3 className="mb-1 text-tiny font-semibold uppercase tracking-wide text-hx-muted">{title}</h3>}<div className="divide-y divide-hx-border-subtle">{children}</div></section>
 );
 
 export function Appearance(): React.ReactElement {
@@ -29,12 +29,12 @@ export function Appearance(): React.ReactElement {
         <div className="grid grid-cols-2 gap-2 py-3 sm:grid-cols-3" role="radiogroup" aria-label="Theme">
           {choices.map((t) => (
             <button key={t.id} type="button" role="radio" aria-checked={prefs.theme === t.id} data-theme-choice={t.id} onClick={() => set({ theme: t.id })}
-              className={cx('overflow-hidden rounded-xl border text-left', prefs.theme === t.id ? 'border-hx-accent ring-2 ring-hx-accent/35' : 'border-hx-border-subtle hover:border-hx-border')}>
+              className={cx('overflow-hidden rounded-xl border text-left', prefs.theme === t.id ? 'border-hx-accent ring-2 ring-hx-accent-border' : 'border-hx-border-subtle hover:border-hx-border')}>
               <div className="flex h-14 items-end gap-1 p-2" style={{ background: t.id === 'system' ? `linear-gradient(90deg, ${themes[0]!.colors.background} 50%, ${themes[1]!.colors.background} 50%)` : t.colors.background }}>
                 <span className="h-2 w-10 rounded-full" style={{ background: t.id === 'system' ? themes[0]!.colors.foreground : t.colors.foreground, opacity: 0.7 }} />
                 <span className="h-2 w-5 rounded-full" style={{ background: t.colors.accent }} />
               </div>
-              <div className="px-2.5 py-1.5 text-[12.5px]">{t.label}{t.source && t.source !== 'core' && t.source !== 'core.shell' && <span className="ml-1 text-[11px] text-hx-muted">· {t.source}</span>}</div>
+              <div className="px-2.5 py-1.5 text-small">{t.label}{t.source && t.source !== 'core' && t.source !== 'core.shell' && <span className="ml-1 text-tiny text-hx-muted">· {t.source}</span>}</div>
             </button>
           ))}
         </div>
@@ -47,7 +47,7 @@ export function Appearance(): React.ReactElement {
         <Field label="Contrast" help="Stronger text and borders." inline><Switch checked={prefs.contrast === 'strong'} onChange={(v) => set({ contrast: v ? 'strong' : 'normal' })} label="Strong contrast" /></Field>
       </Section>
       <Section title="Text and layout">
-        <Field label="Text size" inline><div className="flex items-center gap-2"><input type="range" min={12} max={18} value={prefs.fontSize} onChange={(e) => set({ fontSize: Number(e.target.value) })} aria-label="Text size" /><span className="w-10 text-[12px] text-hx-muted">{prefs.fontSize}px</span></div></Field>
+        <Field label="Text size" inline><div className="flex items-center gap-2"><input type="range" min={12} max={18} value={prefs.fontSize} onChange={(e) => set({ fontSize: Number(e.target.value) })} aria-label="Text size" /><span className="w-10 text-small text-hx-muted">{prefs.fontSize}px</span></div></Field>
         <Field label="Density" inline><Select value={prefs.density} onChange={(v) => set({ density: v as DesktopPrefs['density'] })} options={[{ value: 'comfortable', label: 'Comfortable' }, { value: 'compact', label: 'Compact' }]} className="w-40" /></Field>
         <Field label="Transcript width" inline><Select value={prefs.transcriptWidth} onChange={(v) => set({ transcriptWidth: v as DesktopPrefs['transcriptWidth'] })} options={[{ value: 'normal', label: 'Normal' }, { value: 'wide', label: 'Wide' }, { value: 'full', label: 'Full width' }]} className="w-40" /></Field>
         <Field label="Interface font"><Input value={prefs.uiFont} onChange={(e) => set({ uiFont: e.target.value })} /></Field>
@@ -56,7 +56,7 @@ export function Appearance(): React.ReactElement {
           <div className="grid grid-cols-3 gap-2 pt-1 sm:grid-cols-6" role="radiogroup" aria-label="Working animation" data-working-styles>
             {WORKING_STYLES.map((w) => (
               <button key={w.id} type="button" role="radio" aria-checked={(prefs.working ?? 'dots') === w.id} data-working-choice={w.id} onClick={() => set({ working: w.id })}
-                className={cx('flex flex-col items-center gap-2 rounded-xl border px-2 py-3 text-[11.5px]', (prefs.working ?? 'dots') === w.id ? 'border-hx-accent text-hx-primary ring-2 ring-hx-accent/35' : 'border-hx-border-subtle text-hx-secondary hover:border-hx-border')}>
+                className={cx('flex flex-col items-center gap-2 rounded-xl border px-2 py-3 text-caption', (prefs.working ?? 'dots') === w.id ? 'border-hx-accent text-hx-primary ring-2 ring-hx-accent-border' : 'border-hx-border-subtle text-hx-secondary hover:border-hx-border')}>
                 <span className="flex h-5 items-center"><Working style={w.id} label={w.label} /></span>{w.label}
               </button>
             ))}
@@ -107,7 +107,7 @@ export function Application(): React.ReactElement {
             <Button size="sm" icon="refresh" onClick={() => void desktop.engineRestart()}>Restart</Button>
             <Button size="sm" variant="ghost" onClick={() => void desktop.engineLogs().then(setLogs)}>Show log</Button></div>
         </Field>
-        {logs && <pre className="hx-scroll my-2 max-h-64 overflow-auto rounded-lg bg-hx-code p-2 font-mono text-[11px] leading-4">{logs.join('\n')}</pre>}
+        {logs && <pre className="hx-scroll my-2 max-h-64 overflow-auto rounded-lg bg-hx-code p-2 font-mono text-tiny leading-4">{logs.join('\n')}</pre>}
         <SpendLimit />
         <Field label="App folder" help={`Window, preferences and plugin grants on this computer: ${info?.dataDir ?? ''}`} inline><Button size="sm" icon="folder-open" onClick={() => void desktop.openDataFolder()}>Open</Button></Field>
       </Section>
@@ -170,7 +170,7 @@ function Location(): React.ReactElement {
       <Section title="Location">
         <Field label="Harness home" help="Conversations, workspaces, scratch folders, exports and logs. The server and the command line use it too." inline>
           <div className="flex items-center gap-2">
-            <code className="max-w-[260px] truncate rounded bg-hx-code px-1.5 py-0.5 text-[11.5px]" title={h.home} data-home-path>{h.home}</code>
+            <code className="max-w-[260px] truncate rounded bg-hx-code px-1.5 py-0.5 text-caption" title={h.home} data-home-path>{h.home}</code>
             <Button size="sm" icon="folder-open" onClick={() => void desktop.openHomeFolder('home')}>Open</Button>
             <Button size="sm" icon="arrow-right" loading={busy === 'move'} disabled={!!busy} onClick={() => void move()} data-move-home>Move…</Button>
           </div>
@@ -184,14 +184,14 @@ function Location(): React.ReactElement {
         {h.folders.map((f) => (
           <div key={f.key} className="flex items-center gap-3 py-2" data-home-folder={f.key} data-bytes={f.bytes}>
             <Icon name="folder" size={16} className="text-hx-muted" />
-            <span className="min-w-0 flex-1"><span className="block text-[13px] font-medium">{f.label} <span className="ml-1 text-[11.5px] font-normal text-hx-muted">{size(f.bytes)} · {f.files} file{f.files === 1 ? '' : 's'}</span></span><span className="block truncate text-[11.5px] text-hx-muted" title={f.path}>{f.note} · {f.path}</span></span>
+            <span className="min-w-0 flex-1"><span className="block text-body font-medium">{f.label} <span className="ml-1 text-caption font-normal text-hx-muted">{size(f.bytes)} · {f.files} file{f.files === 1 ? '' : 's'}</span></span><span className="block truncate text-caption text-hx-muted" title={f.path}>{f.note} · {f.path}</span></span>
             <IconButton icon="folder-open" size="sm" label={`Open ${f.label}`} onClick={() => void desktop.openHomeFolder(f.key)} />
           </div>
         ))}
         <Field label="Clean up scratch folders" help="Scratch conversations get a folder each in tmp/. Folders not changed for this many days are removed (on start and daily); nothing outside tmp/ is touched." inline>
           <div className="flex items-center gap-2">
             <Input type="number" min={1} max={365} value={days} onChange={(e) => setDays(e.target.value)} className="w-20" aria-label="Days" data-tmp-days />
-            <span className="text-[12px] text-hx-muted">days</span>
+            <span className="text-small text-hx-muted">days</span>
             <Button size="sm" disabled={!!busy || days === String(h.tmpCleanupDays)} loading={busy === 'days'} onClick={() => void saveDays()} data-save-tmp-days>Save</Button>
             <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => void run('clean', async () => { const r = await desktop.cleanTmp(); toast(r.removed.length ? `Removed ${r.removed.length} old scratch folder(s)` : 'Nothing old enough to remove'); await load(); })}>Clean now</Button>
           </div>
@@ -228,8 +228,8 @@ export function Shortcuts(): React.ReactElement {
       <div className="divide-y divide-hx-border-subtle rounded-xl border border-hx-border-subtle">
         {shown.map((c) => (
           <div key={c.qid} data-shortcut={c.qid} className="flex items-center gap-3 px-3 py-2">
-            <span className="min-w-0 flex-1"><span className="block truncate text-[13px]">{c.category ? `${c.category}: ` : ''}{c.title}</span><span className="block text-[11px] text-hx-muted">{c.plugin}</span></span>
-            {recording === c.qid ? <span className="rounded-md bg-hx-accent-soft px-2 py-1 text-[12px] text-hx-accent-text">Press keys… (Esc cancels)</span> : c.keys ? <Kbd keys={formatChord(c.keys, platform)} /> : <span className="text-[12px] text-hx-muted">—</span>}
+            <span className="min-w-0 flex-1"><span className="block truncate text-body">{c.category ? `${c.category}: ` : ''}{c.title}</span><span className="block text-tiny text-hx-muted">{c.plugin}</span></span>
+            {recording === c.qid ? <span className="rounded-md bg-hx-accent-soft px-2 py-1 text-small text-hx-accent-text">Press keys… (Esc cancels)</span> : c.keys ? <Kbd keys={formatChord(c.keys, platform)} /> : <span className="text-small text-hx-muted">—</span>}
             <Button size="sm" variant="ghost" onClick={() => setRecording(c.qid)}>Change</Button>
             {overrides[c.qid] !== undefined && <IconButton size="xs" icon="refresh" label="Back to the default" onClick={() => { const k = { ...overrides }; delete k[c.qid]; set({ keybindings: k }); }} />}
             {c.keys && <IconButton size="xs" icon="x" label="Remove the shortcut" onClick={() => set({ keybindings: { ...overrides, [c.qid]: '' } })} />}
@@ -250,12 +250,12 @@ export function Servers(): React.ReactElement {
   if (!s) return <Spinner />;
   return (
     <div data-section="servers">
-      <p className="mb-3 text-[13px] text-hx-secondary">The app runs its own engine on this computer, or works with a harness server (a team's or a company's). The same app, the same plugins.</p>
+      <p className="mb-3 text-body text-hx-secondary">The app runs its own engine on this computer, or works with a harness server (a team's or a company's). The same app, the same plugins.</p>
       <div className="space-y-2">
         <ServerRow name="This computer" detail="The local engine" active={s.active === 'local'} onUse={() => void run(() => desktop.useServer('local'))} busy={busy} />
         {s.remote.map((r) => <ServerRow key={r.id} name={r.name} detail={r.url} active={s.active === r.id} onUse={() => void run(() => desktop.useServer(r.id))} onRemove={() => void run(() => desktop.removeServer(r.id))} busy={busy} />)}
       </div>
-      <h3 className="mb-1 mt-6 text-[12px] font-medium uppercase tracking-wide text-hx-muted">Add a server</h3>
+      <h3 className="mb-1 mt-6 text-tiny font-semibold uppercase tracking-wide text-hx-muted">Add a server</h3>
       {!s.encryption && <InfoNote tone="warning">This system has no keychain to keep a token safely; remote servers cannot be saved here.</InfoNote>}
       <Field label="Name"><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Team server" /></Field>
       <Field label="Address"><Input value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} placeholder="https://harness.example.com" /></Field>
@@ -269,7 +269,7 @@ function ServerRow({ name, detail, active, onUse, onRemove, busy }: { name: stri
   return (
     <div className={cx('flex items-center gap-3 rounded-xl border p-3', active ? 'border-hx-accent' : 'border-hx-border-subtle')}>
       <Icon name={onRemove ? 'server' : 'monitor'} size={18} className="text-hx-muted" />
-      <span className="min-w-0 flex-1"><span className="block text-[13.5px] font-medium">{name}</span><span className="block truncate text-[11.5px] text-hx-muted">{detail}</span></span>
+      <span className="min-w-0 flex-1"><span className="block text-body font-medium">{name}</span><span className="block truncate text-caption text-hx-muted">{detail}</span></span>
       {active ? <Badge tone="success">In use</Badge> : <Button size="sm" disabled={busy} onClick={onUse}>Use</Button>}
       {onRemove && <IconButton icon="trash" size="sm" tone="danger" label="Remove" onClick={onRemove} />}
     </div>
@@ -285,8 +285,8 @@ export function About(): React.ReactElement {
   const copy = () => void navigator.clipboard.writeText(rows.map(([k, v]) => `${k}: ${v}`).join('\n')).then(() => toast('Copied'), () => toast('Could not copy', { kind: 'error' }));
   return (
     <div data-section="about">
-      <div className="mb-4 flex items-center gap-3"><ProductMark size={48} /><div className="min-w-0 flex-1"><div className="text-[17px] font-semibold">{info?.product.name ?? 'Harness'}</div><div className="text-[12.5px] text-hx-muted">{info?.product.description}</div></div><Button size="sm" icon="copy" onClick={copy}>Copy versions</Button></div>
-      <div className="divide-y divide-hx-border-subtle rounded-xl border border-hx-border-subtle" data-about-versions>{rows.map(([k, v]) => <div key={k} className="flex gap-4 px-3 py-2 text-[13px]"><span className="w-36 shrink-0 text-hx-muted">{k}</span><span className="min-w-0 break-all" data-about-row={k}>{v}</span></div>)}</div>
+      <div className="mb-4 flex items-center gap-3"><ProductMark size={48} /><div className="min-w-0 flex-1"><div className="text-title font-semibold">{info?.product.name ?? 'Harness'}</div><div className="text-small text-hx-muted">{info?.product.description}</div></div><Button size="sm" icon="copy" onClick={copy}>Copy versions</Button></div>
+      <div className="divide-y divide-hx-border-subtle rounded-xl border border-hx-border-subtle" data-about-versions>{rows.map(([k, v]) => <div key={k} className="flex gap-4 px-3 py-2 text-body"><span className="w-36 shrink-0 text-hx-muted">{k}</span><span className="min-w-0 break-all" data-about-row={k}>{v}</span></div>)}</div>
     </div>
   );
 }

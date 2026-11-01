@@ -17,7 +17,6 @@ const OWN_TITLE: Record<string, string> = {
   'shell/Overlays.tsx': 'the engine gate, shown before any page can be',
   'builtins/dashboards/Doc.tsx': "a document's editable title in its editor toolbar",
   'builtins/dashboards/Data.tsx': 'a full-height tool page: title and tabs in a toolbar over split panes',
-  'builtins/plugin-home.tsx': "ModuleHeader: the one header of every plugin's home (icon, purpose, Ask the agent)",
 };
 /** Where a raw form control stays, and why. */
 const RAW_CONTROL: Record<string, string> = {
@@ -47,4 +46,34 @@ test('ui standards: the gallery shows every layout component', () => {
   const exported = [...layout.matchAll(/^export function (\w+)/gm)].map((m) => m[1]!);
   assert.ok(exported.length >= 4);
   for (const name of exported) assert.match(gallery, new RegExp(`<${name}[\\s>]`), `the gallery shows ${name}`);
+});
+
+// The design system (docs/desktop/DESIGN-SYSTEM.md): type roles, status tints and the shared blocks, never a
+// page's own copy. The kit (packages/ui) defines them; the app and the kit's renderers use them.
+const KIT = path.resolve('packages/ui/src');
+const kitFiles = (fs.readdirSync(KIT, { recursive: true }) as string[]).filter((f) => f.endsWith('.tsx') || f.endsWith('.ts')).map((f) => f.split(path.sep).join('/'));
+const both = [...files.map((f) => ({ f, text: read(f) })), ...kitFiles.map((f) => ({ f: `ui/${f}`, text: fs.readFileSync(path.join(KIT, f), 'utf8') }))];
+/** Where a tone colour with an opacity stays, and why (a meter's fill, not a tint). */
+const TINT_OK: Record<string, string> = {
+  'builtins/dashboards/Data.tsx': "a quality meter's empty track",
+  'ui/render/dashboard/Visual.tsx': "a table cell's data bar",
+  'ui/render/dashboard/Layouts.tsx': "the sidebar resize handle's hover",
+};
+
+test('design system: text sizes are the type roles (text-caption, text-body, ...), never a pixel size', () => {
+  const px = both.filter(({ text }) => /\btext-\[\d+(?:\.\d+)?px\]/.test(text)).map(({ f }) => f);
+  assert.deepEqual(px, [], `use a type role (micro, tiny, caption, small, body, body-lg, title, heading, display) in: ${px.join(', ')}`);
+});
+
+test('design system: status tints are tokens (bg-hx-danger-soft, border-hx-warning-border), never an opacity on a tone', () => {
+  const tint = /\b(?:bg|border|ring)-hx-(?:danger|warning|success|info|accent|accent-soft)\/\d+\b/;
+  const found = both.filter(({ f, text }) => tint.test(text) && !TINT_OK[f]).map(({ f }) => f);
+  assert.deepEqual(found, [], `use the -soft and -border tokens (or Callout, Badge, Card tone) in: ${found.join(', ')}`);
+});
+
+test('design system: pages use the kit\'s blocks, not their own copies of a section, a stat tile or a choice row', () => {
+  const own = files.filter((f) => /^(?:export )?function (?:Section|Kpi|StatCard|Choice|Callout|EmptyBox)\b/m.test(read(f))).map((f) => f);
+  assert.deepEqual(own, [], `use Section, StatCard, ChoiceGroup or Callout from @harness/ui in: ${own.join(', ')}`);
+  const hand = files.filter((f) => /<p role="alert" className="[^"]*bg-hx-danger/.test(read(f)));
+  assert.deepEqual(hand, [], `an error note is a <Callout tone="danger"> in: ${hand.join(', ')}`);
 });

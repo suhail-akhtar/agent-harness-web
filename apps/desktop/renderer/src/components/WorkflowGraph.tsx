@@ -46,8 +46,8 @@ export function WorkflowGraph({ run }: { run: WorkflowRunView }): React.ReactEle
       </div>
       {picked && (
         <div data-graph-output={picked} className="mx-2 mb-2 rounded-lg border border-hx-border-subtle bg-hx-bg p-2.5">
-          <div className="mb-1 flex items-center gap-2 text-[12px]"><b>{node?.title ?? picked}</b><span className="text-hx-muted">{node?.type}{node?.agent ? ` · ${node.agent}` : ''}{node?.model ? ` · ${node.model}` : ''}</span>{out?.outcome && <span className="rounded bg-hx-pill px-1.5 text-[11px]">{out.outcome}</span>}{out?.cost ? <span className="ml-auto text-[11px] text-hx-muted">${out.cost.toFixed(4)}</span> : null}</div>
-          {out?.summary ? <div className={cx('hx-scroll max-h-72 overflow-auto text-[12.5px]')}><Markdown text={out.type === 'gate' || out.type === 'shell' ? `\`\`\`\n${out.summary}\n\`\`\`` : out.summary} /></div> : <p className="text-[12px] text-hx-muted">{out ? 'No output yet.' : 'This step has not run.'}</p>}
+          <div className="mb-1 flex items-center gap-2 text-small"><b>{node?.title ?? picked}</b><span className="text-hx-muted">{node?.type}{node?.agent ? ` · ${node.agent}` : ''}{node?.model ? ` · ${node.model}` : ''}</span>{out?.outcome && <span className="rounded bg-hx-pill px-1.5 text-tiny">{out.outcome}</span>}{out?.cost ? <span className="ml-auto text-tiny text-hx-muted">${out.cost.toFixed(4)}</span> : null}</div>
+          {out?.summary ? <div className={cx('hx-scroll max-h-72 overflow-auto text-small')}><Markdown text={out.type === 'gate' || out.type === 'shell' ? `\`\`\`\n${out.summary}\n\`\`\`` : out.summary} /></div> : <p className="text-small text-hx-muted">{out ? 'No output yet.' : 'This step has not run.'}</p>}
         </div>
       )}
     </div>

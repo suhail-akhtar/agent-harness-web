@@ -20,16 +20,16 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
 }
 
 const VARIANT: Record<ButtonVariant, string> = {
-  primary: 'bg-hx-accent text-hx-on-accent hover:bg-hx-accent-hover border border-transparent',
+  primary: 'bg-hx-accent text-hx-on-accent hover:bg-hx-accent-hover border border-transparent disabled:bg-hx-pill disabled:text-hx-muted disabled:opacity-100',
   secondary: 'bg-hx-elevated text-hx-primary border border-hx-border hover:bg-hx-hover',
   ghost: 'bg-transparent text-hx-secondary border border-transparent hover:bg-hx-hover hover:text-hx-primary',
   subtle: 'bg-hx-pill text-hx-primary border border-transparent hover:bg-hx-active',
-  danger: 'bg-hx-danger text-white border border-transparent hover:opacity-90',
+  danger: 'bg-hx-danger text-white border border-transparent hover:opacity-90 disabled:bg-hx-pill disabled:text-hx-muted disabled:opacity-100',
 };
 const SIZE: Record<ButtonSize, string> = {
-  sm: 'h-7 px-2.5 text-[12.5px] gap-1.5 rounded-md',
-  md: 'h-8 px-3 text-[13px] gap-1.5 rounded-lg',
-  lg: 'h-10 px-4 text-[14px] gap-2 rounded-lg',
+  sm: 'h-7 px-2.5 text-small gap-1.5 rounded-md',
+  md: 'h-8 px-3 text-body gap-1.5 rounded-lg',
+  lg: 'h-10 px-4 text-body-lg gap-2 rounded-lg',
 };
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button({ variant = 'secondary', size = 'md', icon, iconRight, loading, className, children, disabled, type, ...rest }, ref) {
@@ -80,7 +80,7 @@ export const Input = forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTML
     <input
       ref={ref}
       aria-invalid={invalid || undefined}
-      className={cx('h-8 w-full min-w-0 rounded-lg border bg-hx-bg px-2.5 text-[13px] text-hx-primary placeholder:text-hx-muted focus:outline-none focus:ring-2 focus:ring-hx-focus disabled:opacity-60',
+      className={cx('h-8 w-full min-w-0 rounded-lg border bg-hx-bg px-2.5 text-body text-hx-primary placeholder:text-hx-muted focus:outline-none focus:ring-2 focus:ring-hx-focus disabled:opacity-60',
         invalid ? 'border-hx-danger' : 'border-hx-border', icon && 'pl-8', className)}
       {...rest}
     />
@@ -99,7 +99,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, React.TextareaHTMLAttrib
     <textarea
       ref={ref}
       aria-invalid={invalid || undefined}
-      className={cx('w-full min-w-0 rounded-lg border bg-hx-bg px-2.5 py-2 text-[13px] leading-5 text-hx-primary placeholder:text-hx-muted focus:outline-none focus:ring-2 focus:ring-hx-focus', invalid ? 'border-hx-danger' : 'border-hx-border', className)}
+      className={cx('w-full min-w-0 rounded-lg border bg-hx-bg px-2.5 py-2 text-body leading-5 text-hx-primary placeholder:text-hx-muted focus:outline-none focus:ring-2 focus:ring-hx-focus', invalid ? 'border-hx-danger' : 'border-hx-border', className)}
       {...rest}
     />
   );
@@ -112,7 +112,7 @@ export function Select({ value, onChange, options, className, ...rest }: Omit<Re
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="h-8 w-full appearance-none rounded-lg border border-hx-border bg-hx-bg pl-2.5 pr-7 text-[13px] text-hx-primary focus:outline-none focus:ring-2 focus:ring-hx-focus"
+        className="h-8 w-full appearance-none rounded-lg border border-hx-border bg-hx-bg pl-2.5 pr-7 text-body text-hx-primary focus:outline-none focus:ring-2 focus:ring-hx-focus"
         {...rest}
       >
         {options.map((o) => <option key={o.value} value={o.value} disabled={o.disabled}>{o.label}</option>)}
@@ -141,7 +141,7 @@ export function Switch({ checked, onChange, label, disabled, id }: { checked: bo
 
 export function Checkbox({ checked, onChange, label, disabled, className }: { checked: boolean; onChange: (v: boolean) => void; label?: React.ReactNode; disabled?: boolean; className?: string }): React.ReactElement {
   return (
-    <label className={cx('inline-flex cursor-pointer items-center gap-2 text-[13px] text-hx-primary', disabled && 'cursor-not-allowed opacity-60', className)}>
+    <label className={cx('inline-flex cursor-pointer items-center gap-2 text-body text-hx-primary', disabled && 'cursor-not-allowed opacity-60', className)}>
       <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} className="h-4 w-4 accent-[var(--hx-accent)]" />
       {label}
     </label>
@@ -156,9 +156,9 @@ export function CheckboxGroup({ items, value, onChange, name, cols = 2, mono }: 
   return (
     <div role="group" aria-label={name} className={cx('grid gap-x-4 gap-y-1.5', cols === 2 && 'sm:grid-cols-2')} data-checks={name}>
       {items.map((i) => (
-        <label key={i.id} className="flex cursor-pointer items-start gap-2 rounded-md py-0.5 text-[12.5px] text-hx-primary" title={i.hint}>
+        <label key={i.id} className="flex cursor-pointer items-start gap-2 rounded-md py-0.5 text-small text-hx-primary" title={i.hint}>
           <input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--hx-accent)]" checked={value.includes(i.id)} onChange={(e) => onChange(e.target.checked ? [...value, i.id] : value.filter((x) => x !== i.id))} data-check={i.id} />
-          <span className="min-w-0"><span className={cx(mono && 'font-mono text-[12px]')}>{i.label}</span>{i.hint && <span className="block truncate text-[11.5px] text-hx-muted">{i.hint}</span>}</span>
+          <span className="min-w-0"><span className={cx(mono && 'font-mono text-small')}>{i.label}</span>{i.hint && <span className="block truncate text-caption text-hx-muted">{i.hint}</span>}</span>
         </label>
       ))}
     </div>
@@ -180,23 +180,40 @@ export function Kbd({ keys, className }: { keys: string; className?: string }): 
   return (
     <span className={cx('inline-flex items-center gap-0.5', className)}>
       {parts.map((p, i) => (
-        <kbd key={i} className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded border border-hx-border bg-hx-surface px-1 font-sans text-[10.5px] font-medium text-hx-secondary">{p}</kbd>
+        <kbd key={i} className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded border border-hx-border bg-hx-surface px-1 font-sans text-micro font-medium text-hx-secondary">{p}</kbd>
       ))}
     </span>
   );
 }
 
 export function Badge({ children, tone = 'neutral', className }: { children: React.ReactNode; tone?: 'neutral' | 'accent' | 'success' | 'warning' | 'danger' | 'info'; className?: string }): React.ReactElement {
-  const t = { neutral: 'bg-hx-pill text-hx-secondary', accent: 'bg-hx-accent-soft text-hx-accent-text', success: 'bg-hx-success/12 text-hx-success', warning: 'bg-hx-warning/12 text-hx-warning', danger: 'bg-hx-danger/12 text-hx-danger', info: 'bg-hx-info/12 text-hx-info' }[tone];
-  return <span className={cx('inline-flex h-5 items-center rounded-full px-2 text-[11px] font-medium', t, className)}>{children}</span>;
+  const t = { neutral: 'bg-hx-pill text-hx-secondary', accent: 'bg-hx-accent-soft text-hx-accent-text', success: 'bg-hx-success-soft text-hx-success', warning: 'bg-hx-warning-soft text-hx-warning', danger: 'bg-hx-danger-soft text-hx-danger', info: 'bg-hx-info-soft text-hx-info' }[tone];
+  return <span className={cx('inline-flex h-5 items-center rounded-full px-2 text-tiny font-medium', t, className)}>{children}</span>;
 }
 
-export function EmptyState({ icon = 'sparkles', title, children, action }: { icon?: string; title: string; children?: React.ReactNode; action?: React.ReactNode }): React.ReactElement {
+/**
+ * Nothing here yet, and what to do about it. page: a whole page or panel (centred, large); section: inside a
+ * section (a dashed box); inline: one muted line.
+ */
+export function EmptyState({ icon = 'sparkles', title, children, action, variant = 'page' }: { icon?: string; title: string; children?: React.ReactNode; action?: React.ReactNode; variant?: 'page' | 'section' | 'inline' }): React.ReactElement {
+  if (variant === 'inline') return <p className="text-body text-hx-muted" data-empty>{title}{children ? <> {children}</> : null}</p>;
+  if (variant === 'section') {
+    return (
+      <div className="flex items-start gap-3 rounded-xl border border-dashed border-hx-border p-4" data-empty>
+        <Icon name={icon} size={16} className="mt-0.5 shrink-0 text-hx-muted" />
+        <div className="min-w-0 flex-1">
+          <div className="text-body font-medium text-hx-primary">{title}</div>
+          {children && <div className="mt-0.5 text-small text-hx-muted">{children}</div>}
+        </div>
+        {action && <div className="shrink-0">{action}</div>}
+      </div>
+    );
+  }
   return (
-    <div className="flex flex-col items-center justify-center gap-2 px-6 py-12 text-center">
+    <div className="flex flex-col items-center justify-center gap-2 px-6 py-12 text-center" data-empty>
       <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-hx-pill text-hx-muted"><Icon name={icon} size={20} /></div>
-      <div className="text-[14px] font-medium text-hx-primary">{title}</div>
-      {children && <div className="max-w-md text-[13px] text-hx-muted">{children}</div>}
+      <div className="text-body-lg font-medium text-hx-primary">{title}</div>
+      {children && <div className="max-w-md text-body text-hx-muted">{children}</div>}
       {action && <div className="mt-2">{action}</div>}
     </div>
   );
@@ -209,14 +226,14 @@ export function Field({ label, help, error, children, htmlFor, inline, required,
   return (
     <div className={cx('py-2.5', inline ? 'flex items-center justify-between gap-6' : 'flex flex-col gap-1.5')}>
       <div className="min-w-0">
-        <label htmlFor={id} className="block text-[13px] font-medium text-hx-primary">
+        <label htmlFor={id} className="block text-body font-medium text-hx-primary">
           {label}{required && <span className="ml-0.5 text-hx-danger">*</span>}
-          {locked && <span className="ml-2 inline-flex items-center gap-1 text-[11px] font-normal text-hx-muted" title={locked}><Icon name="lock" size={11} />{locked}</span>}
+          {locked && <span className="ml-2 inline-flex items-center gap-1 text-tiny font-normal text-hx-muted" title={locked}><Icon name="lock" size={11} />{locked}</span>}
         </label>
-        {help && <div className="mt-0.5 text-[12px] leading-[18px] text-hx-muted">{help}</div>}
+        {help && <div className="mt-0.5 text-small leading-[18px] text-hx-muted">{help}</div>}
       </div>
       <div className={cx(inline ? 'shrink-0' : 'w-full')}>{children}</div>
-      {error && <div role="alert" className="text-[12px] text-hx-danger">{error}</div>}
+      {error && <div role="alert" className="text-small text-hx-danger">{error}</div>}
     </div>
   );
 }
@@ -238,20 +255,16 @@ export function Tabs({ tabs, value, onChange, className, size = 'md' }: { tabs: 
           aria-selected={t.id === value}
           tabIndex={t.id === value ? 0 : -1}
           onClick={() => onChange(t.id)}
-          className={cx('inline-flex items-center gap-1.5 rounded-md font-medium transition-colors', size === 'sm' ? 'h-6 px-2 text-[12px]' : 'h-7 px-2.5 text-[12.5px]',
+          className={cx('inline-flex items-center gap-1.5 rounded-md font-medium transition-colors', size === 'sm' ? 'h-6 px-2 text-small' : 'h-7 px-2.5 text-small',
             t.id === value ? 'bg-hx-elevated text-hx-primary shadow-sm' : 'text-hx-muted hover:text-hx-primary')}
         >
           {t.icon && <Icon name={t.icon} size={13} />}
           {t.label}
-          {t.count !== undefined && <span className="text-[11px] text-hx-muted">{t.count}</span>}
+          {t.count !== undefined && <span className="text-tiny text-hx-muted">{t.count}</span>}
         </button>
       ))}
     </div>
   );
-}
-
-export function Card({ children, className, ...rest }: React.HTMLAttributes<HTMLDivElement>): React.ReactElement {
-  return <div className={cx('rounded-xl border border-hx-border-subtle bg-hx-elevated', className)} {...rest}>{children}</div>;
 }
 
 export interface ActionPanelProps extends Omit<React.HTMLAttributes<HTMLDivElement>, 'title'> {
@@ -272,14 +285,14 @@ export interface ActionPanelProps extends Omit<React.HTMLAttributes<HTMLDivEleme
  * details scroll, so the person always sees what they are deciding and how to decide it.
  */
 export function ActionPanel({ label, icon, title, footer, tone = 'warning', maxHeight = 'min(60vh, 560px)', className, style, children, ...rest }: ActionPanelProps): React.ReactElement {
-  const border = { warning: 'border-hx-warning/35', accent: 'border-hx-accent/35', neutral: 'border-hx-border-subtle', danger: 'border-hx-danger/35' }[tone];
+  const border = { warning: 'border-hx-warning-border', accent: 'border-hx-accent-border', neutral: 'border-hx-border-subtle', danger: 'border-hx-danger-border' }[tone];
   const text = { warning: 'text-hx-warning', accent: 'text-hx-accent-text', neutral: 'text-hx-muted', danger: 'text-hx-danger' }[tone];
   return (
     <div className={cx('flex flex-col overflow-hidden rounded-xl border bg-hx-elevated shadow-sm', border, className)} style={{ maxHeight, ...style }} {...rest}>
       {(label || title) && (
         <div className="shrink-0 px-3 pt-3" data-panel-head>
-          {label && <div className={cx('flex items-center gap-1.5 text-[11.5px] font-medium uppercase tracking-wide', text)}>{icon && <Icon name={icon} size={13} />}{label}</div>}
-          {title && <div className="mt-1 text-[14px] font-semibold text-hx-primary">{title}</div>}
+          {label && <div className={cx('flex items-center gap-1.5 text-tiny font-semibold uppercase tracking-wide', text)}>{icon && <Icon name={icon} size={13} />}{label}</div>}
+          {title && <div className="mt-1 text-body-lg font-semibold text-hx-primary">{title}</div>}
         </div>
       )}
       <div className={cx('hx-scroll min-h-0 flex-1 overflow-y-auto px-3 pt-1', footer ? 'pb-2' : 'pb-3')} data-panel-body>{children}</div>

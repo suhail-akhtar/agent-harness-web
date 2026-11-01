@@ -225,7 +225,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
     <div className="mx-auto w-full max-w-column px-4 pb-3 sm:px-6" data-composer>
       {p.queued?.length ? (
         <div className="mb-1.5 flex flex-wrap gap-1.5" data-queue>
-          {p.queued.map((q, i) => <span key={i} className="inline-flex max-w-full items-center gap-1 rounded-lg bg-hx-pill py-1 pl-2 pr-1 text-[12px] text-hx-secondary"><Icon name="clock" size={12} /><span className="max-w-[320px] truncate">Queued: {q}</span><button type="button" aria-label="Remove from the queue" onClick={() => p.onUnqueue?.(i)} className="rounded p-0.5 hover:bg-hx-hover"><Icon name="x" size={12} /></button></span>)}
+          {p.queued.map((q, i) => <span key={i} className="inline-flex max-w-full items-center gap-1 rounded-lg bg-hx-pill py-1 pl-2 pr-1 text-small text-hx-secondary"><Icon name="clock" size={12} /><span className="max-w-[320px] truncate">Queued: {q}</span><button type="button" aria-label="Remove from the queue" onClick={() => p.onUnqueue?.(i)} className="rounded p-0.5 hover:bg-hx-hover"><Icon name="x" size={12} /></button></span>)}
         </div>
       ) : null}
       <div ref={wrap} className={cx('relative rounded-2xl border bg-hx-elevated shadow-sm transition-colors focus-within:border-hx-border', drag ? 'border-hx-accent' : 'border-hx-border-subtle')}
@@ -234,7 +234,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
         {files.length > 0 && (
           <div className="flex flex-wrap gap-1.5 px-3 pt-3" data-attachments>
             {files.map((f, i) => (
-              <span key={i} className="inline-flex items-center gap-1.5 rounded-lg border border-hx-border-subtle bg-hx-bg py-1 pl-1 pr-1.5 text-[12px]">
+              <span key={i} className="inline-flex items-center gap-1.5 rounded-lg border border-hx-border-subtle bg-hx-bg py-1 pl-1 pr-1.5 text-small">
                 {f.mediaType.startsWith('image/') ? <img src={`data:${f.mediaType};base64,${f.base64}`} alt="" className="h-7 w-7 rounded object-cover" /> : <Icon name="file" size={14} className="ml-1 text-hx-muted" />}
                 <span className="max-w-[160px] truncate">{f.name}</span>
                 <button type="button" aria-label={`Remove ${f.name}`} onClick={() => setFiles((x) => x.filter((_, j) => j !== i))} className="text-hx-muted hover:text-hx-danger"><Icon name="x" size={12} /></button>
@@ -252,7 +252,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
           onChange={(e) => onInput(e.target.value, e.target.selectionStart)}
           onKeyDown={onKeyDown}
           onPaste={(e) => { const imgs = [...e.clipboardData.files]; if (imgs.length) { e.preventDefault(); void addFiles(imgs); } }}
-          className="block max-h-[280px] min-h-[52px] w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-[14.5px] leading-6 text-hx-primary outline-none placeholder:text-hx-muted"
+          className="block max-h-[280px] min-h-[52px] w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-body-lg leading-6 text-hx-primary outline-none placeholder:text-hx-muted"
         />
         <Popover open={!!menu && menuItems.length > 0} onClose={() => setMenu(null)} anchor={wrap} placement="top-start" noFocus className="w-[min(440px,90vw)]" role="listbox" label={menu?.kind === '/' ? 'Commands' : 'Files'}>
           <MenuList items={menuItems} activeIndex={active} onActiveIndex={setActive} onDone={() => setMenu(null)} />
@@ -263,7 +263,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
           <ModelPicker value={p.value} onChange={p.onChange} />
           <ModeChip value={p.value.mode} onChange={(mode) => p.onChange({ mode })} />
           <Tooltip label={p.value.think ? 'Thinking harder on (effort high)' : 'Think harder'}>
-            <button type="button" data-chip="think" aria-pressed={p.value.think} onClick={() => p.onChange({ think: !p.value.think })} className={cx('inline-flex h-7 items-center gap-1 rounded-lg px-2 text-[12.5px]', p.value.think ? 'bg-hx-accent-soft text-hx-accent-text' : 'text-hx-muted hover:bg-hx-hover hover:text-hx-primary')}><Icon name="brain" size={14} />Think</button>
+            <button type="button" data-chip="think" aria-pressed={p.value.think} onClick={() => p.onChange({ think: !p.value.think })} className={cx('inline-flex h-7 items-center gap-1 rounded-lg px-2 text-small', p.value.think ? 'bg-hx-accent-soft text-hx-accent-text' : 'text-hx-muted hover:bg-hx-hover hover:text-hx-primary')}><Icon name="brain" size={14} />Think</button>
           </Tooltip>
           {chips.map((c) => <PluginChip key={c.qid} chip={c} />)}
           <div className="flex-1" />
@@ -310,7 +310,7 @@ export function ModelPicker({ value, onChange }: { value: ComposerValue; onChang
   const effort = value.effort ?? current?.effort;
   return (
     <>
-      <button ref={ref} type="button" data-model-picker onClick={() => setOpen(!open)} className="inline-flex h-7 max-w-[220px] items-center gap-1 rounded-lg px-2 text-[12.5px] text-hx-secondary hover:bg-hx-hover hover:text-hx-primary">
+      <button ref={ref} type="button" data-model-picker onClick={() => setOpen(!open)} className="inline-flex h-7 max-w-[220px] items-center gap-1 rounded-lg px-2 text-small text-hx-secondary hover:bg-hx-hover hover:text-hx-primary">
         <Icon name="cpu" size={14} /><span className="truncate">{current?.label ?? (value.model || 'Choose a model')}</span>{effort && current?.efforts && current.efforts.length > 1 && <span className="text-hx-muted">· {EFFORT_LABEL[effort]}</span>}<Icon name="chevron-down" size={12} />
       </button>
       <Popover open={open} onClose={() => setOpen(false)} anchor={ref} placement="top-start" className="w-[380px]" label="Models">
@@ -321,7 +321,7 @@ export function ModelPicker({ value, onChange }: { value: ComposerValue; onChang
         <div className="hx-scroll max-h-[400px] overflow-y-auto px-1 pb-1" data-model-list>
           {groups.map((g) => (
             <div key={g.tier} data-model-tier={g.tier}>
-              <div className="px-2 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-hx-muted">{g.label}</div>
+              <div className="px-2 pb-1 pt-2 text-tiny font-semibold uppercase tracking-wide text-hx-muted">{g.label}</div>
               {g.list.map((m) => (
                 <ListRow key={m.id} data-model={m.id} disabled={!m.available} active={m.id === value.model} onClick={() => pick(m)}
                   title={<span className="flex items-center gap-1.5">{m.label}{m.id === value.model && <Icon name="check" size={13} className="text-hx-accent-text" />}</span>}
@@ -330,26 +330,26 @@ export function ModelPicker({ value, onChange }: { value: ComposerValue; onChang
               ))}
             </div>
           ))}
-          {!shown.length && models.length > 0 && <div className="p-3 text-[12.5px] text-hx-muted">No model matches "{q}".</div>}
-          {!models.length && <div className="p-3 text-[12.5px] text-hx-muted">No models yet: the engine is starting.</div>}
+          {!shown.length && models.length > 0 && <div className="p-3 text-small text-hx-muted">No model matches "{q}".</div>}
+          {!models.length && <div className="p-3 text-small text-hx-muted">No models yet: the engine is starting.</div>}
           {more.length > 0 && (
             <div data-model-more>
-              <div className="px-2 pb-1 pt-3 text-[11px] font-medium uppercase tracking-wide text-hx-muted">More from your providers</div>
+              <div className="px-2 pb-1 pt-3 text-tiny font-semibold uppercase tracking-wide text-hx-muted">More from your providers</div>
               {more.slice(0, q ? 60 : 12).map((m) => <ListRow key={`${m.provider}:${m.id}`} data-model-offered={m.id} disabled title={m.name ?? m.id} subtitle={`${m.label} · not set up in Harness yet (its prices are not known)`} />)}
-              {!q && more.length > 12 && <div className="px-2 py-1 text-[11.5px] text-hx-muted">{more.length - 12} more: search to find them.</div>}
+              {!q && more.length > 12 && <div className="px-2 py-1 text-caption text-hx-muted">{more.length - 12} more: search to find them.</div>}
             </div>
           )}
         </div>
-        <div className="border-t border-hx-border-subtle px-3 py-1.5 text-[11px] text-hx-muted">Prices: USD per million tokens, input / output.</div>
+        <div className="border-t border-hx-border-subtle px-3 py-1.5 text-tiny text-hx-muted">Prices: USD per million tokens, input / output.</div>
         {current && current.efforts.length > 1 && (
           <div className="border-t border-hx-border-subtle p-2">
-            <div className="mb-1 px-1 text-[11px] font-medium uppercase tracking-wide text-hx-muted">Effort</div>
+            <div className="mb-1 px-1 text-tiny font-semibold uppercase tracking-wide text-hx-muted">Effort</div>
             <div className="flex flex-wrap gap-1" data-effort>
-              {current.efforts.map((e) => <button key={e} type="button" data-effort-option={e} onClick={() => onChange({ effort: e })} className={cx('rounded-md px-2 py-1 text-[12px]', e === effort ? 'bg-hx-accent text-hx-on-accent' : 'bg-hx-pill text-hx-secondary hover:bg-hx-active')}>{EFFORT_LABEL[e]}</button>)}
+              {current.efforts.map((e) => <button key={e} type="button" data-effort-option={e} onClick={() => onChange({ effort: e })} className={cx('rounded-md px-2 py-1 text-small', e === effort ? 'bg-hx-accent text-hx-on-accent' : 'bg-hx-pill text-hx-secondary hover:bg-hx-active')}>{EFFORT_LABEL[e]}</button>)}
             </div>
           </div>
         )}
-        <button type="button" onClick={() => { setOpen(false); useApp.getState().openSettings('core.settings:models'); }} className="mt-1 flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[12.5px] text-hx-muted hover:bg-hx-hover hover:text-hx-primary"><Icon name="key" size={13} />Models & providers…</button>
+        <button type="button" onClick={() => { setOpen(false); useApp.getState().openSettings('core.settings:models'); }} className="mt-1 flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-small text-hx-muted hover:bg-hx-hover hover:text-hx-primary"><Icon name="key" size={13} />Models & providers…</button>
       </Popover>
     </>
   );
@@ -361,7 +361,7 @@ function ModeChip({ value, onChange }: { value: Mode; onChange: (m: Mode) => voi
   const m = MODE_LABEL[value] ?? MODE_LABEL.default;
   return (
     <>
-      <button ref={ref} type="button" data-chip="mode" onClick={() => setOpen(!open)} className={cx('inline-flex h-7 items-center gap-1 rounded-lg px-2 text-[12.5px] hover:bg-hx-hover', value === 'bypass' ? 'text-hx-danger' : 'text-hx-secondary')}>
+      <button ref={ref} type="button" data-chip="mode" onClick={() => setOpen(!open)} className={cx('inline-flex h-7 items-center gap-1 rounded-lg px-2 text-small hover:bg-hx-hover', value === 'bypass' ? 'text-hx-danger' : 'text-hx-secondary')}>
         <Icon name={m.icon} size={14} />{m.label}<Icon name="chevron-down" size={12} />
       </button>
       <Popover open={open} onClose={() => setOpen(false)} anchor={ref} placement="top-start" className="w-[300px]" role="presentation">
@@ -377,10 +377,10 @@ function PluginChip({ chip }: { chip: ReturnType<typeof useData.getState>['regis
   const value = chips[chip.setting];
   const set = (v: unknown) => useApp.getState().setPrefs({ chips: { ...useApp.getState().prefs.chips, [chip.setting]: v } });
   if (chip.kind === 'toggle') {
-    return <button type="button" data-chip={chip.qid} aria-pressed={value === true} onClick={() => set(value !== true)} className={cx('inline-flex h-7 items-center gap-1 rounded-lg px-2 text-[12.5px]', value === true ? 'bg-hx-accent-soft text-hx-accent-text' : 'text-hx-muted hover:bg-hx-hover')}>{chip.icon && <Icon name={chip.icon} size={14} />}{chip.title}</button>;
+    return <button type="button" data-chip={chip.qid} aria-pressed={value === true} onClick={() => set(value !== true)} className={cx('inline-flex h-7 items-center gap-1 rounded-lg px-2 text-small', value === true ? 'bg-hx-accent-soft text-hx-accent-text' : 'text-hx-muted hover:bg-hx-hover')}>{chip.icon && <Icon name={chip.icon} size={14} />}{chip.title}</button>;
   }
   return (
-    <label className="inline-flex h-7 items-center gap-1 rounded-lg px-2 text-[12.5px] text-hx-secondary hover:bg-hx-hover" data-chip={chip.qid}>
+    <label className="inline-flex h-7 items-center gap-1 rounded-lg px-2 text-small text-hx-secondary hover:bg-hx-hover" data-chip={chip.qid}>
       {chip.icon && <Icon name={chip.icon} size={14} />}{chip.title}:
       <select value={String(value ?? chip.options?.[0] ?? '')} onChange={(e) => set(e.target.value)} className="rounded bg-transparent">{(chip.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}</select>
     </label>

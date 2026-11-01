@@ -70,12 +70,12 @@ export function ArtifactBody({ c, title, fill }: { c: ArtifactContent; title: st
       case 'json': return <JsonView source={source} />;
       case 'code': return <CodeBlock code={source} language={c.meta.language ?? 'text'} collapseAt={1e9} />;
       case 'image': return c.base64 ? <img data-artifact-image src={`data:${c.contentType};base64,${c.base64}`} alt={title} className="mx-auto max-h-full max-w-full rounded-lg" /> : <EmptyState icon="image" title="No image data" />;
-      case 'pdf': return <EmptyState icon="file" title="A PDF document" action={<span className="text-[12px] text-hx-muted">Download it to read it.</span>}>{`${Math.round((c.base64?.length ?? 0) * 0.75 / 1024)} KB`}</EmptyState>;
+      case 'pdf': return <EmptyState icon="file" title="A PDF document" action={<span className="text-small text-hx-muted">Download it to read it.</span>}>{`${Math.round((c.base64?.length ?? 0) * 0.75 / 1024)} KB`}</EmptyState>;
       default: return <CodeBlock code={source} language={codeLanguage(kind, c.meta.language)} collapseAt={1e9} />;
     }
   })();
   return (
-    <RenderBoundary fallback={(e, retry) => <div className="p-3 text-[12.5px] text-hx-danger" data-render-error>This artifact could not be drawn: {e} <button type="button" className="underline" onClick={retry}>Try again</button></div>}>
+    <RenderBoundary fallback={(e, retry) => <div className="p-3 text-small text-hx-danger" data-render-error>This artifact could not be drawn: {e} <button type="button" className="underline" onClick={retry}>Try again</button></div>}>
       <div data-artifact-body={kind} className={fill ? 'h-full min-h-0' : ''}>{drawn}</div>
     </RenderBoundary>
   );

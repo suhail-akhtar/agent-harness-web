@@ -45,7 +45,9 @@ export function CommandPalette(): React.ReactElement | null {
     for (const s of convs.slice(0, 30)) out.push({ id: `s:${s.id}`, group: 'Conversations', title: s.title || 'New conversation', hint: new Date(s.updatedAt).toLocaleDateString(), icon: 'chat', run: () => openSession(s.id) });
     const scored = out.map((e) => ({ ...e, score: e.group === 'Conversations' && found.some((f) => `s:${f.id}` === e.id) ? 500 : fuzzyScore(q, `${e.title} ${e.hint ?? ''}`) })).filter((e) => e.score >= 0);
     if (q.trim()) scored.sort((a, b) => b.score - a.score);
-    return scored.slice(0, 60);
+    // Every command and page, whatever plugins add (a cut at 60 dropped the last plugins' entries without a word);
+    // a search shows the best 60.
+    return q.trim() ? scored.slice(0, 60) : scored.slice(0, 400);
   }, [registry, sessions, projects, found, q]);
 
   useEffect(() => { setActive(0); }, [q]);
@@ -60,7 +62,7 @@ export function CommandPalette(): React.ReactElement | null {
           <div className="flex items-center gap-2.5 border-b border-hx-border-subtle px-4">
             <Icon name="search" size={16} className="text-hx-muted" />
             <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search commands, pages, conversations…" aria-label="Search commands"
-              className="h-12 flex-1 bg-transparent text-[14px] text-hx-primary outline-none placeholder:text-hx-muted"
+              className="h-12 flex-1 bg-transparent text-body-lg text-hx-primary outline-none placeholder:text-hx-muted"
               onKeyDown={(e) => {
                 if (e.key === 'Escape') { e.preventDefault(); close(); }
                 else if (e.key === 'ArrowDown') { e.preventDefault(); setActive((a) => Math.min(entries.length - 1, a + 1)); }
@@ -70,18 +72,18 @@ export function CommandPalette(): React.ReactElement | null {
             <Kbd keys="Esc" />
           </div>
           <div ref={list} role="listbox" className="hx-scroll min-h-0 flex-1 overflow-y-auto p-1.5">
-            {!entries.length && <div className="px-3 py-6 text-center text-[13px] text-hx-muted">Nothing matches.</div>}
+            {!entries.length && <div className="px-3 py-6 text-center text-body text-hx-muted">Nothing matches.</div>}
             {entries.map((e, i) => {
               const head = !q.trim() && e.group !== lastGroup ? e.group : null;
               lastGroup = e.group;
               return (
                 <React.Fragment key={e.id}>
-                  {head && <div className="px-2.5 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-hx-muted">{head}</div>}
+                  {head && <div className="px-2.5 pb-1 pt-2 text-tiny font-semibold uppercase tracking-wide text-hx-muted">{head}</div>}
                   <button type="button" role="option" aria-selected={i === active} data-index={i} data-entry={e.id} onMouseMove={() => setActive(i)} onClick={() => pick(e)}
-                    className={cx('flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[13px]', i === active ? 'bg-hx-hover text-hx-primary' : 'text-hx-secondary')}>
+                    className={cx('flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-body', i === active ? 'bg-hx-hover text-hx-primary' : 'text-hx-secondary')}>
                     <Icon name={e.icon} size={15} className="shrink-0 text-hx-muted" />
-                    <span className="min-w-0 flex-1 truncate">{e.title}{e.hint && <span className="ml-2 text-[12px] text-hx-muted">{e.hint}</span>}</span>
-                    {q.trim() && <span className="text-[11px] text-hx-muted">{e.group}</span>}
+                    <span className="min-w-0 flex-1 truncate">{e.title}{e.hint && <span className="ml-2 text-small text-hx-muted">{e.hint}</span>}</span>
+                    {q.trim() && <span className="text-tiny text-hx-muted">{e.group}</span>}
                     {e.keys && <Kbd keys={formatChord(e.keys, platform)} />}
                   </button>
                 </React.Fragment>

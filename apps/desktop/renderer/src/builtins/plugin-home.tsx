@@ -6,7 +6,7 @@
  */
 
 import React from 'react';
-import { Badge, Button, EmptyState, Icon, Markdown, cx, Page } from '@harness/ui';
+import { Badge, Button, EmptyState, Icon, Markdown, cx, Page, PageHeader, Section } from '@harness/ui';
 import { FOCUS, navigate, prefill, showFullWindow, useApp } from '../state/app';
 import { useData } from '../state/data';
 import { HomeCardHost } from '../registry/PluginView';
@@ -19,31 +19,22 @@ import { desktop, platform } from '../bridge';
 /** The page around a plugin's home: its title, what it is, "Ask the agent" and "Guide for agents". */
 export function ModuleHeader({ model, children }: { model: Pick<HomeModel, 'plugin' | 'title' | 'icon' | 'description' | 'purpose' | 'ask'>; children?: React.ReactNode }): React.ReactElement {
   const registry = useData((s) => s.registry);
+  // The kit's page header (the same title row as every page), with the module's icon.
   return (
-    <header className="mb-6 flex flex-wrap items-start gap-4" data-module-header={model.plugin}>
-      <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-hx-accent/12 text-hx-accent-text"><Icon name={model.icon} size={22} /></span>
-      <div className="min-w-0 flex-1">
-        <h1 className="text-[22px] font-semibold tracking-tight">{model.title}</h1>
-        <p className="mt-0.5 max-w-3xl text-[13.5px] text-hx-secondary">{model.purpose}</p>
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
+    <div data-module-header={model.plugin}>
+      <PageHeader icon={model.icon} title={model.title} subtitle={model.purpose} actions={<>
         {children}
         {FOCUS !== model.plugin && !registry.plugins.find((x) => x.name === model.plugin && x.source === 'builtin') && <Button size="sm" variant="ghost" icon="external" data-open-app={model.plugin} onClick={() => void desktop.openPluginWindow(model.plugin)}>Open as app</Button>}
         <Button size="sm" variant="ghost" icon="book" data-module-guide={model.plugin} onClick={() => showFullWindow(`${model.title}: guide for agents`, <Page><Markdown text={guideFor(registry, model.plugin) ?? ''} /></Page>)}>Guide for agents</Button>
         <Button size="sm" variant="primary" icon="sparkles" data-home-ask={model.plugin} onClick={() => prefill(model.ask, true)}>Ask the agent about {model.title}</Button>
-      </div>
-    </header>
+      </>} />
+    </div>
   );
 }
 
-/** A section of a home page with a heading. */
+/** A section of a home page: the kit's Section (marked for tests and tools by its id). */
 export function HomeSection({ title, children, action, id }: { title: string; children: React.ReactNode; action?: React.ReactNode; id?: string }): React.ReactElement {
-  return (
-    <section className="mb-7" {...(id ? { 'data-home-section': id } : {})}>
-      <div className="mb-2.5 flex items-center gap-2"><h2 className="flex-1 text-[12px] font-semibold uppercase tracking-wide text-hx-muted">{title}</h2>{action}</div>
-      {children}
-    </section>
-  );
+  return <Section title={title} actions={action} {...(id ? { 'data-home-section': id } : {})}>{children}</Section>;
 }
 
 export function PluginHome({ params }: { params: Record<string, string> }): React.ReactElement {
@@ -55,13 +46,13 @@ export function PluginHome({ params }: { params: Record<string, string> }): Reac
   const commands = m.actions.filter((a) => a.kind === 'command');
   const slash = m.actions.filter((a) => a.kind === 'slash');
   return (
-    <Page data-plugin-home={plugin} width="wide">
+    <Page data-plugin-home={plugin}>
         <ModuleHeader model={m} />
-        {m.description && m.description !== m.purpose && <p className="-mt-3 mb-6 max-w-3xl text-[13px] leading-relaxed text-hx-muted">{m.description}</p>}
+        {m.description && m.description !== m.purpose && <p className="-mt-4 mb-7 max-w-3xl text-body text-hx-muted">{m.description}</p>}
         {m.statusItems.length > 0 && (
           <div className="mb-6 flex flex-wrap gap-2">
             {m.statusItems.map((s) => (
-              <button key={s.id} type="button" data-home-status={s.id} disabled={!s.command} onClick={() => s.command && void runCommand(s.command)} className="inline-flex items-center gap-2 rounded-full border border-hx-border-subtle bg-hx-elevated px-3 py-1.5 text-[12.5px] text-hx-secondary hover:border-hx-border disabled:hover:border-hx-border-subtle">
+              <button key={s.id} type="button" data-home-status={s.id} disabled={!s.command} onClick={() => s.command && void runCommand(s.command)} className="inline-flex items-center gap-2 rounded-full border border-hx-border-subtle bg-hx-elevated px-3 py-1.5 text-small text-hx-secondary hover:border-hx-border disabled:hover:border-hx-border-subtle">
                 <Icon name="activity" size={13} />{interpolate(s.text, badges)}
               </button>
             ))}
@@ -74,8 +65,8 @@ export function PluginHome({ params }: { params: Record<string, string> }): Reac
                 const b = p.badge ? badges[p.badge] : undefined;
                 return (
                   <button key={p.id} type="button" data-home-page={p.id} onClick={() => navigate(p.route)} className="group flex min-h-[92px] flex-col items-start gap-1.5 rounded-xl border border-hx-border-subtle bg-hx-elevated p-4 text-left transition-colors hover:border-hx-border">
-                    <span className="flex w-full items-center gap-2"><Icon name={p.icon ?? 'arrow-right'} size={16} className="text-hx-accent-text" /><span className="flex-1 text-[14px] font-medium">{p.title}</span>{b !== undefined && b !== null && b !== 0 && <Badge tone="accent">{String(b)}</Badge>}<Icon name="arrow-right" size={14} className="text-hx-muted opacity-0 transition-opacity group-hover:opacity-100" /></span>
-                    {p.description && <span className="line-clamp-2 text-[12.5px] text-hx-muted">{p.description}</span>}
+                    <span className="flex w-full items-center gap-2"><Icon name={p.icon ?? 'arrow-right'} size={16} className="text-hx-accent-text" /><span className="flex-1 text-body-lg font-medium">{p.title}</span>{b !== undefined && b !== null && b !== 0 && <Badge tone="accent">{String(b)}</Badge>}<Icon name="arrow-right" size={14} className="text-hx-muted opacity-0 transition-opacity group-hover:opacity-100" /></span>
+                    {p.description && <span className="line-clamp-2 text-small text-hx-muted">{p.description}</span>}
                   </button>
                 );
               })}
@@ -86,19 +77,19 @@ export function PluginHome({ params }: { params: Record<string, string> }): Reac
           <HomeSection title="Actions" id="actions">
             <div className="grid gap-2 sm:grid-cols-2">
               {commands.map((a) => (
-                <button key={a.id} type="button" data-home-action={a.id} onClick={() => void runCommand(a.run)} className="flex items-center gap-3 rounded-lg border border-hx-border-subtle px-3 py-2.5 text-left text-[13px] hover:bg-hx-hover">
+                <button key={a.id} type="button" data-home-action={a.id} onClick={() => void runCommand(a.run)} className="flex items-center gap-3 rounded-lg border border-hx-border-subtle px-3 py-2.5 text-left text-body hover:bg-hx-hover">
                   <Icon name={a.icon} size={15} className="text-hx-secondary" /><span className="min-w-0 flex-1 truncate">{a.title}</span>
-                  {a.agent && <span className="rounded bg-hx-pill px-1.5 py-0.5 text-[10.5px] text-hx-muted" title="Agents may run it (desktop_command)">agents</span>}
-                  {a.hint && <span className="text-[11px] text-hx-muted">{formatChord(a.hint, platform)}</span>}
+                  {a.agent && <span className="rounded bg-hx-pill px-1.5 py-0.5 text-micro text-hx-muted" title="Agents may run it (desktop_command)">agents</span>}
+                  {a.hint && <span className="text-tiny text-hx-muted">{formatChord(a.hint, platform)}</span>}
                 </button>
               ))}
               {slash.map((a) => (
-                <button key={a.id} type="button" data-home-action={a.id} onClick={() => prefill(a.run, true)} className="flex items-center gap-3 rounded-lg border border-hx-border-subtle px-3 py-2.5 text-left text-[13px] hover:bg-hx-hover">
-                  <span className="font-mono text-[12.5px] text-hx-accent-text">{a.title}</span><span className="min-w-0 flex-1 truncate text-hx-muted">{a.hint}</span>
+                <button key={a.id} type="button" data-home-action={a.id} onClick={() => prefill(a.run, true)} className="flex items-center gap-3 rounded-lg border border-hx-border-subtle px-3 py-2.5 text-left text-body hover:bg-hx-hover">
+                  <span className="font-mono text-small text-hx-accent-text">{a.title}</span><span className="min-w-0 flex-1 truncate text-hx-muted">{a.hint}</span>
                 </button>
               ))}
               {m.prompts.map((p) => (
-                <button key={p.id} type="button" data-home-action={p.id} onClick={() => prefill(p.prompt, true)} className="flex items-center gap-3 rounded-lg border border-hx-border-subtle px-3 py-2.5 text-left text-[13px] hover:bg-hx-hover">
+                <button key={p.id} type="button" data-home-action={p.id} onClick={() => prefill(p.prompt, true)} className="flex items-center gap-3 rounded-lg border border-hx-border-subtle px-3 py-2.5 text-left text-body hover:bg-hx-hover">
                   <Icon name={p.icon ?? 'sparkles'} size={15} className="text-hx-accent-text" /><span className="min-w-0 flex-1 truncate">{p.title}</span>
                 </button>
               ))}
@@ -117,7 +108,7 @@ export function PluginHome({ params }: { params: Record<string, string> }): Reac
             </div>
           </HomeSection>
         )}
-        {!m.pages.length && !m.actions.length && !m.settings.length && <p className={cx('text-[13px] text-hx-muted')}>This plugin adds no pages or commands of its own: it works in conversations (renderers, tools).</p>}
+        {!m.pages.length && !m.actions.length && !m.settings.length && <p className={cx('text-body text-hx-muted')}>This plugin adds no pages or commands of its own: it works in conversations (renderers, tools).</p>}
     </Page>
   );
 }

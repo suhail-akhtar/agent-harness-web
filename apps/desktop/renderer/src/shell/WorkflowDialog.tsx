@@ -73,7 +73,7 @@ function InputField({ k, d, value, onChange }: { k: string; d: InputDef; value: 
           <div role="radiogroup" aria-label={d.title ?? human(k)} className="inline-flex flex-wrap rounded-lg bg-hx-pill p-0.5">
             {choices.map((c) => (
               <button key={c} type="button" role="radio" aria-checked={value === c} data-input-choice={c} onClick={() => onChange(c)}
-                className={cx('h-7 rounded-md px-3 text-[12.5px]', value === c ? 'bg-hx-elevated font-medium text-hx-primary shadow-sm' : 'text-hx-muted hover:text-hx-primary')}>{human(c)}</button>
+                className={cx('h-7 rounded-md px-3 text-small', value === c ? 'bg-hx-elevated font-medium text-hx-primary shadow-sm' : 'text-hx-muted hover:text-hx-primary')}>{human(c)}</button>
             ))}
           </div>
         ) : long ? (
@@ -84,8 +84,8 @@ function InputField({ k, d, value, onChange }: { k: string; d: InputDef; value: 
       </Field>
       {d.examples && d.examples.length > 0 && (
         <div className="-mt-1 mb-2 flex flex-wrap items-center gap-1.5">
-          <span className="text-[11.5px] text-hx-muted">Suggestions:</span>
-          {d.examples.map((x) => <button key={x} type="button" onClick={() => onChange(x)} className={cx('rounded-full border px-2 py-0.5 text-[12px]', value === x ? 'border-hx-accent/40 bg-hx-accent-soft text-hx-accent-text' : 'border-hx-border-subtle text-hx-secondary hover:text-hx-primary')}>{x}</button>)}
+          <span className="text-caption text-hx-muted">Suggestions:</span>
+          {d.examples.map((x) => <button key={x} type="button" onClick={() => onChange(x)} className={cx('rounded-full border px-2 py-0.5 text-small', value === x ? 'border-hx-accent-border bg-hx-accent-soft text-hx-accent-text' : 'border-hx-border-subtle text-hx-secondary hover:text-hx-primary')}>{x}</button>)}
         </div>
       )}
     </div>
@@ -102,16 +102,16 @@ function Steps({ w }: { w: WorkflowInfo }): React.ReactElement {
         return (
           <li key={n.id} className="relative flex gap-2.5 pb-2.5" data-step={n.id} data-step-type={n.type}>
             {i < steps.length - 1 && <span className="absolute left-[13px] top-7 h-[calc(100%-22px)] w-px bg-hx-border-subtle" aria-hidden />}
-            <span className={cx('flex h-[27px] w-[27px] shrink-0 items-center justify-center rounded-full border text-[11px]', yours ? 'border-hx-accent/50 bg-hx-accent-soft text-hx-accent-text' : n.type === 'gate' ? 'border-hx-success/40 bg-hx-success/10 text-hx-success' : 'border-hx-border-subtle bg-hx-elevated text-hx-secondary')}>
+            <span className={cx('flex h-[27px] w-[27px] shrink-0 items-center justify-center rounded-full border text-tiny', yours ? 'border-hx-accent-border bg-hx-accent-soft text-hx-accent-text' : n.type === 'gate' ? 'border-hx-success-border bg-hx-success-soft text-hx-success' : 'border-hx-border-subtle bg-hx-elevated text-hx-secondary')}>
               <Icon name={t.icon} size={13} />
             </span>
             <span className="min-w-0 pt-0.5">
-              <span className="flex flex-wrap items-center gap-1.5 text-[13px] font-medium text-hx-primary">
+              <span className="flex flex-wrap items-center gap-1.5 text-body font-medium text-hx-primary">
                 <span className="text-hx-muted">{i + 1}.</span>{n.title ?? human(n.id)}
                 {yours && <Badge tone="accent">You approve</Badge>}
-                {n.repeats && <span className="inline-flex items-center gap-0.5 text-[11px] font-normal text-hx-muted" title="Goes back to an earlier step when its result asks for it"><Icon name="refresh" size={11} />may repeat</span>}
+                {n.repeats && <span className="inline-flex items-center gap-0.5 text-tiny font-normal text-hx-muted" title="Goes back to an earlier step when its result asks for it"><Icon name="refresh" size={11} />may repeat</span>}
               </span>
-              <span className="block text-[11.5px] text-hx-muted">{t.label}{n.agent ? `: ${n.agent}` : ''}{n.model ? ` · ${n.model}` : ''}</span>
+              <span className="block text-caption text-hx-muted">{t.label}{n.agent ? `: ${n.agent}` : ''}{n.model ? ` · ${n.model}` : ''}</span>
             </span>
           </li>
         );
@@ -133,8 +133,8 @@ function Tips({ w, inputs }: { w?: WorkflowInfo; inputs: Record<string, string> 
   ];
   return (
     <div className="rounded-lg border border-hx-border-subtle bg-hx-bg p-3" data-workflow-tips>
-      <div className="mb-1 flex items-center gap-1.5 text-[11.5px] font-medium uppercase tracking-wide text-hx-muted"><Icon name="info" size={12} />What happens when you start it</div>
-      <ul className="ml-4 list-disc space-y-0.5 text-[12.5px] text-hx-secondary">{tips.map((t) => <li key={t}>{t}</li>)}</ul>
+      <div className="mb-1 flex items-center gap-1.5 text-tiny font-semibold uppercase tracking-wide text-hx-muted"><Icon name="info" size={12} />What happens when you start it</div>
+      <ul className="ml-4 list-disc space-y-0.5 text-small text-hx-secondary">{tips.map((t) => <li key={t}>{t}</li>)}</ul>
     </div>
   );
 }
@@ -223,7 +223,7 @@ export function WorkflowDialog(): React.ReactElement | null {
   };
   const onKey = (e: React.KeyboardEvent) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void (fresh ? startFresh() : start()); } };
   const intro = (
-    <div className="mb-3 flex items-start gap-2.5 rounded-lg bg-hx-accent-soft/50 px-3 py-2 text-[12.5px] text-hx-secondary" data-workflow-intro>
+    <div className="mb-3 flex items-start gap-2.5 rounded-lg bg-hx-accent-soft px-3 py-2 text-small text-hx-secondary" data-workflow-intro>
       <Icon name="workflow" size={16} className="mt-0.5 shrink-0 text-hx-accent-text" />
       <span>A <b className="text-hx-primary">workflow</b> is a ready-made, multi-step process: specialised agents do each step, checks verify the work, and it waits for you where your approval is needed. Pick one, say what you want, and start it.</span>
     </div>
@@ -235,11 +235,11 @@ export function WorkflowDialog(): React.ReactElement | null {
       <Modal open onClose={close} title={`Run ${human(name)}`} size="lg" footer={<><Button variant="ghost" onClick={close}>Cancel</Button><Button variant="primary" icon="play" loading={busy} onClick={() => void startFresh()} data-start-workflow>Start</Button></>}>
         <div data-workflow-dialog data-fresh onKeyDown={onKey}>
           {intro}
-          <p className="mb-2 text-[12.5px] text-hx-secondary">It starts in a new conversation.</p>
+          <p className="mb-2 text-small text-hx-secondary">It starts in a new conversation.</p>
           <Field label="Work in" help="The folder the workflow reads and changes."><Select value={where} onChange={setWhere} options={options} data-work-in-select /></Field>
           <Field label="Model" help="Runs the workflow's agents unless a step names its own."><Select value={model} onChange={setModel} options={[{ value: '', label: 'The default model' }, ...models.filter((m) => m.available).map((m) => ({ value: m.id, label: m.label ?? m.id }))]} data-workflow-model /></Field>
           {Object.entries(input).map(([k, v]) => <InputField key={k} k={k} d={{ description: undefined }} value={v} onChange={(x) => setInput({ ...input, [k]: x })} />)}
-          {err && <p className="mt-2 text-[12.5px] text-hx-danger" role="alert">{err}</p>}
+          {err && <p className="mt-2 text-small text-hx-danger" role="alert">{err}</p>}
         </div>
       </Modal>
     );
@@ -247,7 +247,7 @@ export function WorkflowDialog(): React.ReactElement | null {
 
   const footer = (
     <>
-      <span className="mr-auto hidden text-[12px] text-hx-muted sm:inline" data-workflow-summary>
+      <span className="mr-auto hidden text-small text-hx-muted sm:inline" data-workflow-summary>
         {w ? `${ordered(w).length} step${ordered(w).length === 1 ? '' : 's'}${w.nodes.some((n) => n.type === 'approval') ? ' · waits for your approval' : ''}${missing.length ? ` · fill in ${missing.join(', ')}` : ' · Ctrl+Enter starts'}` : ''}
       </span>
       <Button variant="ghost" onClick={close}>Cancel</Button>
@@ -259,22 +259,22 @@ export function WorkflowDialog(): React.ReactElement | null {
       <div data-workflow-dialog onKeyDown={onKey}>
         {intro}
         {!list ? <div className="flex justify-center py-10"><Spinner /></div> : !list.length ? (
-          <div className="py-8 text-center text-[13px] text-hx-muted">{err || <>No workflows here yet. Plugins add them (Plugins &gt; Catalogue: Studio, Operations, Engineering, DevOps, Documents), or put JSON graphs in <code>.harness/workflows/</code> of the project.</>}</div>
+          <div className="py-8 text-center text-body text-hx-muted">{err || <>No workflows here yet. Plugins add them (Plugins &gt; Catalogue: Studio, Operations, Engineering, DevOps, Documents), or put JSON graphs in <code>.harness/workflows/</code> of the project.</>}</div>
         ) : (
           <div className="grid gap-4 md:grid-cols-[250px_1fr]">
             <div className="flex min-h-0 flex-col gap-2" data-workflow-list>
               <Input icon="search" placeholder={list.length === 1 ? 'Search workflows' : `Search ${list.length} workflows`} value={q} onChange={(e) => setQ(e.target.value)} data-workflow-search />
               <div className="hx-scroll max-h-[52vh] space-y-3 overflow-y-auto pr-1">
-                {!groups.length && <p className="px-1 text-[12.5px] text-hx-muted">Nothing matches “{q}”.</p>}
+                {!groups.length && <p className="px-1 text-small text-hx-muted">Nothing matches “{q}”.</p>}
                 {groups.map(([src, ws]) => (
                   <div key={src}>
-                    <div className="mb-1 px-1 text-[11px] font-medium uppercase tracking-wide text-hx-muted">{human(src)}</div>
+                    <div className="mb-1 px-1 text-tiny font-semibold uppercase tracking-wide text-hx-muted">{human(src)}</div>
                     <div className="space-y-1">
                       {ws.map((x) => (
                         <button key={x.name} type="button" onClick={() => choose(x)} data-workflow-option={x.name} aria-pressed={x.name === name}
-                          className={cx('w-full rounded-lg border px-2.5 py-1.5 text-left', x.name === name ? 'border-hx-accent/50 bg-hx-accent-soft/50' : 'border-transparent hover:bg-hx-hover')}>
-                          <span className="flex items-center gap-1.5 text-[13px] font-medium text-hx-primary">{human(x.name)}{x.nodes.some((n) => n.type === 'approval') && <Icon name="user" size={11} className="text-hx-accent-text" title="Waits for your approval" />}</span>
-                          <span className="line-clamp-2 text-[11.5px] leading-snug text-hx-muted">{x.description}</span>
+                          className={cx('w-full rounded-lg border px-2.5 py-1.5 text-left', x.name === name ? 'border-hx-accent-border bg-hx-accent-soft' : 'border-transparent hover:bg-hx-hover')}>
+                          <span className="flex items-center gap-1.5 text-body font-medium text-hx-primary">{human(x.name)}{x.nodes.some((n) => n.type === 'approval') && <Icon name="user" size={11} className="text-hx-accent-text" title="Waits for your approval" />}</span>
+                          <span className="line-clamp-2 text-caption leading-snug text-hx-muted">{x.description}</span>
                         </button>
                       ))}
                     </div>
@@ -285,22 +285,22 @@ export function WorkflowDialog(): React.ReactElement | null {
             {w ? (
               <div className="hx-scroll min-w-0 max-h-[60vh] space-y-4 overflow-y-auto pr-1" data-workflow-detail={w.name}>
                 <div>
-                  <div className="flex flex-wrap items-center gap-2"><h3 className="text-[16px] font-semibold text-hx-primary">{human(w.name)}</h3>{w.source && <Badge>{human(w.source)}</Badge>}</div>
-                  <p className="mt-1 text-[13px] leading-relaxed text-hx-secondary">{w.description}</p>
+                  <div className="flex flex-wrap items-center gap-2"><h3 className="text-title font-semibold text-hx-primary">{human(w.name)}</h3>{w.source && <Badge>{human(w.source)}</Badge>}</div>
+                  <p className="mt-1 text-body leading-relaxed text-hx-secondary">{w.description}</p>
                 </div>
                 <section>
-                  <div className="mb-1.5 text-[11.5px] font-medium uppercase tracking-wide text-hx-muted">How it runs</div>
+                  <div className="mb-1.5 text-tiny font-semibold uppercase tracking-wide text-hx-muted">How it runs</div>
                   <Steps w={w} />
                 </section>
                 <section>
-                  <div className="mb-1 text-[11.5px] font-medium uppercase tracking-wide text-hx-muted">What it needs</div>
+                  <div className="mb-1 text-tiny font-semibold uppercase tracking-wide text-hx-muted">What it needs</div>
                   {Object.keys(w.inputs).length ? Object.entries(w.inputs).map(([k, d]) => <InputField key={`${w.name}:${k}`} k={k} d={d as InputDef} value={input[k] ?? ''} onChange={(v) => setInput({ ...input, [k]: v })} />)
-                    : <p className="text-[12.5px] text-hx-muted">Nothing: it works from the conversation and its folder.</p>}
+                    : <p className="text-small text-hx-muted">Nothing: it works from the conversation and its folder.</p>}
                 </section>
                 <Tips w={w} inputs={input} />
-                {err && <p className="text-[12.5px] text-hx-danger" role="alert">{err}</p>}
+                {err && <p className="text-small text-hx-danger" role="alert">{err}</p>}
               </div>
-            ) : <p className="text-[13px] text-hx-muted">Pick a workflow.</p>}
+            ) : <p className="text-body text-hx-muted">Pick a workflow.</p>}
           </div>
         )}
       </div>

@@ -155,7 +155,7 @@ function SidePanel({ narrow }: { narrow: boolean }) {
   const body = (
     <>
       <div className="flex h-10 items-center gap-2 border-b border-hx-border-subtle px-3">
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{panel.kind === 'plugin' ? panelDef?.title ?? 'Panel' : panel.title}</span>
+        <span className="min-w-0 flex-1 truncate text-body font-medium">{panel.kind === 'plugin' ? panelDef?.title ?? 'Panel' : panel.title}</span>
         <IconButton icon="x" size="sm" label="Close the panel" onClick={() => useApp.setState({ panel: null })} />
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-2">
@@ -182,7 +182,7 @@ function SplitPane({ view, params }: { view: View; params: Record<string, string
       <PaneContext.Provider value={{ split: true, close, here }}>
         {view.qid !== 'core.chat:session' && (
           <div className="flex h-10 shrink-0 items-center gap-2 border-b border-hx-border-subtle px-3">
-            <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{view.title}</span>
+            <span className="min-w-0 flex-1 truncate text-body font-medium">{view.title}</span>
             <Tooltip label="Open here"><IconButton icon="pop-out" size="sm" label="Open here" onClick={here} /></Tooltip>
             <IconButton icon="x" size="sm" label="Close the view beside" onClick={close} data-close-split />
           </div>

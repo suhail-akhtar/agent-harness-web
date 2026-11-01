@@ -213,15 +213,15 @@ export function DocView(p: DocViewProps): React.ReactElement {
     <div ref={host} className={cx('flex h-full min-h-0 flex-col', tv && 'bg-hx-bg text-[115%]')} style={bg} data-bi-doc={doc.type} data-bi-ready={ready ? '1' : '0'} data-bi-page={page.id} data-layout={page.layout?.type ?? 'grid'}>
       {!p.print && !tvLayout && (
         <div className="flex flex-wrap items-center gap-1 border-b border-hx-border-subtle px-2 py-1" data-bi-toolbar>
-          {back.length > 0 && <button type="button" className="mr-1 flex items-center gap-1 rounded px-1.5 py-0.5 text-[12px] hover:bg-hx-hover" onClick={goBack} data-bi-back><Icon name="arrow-left" size={13} />Back</button>}
+          {back.length > 0 && <button type="button" className="mr-1 flex items-center gap-1 rounded px-1.5 py-0.5 text-small hover:bg-hx-hover" onClick={goBack} data-bi-back><Icon name="arrow-left" size={13} />Back</button>}
           <div role="tablist" aria-label="Pages" className="flex min-w-0 flex-wrap gap-0.5">
-            {pages.map((x) => <button key={x.id} role="tab" type="button" aria-selected={x.id === page.id} data-bi-tab={x.id} onClick={() => setPageId(x.id)} className={cx('rounded-md px-2 py-0.5 text-[12.5px]', x.id === page.id ? 'bg-hx-accent-soft font-medium text-hx-primary' : 'text-hx-secondary hover:bg-hx-hover')}>{x.name}</button>)}
-            {page.kind === 'drillthrough' && <span className="rounded-md bg-hx-accent-soft px-2 py-0.5 text-[12.5px] font-medium">{page.name}</span>}
+            {pages.map((x) => <button key={x.id} role="tab" type="button" aria-selected={x.id === page.id} data-bi-tab={x.id} onClick={() => setPageId(x.id)} className={cx('rounded-md px-2 py-0.5 text-small', x.id === page.id ? 'bg-hx-accent-soft font-medium text-hx-primary' : 'text-hx-secondary hover:bg-hx-hover')}>{x.name}</button>)}
+            {page.kind === 'drillthrough' && <span className="rounded-md bg-hx-accent-soft px-2 py-0.5 text-small font-medium">{page.name}</span>}
           </div>
           <div className="ml-auto flex flex-wrap items-center gap-1">
-            {active > 0 && <span className="flex flex-wrap gap-1" data-bi-filters>{[...filters, ...(selection?.filters ?? [])].map((f, i) => <span key={i} className="flex items-center gap-1 rounded-full bg-hx-code px-2 py-0.5 text-[11.5px]">{f.field.split('.').pop()?.replace(/:.*/, '')}: {filterText(f)}</span>)}<button type="button" className="text-[11.5px] text-hx-accent-text hover:underline" onClick={() => { setFilters([]); setSelection(undefined); }}>Clear</button></span>}
-            {!!doc.bookmarks?.length && <select aria-label="Bookmarks" className="rounded border border-hx-border bg-hx-bg px-1 py-0.5 text-[12px]" value="" onChange={(e) => { const bm = doc.bookmarks!.find((b) => b.id === e.target.value); if (bm) applyBookmark(bm); }}><option value="">Bookmarks</option>{doc.bookmarks.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select>}
-            <span className="text-[11px] text-hx-muted" title="When this page last got new data" data-bi-updated>{p.mode === 'static' && doc.snapshot ? `Snapshot ${new Date(doc.snapshot.at).toLocaleString()}` : `Updated ${new Date(refreshedAt).toLocaleTimeString()}`}</span>
+            {active > 0 && <span className="flex flex-wrap gap-1" data-bi-filters>{[...filters, ...(selection?.filters ?? [])].map((f, i) => <span key={i} className="flex items-center gap-1 rounded-full bg-hx-code px-2 py-0.5 text-caption">{f.field.split('.').pop()?.replace(/:.*/, '')}: {filterText(f)}</span>)}<button type="button" className="text-caption text-hx-accent-text hover:underline" onClick={() => { setFilters([]); setSelection(undefined); }}>Clear</button></span>}
+            {!!doc.bookmarks?.length && <select aria-label="Bookmarks" className="rounded border border-hx-border bg-hx-bg px-1 py-0.5 text-small" value="" onChange={(e) => { const bm = doc.bookmarks!.find((b) => b.id === e.target.value); if (bm) applyBookmark(bm); }}><option value="">Bookmarks</option>{doc.bookmarks.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select>}
+            <span className="text-tiny text-hx-muted" title="When this page last got new data" data-bi-updated>{p.mode === 'static' && doc.snapshot ? `Snapshot ${new Date(doc.snapshot.at).toLocaleString()}` : `Updated ${new Date(refreshedAt).toLocaleTimeString()}`}</span>
             {p.mode !== 'static' && <button type="button" aria-label="Refresh the visuals" className="rounded p-1 text-hx-muted hover:bg-hx-hover hover:text-hx-primary" onClick={() => setVersion((n) => n + 1)}><Icon name="refresh" size={14} /></button>}
             <button type="button" aria-label={tv ? 'Leave TV mode' : 'TV mode (full screen, pages in turn)'} aria-pressed={tv} className="rounded p-1 text-hx-muted hover:bg-hx-hover hover:text-hx-primary" onClick={() => (tv ? void document.exitFullscreen?.().catch(() => {}) : setTv(true))}><Icon name={tv ? 'collapse' : 'monitor'} size={14} /></button>
             {p.toolbar}
@@ -229,23 +229,23 @@ export function DocView(p: DocViewProps): React.ReactElement {
         </div>
       )}
       <div className={cx('min-h-0 flex-1', tvLayout ? 'overflow-hidden bg-hx-bg' : 'overflow-auto', p.print || tvLayout ? '' : 'p-2')} data-bi-canvas ref={canvasEl}>
-        {doc.type === 'report' && page.layout?.type !== 'print' && <div className="mx-auto mb-2 max-w-[1100px] px-2"><h1 className="text-[22px] font-semibold">{doc.title}</h1>{doc.description && <p className="text-hx-secondary">{doc.description}</p>}{doc.snapshot && <p className="text-[12px] text-hx-muted">Numbers as of {new Date(doc.snapshot.at).toLocaleString()}</p>}</div>}
+        {doc.type === 'report' && page.layout?.type !== 'print' && <div className="mx-auto mb-2 max-w-[1100px] px-2"><h1 className="text-heading font-semibold">{doc.title}</h1>{doc.description && <p className="text-hx-secondary">{doc.description}</p>}{doc.snapshot && <p className="text-small text-hx-muted">Numbers as of {new Date(doc.snapshot.at).toLocaleString()}</p>}</div>}
         {shownPages.map((pg, i) => {
           const pl = doc.type === 'report' && !pg.layout ? { ...pg, layout: { type: 'story' as const } } : p.print && pg.layout?.type === 'tabs' ? { ...pg, layout: { ...pg.layout, type: 'sections' as const } } : pg;
           return (
             <div key={pg.id} data-bi-print-page={p.print ? pg.id : undefined} style={p.print && pg.layout?.type !== 'print' ? { breakAfter: 'page' } : undefined}>
-              {p.print && shownPages.length > 1 && pg.layout?.type !== 'print' && <h2 className="mb-2 px-2 text-[16px] font-semibold">{pg.name}</h2>}
+              {p.print && shownPages.length > 1 && pg.layout?.type !== 'print' && <h2 className="mb-2 px-2 text-title font-semibold">{pg.name}</h2>}
               <PageLayout page={pl} doc={doc} visuals={pg === page ? all : pg.visuals} width={width} edit={p.edit} print={p.print} paper={p.print ? { before: papers.slice(0, i).reduce((a, b) => a + b, 0), total: papers.reduce((a, b) => a + b, 0) } : undefined}
                 tab={tabs[pg.id]} onTab={(t) => setTabs((x) => ({ ...x, [pg.id]: t }))} collapsed={p.print ? {} : collapsed} onCollapse={(id) => { const sec = pg.layout?.sections?.find((x) => x.id === id); const now = !(collapsed[id] ?? !!sec?.collapsed); setCollapsed((c) => ({ ...c, [id]: now })); p.edit?.onSection?.(id, { collapsed: now }); }} render={renderVisual} />
             </div>
           );
         })}
-        {!visuals.length && <div className="p-8 text-center text-[13px] text-hx-muted" data-bi-empty-page>{p.edit ? 'Add a visual, or ask the agent to build this page.' : 'This page is empty.'}</div>}
+        {!visuals.length && <div className="p-8 text-center text-body text-hx-muted" data-bi-empty-page>{p.edit ? 'Add a visual, or ask the agent to build this page.' : 'This page is empty.'}</div>}
       </div>
       {menu && (
         <div className="fixed inset-0 z-50" onClick={() => setMenu(undefined)} onContextMenu={(e) => { e.preventDefault(); setMenu(undefined); }}>
-          <div role="menu" className="absolute min-w-[200px] rounded-lg border border-hx-border bg-hx-elevated p-1 text-[12.5px] shadow-[var(--hx-shadow)]" style={{ left: Math.min(menu.x, window.innerWidth - 220), top: Math.min(menu.y, window.innerHeight - 160) }} data-bi-menu>
-            <div className="px-2 py-1 text-[11px] text-hx-muted">{menu.filters.map(filterText).join(' · ')}</div>
+          <div role="menu" className="absolute min-w-[200px] rounded-lg border border-hx-border bg-hx-elevated p-1 text-small shadow-[var(--hx-shadow)]" style={{ left: Math.min(menu.x, window.innerWidth - 220), top: Math.min(menu.y, window.innerHeight - 160) }} data-bi-menu>
+            <div className="px-2 py-1 text-tiny text-hx-muted">{menu.filters.map(filterText).join(' · ')}</div>
             {drillTargets(contextOf(menu.v, menu.filters)).map((t) => <button key={t.id} role="menuitem" type="button" className="block w-full rounded px-2 py-1 text-left hover:bg-hx-hover" data-drillthrough={t.id} onClick={() => { goDrillthrough(t, contextOf(menu.v, menu.filters)); setMenu(undefined); }}>Drill through: {t.name}</button>)}
             {p.onOpenDoc && (menu.v.options?.links ?? []).map((l) => <button key={l.id} role="menuitem" type="button" className="block w-full rounded px-2 py-1 text-left hover:bg-hx-hover" data-link={l.doc} onClick={() => { openLink(menu.v, l, menu.filters); setMenu(undefined); }}>Open {l.label}</button>)}
             {hierarchyOf(menu.v) && <button role="menuitem" type="button" className="block w-full rounded px-2 py-1 text-left hover:bg-hx-hover" data-drill-down onClick={() => { drillDown(menu.v, menu.filters[0]?.value ?? null, menu.filters); setMenu(undefined); }}>Drill down</button>}
@@ -257,7 +257,7 @@ export function DocView(p: DocViewProps): React.ReactElement {
       {records && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--hx-scrim)] p-6" onClick={() => setRecords(undefined)} role="dialog" aria-modal="true" aria-label="Records">
           <div className="flex max-h-full w-full max-w-4xl flex-col rounded-xl border border-hx-border bg-hx-elevated shadow-[var(--hx-shadow)]" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center gap-2 border-b border-hx-border-subtle px-3 py-2"><b className="flex-1 truncate text-[13px]">Records: {records.title}</b>{records.result && <button type="button" className="text-[12px] text-hx-accent-text hover:underline" onClick={() => downloadCsv('records.csv', records.result!)}>CSV</button>}<button type="button" aria-label="Close" onClick={() => setRecords(undefined)}><Icon name="x" size={14} /></button></div>
+            <div className="flex items-center gap-2 border-b border-hx-border-subtle px-3 py-2"><b className="flex-1 truncate text-body">Records: {records.title}</b>{records.result && <button type="button" className="text-small text-hx-accent-text hover:underline" onClick={() => downloadCsv('records.csv', records.result!)}>CSV</button>}<button type="button" aria-label="Close" onClick={() => setRecords(undefined)}><Icon name="x" size={14} /></button></div>
             <div className="min-h-0 flex-1 overflow-auto p-2" data-bi-records>{records.error ? <p className="text-hx-danger">{records.error}</p> : records.result ? <BiVisual v={{ id: 'records', type: 'table', layout: { x: 0, y: 0, w: 12, h: 8 } }} result={records.result} theme={theme} dark={p.dark} /> : 'Loading…'}</div>
           </div>
         </div>
@@ -314,15 +314,15 @@ function VisualFrame(f: FrameProps) {
   // A slicer one grid row high is a strip: its title beside its values.
   const strip = v.type === 'slicer' && v.layout.h <= 1 && !f.focus;
   return (
-    <section aria-label={v.title ?? v.type} data-visual={v.id} data-visual-type={v.type} data-strip={strip ? '' : undefined} className={cx('group flex h-full min-h-0 overflow-hidden rounded-xl', strip ? 'flex-row items-center' : 'flex-col', !bare && 'border bg-hx-elevated', selected ? 'border-hx-accent ring-2 ring-hx-accent/40' : 'border-hx-border-subtle', f.focus && 'fixed inset-6 z-40 shadow-[var(--hx-shadow)]')}
+    <section aria-label={v.title ?? v.type} data-visual={v.id} data-visual-type={v.type} data-strip={strip ? '' : undefined} className={cx('group flex h-full min-h-0 overflow-hidden rounded-xl', strip ? 'flex-row items-center' : 'flex-col', !bare && 'border bg-hx-elevated', selected ? 'border-hx-accent ring-2 ring-hx-accent-border' : 'border-hx-border-subtle', f.focus && 'fixed inset-6 z-40 shadow-[var(--hx-shadow)]')}
       style={{ containerType: 'inline-size' }} onClick={f.edit ? (e) => { e.stopPropagation(); f.edit!.onSelect(v.id); } : undefined}>
       {!bare && (
         <header className={cx('flex min-h-[28px] items-center gap-1 px-2', strip ? 'max-w-[35%] shrink-0' : 'pt-1', f.edit && 'cursor-move')} data-drag-handle={f.edit ? '' : undefined}>
           <div className="min-w-0 flex-1">
-            <div className="truncate text-[12.5px] font-medium text-hx-secondary">{v.title ?? (v.type === 'slicer' ? v.options?.slicer?.field.split('.').pop() : '')}</div>
-            {v.subtitle && <div className="truncate text-[11px] text-hx-muted">{v.subtitle}</div>}
+            <div className="truncate text-small font-medium text-hx-secondary">{v.title ?? (v.type === 'slicer' ? v.options?.slicer?.field.split('.').pop() : '')}</div>
+            {v.subtitle && <div className="truncate text-tiny text-hx-muted">{v.subtitle}</div>}
           </div>
-          {statics.some((d) => d.origin === 'model') && <span title="These numbers were typed by a model in a conversation, not read from a source. Bind a real source to trust them." className="rounded bg-hx-warning/15 px-1.5 text-[10.5px] font-medium text-hx-warning" data-static-badge>Typed by a model</span>}
+          {statics.some((d) => d.origin === 'model') && <span title="These numbers were typed by a model in a conversation, not read from a source. Bind a real source to trust them." className="rounded bg-hx-warning-soft px-1.5 text-micro font-medium text-hx-warning" data-static-badge>Typed by a model</span>}
           {result?.lineage.datasets.some((d) => d.certified) && <span title="Certified dataset" className="text-hx-success"><Icon name="shield-check" size={13} /></span>}
           {f.hierarchy && <DrillBar h={f.hierarchy} s={f.drill} mode={f.drillMode} act={f.onDrillAct} toggle={f.onDrillMode} />}
           <div className={cx('flex items-center gap-0.5', !f.focus && 'opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100')}>
@@ -339,14 +339,14 @@ function VisualFrame(f: FrameProps) {
         <BiVisual v={v} result={result} error={error} theme={f.theme} dark={f.dark} selection={f.selection} slicerValue={f.slicerValue} decompPath={f.decompPath}
           renderMarkdown={f.renderMarkdown} renderFence={f.renderFence} geo={f.client.geo} static={f.static} chartRef={(c) => { chart.current = c; }} {...f.events} />
       </div>
-      {result?.method && !['decomp', 'drivers'].includes(v.type) && <div className="px-2 pb-1 text-[10.5px] text-hx-muted" data-method>{result.method}</div>}
+      {result?.method && !['decomp', 'drivers'].includes(v.type) && <div className="px-2 pb-1 text-micro text-hx-muted" data-method>{result.method}</div>}
     </section>
   );
 }
 
 function Lineage({ r }: { r: QueryResult }) {
   return (
-    <div className="mx-2 mb-1 max-h-48 overflow-auto rounded-lg border border-hx-border-subtle bg-hx-bg p-2 text-[11.5px]" data-lineage>
+    <div className="mx-2 mb-1 max-h-48 overflow-auto rounded-lg border border-hx-border-subtle bg-hx-bg p-2 text-caption" data-lineage>
       {r.lineage.datasets.map((d) => (
         <div key={d.name} className="mb-0.5">
           <b>{d.name}</b>{d.source ? ` from ${d.source}${d.sourceType ? ` (${d.sourceType})` : ''}` : ''}{d.static ? (d.origin === 'model' ? ' · static, typed by a model' : ' · static') : ''}
@@ -356,7 +356,7 @@ function Lineage({ r }: { r: QueryResult }) {
       ))}
       <div className="text-hx-muted">{r.rowCount} result rows · computed {new Date(r.at).toLocaleTimeString()} in {r.ms} ms · hash {r.hash.slice(0, 12)}{r.lineage.role ? ` · as role ${r.lineage.role}` : ''}</div>
       {r.lineage.params && <div className="text-hx-muted">parameters {JSON.stringify(r.lineage.params)}</div>}
-      {r.lineage.sql && <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-hx-code p-1 font-mono text-[10.5px]" data-lineage-sql>{r.lineage.sql}</pre>}
+      {r.lineage.sql && <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-hx-code p-1 font-mono text-micro" data-lineage-sql>{r.lineage.sql}</pre>}
       {(r.extra?.warnings as string[] | undefined)?.map((w, i) => <div key={i} className="text-hx-warning">{w}</div>)}
     </div>
   );
@@ -376,7 +376,7 @@ function TooltipPage({ tip, doc, client, state, dark }: { tip: { v: VisualSpec; 
   const theme = themeOf(doc.theme);
   return (
     <div className="pointer-events-none fixed z-50 w-[300px] rounded-lg border border-hx-border bg-hx-elevated p-2 shadow-[var(--hx-shadow)]" style={{ left: Math.min(tip.x + 14, window.innerWidth - 310), top: Math.min(tip.y + 14, window.innerHeight - 260) }} data-bi-tooltip-page>
-      <div className="mb-1 text-[11px] text-hx-muted">{tip.filters.map(filterText).join(' · ')}</div>
+      <div className="mb-1 text-tiny text-hx-muted">{tip.filters.map(filterText).join(' · ')}</div>
       {page.visuals.slice(0, 3).map((v) => <div key={v.id} style={{ height: Math.min(160, v.layout.h * 24) }}><BiVisual v={v} result={results[v.id]} theme={theme} dark={dark} static /></div>)}
     </div>
   );
@@ -396,7 +396,7 @@ function DrillBar({ h, s, mode, act, toggle }: { h: HierarchySpec; s?: DrillStat
   const stop = (fn: () => void) => (e: React.MouseEvent) => { e.stopPropagation(); fn(); };
   const crumbs = drillCrumbs(h, s);
   return (
-    <span className="flex min-w-0 items-center gap-0.5 text-[11px] text-hx-muted" data-drill-level={level} data-drill-mode={mode ? 'on' : 'off'} data-drill-expand={s?.mode === 'expand' ? '1' : undefined}>
+    <span className="flex min-w-0 items-center gap-0.5 text-tiny text-hx-muted" data-drill-level={level} data-drill-mode={mode ? 'on' : 'off'} data-drill-expand={s?.mode === 'expand' ? '1' : undefined}>
       <button type="button" aria-label="Drill up" title="Drill up" disabled={!level} className={btn} onClick={stop(() => act({ action: 'up' }))} data-drill-up><Icon name="arrow-up" size={13} /></button>
       <button type="button" aria-label="Drill mode: a click on a point drills down" title="Drill mode: a click on a point drills down" aria-pressed={mode} className={cx(btn, mode && 'bg-hx-accent-soft text-hx-accent-text')} onClick={stop(toggle)} data-drill-toggle><Icon name="arrow-down" size={13} /></button>
       <button type="button" aria-label="Go to the next level" title="Go to the next level" disabled={last} className={btn} onClick={stop(() => act({ action: 'next' }))} data-drill-next><Icon name="chevron-down" size={13} /></button>

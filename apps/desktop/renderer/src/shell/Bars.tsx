@@ -32,7 +32,7 @@ export function TopBar({ title, children }: { title?: React.ReactNode; children?
     return (
       <header data-topbar="split" className="flex h-10 shrink-0 items-center gap-1 border-b border-hx-border-subtle bg-hx-bg px-2">
         <Icon name="split" size={14} className="ml-1 text-hx-muted" />
-        <span className="min-w-0 flex-1 truncate px-1 text-[13px] font-medium" data-breadcrumb>{title}</span>
+        <span className="min-w-0 flex-1 truncate px-1 text-body font-medium" data-breadcrumb>{title}</span>
         {children}
         <Tooltip label="Open here"><IconButton icon="pop-out" size="sm" label="Open here" onClick={pane.here} /></Tooltip>
         <Tooltip label="Close"><IconButton icon="x" size="sm" label="Close the view beside" onClick={pane.close} data-close-split /></Tooltip>
@@ -45,7 +45,7 @@ export function TopBar({ title, children }: { title?: React.ReactNode; children?
         <Tooltip label="Back" shortcut={formatChord('Alt+Left', platform)}><IconButton icon="arrow-left" size="sm" label="Back" disabled={!back} onClick={() => useApp.getState().goBack()} /></Tooltip>
         <Tooltip label="Forward" shortcut={formatChord('Alt+Right', platform)}><IconButton icon="arrow-right" size="sm" label="Forward" disabled={!fwd} onClick={() => useApp.getState().goForward()} /></Tooltip>
       </div>
-      <nav aria-label="Breadcrumb" className="flex min-w-0 flex-1 items-center gap-1.5 px-1 text-[13px]" data-crumbs>
+      <nav aria-label="Breadcrumb" className="flex min-w-0 flex-1 items-center gap-1.5 px-1 text-body" data-crumbs>
         {c.parent && (c.parent.route
           ? <button type="button" data-crumb-parent onClick={() => navigate(c.parent!.route!)} className="app-no-drag shrink-0 rounded px-0.5 text-hx-muted hover:text-hx-primary">{c.parent.label}</button>
           : <span data-crumb-parent className="shrink-0 text-hx-muted">{c.parent.label}</span>)}
@@ -84,7 +84,7 @@ export function StatusBar(): React.ReactElement {
     </Tooltip>
   );
   return (
-    <footer data-statusbar className="flex h-6 shrink-0 items-center border-t border-hx-border-subtle bg-hx-sidebar text-[11.5px] text-hx-muted">
+    <footer data-statusbar className="flex h-6 shrink-0 items-center border-t border-hx-border-subtle bg-hx-sidebar text-caption text-hx-muted">
       <button type="button" data-engine-status={engine.status} onClick={() => void runCommand('core.settings:engine')} className="inline-flex h-full items-center gap-1.5 px-2.5 hover:bg-hx-hover">
         <span className={cx('h-2 w-2 rounded-full', dot)} />{label}
       </button>

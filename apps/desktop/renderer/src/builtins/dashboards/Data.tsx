@@ -22,7 +22,7 @@ export function DataPage({ params }: { params: Record<string, string> }): React.
   return (
     <div className="flex h-full min-h-0 flex-col" data-bi-data>
       <div className="flex flex-wrap items-center gap-3 border-b border-hx-border-subtle px-6 py-3">
-        <h1 className="text-[20px] font-semibold">Data</h1>
+        <h1 className="text-heading font-semibold">Data</h1>
         <Tabs value={tab} onChange={setTab} tabs={[{ id: 'sources', label: 'Sources', icon: 'plug', count: catalog?.sources.length }, { id: 'datasets', label: 'Datasets', icon: 'table', count: catalog?.datasets.length }, { id: 'model', label: 'Model', icon: 'layers', count: catalog?.models.length }, { id: 'history', label: 'Refresh history', icon: 'history' }]} />
       </div>
       <div className="min-h-0 flex-1">
@@ -46,16 +46,16 @@ function Sources() {
   const [tested, setTested] = useState<Record<string, string>>({});
   return (
     <div className="hx-scroll h-full overflow-y-auto px-6 py-4">
-      <div className="mb-3 flex items-center gap-2"><p className="flex-1 text-[12.5px] text-hx-secondary">Where data comes from. Secrets stay in the key vault: a source only names the entry, and its value is used on the server, never shown here or sent to a page.</p><Button variant="primary" icon="plus" onClick={() => setAdding(true)} data-add-source>Add a source</Button></div>
+      <div className="mb-3 flex items-center gap-2"><p className="flex-1 text-small text-hx-secondary">Where data comes from. Secrets stay in the key vault: a source only names the entry, and its value is used on the server, never shown here or sent to a page.</p><Button variant="primary" icon="plus" onClick={() => setAdding(true)} data-add-source>Add a source</Button></div>
       {!catalog.sources.length ? <EmptyState icon="plug" title="No sources yet">Files (CSV, Excel, JSON, Parquet, GeoJSON), SQLite, Postgres, MySQL, HTTP APIs, values typed in, or a plugin's source.</EmptyState> : (
         <div className="space-y-2">{catalog.sources.map((s) => (
           <div key={s.id} className="rounded-xl border border-hx-border-subtle bg-hx-elevated p-3" data-source={s.id}>
-            <div className="flex items-center gap-2"><Icon name={s.type === 'http' ? 'globe' : s.type === 'static' ? 'edit' : s.type === 'file' ? 'file' : 'database'} size={16} className="text-hx-accent-text" /><b className="min-w-0 flex-1 truncate text-[13.5px]">{s.name}</b><Badge>{s.type}</Badge>{s.origin === 'model' && <Badge tone="warning">typed by a model</Badge>}{s.secret && <Badge tone="neutral"><Icon name="key" size={11} className="mr-0.5 inline" />{s.secret}</Badge>}
+            <div className="flex items-center gap-2"><Icon name={s.type === 'http' ? 'globe' : s.type === 'static' ? 'edit' : s.type === 'file' ? 'file' : 'database'} size={16} className="text-hx-accent-text" /><b className="min-w-0 flex-1 truncate text-body">{s.name}</b><Badge>{s.type}</Badge>{s.origin === 'model' && <Badge tone="warning">typed by a model</Badge>}{s.secret && <Badge tone="neutral"><Icon name="key" size={11} className="mr-0.5 inline" />{s.secret}</Badge>}
               <Button size="sm" onClick={() => void act('data.test-source', { id: s.id }, { quiet: true }).then((r) => setTested({ ...tested, [s.id]: r.results[0]?.message ?? '' })).catch((e: Error) => setTested({ ...tested, [s.id]: `Failed: ${e.message}` }))}>Test</Button>
               <IconButton size="sm" icon="trash" label="Remove" onClick={() => void act('data.remove-source', { id: s.id }).catch(() => {})} />
             </div>
-            <div className="mt-1 truncate text-[12px] text-hx-muted">{s.path ?? s.url ?? (s.host ? `${s.host}:${s.port ?? ''}/${s.database}` : s.type === 'static' ? `${s.rows?.length ?? 0} rows` : s.plugin ? `${s.plugin}:${s.kind}` : '')} · read by {catalog.datasets.filter((d) => d.source === s.id).map((d) => d.name).join(', ') || 'no dataset yet'}</div>
-            {tested[s.id] && <div className="mt-1 text-[12px] text-hx-secondary" data-source-test>{tested[s.id]}</div>}
+            <div className="mt-1 truncate text-small text-hx-muted">{s.path ?? s.url ?? (s.host ? `${s.host}:${s.port ?? ''}/${s.database}` : s.type === 'static' ? `${s.rows?.length ?? 0} rows` : s.plugin ? `${s.plugin}:${s.kind}` : '')} · read by {catalog.datasets.filter((d) => d.source === s.id).map((d) => d.name).join(', ') || 'no dataset yet'}</div>
+            {tested[s.id] && <div className="mt-1 text-small text-hx-secondary" data-source-test>{tested[s.id]}</div>}
           </div>
         ))}</div>
       )}
@@ -133,10 +133,10 @@ function Datasets({ initial }: { initial?: string }) {
         <div className="hx-scroll min-h-0 flex-1 overflow-y-auto p-2">
           <Button size="sm" variant="primary" icon="plus" className="mb-2 w-full" onClick={() => setDefining(true)} data-new-dataset>New dataset</Button>
           {catalog.datasets.map((x) => (
-            <button key={x.id} type="button" onClick={() => setSel(x.name)} data-dataset={x.name} className={cx('mb-0.5 flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[13px]', sel === x.name ? 'bg-hx-accent-soft' : 'hover:bg-hx-hover')}>
+            <button key={x.id} type="button" onClick={() => setSel(x.name)} data-dataset={x.name} className={cx('mb-0.5 flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-body', sel === x.name ? 'bg-hx-accent-soft' : 'hover:bg-hx-hover')}>
               <Icon name="table" size={14} className="text-hx-muted" /><span className="min-w-0 flex-1 truncate">{x.name}</span>
               {x.certified && <Icon name="shield-check" size={13} className="text-hx-success" />}
-              {x.state.error ? <Icon name="alert" size={13} className="text-hx-danger" /> : <span className="text-[11px] text-hx-muted">{x.state.rows?.toLocaleString() ?? ''}</span>}
+              {x.state.error ? <Icon name="alert" size={13} className="text-hx-danger" /> : <span className="text-tiny text-hx-muted">{x.state.rows?.toLocaleString() ?? ''}</span>}
             </button>
           ))}
         </div>
@@ -161,7 +161,7 @@ function DefineDataset({ onClose }: { onClose(name?: string): void }) {
       <Field label="Name" help="Its name in SQL and in the model: letters, digits and _."><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="sales" data-dataset-name /></Field>
       <Field label="Source"><Select value={source} onChange={setSource} options={[{ value: '', label: 'None (SQL over other datasets)' }, ...catalog.sources.map((s) => ({ value: s.id, label: s.name }))]} data-dataset-source /></Field>
       {source && tables.length > 1 && <Field label="Table or sheet"><Select value={from} onChange={setFrom} options={[{ value: '', label: 'The first' }, ...tables.map((t) => ({ value: t, label: t }))]} /></Field>}
-      <Field label="SQL (optional)" help="One read-only SELECT. The source (after steps) is base; other datasets by name; parameters as $name."><Textarea rows={4} className="font-mono text-[12px]" value={sql} onChange={(e) => setSql(e.target.value)} placeholder={source ? 'SELECT * FROM base WHERE amount > 0' : 'SELECT region, sum(amount) AS amount FROM sales GROUP BY 1'} /></Field>
+      <Field label="SQL (optional)" help="One read-only SELECT. The source (after steps) is base; other datasets by name; parameters as $name."><Textarea rows={4} className="font-mono text-small" value={sql} onChange={(e) => setSql(e.target.value)} placeholder={source ? 'SELECT * FROM base WHERE amount > 0' : 'SELECT region, sum(amount) AS amount FROM sales GROUP BY 1'} /></Field>
     </Modal>
   );
 }
@@ -190,23 +190,23 @@ function DatasetDetail({ d }: { d: DatasetRow }) {
   return (
     <div className="space-y-4" data-dataset-detail={d.name}>
       <div className="flex flex-wrap items-center gap-2">
-        <h2 className="text-[17px] font-semibold">{d.name}</h2>
+        <h2 className="text-title font-semibold">{d.name}</h2>
         {d.certified && <Badge tone="success">Certified</Badge>}{d.promoted && <Badge tone="accent">Promoted</Badge>}
-        <span className="text-[12px] text-hx-muted">{d.state.error ? <span className="text-hx-danger">Refresh failed: {d.state.error}</span> : d.state.at ? `${d.state.rows?.toLocaleString() ?? ''} rows · read ${new Date(d.state.at).toLocaleString()}` : 'not read yet'}</span>
+        <span className="text-small text-hx-muted">{d.state.error ? <span className="text-hx-danger">Refresh failed: {d.state.error}</span> : d.state.at ? `${d.state.rows?.toLocaleString() ?? ''} rows · read ${new Date(d.state.at).toLocaleString()}` : 'not read yet'}</span>
         <div className="ml-auto flex gap-1">
           <Button size="sm" icon="refresh" onClick={() => void act('data.refresh', { dataset: d.name }).catch(() => {})} data-refresh-dataset>Refresh</Button>
           <Button size="sm" icon="shield-check" onClick={() => void act('data.certify', { dataset: d.name, certified: !d.certified }).catch(() => {})}>{d.certified ? 'Uncertify' : 'Certify'}</Button>
           <IconButton size="sm" icon="trash" label="Remove the dataset" onClick={() => void act('data.remove-dataset', { dataset: d.name }).catch(() => {})} />
         </div>
       </div>
-      <div className="text-[12px] text-hx-muted" data-lineage-dataset>Lineage: {src ? `${src.name} (${src.type}${src.path ? `: ${src.path}` : src.url ? `: ${src.url}` : ''})` : 'SQL over datasets'}{d.from ? ` · ${d.from}` : ''} → {d.steps?.length ?? 0} steps{d.sql ? ' → SQL' : ''} → <b>{d.name}</b> → {users.join(', ') || 'not used yet'}</div>
+      <div className="text-small text-hx-muted" data-lineage-dataset>Lineage: {src ? `${src.name} (${src.type}${src.path ? `: ${src.path}` : src.url ? `: ${src.url}` : ''})` : 'SQL over datasets'}{d.from ? ` · ${d.from}` : ''} → {d.steps?.length ?? 0} steps{d.sql ? ' → SQL' : ''} → <b>{d.name}</b> → {users.join(', ') || 'not used yet'}</div>
       <div className="grid gap-4 xl:grid-cols-[minmax(260px,320px)_1fr]">
         <div className="space-y-3">
           <div className="rounded-xl border border-hx-border-subtle p-2" data-steps>
-            <div className="mb-1 flex items-center"><b className="flex-1 text-[13px]">Applied steps</b><button type="button" className={cx('rounded px-1.5 text-[11.5px]', step === undefined ? 'bg-hx-accent-soft' : 'hover:bg-hx-hover')} onClick={() => setStep(undefined)}>result</button></div>
-            <button type="button" className={cx('block w-full rounded px-1.5 py-0.5 text-left text-[12.5px]', step === 0 ? 'bg-hx-accent-soft' : 'hover:bg-hx-hover')} onClick={() => setStep(0)}>Source</button>
+            <div className="mb-1 flex items-center"><b className="flex-1 text-body">Applied steps</b><button type="button" className={cx('rounded px-1.5 text-caption', step === undefined ? 'bg-hx-accent-soft' : 'hover:bg-hx-hover')} onClick={() => setStep(undefined)}>result</button></div>
+            <button type="button" className={cx('block w-full rounded px-1.5 py-0.5 text-left text-small', step === 0 ? 'bg-hx-accent-soft' : 'hover:bg-hx-hover')} onClick={() => setStep(0)}>Source</button>
             {(d.steps ?? []).map((s, i) => (
-              <div key={i} className={cx('flex items-center gap-1 rounded px-1.5 py-0.5 text-[12.5px]', step === i + 1 ? 'bg-hx-accent-soft' : 'hover:bg-hx-hover')} data-step={i}>
+              <div key={i} className={cx('flex items-center gap-1 rounded px-1.5 py-0.5 text-small', step === i + 1 ? 'bg-hx-accent-soft' : 'hover:bg-hx-hover')} data-step={i}>
                 <button type="button" className="min-w-0 flex-1 truncate text-left" onClick={() => setStep(i + 1)} title={JSON.stringify(s)}>{i + 1}. {s.op} <span className="text-hx-muted">{JSON.stringify(s).slice(s.op.length + 9, 60)}</span></button>
                 {i > 0 && <IconButton size="xs" icon="arrow-up" label="Move up" onClick={() => void act('data.move-step', { dataset: d.name, from: i, to: i - 1 }).catch(() => {})} />}
                 <IconButton size="xs" icon="x" label="Remove the step" onClick={() => void act('data.remove-step', { dataset: d.name, index: i }).catch(() => {})} />
@@ -214,27 +214,27 @@ function DatasetDetail({ d }: { d: DatasetRow }) {
             ))}
             <div className="mt-2 border-t border-hx-border-subtle pt-2">
               <Select aria-label="Step" value={newStep.op} onChange={(op) => setNewStep({ op, args: STEP_HELP[op] ?? '{}' })} options={(STEP_OPS as readonly string[]).map((x) => ({ value: x, label: x }))} />
-              <Textarea aria-label="Step settings" rows={3} className="mt-1 font-mono text-[11.5px]" value={newStep.args} onChange={(e) => setNewStep({ ...newStep, args: e.target.value })} />
+              <Textarea aria-label="Step settings" rows={3} className="mt-1 font-mono text-caption" value={newStep.args} onChange={(e) => setNewStep({ ...newStep, args: e.target.value })} />
               <Button size="sm" className="mt-1" onClick={() => { let args: Record<string, unknown>; try { args = JSON.parse(newStep.args) as Record<string, unknown>; } catch { toast('The settings are not JSON', { kind: 'error' }); return; } void act('data.add-step', { dataset: d.name, step: { op: newStep.op, ...args } as StepSpec }).catch(() => {}); }} data-add-step>Add step</Button>
             </div>
           </div>
           <div className="rounded-xl border border-hx-border-subtle p-2">
-            <b className="text-[13px]">Dataset SQL</b>
-            <Textarea aria-label="Dataset SQL" rows={4} className="mt-1 font-mono text-[12px]" value={sql} onChange={(e) => setSql(e.target.value)} placeholder="SELECT * FROM base" />
+            <b className="text-body">Dataset SQL</b>
+            <Textarea aria-label="Dataset SQL" rows={4} className="mt-1 font-mono text-small" value={sql} onChange={(e) => setSql(e.target.value)} placeholder="SELECT * FROM base" />
             <Button size="sm" className="mt-1" onClick={() => void act('data.edit-sql', { dataset: d.name, patch: { sql: sql.trim() || null } }).catch(() => {})}>Save SQL</Button>
           </div>
           <RefreshSettings d={d} />
         </div>
         <div className="min-w-0 space-y-3">
-          <div><b className="text-[13px]">{step === undefined ? 'Result' : step === 0 ? 'Source rows' : `After step ${step}`}</b> {err && <span className="text-[12px] text-hx-danger">{err}</span>}<ResultTable r={preview} /></div>
+          <div><b className="text-body">{step === undefined ? 'Result' : step === 0 ? 'Source rows' : `After step ${step}`}</b> {err && <span className="text-small text-hx-danger">{err}</span>}<ResultTable r={preview} /></div>
           {profile && <div className="rounded-xl border border-hx-border-subtle p-2" data-profile>
-            <b className="text-[13px]">Column quality and distribution</b> <span className="text-[12px] text-hx-muted">{rows.toLocaleString()} rows</span>
+            <b className="text-body">Column quality and distribution</b> <span className="text-small text-hx-muted">{rows.toLocaleString()} rows</span>
             <div className="mt-1 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{profile.map((c) => {
               const valid = rows ? (rows - c.nulls) / rows : 0;
               const maxTop = Math.max(1, ...c.top.map((t) => t[1]));
               return (
-                <div key={c.name} className="rounded-lg bg-hx-bg p-2 text-[11.5px]">
-                  <div className="flex items-center gap-1"><b className="min-w-0 flex-1 truncate text-[12.5px]">{c.name}</b><span className="text-hx-muted">{c.type}</span></div>
+                <div key={c.name} className="rounded-lg bg-hx-bg p-2 text-caption">
+                  <div className="flex items-center gap-1"><b className="min-w-0 flex-1 truncate text-small">{c.name}</b><span className="text-hx-muted">{c.type}</span></div>
                   <div className="mt-1 h-1.5 overflow-hidden rounded bg-hx-danger/30"><div className="h-full bg-hx-success" style={{ width: `${valid * 100}%` }} /></div>
                   <div className="text-hx-muted">{Math.round(valid * 1000) / 10}% valid · {c.nulls} empty · {c.distinct} distinct</div>
                   <div className="text-hx-muted">{String(c.min ?? '')} … {String(c.max ?? '')}{c.mean !== null ? ` · mean ${c.mean.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : ''}</div>
@@ -244,8 +244,8 @@ function DatasetDetail({ d }: { d: DatasetRow }) {
             })}</div>
           </div>}
           <div className="rounded-xl border border-hx-border-subtle p-2">
-            <b className="text-[13px]">Query (read-only SQL over your datasets)</b>
-            <Textarea aria-label="Query" rows={3} className="mt-1 font-mono text-[12px]" value={query} onChange={(e) => setQuery(e.target.value)} data-sql-editor />
+            <b className="text-body">Query (read-only SQL over your datasets)</b>
+            <Textarea aria-label="Query" rows={3} className="mt-1 font-mono text-small" value={query} onChange={(e) => setQuery(e.target.value)} data-sql-editor />
             <Button size="sm" className="mt-1" icon="play" onClick={() => void act('data.run-sql', { sql: query }, { quiet: true }).then((r) => setQueryResult(r.results[0]?.data as unknown as QueryResult)).catch((e: Error) => toast(e.message, { kind: 'error' }))} data-run-sql>Run</Button>
             <ResultTable r={queryResult} />
           </div>
@@ -261,8 +261,8 @@ function RefreshSettings({ d }: { d: DatasetRow }) {
   const [win, setWin] = useState(String(d.incremental?.window ?? 30));
   const cols = d.state.sourceColumns ?? [];
   return (
-    <div className="space-y-1 rounded-xl border border-hx-border-subtle p-2 text-[12.5px]">
-      <b className="text-[13px]">Refresh</b>
+    <div className="space-y-1 rounded-xl border border-hx-border-subtle p-2 text-small">
+      <b className="text-body">Refresh</b>
       {d.source && <div className="flex items-center gap-1"><span className="w-28">Storage</span><Select aria-label="Storage" value={d.storage ?? 'import'} onChange={(m) => void act('data.storage', { dataset: d.name, storage: m }).catch(() => {})} options={[{ value: 'import', label: 'Import (an extract)' }, { value: 'live', label: 'Live (read when queried)' }]} data-storage /></div>}
       <div className="flex items-center gap-1"><span className="w-28">Every (seconds)</span><Input aria-label="Refresh every" type="number" value={every} onChange={(e) => setEvery(e.target.value)} placeholder="manual" /><Button size="sm" onClick={() => void act('data.schedule', { dataset: d.name, refresh: every ? { mode: 'interval', every: Number(every) } : { mode: 'manual' } }).catch(() => {})}>Save</Button></div>
       <div className="flex items-center gap-1"><span className="w-28">Incremental on</span><Select aria-label="Incremental column" value={inc} onChange={setInc} options={[{ value: '', label: 'Off (full refresh)' }, ...cols.filter((c) => /DATE|TIMESTAMP/.test(c.type)).map((c) => ({ value: c.name, label: c.name }))]} /></div>
@@ -318,23 +318,23 @@ function ModelEditor({ m }: { m: ModelSpec }) {
   return (
     <div className="grid gap-4 lg:grid-cols-2" data-model={m.id}>
       <div className="rounded-xl border border-hx-border-subtle p-3">
-        <b className="text-[13px]">Tables and relationships</b>
+        <b className="text-body">Tables and relationships</b>
         <div className="mt-1 flex flex-wrap gap-2">{m.tables.map((t) => (
-          <div key={t.name} className="min-w-[160px] rounded-lg border border-hx-border bg-hx-elevated p-2 text-[12px]" data-model-table={t.name}>
+          <div key={t.name} className="min-w-[160px] rounded-lg border border-hx-border bg-hx-elevated p-2 text-small" data-model-table={t.name}>
             <div className="flex items-center"><b className="flex-1">{t.name}</b><IconButton size="xs" icon="x" label={`Remove ${t.name}`} onClick={() => void act('model.remove-table', { model: m.id, table: t.name }).catch(() => {})} /></div>
             {(() => {
               // Where the table's rows come from: tables of different sources relate in one model.
               const ds = catalog.datasets.find((d) => d.name === t.dataset);
               const src = ds?.source ? catalog.sources.find((s) => s.id === ds.source) : undefined;
               const kind = src ? (src.type === 'file' ? (src.format ?? src.path?.split('.').pop() ?? 'file').toUpperCase() : ({ sqlite: 'SQLite', postgres: 'Postgres', mysql: 'MySQL', mssql: 'SQL Server', mongodb: 'MongoDB', http: 'API', static: 'values', plugin: 'plugin' } as Record<string, string>)[src.type] ?? src.type) : 'SQL';
-              return <div className="mb-0.5 flex flex-wrap items-center gap-1 text-[11px]" data-table-source={kind}><span className="rounded bg-hx-accent-soft px-1 font-medium text-hx-accent-text">{kind}</span><span className="truncate text-hx-secondary">{src?.name ?? 'over other datasets'}</span>{ds?.storage === 'live' && <span className="rounded bg-hx-success/15 px-1 text-hx-success" data-live>live</span>}</div>;
+              return <div className="mb-0.5 flex flex-wrap items-center gap-1 text-tiny" data-table-source={kind}><span className="rounded bg-hx-accent-soft px-1 font-medium text-hx-accent-text">{kind}</span><span className="truncate text-hx-secondary">{src?.name ?? 'over other datasets'}</span>{ds?.storage === 'live' && <span className="rounded bg-hx-success-soft px-1 text-hx-success" data-live>live</span>}</div>;
             })()}
             <div className="text-hx-muted">{catalog.datasets.find((d) => d.name === t.dataset)?.state.columns?.filter((c) => c.name !== '__rn').map((c) => c.name).join(', ')}</div>
             {(t.columns ?? []).map((c) => <div key={c.name} className="flex items-center text-hx-accent-text">ƒ {c.name}<IconButton size="xs" icon="x" label="Remove" onClick={() => void act('model.remove-column', { model: m.id, table: t.name, column: c.name }).catch(() => {})} /></div>)}
           </div>
         ))}</div>
         <div className="mt-2 flex gap-1"><Select aria-label="Add a table" value={addTable} onChange={setAddTable} options={[{ value: '', label: 'Add a dataset as a table…' }, ...catalog.datasets.filter((d) => !m.tables.some((t) => t.dataset === d.name)).map((d) => ({ value: d.name, label: d.name }))]} /><Button size="sm" disabled={!addTable} onClick={() => void act('model.add-table', { model: m.id, table: { name: addTable, dataset: addTable } }).then(() => setAddTable('')).catch(() => {})}>Add</Button></div>
-        <div className="mt-3 space-y-0.5 text-[12.5px]">{m.relationships.map((r) => (
+        <div className="mt-3 space-y-0.5 text-small">{m.relationships.map((r) => (
           <div key={r.id ?? `${r.from}->${r.to}`} className="flex items-center gap-1" data-relationship><span className="flex-1">{r.from} <Icon name="arrow-right" size={11} className="inline" /> {r.to} <span className="text-hx-muted">{r.cardinality ?? 'n:1'}{r.crossFilter === 'both' ? ', both ways' : ''}</span></span><IconButton size="xs" icon="x" label="Remove" onClick={() => void act('model.unrelate', { model: m.id, id: r.id ?? `${r.from}->${r.to}` }).catch(() => {})} /></div>
         ))}</div>
         <div className="mt-1 grid grid-cols-[1fr_1fr_auto_auto] gap-1">
@@ -343,16 +343,16 @@ function ModelEditor({ m }: { m: ModelSpec }) {
           <Select aria-label="Cross-filter" value={rel.crossFilter} onChange={(v) => setRel({ ...rel, crossFilter: v })} options={[{ value: 'single', label: 'Single' }, { value: 'both', label: 'Both' }]} />
           <Button size="sm" disabled={!rel.from || !rel.to} onClick={() => void act('model.relate', { model: m.id, relationship: rel }).catch(() => {})}>Relate</Button>
         </div>
-        <div className="mt-3 text-[12.5px]"><b>Calculated column</b></div>
+        <div className="mt-3 text-small"><b>Calculated column</b></div>
         <div className="grid grid-cols-[auto_1fr] gap-1"><Select aria-label="Table" value={col.table} onChange={(v) => setCol({ ...col, table: v })} options={m.tables.map((t) => ({ value: t.name, label: t.name }))} /><Input aria-label="Column name" placeholder="name" value={col.name} onChange={(e) => setCol({ ...col, name: e.target.value })} /></div>
         <div className="mt-1 flex gap-1"><Input aria-label="Column expression" placeholder="revenue - cost" value={col.expr} onChange={(e) => setCol({ ...col, expr: e.target.value })} /><Button size="sm" disabled={!col.name || !col.expr} onClick={() => void act('model.add-column', { model: m.id, table: col.table, column: { name: col.name, expr: col.expr } }).catch(() => {})}>Add</Button></div>
-        <div className="mt-3 flex items-center gap-1 text-[12.5px]"><b className="w-28">Date field</b><Select aria-label="Date field" value={m.date ?? ''} onChange={(v) => void act('model.settings', { model: m.id, patch: { date: v } }).catch(() => {})} options={[{ value: '', label: 'None' }, ...fields]} /></div>
+        <div className="mt-3 flex items-center gap-1 text-small"><b className="w-28">Date field</b><Select aria-label="Date field" value={m.date ?? ''} onChange={(v) => void act('model.settings', { model: m.id, patch: { date: v } }).catch(() => {})} options={[{ value: '', label: 'None' }, ...fields]} /></div>
       </div>
       <div className="rounded-xl border border-hx-border-subtle p-3">
-        <b className="text-[13px]">Measures</b>
-        <div className="mt-1 space-y-0.5 text-[12.5px]">{m.measures.map((x) => (
+        <b className="text-body">Measures</b>
+        <div className="mt-1 space-y-0.5 text-small">{m.measures.map((x) => (
           <div key={x.name} className="flex items-center gap-1" data-measure={x.name}>
-            <span className="min-w-0 flex-1 truncate"><b>{x.name}</b> = <span className="font-mono text-[11.5px] text-hx-secondary">{x.expr ?? `${x.calc}(${x.base})`}{x.filter ? ` where ${x.filter}` : ''}</span></span>
+            <span className="min-w-0 flex-1 truncate"><b>{x.name}</b> = <span className="font-mono text-caption text-hx-secondary">{x.expr ?? `${x.calc}(${x.base})`}{x.filter ? ` where ${x.filter}` : ''}</span></span>
             <Select aria-label={`Format of ${x.name}`} className="w-32" value={x.format ?? ''} onChange={(f) => void act('model.format', { model: m.id, field: x.name, format: f || null }).catch(() => {})} options={[{ value: '', label: 'Default' }, ...['currency:USD', 'currency:USD:0', 'currency:EUR', 'percent:1', 'number:2', 'integer', 'compact'].map((f) => ({ value: f, label: f }))]} />
             <IconButton size="xs" icon="edit" label="Edit" onClick={() => setMeas(x)} />
             <IconButton size="xs" icon="x" label="Remove" onClick={() => void act('model.remove-measure', { model: m.id, name: x.name }).catch(() => {})} />
@@ -365,9 +365,9 @@ function ModelEditor({ m }: { m: ModelSpec }) {
             : <><Input aria-label="Measure expression" className="font-mono" placeholder="sum(orders.revenue), or [Revenue] / [Orders]" value={meas.expr ?? ''} onChange={(e) => setMeas({ ...meas, expr: e.target.value })} /><Input aria-label="Measure filter" placeholder="Only where (optional): countries.region = 'EMEA'" value={meas.filter ?? ''} onChange={(e) => setMeas({ ...meas, filter: e.target.value || undefined })} /></>}
           <Button size="sm" variant="primary" disabled={!meas.name || (!meas.expr && !meas.calc)} onClick={() => void act('model.measure', { model: m.id, measure: meas }).then(() => setMeas({ name: '', expr: '' })).catch(() => {})} data-save-measure>Save measure</Button>
         </div>
-        <div className="mt-3 text-[12.5px]"><b>Hierarchies</b>{m.hierarchies.map((h) => <div key={h.name} className="flex items-center gap-1"><span className="flex-1">{h.name}: {h.levels.join(' › ')}</span><IconButton size="xs" icon="x" label="Remove" onClick={() => void act('model.remove-hierarchy', { model: m.id, name: h.name }).catch(() => {})} /></div>)}</div>
+        <div className="mt-3 text-small"><b>Hierarchies</b>{m.hierarchies.map((h) => <div key={h.name} className="flex items-center gap-1"><span className="flex-1">{h.name}: {h.levels.join(' › ')}</span><IconButton size="xs" icon="x" label="Remove" onClick={() => void act('model.remove-hierarchy', { model: m.id, name: h.name }).catch(() => {})} /></div>)}</div>
         <div className="mt-1 grid grid-cols-[auto_1fr_auto] gap-1"><Input aria-label="Hierarchy name" placeholder="Calendar" value={hier.name} onChange={(e) => setHier({ ...hier, name: e.target.value })} className="w-28" /><Input aria-label="Hierarchy levels" placeholder="orders.day:year, orders.day:month" value={hier.levels} onChange={(e) => setHier({ ...hier, levels: e.target.value })} /><Button size="sm" disabled={!hier.name || !hier.levels} onClick={() => void act('model.hierarchy', { model: m.id, hierarchy: { name: hier.name, levels: hier.levels.split(',').map((x) => x.trim()).filter(Boolean) } }).catch(() => {})}>Add</Button></div>
-        <div className="mt-3 text-[12.5px]"><b>Row-level security</b>{m.roles.map((r) => <div key={r.name} className="flex items-center gap-1" data-role={r.name}><span className="flex-1">{r.name} ({r.members.join(', ')}): {Object.entries(r.filters).map(([t, p]) => `${t} where ${p}`).join('; ')}</span><IconButton size="xs" icon="x" label="Remove" onClick={() => void act('model.remove-role', { model: m.id, name: r.name }).catch(() => {})} /></div>)}</div>
+        <div className="mt-3 text-small"><b>Row-level security</b>{m.roles.map((r) => <div key={r.name} className="flex items-center gap-1" data-role={r.name}><span className="flex-1">{r.name} ({r.members.join(', ')}): {Object.entries(r.filters).map(([t, p]) => `${t} where ${p}`).join('; ')}</span><IconButton size="xs" icon="x" label="Remove" onClick={() => void act('model.remove-role', { model: m.id, name: r.name }).catch(() => {})} /></div>)}</div>
         <div className="mt-1 grid grid-cols-2 gap-1">
           <Input aria-label="Role name" placeholder="Role" value={role.name} onChange={(e) => setRole({ ...role, name: e.target.value })} />
           <Input aria-label="Role members" placeholder="usr_..., or *" value={role.members} onChange={(e) => setRole({ ...role, members: e.target.value })} />
@@ -386,7 +386,7 @@ function History() {
   useEffect(() => { void client.get<Array<Record<string, unknown>>>('/api/data/runs').then(setRuns).catch(() => {}); }, [catalog.version]);
   return (
     <div className="hx-scroll h-full overflow-y-auto px-6 py-4">
-      <table className="w-full text-[12.5px]" data-refresh-history>
+      <table className="w-full text-small" data-refresh-history>
         <thead><tr className="text-left text-hx-muted"><th className="py-1">When</th><th>What</th><th>Result</th><th>Rows</th><th>Time</th><th>Why</th></tr></thead>
         <tbody>{runs.map((r, i) => (
           <tr key={i} className="border-t border-hx-border-subtle">

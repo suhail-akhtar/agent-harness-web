@@ -71,10 +71,10 @@ export function DocPage({ params }: { params: Record<string, string> }): React.R
     <div className="flex h-full min-h-0 flex-col" data-bi-editor={id} data-bi-version={d.version}>
       <div className="flex flex-wrap items-center gap-1.5 border-b border-hx-border-subtle px-3 py-1.5">
         <IconButton icon="arrow-left" size="sm" label="All dashboards" onClick={() => navigate({ view: doc.type === 'report' ? 'core.dashboards:reports' : 'core.dashboards:dashboards' })} />
-        {edit ? <input aria-label="Title" defaultValue={doc.title} key={doc.title} className="min-w-0 flex-1 rounded bg-transparent px-1 text-[15px] font-semibold hover:bg-hx-hover focus:bg-hx-bg" onBlur={(e) => { const t = e.target.value.trim(); if (t && t !== doc.title) void act('doc.rename', { doc: id, patch: { title: t } }).catch(() => {}); }} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
-          : <h1 className="min-w-0 flex-1 truncate text-[15px] font-semibold" data-bi-doc-title>{doc.title}</h1>}
+        {edit ? <input aria-label="Title" defaultValue={doc.title} key={doc.title} className="min-w-0 flex-1 rounded bg-transparent px-1 text-body-lg font-semibold hover:bg-hx-hover focus:bg-hx-bg" onBlur={(e) => { const t = e.target.value.trim(); if (t && t !== doc.title) void act('doc.rename', { doc: id, patch: { title: t } }).catch(() => {}); }} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
+          : <h1 className="min-w-0 flex-1 truncate text-body-lg font-semibold" data-bi-doc-title>{doc.title}</h1>}
         {d.published && <Badge tone="accent">Published</Badge>}
-        <span className="text-[11px] text-hx-muted" title="Version">v{d.version}</span>
+        <span className="text-tiny text-hx-muted" title="Version">v{d.version}</span>
         <Tooltip label="Undo"><IconButton icon="arrow-left" size="sm" label="Undo" onClick={() => void act('doc.undo', { doc: id }).catch(() => {})} data-bi-undo /></Tooltip>
         <Tooltip label="Redo"><IconButton icon="arrow-right" size="sm" label="Redo" onClick={() => void act('doc.redo', { doc: id }).catch(() => {})} data-bi-redo /></Tooltip>
         <Tooltip label="Read the sources again"><IconButton icon="refresh" size="sm" label="Refresh the data" onClick={() => void act('data.refresh', { doc: id }, { quiet: true }).then((r) => toast(r.results[0]?.message.split('\n')[0] ?? 'Refreshed', { kind: 'success' })).catch(() => {})} data-bi-refresh /></Tooltip>
@@ -238,7 +238,7 @@ function PublishDialog({ id, detail, onClose }: { id: string; detail: DocDetail;
   const full = (u: string) => u;
   return (
     <Modal open onClose={onClose} title="Publish as a live page" footer={<>{detail.published && <Button variant="danger" onClick={() => void act('doc.unpublish', { doc: id }).then(onClose).catch(() => {})} data-bi-unpublish>Unpublish</Button>}<Button onClick={onClose}>Close</Button><Button variant="primary" loading={busy} onClick={() => void publish()} data-bi-publish-go>{detail.published ? 'Publish again (new link)' : 'Publish'}</Button></>}>
-      <div className="space-y-2 text-[13px]">
+      <div className="space-y-2 text-body">
         <p className="text-hx-secondary">The page looks and works as it does here, read-only. Its numbers refresh on the server on this dashboard's schedule and reach viewers live. Viewers never get SQL, sources or credentials{showSql ? ' (except the SQL: you allow it below)' : ''}.</p>
         <Field label="Who can see it"><Select value={access} onChange={(v) => setAccess(v as 'token')} options={[{ value: 'token', label: 'Anyone with the link (a secret token)' }, { value: 'signed-in', label: 'Signed-in accounts of this server' }]} /></Field>
         {access === 'signed-in' && <Field label="Accounts" help="Account ids (usr_...), comma separated; empty: every account; * for all signed-in."><Input value={accounts} onChange={(e) => setAccounts(e.target.value)} /></Field>}
@@ -246,9 +246,9 @@ function PublishDialog({ id, detail, onClose }: { id: string; detail: DocDetail;
         <Switch checked={showSql} onChange={setShowSql} label="Let viewers see the SQL behind each visual" />
         {out && (
           <div className="space-y-1 rounded-lg border border-hx-border-subtle bg-hx-code p-2" data-bi-published-url>
-            <div className="break-all font-mono text-[12px]">{full(out.url)}</div>
+            <div className="break-all font-mono text-small">{full(out.url)}</div>
             <div className="flex gap-1"><Button size="sm" icon="copy" onClick={() => void navigator.clipboard.writeText(full(out.url)).then(() => toast('Link copied'))}>Copy link</Button><Button size="sm" icon="code" onClick={() => void navigator.clipboard.writeText(`<iframe src="${full(out.url)}" style="border:0;width:100%;height:720px" loading="lazy"></iframe>`).then(() => toast('Embed code copied'))}>Copy embed code</Button></div>
-            {out.token && <p className="text-[11.5px] text-hx-muted">The token is shown once (it is part of the link). Publishing again makes a new one; unpublishing stops every link at once.</p>}
+            {out.token && <p className="text-caption text-hx-muted">The token is shown once (it is part of the link). Publishing again makes a new one; unpublishing stops every link at once.</p>}
           </div>
         )}
       </div>
@@ -278,7 +278,7 @@ function ThemeDialog({ id, doc, onClose }: { id: string; doc: DocSpec; onClose()
     <Modal open onClose={onClose} title="Theme">
       <div className="grid grid-cols-2 gap-2">{THEMES.map((t) => (
         <button key={t.name} type="button" aria-pressed={cur === t.name} onClick={() => void act('doc.theme', { doc: id, theme: t.name }).then(onClose).catch(() => {})} className={cx('rounded-lg border p-2 text-left', cur === t.name ? 'border-hx-accent' : 'border-hx-border hover:bg-hx-hover')} style={t.background ? { background: t.background, color: t.foreground } : undefined}>
-          <div className="mb-1 text-[13px] font-medium capitalize">{t.name}</div><div className="flex gap-0.5">{t.palette.slice(0, 8).map((c) => <span key={c} className="h-3 w-5 rounded-sm" style={{ background: c }} />)}</div>
+          <div className="mb-1 text-body font-medium capitalize">{t.name}</div><div className="flex gap-0.5">{t.palette.slice(0, 8).map((c) => <span key={c} className="h-3 w-5 rounded-sm" style={{ background: c }} />)}</div>
         </button>
       ))}</div>
     </Modal>
@@ -293,8 +293,8 @@ function AlertsDialog({ id, detail, onClose }: { id: string; detail: DocDetail; 
   const [notify, setNotify] = useState(true);
   return (
     <Modal open onClose={onClose} title="Alerts" footer={<Button onClick={onClose}>Close</Button>}>
-      <p className="mb-2 text-[12.5px] text-hx-secondary">Checked after every refresh: when a measure crosses its threshold the alert fires once (and again only after it recovers), is recorded, and can notify you.</p>
-      {(detail.doc.alerts ?? []).map((a) => <div key={a.id} className="flex items-center gap-2 py-1 text-[13px]"><span className="flex-1">{a.name}: {a.measure} {a.op} {a.value}{a.notify ? ' · notifies' : ''}</span><IconButton icon="trash" size="xs" label="Remove" onClick={() => void act('doc.remove-alert', { doc: id, alert: a.id }).catch(() => {})} /></div>)}
+      <p className="mb-2 text-small text-hx-secondary">Checked after every refresh: when a measure crosses its threshold the alert fires once (and again only after it recovers), is recorded, and can notify you.</p>
+      {(detail.doc.alerts ?? []).map((a) => <div key={a.id} className="flex items-center gap-2 py-1 text-body"><span className="flex-1">{a.name}: {a.measure} {a.op} {a.value}{a.notify ? ' · notifies' : ''}</span><IconButton icon="trash" size="xs" label="Remove" onClick={() => void act('doc.remove-alert', { doc: id, alert: a.id }).catch(() => {})} /></div>)}
       <div className="mt-2 grid grid-cols-2 gap-2">
         <Input placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} aria-label="Alert name" />
         <Select value={measure} onChange={setMeasure} options={(detail.model?.measures ?? []).map((m) => ({ value: m.name, label: m.name }))} aria-label="Measure" />
@@ -312,8 +312,8 @@ function SubsDialog({ id, doc, onClose }: { id: string; doc: DocSpec; onClose():
   const [deliver, setDeliver] = useState('save');
   return (
     <Modal open onClose={onClose} title="Subscriptions" footer={<Button onClick={onClose}>Close</Button>}>
-      <p className="mb-2 text-[12.5px] text-hx-secondary">A snapshot on a schedule: saved in your exports, or announced as a notification.</p>
-      {(doc.subscriptions ?? []).map((s) => <div key={s.id} className="flex items-center gap-2 py-1 text-[13px]"><span className="flex-1">{s.format.toUpperCase()} at {s.cron} · {s.deliver}</span><IconButton icon="trash" size="xs" label="Remove" onClick={() => void act('doc.unsubscribe', { doc: id, subscription: s.id }).catch(() => {})} /></div>)}
+      <p className="mb-2 text-small text-hx-secondary">A snapshot on a schedule: saved in your exports, or announced as a notification.</p>
+      {(doc.subscriptions ?? []).map((s) => <div key={s.id} className="flex items-center gap-2 py-1 text-body"><span className="flex-1">{s.format.toUpperCase()} at {s.cron} · {s.deliver}</span><IconButton icon="trash" size="xs" label="Remove" onClick={() => void act('doc.unsubscribe', { doc: id, subscription: s.id }).catch(() => {})} /></div>)}
       <div className="mt-2 grid grid-cols-3 gap-2">
         <Input value={cron} onChange={(e) => setCron(e.target.value)} aria-label="Cron" />
         <Select value={format} onChange={setFormat} options={['pdf', 'xlsx', 'csv', 'png', 'html'].map((x) => ({ value: x, label: x.toUpperCase() }))} aria-label="Format" />
@@ -330,7 +330,7 @@ function HistoryDialog({ id, onClose }: { id: string; onClose(): void }) {
   return (
     <Modal open onClose={onClose} title="Version history" size="lg" footer={<Button onClick={onClose}>Close</Button>}>
       {!rows ? <Spinner /> : (
-        <div className="max-h-[60vh] overflow-auto text-[12.5px]">{[...rows].reverse().map((r) => (
+        <div className="max-h-[60vh] overflow-auto text-small">{[...rows].reverse().map((r) => (
           <div key={r.version} className="flex items-center gap-2 border-b border-hx-border-subtle py-1">
             <b className="w-10">v{r.version}</b><span className="w-40 text-hx-muted">{new Date(r.at).toLocaleString()}</span>
             <span className="min-w-0 flex-1 truncate">{r.by.startsWith('agent:') ? '🤖 agent' : r.by ? 'you' : ''} {r.kind !== 'ops' ? r.kind : ''} {r.ops.join(', ')}</span>
@@ -347,7 +347,7 @@ function VerifyDialog({ id, onClose }: { id: string; onClose(): void }) {
   useEffect(() => { void act('doc.verify', { doc: id }, { quiet: true }).then((r) => setText(r.results[0]?.message ?? '')).catch((e: Error) => setText(e.message)); }, [id]);
   return (
     <Modal open onClose={onClose} title="Verify" size="lg" footer={<Button onClick={onClose}>Close</Button>}>
-      {text === undefined ? <div className="flex items-center gap-2"><Spinner />Running every visual…</div> : <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap text-[12px]" data-bi-verify>{text}</pre>}
+      {text === undefined ? <div className="flex items-center gap-2"><Spinner />Running every visual…</div> : <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap text-small" data-bi-verify>{text}</pre>}
     </Modal>
   );
 }

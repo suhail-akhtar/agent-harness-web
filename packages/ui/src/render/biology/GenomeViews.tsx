@@ -44,7 +44,7 @@ export function PlasmidView({ source, streaming }: { source: string; streaming?:
     <div data-plasmid={p.features.length} className="space-y-1.5">
       <Notes notes={p.notes} />
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="mr-1 text-[13px] font-semibold text-hx-primary">{p.name}</span>
+        <span className="mr-1 text-body font-semibold text-hx-primary">{p.name}</span>
         <Stat label="length" value={`${fmt(p.length)} bp`} />
         <Stat label="features" value={p.features.length} />
         {p.sites.length > 0 && <Stat label="sites" value={p.sites.length} />}
@@ -52,7 +52,7 @@ export function PlasmidView({ source, streaming }: { source: string; streaming?:
         <Seg label="View" value={view} onChange={setView} options={[['circular', 'Circular'], ['linear', 'Linear']]} />
       </div>
       {view === 'circular' ? <CircularMap p={p} picked={picked} onPick={setPicked} /> : <LinearMap p={p} picked={picked} onPick={setPicked} />}
-      <div className="min-h-[18px] text-[11.5px] text-hx-secondary" data-plasmid-detail>
+      <div className="min-h-[18px] text-caption text-hx-secondary" data-plasmid-detail>
         {f ? `${f.label} · ${f.type} · ${fmt(f.start)}–${fmt(f.end)} (${fmt(spanOf(f, p.length))} bp${f.start > f.end ? ', across the origin' : ''}) · ${strandText(f.strand)}` : <span className="text-hx-muted">Click a feature for its details.</span>}
       </div>
     </div>
@@ -194,7 +194,7 @@ function Browser({ set }: { set: TrackSet }) {
         {niceTicks(s, e, 7).map((t, _i, all) => <g key={t}><line x1={x(t)} x2={x(t)} y1={12} y2={20} stroke="var(--hx-text-muted)" /><text x={x(t)} y={9} fontSize={9.5} textAnchor={x(t) < L + 30 ? 'start' : x(t) > W - R - 30 ? 'end' : 'middle'} fill="var(--hx-text-muted)">{tickText(all, t)}</text></g>)}
         {blocks}
       </svg>
-      <div className="min-h-[18px] text-[11.5px] text-hx-secondary" data-track-detail>
+      <div className="min-h-[18px] text-caption text-hx-secondary" data-track-detail>
         {hover ? `${hover.name} · ${hover.type} · ${hover.chrom}:${fmt(hover.start)}-${fmt(hover.end)} (${bp(hover.end - hover.start + 1)}) · ${strandText(hover.strand)} · ${hover.exons.length} exon${hover.exons.length === 1 ? '' : 's'}${hover.cds ? ` · CDS ${fmt(hover.cds[0])}-${fmt(hover.cds[1])}` : ''}${hover.info.length ? ` · ${hover.info.map(([k, v]) => `${k}=${v}`).join(' ')}` : ''}`
           : <span className="text-hx-muted">Drag to pan, Ctrl+wheel or the buttons to zoom, double-click a gene to fit it.</span>}
       </div>
@@ -256,7 +256,7 @@ function ProteinTracksView({ p }: { p: ProteinTracks }) {
     <div data-protein-features={p.features.length} className="space-y-1.5">
       <Notes notes={p.notes} />
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="mr-1 text-[13px] font-semibold text-hx-primary">{p.name}</span>
+        <span className="mr-1 text-body font-semibold text-hx-primary">{p.name}</span>
         {p.accession && <Stat label="UniProt" value={p.accession} />}
         <Stat label="length" value={`${fmt(p.length)} aa`} />
         <Stat label="features" value={p.features.length} />
@@ -270,7 +270,7 @@ function ProteinTracksView({ p }: { p: ProteinTracks }) {
         {p.sequence && <text x={6} y={seqTop + 11} fontSize={10.5} fontWeight={600} fill="var(--hx-text-secondary)">Sequence</text>}
         {residues}
       </svg>
-      <div className="min-h-[18px] text-[11.5px] text-hx-secondary">
+      <div className="min-h-[18px] text-caption text-hx-secondary">
         {hover ? `${hover.type}${hover.description ? ` · ${hover.description}` : ''} · ${hover.start}${hover.end !== hover.start ? `–${hover.end} (${hover.end - hover.start + 1} aa)` : ''}${p.sequence ? ` · ${p.sequence.slice(hover.start - 1, Math.min(hover.end, hover.start + 19))}${hover.end - hover.start >= 20 ? '…' : ''}` : ''}`
           : <span className="text-hx-muted">Hover a feature; zoom in to read the residues.</span>}
         {' '}

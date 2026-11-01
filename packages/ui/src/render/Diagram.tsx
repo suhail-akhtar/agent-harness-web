@@ -87,18 +87,18 @@ export const Diagram = React.memo(function Diagram({ source, streaming = false }
     (drawing as SVGElement).style.maxWidth = 'none';
   }, [svg, expanded, showSource]);
 
-  if (streaming) return <p className="p-2 text-[11.5px] text-hx-muted">Diagram arriving…</p>;
+  if (streaming) return <p className="p-2 text-caption text-hx-muted">Diagram arriving…</p>;
   if (error) throw new Error(error.split('\n')[0]);
   const toggle = () => setShowSource((c) => { const n = !c; if (n) sourceShown.add(source); else sourceShown.delete(source); return n; });
   return (
     <ZoomPan className="h-[24rem]" actions={<IconButton size="xs" icon="code" label={showSource ? 'Show the diagram' : 'View source'} onClick={toggle} active={showSource} />}>
       {showSource ? (
-        <pre className="max-h-[24rem] overflow-auto p-2 font-mono text-[12.5px] leading-5 text-hx-primary" data-diagram-source><code>{source}</code></pre>
+        <pre className="max-h-[24rem] overflow-auto p-2 font-mono text-small leading-5 text-hx-primary" data-diagram-source><code>{source}</code></pre>
       ) : svg ? (
         // Mermaid's output under securityLevel strict, scrubbed again by scrubSvgDom.
         <div ref={container} data-diagram="svg" dangerouslySetInnerHTML={{ __html: svg }} className="h-full w-full p-2 [&>svg]:h-full [&>svg]:w-full [&>svg]:!max-w-none" />
       ) : (
-        <div className="p-6 text-center text-[12.5px] text-hx-muted">Drawing…</div>
+        <div className="p-6 text-center text-small text-hx-muted">Drawing…</div>
       )}
     </ZoomPan>
   );

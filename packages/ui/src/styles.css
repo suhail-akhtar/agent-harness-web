@@ -27,6 +27,16 @@
   --hx-warning: #a86c14;
   --hx-danger: #c43030;
   --hx-info: #2876a0;
+  --hx-success-soft: rgba(24, 140, 76, 0.1);
+  --hx-success-border: rgba(24, 140, 76, 0.32);
+  --hx-warning-soft: rgba(168, 108, 20, 0.1);
+  --hx-warning-border: rgba(168, 108, 20, 0.32);
+  --hx-danger-soft: rgba(196, 48, 48, 0.1);
+  --hx-danger-border: rgba(196, 48, 48, 0.32);
+  --hx-info-soft: rgba(40, 118, 160, 0.1);
+  --hx-info-border: rgba(40, 118, 160, 0.32);
+  --hx-accent-border: rgba(217, 119, 87, 0.4);
+  --hx-shadow-pop: 0 4px 16px rgba(0, 0, 0, 0.08);
   --hx-code-bg: #f1f0ec;
   --hx-focus: rgba(217, 119, 87, 0.55);
   --hx-diff-add-bg: rgba(46, 160, 67, 0.12);
@@ -46,8 +56,11 @@
 }
 
 /* ── Markdown ─────────────────────────────────────────────────────── */
+/* Markdown inside a card or a panel (a home card): the surrounding text's size, tighter paragraphs. */
+.hx-compact-md .markdown-body { font-size: inherit; line-height: 1.55; }
+.hx-compact-md .markdown-body p, .hx-compact-md .markdown-body ul, .hx-compact-md .markdown-body ol { margin-bottom: 6px; }
 .markdown-body {
-  font-size: 15px;
+  font-size: calc(var(--hx-font-size, 14px) * 15 / 14);
   line-height: 1.7;
   color: var(--hx-text-primary);
   overflow-wrap: anywhere;

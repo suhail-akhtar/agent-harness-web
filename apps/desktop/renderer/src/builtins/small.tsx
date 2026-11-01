@@ -115,8 +115,8 @@ function NewProject({ onDone }: { onDone: () => void }) {
   return (
     <form className="mb-5 flex items-center gap-2 rounded-xl border border-hx-border-subtle bg-hx-elevated p-3" data-new-project-form onSubmit={(e) => { e.preventDefault(); void create(); }}>
       <Icon name="folder-plus" size={16} className="text-hx-muted" />
-      <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Project name" aria-label="Project name" data-new-project-name className="h-8 min-w-0 flex-1 rounded-lg border border-hx-border bg-hx-bg px-2 text-[13px] outline-none focus:border-hx-accent" />
-      <span className="hidden text-[11.5px] text-hx-muted sm:inline">in the harness home's workspaces</span>
+      <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Project name" aria-label="Project name" data-new-project-name className="h-8 min-w-0 flex-1 rounded-lg border border-hx-border bg-hx-bg px-2 text-body outline-none focus:border-hx-accent" />
+      <span className="hidden text-caption text-hx-muted sm:inline">in the harness home's workspaces</span>
       <Button type="submit" size="sm" variant="primary" loading={busy} disabled={!name.trim()}>Create</Button>
       <Button type="button" size="sm" variant="ghost" onClick={onDone}>Cancel</Button>
     </form>
@@ -128,7 +128,7 @@ function Projects() {
   const sessions = useData((s) => s.sessions);
   const [making, setMaking] = useState(false);
   return (
-    <Page data-projects width="wide" title="Projects" actions={<><Button icon="plus" onClick={() => setMaking(true)} data-new-project>New project</Button><Button variant="primary" icon="folder-plus" onClick={() => void openFolder()}>Open a folder</Button></>}>
+    <Page data-projects title="Projects" actions={<><Button icon="plus" onClick={() => setMaking(true)} data-new-project>New project</Button><Button variant="primary" icon="folder-plus" onClick={() => void openFolder()}>Open a folder</Button></>}>
         {making && <NewProject onDone={() => setMaking(false)} />}
         {!projects.length ? <EmptyState icon="folder" title="No projects yet" action={<Button variant="primary" icon="folder-plus" onClick={() => void openFolder()}>Open a folder</Button>}>Open a folder and the agent can work in it. Each conversation started there runs in that folder.</EmptyState> : (
           <div className="grid gap-3 sm:grid-cols-2">
@@ -137,7 +137,7 @@ function Projects() {
               return (
                 <button key={p.path} type="button" data-project={p.path} onClick={() => navigate({ view: 'core.projects:project', params: { path: p.path } })} className="flex items-start gap-3 rounded-xl border border-hx-border-subtle bg-hx-elevated p-4 text-left hover:border-hx-border">
                   <Icon name="folder" size={20} className="text-hx-accent-text" />
-                  <span className="min-w-0 flex-1"><span className="block truncate text-[14px] font-medium">{p.name}</span><span className="block truncate text-[11.5px] text-hx-muted">{p.path}</span><span className="mt-1 block text-[12px] text-hx-secondary">{n} conversation{n === 1 ? '' : 's'}</span></span>
+                  <span className="min-w-0 flex-1"><span className="block truncate text-body-lg font-medium">{p.name}</span><span className="block truncate text-caption text-hx-muted">{p.path}</span><span className="mt-1 block text-small text-hx-secondary">{n} conversation{n === 1 ? '' : 's'}</span></span>
                 </button>
               );
             })}
@@ -159,7 +159,7 @@ function Project({ params }: { params: Record<string, string> }) {
     <Page data-project-view={path} title={project.name} subtitle={path} lead={<Icon name="folder-open" size={22} className="text-hx-accent-text" />}
       actions={<><Button icon="external" variant="ghost" onClick={() => void desktop.showItem(path)}>Show</Button><Button variant="primary" icon="edit" onClick={newChat}>New chat here</Button></>}>
         <Section title="Conversations">
-        {!mine.length ? <p className="text-[13px] text-hx-muted">No conversations in this folder yet.</p> : (
+        {!mine.length ? <p className="text-body text-hx-muted">No conversations in this folder yet.</p> : (
           <div className="divide-y divide-hx-border-subtle rounded-xl border border-hx-border-subtle">
             {mine.map((s) => <SessionLine key={s.id} s={s} />)}
           </div>
@@ -181,9 +181,9 @@ function OnboardFolder() {
   const projects = useApp((s) => s.prefs.projects);
   return (
     <div className="px-6 py-6">
-      <p className="text-[13px] text-hx-secondary">The agent works inside a folder you choose. You can also start in a scratch space and add folders later.</p>
+      <p className="text-body text-hx-secondary">The agent works inside a folder you choose. You can also start in a scratch space and add folders later.</p>
       <Button className="mt-4" variant="primary" icon="folder-plus" onClick={() => void desktop.openFolder('Open a project folder').then(async (d) => { if (d) { await desktop.addProject(d); toast(`Added ${d}`); } })}>Open a folder</Button>
-      {projects.length > 0 && <ul className="mt-4 space-y-1">{projects.map((p) => <li key={p.path} className="flex items-center gap-2 text-[13px]"><Icon name="check" size={14} className="text-hx-success" />{p.path}</li>)}</ul>}
+      {projects.length > 0 && <ul className="mt-4 space-y-1">{projects.map((p) => <li key={p.path} className="flex items-center gap-2 text-body"><Icon name="check" size={14} className="text-hx-success" />{p.path}</li>)}</ul>}
     </div>
   );
 }
@@ -219,10 +219,10 @@ function Inbox() {
   }, [approvals]);
   return (
     <Page data-inbox title="Inbox" actions={<IconButton icon="refresh" label="Refresh" onClick={() => { void useData.getState().refreshApprovals(); void useData.getState().refreshInbox(); }} />}>
-        <h2 className="mb-2 text-[12px] font-medium uppercase tracking-wide text-hx-muted" data-inbox-waiting>Waiting for you</h2>
-        {!groups.length ? <p className="mb-8 text-[13px] text-hx-muted" data-inbox-nothing-waiting>Nothing is waiting for you. Permission requests, questions, plans and workflow approvals from every conversation, scheduled runs included, land here.</p> : groups.map(([sid, list]) => (
+        <h2 className="mb-2 text-tiny font-semibold uppercase tracking-wide text-hx-muted" data-inbox-waiting>Waiting for you</h2>
+        {!groups.length ? <p className="mb-8 text-body text-hx-muted" data-inbox-nothing-waiting>Nothing is waiting for you. Permission requests, questions, plans and workflow approvals from every conversation, scheduled runs included, land here.</p> : groups.map(([sid, list]) => (
           <section key={sid} className="mb-6" data-inbox-session={sid}>
-            <button type="button" onClick={() => openSession(sid)} className="mb-2 flex items-center gap-2 text-[13px] font-medium text-hx-secondary hover:text-hx-primary"><Icon name="chat" size={14} />{list[0]!.title ?? sessions.find((s) => s.id === sid)?.title ?? sid}<Icon name="arrow-right" size={13} /></button>
+            <button type="button" onClick={() => openSession(sid)} className="mb-2 flex items-center gap-2 text-body font-medium text-hx-secondary hover:text-hx-primary"><Icon name="chat" size={14} />{list[0]!.title ?? sessions.find((s) => s.id === sid)?.title ?? sid}<Icon name="arrow-right" size={13} /></button>
             <div className="space-y-2">{list.map((a) => <InboxItem key={a.requestId} a={a} />)}</div>
           </section>
         ))}
@@ -243,16 +243,16 @@ function InboxItem({ a }: { a: import('@harness/client').Approval }) {
     }).catch(() => setFailed(true));
   }, [a.requestId]);
   if (full) return <PendingCard p={full} respond={respondFor(a.sessionId)} />;
-  return <div className="flex items-center gap-2 rounded-xl border border-hx-border-subtle p-3 text-[13px] text-hx-secondary">{failed ? <Icon name="warning" size={14} /> : <Spinner />}<span className="flex-1">{a.summary ?? a.kind}</span><Button size="sm" onClick={() => openSession(a.sessionId)}>Open</Button></div>;
+  return <div className="flex items-center gap-2 rounded-xl border border-hx-border-subtle p-3 text-body text-hx-secondary">{failed ? <Icon name="warning" size={14} /> : <Spinner />}<span className="flex-1">{a.summary ?? a.kind}</span><Button size="sm" onClick={() => openSession(a.sessionId)}>Open</Button></div>;
 }
 
 function AttentionCard() {
   const approvals = useData((s) => s.approvals);
-  if (!approvals.length) return <p className="text-[12.5px] text-hx-muted">Nothing is waiting for you.</p>;
+  if (!approvals.length) return <p className="text-small text-hx-muted">Nothing is waiting for you.</p>;
   return (
     <div className="space-y-1">
-      {approvals.slice(0, 5).map((a) => <button key={a.requestId} type="button" onClick={() => openSession(a.sessionId)} className="flex w-full items-center gap-2 rounded-lg px-1.5 py-1 text-left text-[13px] hover:bg-hx-hover"><Icon name={a.kind === 'question' ? 'help' : 'shield'} size={14} className="text-hx-warning" /><span className="min-w-0 flex-1 truncate">{a.summary ?? a.tool ?? a.kind}</span><span className="max-w-[40%] truncate text-[11px] text-hx-muted">{a.title}</span></button>)}
-      {approvals.length > 5 && <button type="button" className="px-1.5 text-[12px] text-hx-accent-text" onClick={() => navigate({ view: 'core.inbox:inbox' })}>All {approvals.length}</button>}
+      {approvals.slice(0, 5).map((a) => <button key={a.requestId} type="button" onClick={() => openSession(a.sessionId)} className="flex w-full items-center gap-2 rounded-lg px-1.5 py-1 text-left text-body hover:bg-hx-hover"><Icon name={a.kind === 'question' ? 'help' : 'shield'} size={14} className="text-hx-warning" /><span className="min-w-0 flex-1 truncate">{a.summary ?? a.tool ?? a.kind}</span><span className="max-w-[40%] truncate text-tiny text-hx-muted">{a.title}</span></button>)}
+      {approvals.length > 5 && <button type="button" className="px-1.5 text-small text-hx-accent-text" onClick={() => navigate({ view: 'core.inbox:inbox' })}>All {approvals.length}</button>}
     </div>
   );
 }
@@ -300,13 +300,13 @@ function Activity() {
           <div key={s.id} data-activity-session={s.id} className="mb-3 rounded-xl border border-hx-border-subtle bg-hx-elevated p-3">
             <div className="flex items-center gap-2">
               {s.status === 'running' ? <Spinner className="text-hx-accent-text" /> : <Icon name="clock" size={15} className="text-hx-warning" />}
-              <button type="button" onClick={() => openSession(s.id)} className="min-w-0 flex-1 truncate text-left text-[13.5px] font-medium hover:underline">{s.title || 'Conversation'}</button>
+              <button type="button" onClick={() => openSession(s.id)} className="min-w-0 flex-1 truncate text-left text-body font-medium hover:underline">{s.title || 'Conversation'}</button>
               <Badge tone={s.status === 'waiting' ? 'warning' : 'accent'}>{s.status === 'waiting' ? 'Needs you' : 'Working'}</Badge>
-              <span className="text-[11.5px] text-hx-muted">{fmtCost(s.cost)}</span>
+              <span className="text-caption text-hx-muted">{fmtCost(s.cost)}</span>
               <Button size="sm" variant="ghost" icon="stop" onClick={() => stop(s.id)}>Stop</Button>
             </div>
             {(tasks[s.id] ?? []).filter((t) => t.status === 'running').map((t) => (
-              <div key={t.id} className="ml-6 mt-1.5 flex items-center gap-2 text-[12.5px] text-hx-secondary"><Icon name={t.kind === 'shell' ? 'terminal' : t.kind === 'workflow' ? 'workflow' : 'bot'} size={13} /><span className="min-w-0 flex-1 truncate">{t.description}</span><span className="text-[11px] text-hx-muted">{t.kind}</span></div>
+              <div key={t.id} className="ml-6 mt-1.5 flex items-center gap-2 text-small text-hx-secondary"><Icon name={t.kind === 'shell' ? 'terminal' : t.kind === 'workflow' ? 'workflow' : 'bot'} size={13} /><span className="min-w-0 flex-1 truncate">{t.description}</span><span className="text-tiny text-hx-muted">{t.kind}</span></div>
             ))}
           </div>
         ))}

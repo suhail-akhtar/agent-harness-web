@@ -18,7 +18,7 @@ export function MathBlock({ source, streaming }: { source: string; streaming?: b
     try { return { html: katex.renderToString(source.trim(), { displayMode: true, throwOnError: true, strict: false, trust: false, macros: { ...KATEX_MACROS } }) }; }
     catch (e) { return { error: e instanceof Error ? e.message : String(e) }; }
   }, [source, streaming]);
-  if (streaming) return <p className="p-2 text-[11.5px] text-hx-muted">Formula arriving…</p>;
+  if (streaming) return <p className="p-2 text-caption text-hx-muted">Formula arriving…</p>;
   if (out.error) throw new Error(out.error.split('\n')[0]);
   // KaTeX's own markup with trust: false.
   return <div data-math="block" className="overflow-x-auto px-2 py-3 text-hx-primary [&_.katex-display]:my-0" dangerouslySetInnerHTML={{ __html: out.html ?? '' }} />;
@@ -29,7 +29,7 @@ const fmt = (v: number) => (Number.isInteger(v) ? v.toLocaleString() : v.toLocal
 /** ```table ({columns, rows}), ```csv or ```tsv. */
 export function DataTable({ source, format = 'table', streaming }: { source: string; format?: 'table' | 'csv' | 'tsv'; streaming?: boolean }): React.ReactElement {
   const parsed = useMemo(() => (format === 'table' ? parseTableSpec(source) : { spec: parseDelimited(source, format === 'tsv' ? '\t' : undefined) }), [source, format]);
-  if (parsed.error) { if (streaming) return <div className="px-3 py-4 text-[12px] text-hx-muted">Table arriving…</div>; throw new Error(parsed.error); }
+  if (parsed.error) { if (streaming) return <div className="px-3 py-4 text-small text-hx-muted">Table arriving…</div>; throw new Error(parsed.error); }
   return <TableBody spec={parsed.spec!} />;
 }
 
@@ -45,14 +45,14 @@ export function TableBody({ spec, maxHeight = 420 }: { spec: TableSpec; maxHeigh
     <div className="space-y-1.5" data-table>
       {big && (
         <div className="flex items-center gap-2">
-          <label className="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md border border-hx-border-subtle bg-hx-bg px-2 text-[12px] focus-within:border-hx-accent">
+          <label className="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md border border-hx-border-subtle bg-hx-bg px-2 text-small focus-within:border-hx-accent">
             <Icon name="filter" size={12} className="text-hx-muted" />
             <input data-table-filter value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter rows" className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-hx-muted" />
           </label>
         </div>
       )}
       <div className="overflow-auto" style={{ maxHeight }}>
-        <table className="w-full border-collapse text-[12.5px]">
+        <table className="w-full border-collapse text-small">
           <thead className="sticky top-0 bg-hx-bg">
             <tr>
               {spec.columns.map((c, i) => (
@@ -73,7 +73,7 @@ export function TableBody({ spec, maxHeight = 420 }: { spec: TableSpec; maxHeigh
           </tbody>
         </table>
       </div>
-      <div className="flex flex-wrap items-center gap-1 text-[11px] text-hx-muted">
+      <div className="flex flex-wrap items-center gap-1 text-tiny text-hx-muted">
         <span data-table-count className="mr-1">{query ? `${rows.length} of ` : ''}{spec.rows.length} row{spec.rows.length === 1 ? '' : 's'} · {spec.columns.length} column{spec.columns.length === 1 ? '' : 's'}</span>
         {numeric.some(Boolean) && <ToolButton on={tool === 'stats'} onClick={() => setTool((t) => (t === 'stats' ? 'none' : 'stats'))}>Stats</ToolButton>}
         {spec.columns.length > 1 && spec.rows.length > 1 && <ToolButton on={tool === 'pivot'} onClick={() => setTool((t) => (t === 'pivot' ? 'none' : 'pivot'))}>Pivot</ToolButton>}
@@ -92,7 +92,7 @@ function ToolButton({ on, onClick, children }: { on?: boolean; onClick: () => vo
 const STAT_COLUMNS = ['count', 'mean', 'median', 'std', 'min', 'max'] as const;
 function StatsTable({ spec, numeric }: { spec: TableSpec; numeric: boolean[] }) {
   return (
-    <table className="w-full border-collapse text-[11.5px]" data-table-stats>
+    <table className="w-full border-collapse text-caption" data-table-stats>
       <thead><tr className="text-hx-muted"><th className="px-2 text-left font-normal">column</th>{STAT_COLUMNS.map((h) => <th key={h} className="px-2 text-right font-normal">{h}</th>)}</tr></thead>
       <tbody>
         {spec.columns.map((c, i) => {
@@ -120,7 +120,7 @@ function PivotTool({ spec, numeric }: { spec: TableSpec; numeric: boolean[] }) {
   const cols = spec.columns.map((c, i) => [i, c] as [number, string]);
   return (
     <div data-table-pivot className="space-y-1.5 rounded-lg border border-hx-border-subtle p-2">
-      <div className="flex flex-wrap items-center gap-3 text-[11.5px] text-hx-secondary">
+      <div className="flex flex-wrap items-center gap-3 text-caption text-hx-secondary">
         {pick('Rows', rowsBy, setRowsBy, cols)}
         {pick('Columns', colsBy, setColsBy, [[-1, '(none)'], ...cols.filter(([i]) => i !== rowsBy)])}
         {pick('Values', values, setValues, [[-1, '(rows)'], ...cols.filter(([i]) => numeric[i])])}
@@ -135,16 +135,16 @@ function PivotTool({ spec, numeric }: { spec: TableSpec; numeric: boolean[] }) {
 export function JsonView({ source, streaming }: { source: string; streaming?: boolean }): React.ReactElement {
   const parsed = useMemo(() => { try { return { v: JSON.parse(source) as unknown }; } catch (e) { return { error: e instanceof Error ? e.message : String(e) }; } }, [source]);
   const [mode, setMode] = useState<'tree' | 'table'>('tree');
-  if ('error' in parsed) { if (streaming) return <div className="p-2 text-[12px] text-hx-muted">JSON arriving…</div>; throw new Error(`not valid JSON: ${parsed.error}`); }
+  if ('error' in parsed) { if (streaming) return <div className="p-2 text-small text-hx-muted">JSON arriving…</div>; throw new Error(`not valid JSON: ${parsed.error}`); }
   const asTable = tableFromJson(parsed.v);
   return (
     <div data-json>
       {asTable && (
-        <div className="mb-1.5 flex gap-1 text-[11.5px]">
+        <div className="mb-1.5 flex gap-1 text-caption">
           {(['tree', 'table'] as const).map((m) => <button key={m} type="button" onClick={() => setMode(m)} className={`rounded px-2 py-0.5 ${mode === m ? 'bg-hx-active text-hx-primary' : 'text-hx-muted hover:bg-hx-hover'}`}>{m === 'tree' ? 'Tree' : 'Table'}</button>)}
         </div>
       )}
-      {mode === 'table' && asTable ? <TableBody spec={asTable} /> : <div className="max-h-[420px] overflow-auto font-mono text-[12px] leading-5"><JsonNode name={null} value={parsed.v} depth={0} /></div>}
+      {mode === 'table' && asTable ? <TableBody spec={asTable} /> : <div className="max-h-[420px] overflow-auto font-mono text-small leading-5"><JsonNode name={null} value={parsed.v} depth={0} /></div>}
     </div>
   );
 }

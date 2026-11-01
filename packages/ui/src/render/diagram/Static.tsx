@@ -25,9 +25,9 @@ export function useDiagramSpec(source: string): ReturnType<typeof validateDiagra
 export function DiagramError({ error, source }: { error: string; source: string }): React.ReactElement {
   const [show, setShow] = useState(false);
   return (
-    <div data-diagram-error="" className="m-2 rounded-lg border border-hx-danger/30 bg-hx-danger/8 p-3 text-[12.5px]">
+    <div data-diagram-error="" className="m-2 rounded-lg border border-hx-danger-border bg-hx-danger-soft p-3 text-small">
       <div className="flex items-start gap-2 text-hx-danger"><Icon name="alert" size={15} className="mt-0.5 shrink-0" /><span><b className="font-semibold">This diagram could not be drawn.</b> <span data-diagram-error-text>{error}</span></span></div>
-      <button type="button" onClick={() => setShow((v) => !v)} className="mt-2 text-[12px] text-hx-secondary underline">{show ? 'Hide' : 'Show'} the JSON</button>
+      <button type="button" onClick={() => setShow((v) => !v)} className="mt-2 text-small text-hx-secondary underline">{show ? 'Hide' : 'Show'} the JSON</button>
       {show && <div className="mt-2 max-h-[320px] overflow-auto [&_figure]:my-0"><CodeBlock code={source} language="json" /></div>}
     </div>
   );
@@ -67,21 +67,21 @@ function DiagramStatic({ spec, warnings, title, onOpen, stableKey, changed, canv
       {!bare && (
         <div className="flex items-center gap-2 border-b border-hx-border-subtle px-2.5 py-1.5">
           <span className="flex h-6 w-6 items-center justify-center rounded-md bg-hx-accent-soft text-hx-accent-text"><Icon name="layers" size={14} /></span>
-          <span className="min-w-0 flex-1"><span className="block truncate text-[12.5px] font-medium text-hx-primary">{title ?? viewName(spec.view)}</span><span className="block text-[11px] text-hx-muted">{viewName(spec.view)} diagram</span></span>
+          <span className="min-w-0 flex-1"><span className="block truncate text-small font-medium text-hx-primary">{title ?? viewName(spec.view)}</span><span className="block text-tiny text-hx-muted">{viewName(spec.view)} diagram</span></span>
         </div>
       )}
       <button type="button" onClick={open} title="Open the interactive diagram" className="group relative block w-full cursor-zoom-in bg-hx-bg text-left" style={{ backgroundImage: 'radial-gradient(circle, var(--hx-border) 1px, transparent 1.2px)', backgroundSize: '18px 18px' }} data-diagram-static="">
         {scene ? (
           <Drawing scene={scene} view={spec.view} fitToBox title={title ?? spec.title} state={{ changed: changedSet, changedEdges }} style={{ maxHeight, display: 'block', pointerEvents: 'none' }} />
-        ) : <div className="flex h-[220px] items-center justify-center text-[12px] text-hx-muted">Laying out…</div>}
+        ) : <div className="flex h-[220px] items-center justify-center text-small text-hx-muted">Laying out…</div>}
       </button>
-      <div className="flex flex-wrap items-center gap-2 border-t border-hx-border-subtle px-2.5 py-1.5 text-[11.5px] text-hx-muted">
+      <div className="flex flex-wrap items-center gap-2 border-t border-hx-border-subtle px-2.5 py-1.5 text-caption text-hx-muted">
         <span data-diagram-summary>{summary}</span>
         {changed && changed.nodes.length > 0 && <span className="rounded-full bg-amber-500/12 px-2 py-0.5 font-medium text-hx-warning" data-diagram-changed={changed.nodes.length}>{changed.note ?? `${changed.nodes.length} changed`}</span>}
         {warnings.length > 0 && <button type="button" className="underline decoration-dotted" onClick={() => setNotes((v) => !v)}>{warnings.length} note{warnings.length === 1 ? '' : 's'}</button>}
         <Button size="sm" variant="secondary" icon="expand" className="ml-auto" onClick={open} data-diagram-open="">Open interactive</Button>
       </div>
-      {notes && <ul className="border-t border-hx-border-subtle px-3 py-1.5 text-[11.5px] text-hx-muted" data-diagram-warnings>{warnings.slice(0, 20).map((w, i) => <li key={i}>· {w}</li>)}</ul>}
+      {notes && <ul className="border-t border-hx-border-subtle px-3 py-1.5 text-caption text-hx-muted" data-diagram-warnings>{warnings.slice(0, 20).map((w, i) => <li key={i}>· {w}</li>)}</ul>}
       {overlay && <DiagramOverlay spec={spec} title={title} stableKey={stableKey} changed={changed} canvas={canvas} onClose={() => setOverlay(false)} />}
     </div>
   );
@@ -99,7 +99,7 @@ export function DiagramOverlay({ spec, title, stableKey, changed, canvas, onClos
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-hx-border bg-hx-bg shadow-2xl">
         <div className="flex items-center gap-2 border-b border-hx-border-subtle px-3 py-2">
           <Icon name="layers" size={15} className="text-hx-accent-text" />
-          <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{title ?? spec.title ?? viewName(spec.view)}</span>
+          <span className="min-w-0 flex-1 truncate text-body font-medium">{title ?? spec.title ?? viewName(spec.view)}</span>
           <Button size="sm" variant="ghost" icon="x" onClick={onClose}>Close</Button>
         </div>
         <div className="min-h-0 flex-1"><DiagramCanvas spec={spec} title={title} stableKey={stableKey} changed={changed} {...canvas} /></div>

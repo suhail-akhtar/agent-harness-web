@@ -57,8 +57,8 @@ export const Artifact = React.memo(function Artifact({ kind, source, language, t
       <figcaption className="flex items-center gap-2 border-b border-hx-border-subtle px-2.5 py-1.5">
         <span className="flex h-6 w-6 items-center justify-center rounded-md bg-hx-accent-soft text-hx-accent-text"><Icon name={ICON[kind]} size={14} /></span>
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-[12.5px] font-medium text-hx-primary">{name}</span>
-          <span className="block text-[11px] text-hx-muted">{label[kind]}{streaming ? ' · writing…' : ''}</span>
+          <span className="block truncate text-small font-medium text-hx-primary">{name}</span>
+          <span className="block text-tiny text-hx-muted">{label[kind]}{streaming ? ' · writing…' : ''}</span>
         </span>
         <Tabs size="sm" value={tab} onChange={(t) => setTab(t as 'preview' | 'code')} tabs={[{ id: 'preview', label: 'Preview' }, { id: 'code', label: 'Code' }]} />
         {host.openPanel && !fill && <IconButton size="xs" icon="panel-right" label="Open in the side panel" onClick={() => host.openPanel!({ title: name, kind, source, language: language ?? kind })} />}
@@ -77,7 +77,7 @@ export const Artifact = React.memo(function Artifact({ kind, source, language, t
 function ArtifactPreview({ kind, source, fill, title, custom, origin }: { kind: ArtifactKind; source: string; fill?: boolean; title: string; custom: ArtifactRenderer; origin?: ArtifactOrigin }): React.ReactElement {
   const drawn = custom(kind, source, { title, fill, ...(origin ? { origin } : {}) });
   if (drawn !== undefined && drawn !== null) {
-    return <RenderBoundary fallback={(e, retry) => <div className="p-3 text-[12px] text-hx-danger" data-render-error>The renderer for {label[kind]} failed: {e} <button type="button" className="underline" onClick={retry}>Try again</button></div>}><div data-artifact-renderer className={fill ? 'h-full' : ''}>{drawn}</div></RenderBoundary>;
+    return <RenderBoundary fallback={(e, retry) => <div className="p-3 text-small text-hx-danger" data-render-error>The renderer for {label[kind]} failed: {e} <button type="button" className="underline" onClick={retry}>Try again</button></div>}><div data-artifact-renderer className={fill ? 'h-full' : ''}>{drawn}</div></RenderBoundary>;
   }
   return kind === 'diagram' ? <DiagramBlock source={source} title={title} bare stableKey={origin ? `${origin.sessionId}/${origin.id}` : undefined} /> : <ArtifactFrame kind={kind} source={source} fill={fill} />;
 }
@@ -88,7 +88,7 @@ export function DiagramPlaceholder({ source }: { source: string }): React.ReactE
   try { JSON.parse(source); } catch { json = false; }
   return (
     <div data-diagram-placeholder className="p-2">
-      <div className="mb-1.5 flex items-center gap-1.5 text-[11.5px] text-hx-muted"><Icon name="info" size={12} />diagram (the spec as JSON)</div>
+      <div className="mb-1.5 flex items-center gap-1.5 text-caption text-hx-muted"><Icon name="info" size={12} />diagram (the spec as JSON)</div>
       <div className="max-h-[420px] overflow-auto [&_figure]:my-0">{json ? <JsonView source={source} /> : <CodeBlock code={source} language="text" />}</div>
     </div>
   );
@@ -126,7 +126,7 @@ export function SandboxFrame({ doc, scripted, label: title, marker, fill, initia
   const waiting = scripted && !!host.register && !url;
   return (
     <div className={`relative bg-white ${fill ? 'h-full' : ''}`} style={fill ? undefined : { height, resize: 'vertical', overflow: 'hidden', minHeight: 80 }}>
-      {waiting ? <div className="p-4 text-[12px] text-neutral-500">Preparing preview…</div> : (
+      {waiting ? <div className="p-4 text-small text-neutral-500">Preparing preview…</div> : (
         <iframe
           ref={frame}
           key={url ?? 'srcdoc'}

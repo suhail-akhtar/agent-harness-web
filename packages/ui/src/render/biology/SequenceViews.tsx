@@ -29,7 +29,7 @@ function SequenceRecords({ records, notes }: { records: SeqRecord[]; notes: stri
     <div data-sequence={rec.type} className="space-y-2">
       <Notes notes={notes} />
       {records.length > 1 && (
-        <div className="flex items-center gap-2 text-[12px] text-hx-muted">
+        <div className="flex items-center gap-2 text-small text-hx-muted">
           <span>{records.length} sequences</span>
           <Select aria-label="Sequence" className="w-64" value={String(idx)} onChange={(v) => setIdx(Number(v))} options={records.map((r, i) => ({ value: String(i), label: `${r.name} (${fmt(r.seq.length)})` }))} />
         </div>
@@ -62,8 +62,8 @@ function OneSequence({ rec }: { rec: SeqRecord }) {
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="mr-1 text-[13px] font-semibold text-hx-primary">{rec.name}</span>
-        {rec.description && <span className="mr-1 truncate text-[12px] text-hx-muted">{rec.description}</span>}
+        <span className="mr-1 text-body font-semibold text-hx-primary">{rec.name}</span>
+        {rec.description && <span className="mr-1 truncate text-small text-hx-muted">{rec.description}</span>}
         <Stat label={rec.type === 'protein' ? 'protein' : rec.type.toUpperCase()} value={`${fmt(len)} ${nucleic ? (rec.type === 'rna' ? 'nt' : 'bp') : 'aa'}`} />
         {stats.gc !== undefined && <Stat label="GC" value={`${(stats.gc * 100).toFixed(1)}%`} />}
         <Stat label="MW" value={kda(stats.mw)} />
@@ -76,7 +76,7 @@ function OneSequence({ rec }: { rec: SeqRecord }) {
       {seq.length > LIMITS.seqView && <Notes notes={[tooLarge(LIMITS.seqView, seq.length, 'residues (statistics use all of them)')]} />}
       <div
         data-seq-body
-        className="max-h-[420px] select-none overflow-auto rounded-lg bg-hx-code px-2 py-1.5 font-mono text-[12.5px] leading-[19px] text-hx-primary"
+        className="max-h-[420px] select-none overflow-auto rounded-lg bg-hx-code px-2 py-1.5 font-mono text-small leading-[19px] text-hx-primary"
         onPointerDown={(e) => { const i = at(e); if (i === null) { setSel(null); return; } anchor.current = i; setSel([i, i]); }}
         onPointerOver={(e) => { const i = at(e); setHover(i); if (i !== null && anchor.current !== null && e.buttons === 1) setSel([anchor.current, i]); }}
         onPointerUp={() => { anchor.current = null; }}
@@ -86,7 +86,7 @@ function OneSequence({ rec }: { rec: SeqRecord }) {
           <div key={s} className="flex whitespace-pre">
             <span className="mr-2 inline-block w-[7ch] shrink-0 text-right text-hx-muted">{s + 1}</span>
             <span className="inline-block">
-              <span className="block text-[10px] leading-[12px] text-hx-muted">{Array.from({ length: Math.ceil(Math.min(LINE, shown.length - s) / 10) }, (_, g) => <span key={g} className="inline-block w-[10ch] text-right" style={{ marginRight: g < 5 ? '1ch' : 0 }}>{s + g * 10 + 10 <= shown.length ? s + g * 10 + 10 : ''}</span>)}</span>
+              <span className="block text-micro leading-[12px] text-hx-muted">{Array.from({ length: Math.ceil(Math.min(LINE, shown.length - s) / 10) }, (_, g) => <span key={g} className="inline-block w-[10ch] text-right" style={{ marginRight: g < 5 ? '1ch' : 0 }}>{s + g * 10 + 10 <= shown.length ? s + g * 10 + 10 : ''}</span>)}</span>
               <span className="block">
                 {shown.slice(s, s + LINE).split('').map((c, k) => {
                   const i = s + k; const inSel = i >= lo && i <= hi;
@@ -99,14 +99,14 @@ function OneSequence({ rec }: { rec: SeqRecord }) {
                     const i = s + k; const codonIdx = (i - f - 1) / 3; const aa = Number.isInteger(codonIdx) && codonIdx >= 0 ? p[codonIdx] : undefined;
                     return <span key={k} style={{ marginRight: k % 10 === 9 && k < LINE - 1 ? '1ch' : 0, color: aa === '*' ? 'var(--hx-danger)' : aa === 'M' ? 'var(--hx-success)' : undefined, fontWeight: aa === 'M' || aa === '*' ? 600 : undefined }}>{aa ?? ' '}</span>;
                   })}
-                  <span className="ml-2 text-[10px] text-hx-muted">+{f + 1}</span>
+                  <span className="ml-2 text-micro text-hx-muted">+{f + 1}</span>
                 </span>
               ))}
             </span>
           </div>
         ))}
       </div>
-      <div className="flex min-h-[22px] flex-wrap items-center gap-2 text-[11.5px] text-hx-secondary">
+      <div className="flex min-h-[22px] flex-wrap items-center gap-2 text-caption text-hx-secondary">
         {sel ? (
           <>
             <span data-seq-selection>Selected {fmt(lo + 1)}–{fmt(hi + 1)} ({fmt(hi - lo + 1)} {nucleic ? 'bp' : 'aa'}){nucleic ? ` · GC ${(gcContent(selected) * 100).toFixed(1)}%` : ''}{nucleic && selected.length >= 3 ? ` · ${translate(selected).slice(0, 24)}${selected.length > 72 ? '…' : ''}` : ''}</span>
@@ -183,16 +183,16 @@ function MsaGrid({ a, scheme, setScheme, hover, setHover }: { a: ReturnType<type
         <span className="flex-1" />
         <Seg label="Colour scheme" value={scheme} onChange={setScheme} options={[['auto', 'Auto'], ['clustal', 'Clustal'], ['nucleotide', 'Nucleotide'], ['identity', 'Identity'], ['none', 'None']]} />
       </div>
-      <div className="flex rounded-lg bg-hx-code font-mono text-[12.5px] leading-[18px]">
+      <div className="flex rounded-lg bg-hx-code font-mono text-small leading-[18px]">
         <div className="shrink-0 whitespace-nowrap border-r border-hx-border-subtle py-1.5 pl-2 pr-1 text-hx-secondary" style={{ width: `${nameW + 1}ch` }}>
-          <div className="text-[10px] text-hx-muted">&nbsp;</div>
+          <div className="text-micro text-hx-muted">&nbsp;</div>
           {a.names.map((n, i) => <div key={i} className="truncate" title={n}>{n}</div>)}
           <div className="font-semibold text-hx-muted">consensus</div>
-          <div className="h-[28px] text-[10px] text-hx-muted">conservation</div>
+          <div className="h-[28px] text-micro text-hx-muted">conservation</div>
         </div>
         <div data-msa-scroll className="min-w-0 flex-1 overflow-x-auto py-1.5 pl-2 pr-2" onMouseMove={(e) => setHover(colAt(e))} onMouseLeave={() => setHover(null)}>
           <div className="w-max whitespace-pre">
-            <div className="text-[10px] text-hx-muted">{ruler}</div>
+            <div className="text-micro text-hx-muted">{ruler}</div>
             {runs.map((row, i) => <div key={i} data-msa-row={i}>{row.map((r, k) => <span key={k} style={r.color ? { background: r.color } : undefined}>{r.text}</span>)}</div>)}
             <div data-msa-consensus className="font-semibold text-hx-primary">{cols.map((c) => c.consensus).join('')}</div>
             <svg data-msa-conservation viewBox={`0 0 ${a.columns} 1`} preserveAspectRatio="none" style={{ width: `${a.columns}ch`, height: 28, display: 'block' }} aria-label="Conservation per column">
@@ -201,7 +201,7 @@ function MsaGrid({ a, scheme, setScheme, hover, setHover }: { a: ReturnType<type
           </div>
         </div>
       </div>
-      <div className="min-h-[18px] text-[11.5px] text-hx-secondary">
+      <div className="min-h-[18px] text-caption text-hx-secondary">
         {hover !== null && cols[hover] ? `Column ${hover + 1}: ${cols[hover].consensus.toUpperCase()} in ${Math.round(cols[hover].identity * 100)}% of rows${cols[hover].gaps ? ` · ${cols[hover].gaps} gap${cols[hover].gaps === 1 ? '' : 's'}` : ''}${cols[hover].conserved ? ' · fully conserved' : ''}` : <span className="text-hx-muted">Scroll sideways for more columns; hover for a column's consensus.</span>}
       </div>
     </div>

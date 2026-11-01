@@ -24,7 +24,7 @@ function PluginsPage() {
   const [q, setQ] = useState('');
   const shown = plugins.filter((p) => `${p.name} ${p.description ?? ''} ${p.ui?.displayName ?? ''} ${p.info?.tags.join(' ') ?? ''} ${p.info?.publisher?.name ?? ''}`.toLowerCase().includes(q.toLowerCase()));
   return (
-    <Page data-plugins-page width="wide" title="Plugins" actions={<Tabs value={tab} onChange={setTab} tabs={[{ id: 'installed', label: 'Installed', count: plugins.length }, { id: 'catalogue', label: 'Catalogue' }, { id: 'dev', label: 'Developer' }]} />}>
+    <Page data-plugins-page title="Plugins" actions={<Tabs value={tab} onChange={setTab} tabs={[{ id: 'installed', label: 'Installed', count: plugins.length }, { id: 'catalogue', label: 'Catalogue' }, { id: 'dev', label: 'Developer' }]} />}>
         {tab === 'installed' && (
           <>
             <div className="mb-3 flex items-center gap-2"><div className="flex-1"><Input icon="search" placeholder="Filter plugins" value={q} onChange={(e) => setQ(e.target.value)} /></div><InstallFile /><CheckUpdates /></div>
@@ -104,20 +104,20 @@ function PluginCard({ p }: { p: PluginEntry }) {
         <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-hx-pill text-hx-secondary">{p.info?.iconData ? <img src={p.info.iconData} alt="" className="h-9 w-9 object-cover" data-plugin-icon /> : <Icon name={(p.ui?.icon ?? p.info?.icon ?? 'puzzle') as IconName} size={18} />}</span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-[14px] font-medium">{title}</span>
-            <span className="text-[11.5px] text-hx-muted">{p.name} {p.version}</span>
-            <Badge tone={builtin ? 'accent' : p.source === 'dev' ? 'info' : 'neutral'}>{builtin ? 'Built in' : p.source}</Badge>
+            <span className="text-body-lg font-medium">{title}</span>
+            <span className="text-caption text-hx-muted">{p.name} {p.version}</span>
+            <Badge tone={p.source === 'dev' ? 'info' : 'neutral'}>{builtin ? 'Built in' : p.source}</Badge>
             {!builtin && <span data-tier={p.tier ?? 'custom'}><Badge tone={p.tier === 'official' ? 'success' : 'neutral'}>{p.tier === 'official' ? 'Official' : 'Custom'}</Badge></span>}
             {/* Signed by an official publisher and every file as signed; or a signature that does not verify. */}
             {p.tier === 'official' && p.signature?.startsWith('signed by ') && <span data-verified={p.name} title={`Every file is as ${p.info?.publisher?.name ?? 'the publisher'} signed it (${p.signature}).`}><Badge tone="success">Verified</Badge></span>}
             {p.signature?.startsWith('signed, not verified') && <span data-unverified={p.name} title={p.signature}><Badge tone="danger">Signature does not match</Badge></span>}
             {p.ui && <Badge>{p.ui.trust === 'native' ? 'native UI' : p.ui.trust === 'frame' ? 'frame UI' : 'declarative UI'}</Badge>}
-            {required && <Badge tone="warning">Required</Badge>}
+            {required && <Badge>Required</Badge>}
             {p.update && <span data-update-available={p.update.latest}><Badge tone="info">Update: {p.update.latest}</Badge></span>}
           </div>
-          {p.description && <p className="mt-1 line-clamp-2 text-[12.5px] text-hx-secondary">{p.description}</p>}
+          {p.description && <p className="mt-1 line-clamp-2 text-small text-hx-secondary">{p.description}</p>}
           {(p.info?.publisher || p.info?.author || (p.info?.tags.length ?? 0) > 0) && (
-            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11.5px] text-hx-muted" data-plugin-meta={p.name}>
+            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-caption text-hx-muted" data-plugin-meta={p.name}>
               {(p.info?.publisher ?? p.info?.author) && <span>by {(p.info.publisher ?? p.info.author)!.name}</span>}
               {p.info?.category && <span>· {p.info.category}</span>}
               {p.info?.tags.slice(0, 5).map((t) => <span key={t} className="rounded bg-hx-pill px-1.5 py-px">{t}</span>)}
@@ -132,15 +132,15 @@ function PluginCard({ p }: { p: PluginEntry }) {
             </div>
           )}
           {decision && declared.length > 0 && (
-            <div className="mt-2 text-[12px]" data-grant-state={decision.state}>
+            <div className="mt-2 text-small" data-grant-state={decision.state}>
               {decision.state === 'granted' ? <span className="text-hx-success">Access granted: {decision.capabilities.join(', ')}</span> : decision.state === 'denied' ? <span className="text-hx-muted">Access refused</span> : <span className="text-hx-warning">Will ask for access when it opens{decision.changed ? ' (its files changed)' : ''}</span>}
             </div>
           )}
         </div>
         <Switch checked={p.enabled || required} disabled={busy || required || (!builtin && p.source !== 'dev' && me?.role !== 'admin')} onChange={(v) => void toggle(v)} label={`${p.name} on`} />
       </div>
-      <div className="mt-2 flex items-center gap-2">
-        <button type="button" className="text-[12px] text-hx-muted hover:text-hx-primary" onClick={() => setOpen(!open)}>{open ? 'Less' : 'Details'}</button>
+      <div className="-ml-2.5 mt-1.5 flex flex-wrap items-center gap-1.5 pl-12">
+        <Button size="sm" variant="ghost" iconRight={open ? 'chevron-up' : 'chevron-down'} aria-expanded={open} onClick={() => setOpen(!open)} data-plugin-details={p.name}>{open ? 'Less' : 'Details'}</Button>
         <div className="flex-1" />
         {decision?.state === 'granted' && <Button size="sm" variant="ghost" onClick={() => void desktop.revokeGrant(p.name).then(() => useData.getState().refreshPlugins())}>Revoke access</Button>}
         {p.enabled && !builtin && (p.ui?.contributes.views.length ?? 0) > 0 && <Button size="sm" variant="ghost" icon="external" data-open-app={p.name} onClick={() => void desktop.openPluginWindow(p.name)}>Open as app</Button>}
@@ -153,21 +153,21 @@ function PluginCard({ p }: { p: PluginEntry }) {
       {reviewing && <ReviewModal target={p.source === 'dev' ? { dir: (useData.getState().devPlugins.find((d) => d.name === p.name)?.dir) ?? '', title: p.ui?.displayName ?? p.name } : { name: p.name, title: p.ui?.displayName ?? p.name }} onClose={() => setReviewing(false)} />}
       <Modal open={removing} onClose={() => setRemoving(false)} title={`Uninstall ${p.ui?.displayName ?? p.name}?`} size="sm" label="Uninstall plugin"
         footer={<><Button variant="ghost" onClick={() => setRemoving(false)}>Cancel</Button><Button variant="danger" data-confirm-uninstall onClick={() => void uninstall()}>Uninstall</Button></>}>
-        <div className="space-y-3 text-[13px] text-hx-secondary" data-uninstall-dialog={p.name}>
+        <div className="space-y-3 text-body text-hx-secondary" data-uninstall-dialog={p.name}>
           <p>Its folder is removed from the server. Conversations keep what it already did.</p>
           <p>Its data folder (what it stored for itself) is kept, so installing it again picks up where it left off.</p>
           <div data-delete-data><Checkbox checked={deleteData} onChange={setDeleteData} label="Also delete its data folder" /></div>
         </div>
       </Modal>
       {open && (
-        <div className="mt-2 rounded-lg bg-hx-bg p-3 text-[12px] text-hx-secondary">
+        <div className="mt-2 rounded-lg border border-hx-border-subtle bg-hx-bg p-3 text-small text-hx-secondary">
           <div><b>Contributes:</b> {points.join(', ') || 'no UI (server half only)'}</div>
           {p.permissions && Object.keys(p.permissions).length > 0 && (
             <div className="mt-1" data-server-permissions={p.name}><b>Its server code may:</b><ul className="ml-4 list-disc">{serverPermissions(p.permissions).map((t) => <li key={t}>{t}</li>)}</ul></div>
           )}
           {declared.length > 0 && <div className="mt-1"><b>May ask for:</b><ul className="ml-4 list-disc">{declared.map((c) => <li key={c}>{CAPABILITY_TEXT[c] ?? c}</li>)}</ul></div>}
           {p.info && <BundleDetails p={p} admin={me?.role === 'admin'} />}
-          {p.uiHash && <div className="mt-1 font-mono text-[11px] text-hx-muted">uiHash {p.uiHash}</div>}
+          {p.uiHash && <div className="mt-1 font-mono text-tiny text-hx-muted">uiHash {p.uiHash}</div>}
         </div>
       )}
     </div>
@@ -201,7 +201,7 @@ function BundleDetails({ p, admin }: { p: PluginEntry; admin: boolean }) {
       {info.changelog && (
         <div>
           <button type="button" className="text-hx-muted hover:text-hx-primary" data-changelog-toggle onClick={() => setLog(!log)}>{log ? 'Hide changelog' : 'Changelog'}</button>
-          {log && <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-hx-elevated p-2 text-[11.5px]" data-changelog>{info.changelog}</pre>}
+          {log && <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-hx-elevated p-2 text-caption" data-changelog>{info.changelog}</pre>}
         </div>
       )}
       {revs && revs.length > 0 && (
@@ -254,9 +254,9 @@ function InstallFile() {
       {picked && (
         <Modal open onClose={() => setPicked(null)} title={`Install ${picked.title} ${picked.version}?`} size="md" label="Install from a file"
           footer={<><Button variant="ghost" onClick={() => setPicked(null)}>Cancel</Button><Button variant="primary" data-confirm-install disabled={busy || changed} onClick={() => void install()}>{busy ? 'Installing…' : picked.kind === 'solution' ? `Install ${picked.plugins.length} plugins` : 'Install'}</Button></>}>
-          <div className="space-y-3 text-[13px]" data-install-dialog={picked.kind}>
+          <div className="space-y-3 text-body" data-install-dialog={picked.kind}>
             <p className="text-hx-secondary">{picked.description ?? (picked.kind === 'solution' ? 'A solution: several plugins that work together.' : 'A plugin.')}</p>
-            <div className="flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-hx-muted">
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-small text-hx-muted">
               <span>{picked.file}</span>
               {picked.publisher && <span>by {picked.publisher}</span>}
               {picked.license && <span>{picked.license} licence</span>}
@@ -265,11 +265,11 @@ function InstallFile() {
             {verified && <InfoNote tone="success">Every file is as {picked.plugins[0]?.signedBy ? `${picked.publisher ?? picked.plugins[0].signedBy}` : 'its publisher'} signed it: an official publisher of this app.</InfoNote>}
             {changed && <InfoNote tone="danger">Some of its files changed after they were signed. It is not installed: get the file again from its publisher.</InfoNote>}
             {!verified && !changed && <InfoNote tone="warning">It is not signed by a publisher this app knows. Its code runs on this computer: install it only if you trust where it came from.</InfoNote>}
-            {picked.kind === 'solution' && <p className="text-[12px] text-hx-muted">Installed in this order, all or none; a plugin already at this version is left as it is, an older one is updated (the version before is kept).</p>}
+            {picked.kind === 'solution' && <p className="text-small text-hx-muted">Installed in this order, all or none; a plugin already at this version is left as it is, an older one is updated (the version before is kept).</p>}
             <div className="space-y-1.5" data-install-plugins>
               {picked.plugins.map((p) => (
                 <div key={p.name} className="flex items-center gap-2 rounded-lg border border-hx-border-subtle px-2.5 py-2" data-install-plugin={p.name}>
-                  <span className="min-w-0 flex-1"><span className="font-medium">{p.displayName ?? p.name}</span> <span className="text-[11.5px] text-hx-muted">{p.name} {p.version}</span>{p.description && <span className="block truncate text-[12px] text-hx-muted">{p.description}</span>}</span>
+                  <span className="min-w-0 flex-1"><span className="font-medium">{p.displayName ?? p.name}</span> <span className="text-caption text-hx-muted">{p.name} {p.version}</span>{p.description && <span className="block truncate text-small text-hx-muted">{p.description}</span>}</span>
                   <span data-signature={p.signature}><Badge tone={SIGNATURE_TEXT[p.signature].tone}>{SIGNATURE_TEXT[p.signature].label}</Badge></span>
                 </div>
               ))}
@@ -334,21 +334,21 @@ function Catalogue() {
     <div className="space-y-6" data-catalogue>
       {solutions.length > 0 && (
         <section data-solutions>
-          <h2 className="mb-1 text-[14px] font-semibold">Solutions</h2>
-          <p className="mb-3 text-[12.5px] text-hx-secondary">Complete solutions on top of the core: install the ones this {me?.role === 'admin' ? 'server' : 'workspace'} needs, in any mix. Removing one keeps its data, so installing it again picks up where it left off.</p>
+          <h2 className="mb-1 text-body-lg font-semibold">Solutions</h2>
+          <p className="mb-3 text-small text-hx-secondary">Complete solutions on top of the core: install the ones this {me?.role === 'admin' ? 'server' : 'workspace'} needs, in any mix. Removing one keeps its data, so installing it again picks up where it left off.</p>
           <div className="grid gap-2 md:grid-cols-2">
             {solutions.map((c) => (
               <div key={c.name} data-solution={c.name} data-installed={c.installed ? '1' : '0'} className="flex flex-col gap-2 rounded-xl border border-hx-border-subtle bg-hx-elevated p-3">
                 <div className="flex items-center gap-2">
-                  <span className="text-[14px] font-medium">{c.solution!.title}</span>
-                  <span className="text-[11.5px] text-hx-muted">{c.name} {c.version}</span>
+                  <span className="text-body-lg font-medium">{c.solution!.title}</span>
+                  <span className="text-caption text-hx-muted">{c.name} {c.version}</span>
                   <span className="flex-1" />
                   <Badge tone="accent">Official</Badge>
                   {c.installed && <Badge tone="success">Installed</Badge>}
                 </div>
-                <p className="line-clamp-3 text-[12.5px] text-hx-secondary">{c.description}</p>
+                <p className="line-clamp-3 text-small text-hx-secondary">{c.description}</p>
                 {(c.solution!.requires.length > 0 || c.solution!.requiredBy.length > 0) && (
-                  <div className="text-[12px] text-hx-muted">
+                  <div className="text-small text-hx-muted">
                     {c.solution!.requires.length > 0 && <div>Needs {c.solution!.requires.map(titleOf).join(', ')} (installed with it)</div>}
                     {c.solution!.requiredBy.length > 0 && <div>Needed by {c.solution!.requiredBy.map(titleOf).join(', ')}</div>}
                   </div>
@@ -366,13 +366,13 @@ function Catalogue() {
         </section>
       )}
       <section>
-        {solutions.length > 0 && <h2 className="mb-2 text-[14px] font-semibold">Plugins</h2>}
+        {solutions.length > 0 && <h2 className="mb-2 text-body-lg font-semibold">Plugins</h2>}
         {!others.length ? <EmptyState icon="box" title="No other plugins in the catalogue">The operator names a catalogue of signed plugins with HARNESS_PLUGIN_CATALOGUE.</EmptyState> : (
           <div className="space-y-2">
             {others.map((c) => (
               <div key={c.name} className="flex items-center gap-3 rounded-xl border border-hx-border-subtle bg-hx-elevated p-3">
                 <Icon name="box" size={18} className="text-hx-muted" />
-                <span className="min-w-0 flex-1"><span className="block text-[13.5px] font-medium">{c.name} <span className="text-[11.5px] font-normal text-hx-muted">{c.version}</span></span><span className="block truncate text-[12px] text-hx-muted">{c.description}</span></span>
+                <span className="min-w-0 flex-1"><span className="block text-body font-medium">{c.name} <span className="text-caption font-normal text-hx-muted">{c.version}</span></span><span className="block truncate text-small text-hx-muted">{c.description}</span></span>
                 {c.installed ? <Badge tone="success">Installed</Badge> : <Button size="sm" variant="primary" onClick={() => void act(c, true)}>Install</Button>}
               </div>
             ))}
@@ -395,18 +395,18 @@ function Developer() {
   const commit = async () => { const dir = await desktop.importCommit(staged!.dir); setStaged(null); await load(dir); };
   return (
     <div data-dev-plugins>
-      <p className="mb-3 text-[13px] text-hx-secondary">Load a plugin from a folder on this computer: it is reviewed first (its manifest, tools, routes, pages, permissions, code and tests), then loaded whole. Its pages run in sandboxed frames (asking for access like any other); its server code (tools, routes, skills) runs in this app's engine. Edits reload as you save. New plugin: <code>npm run plugin -- new my-plugin</code>, or ask an agent to build one (the build-a-plugin skill).</p>
+      <p className="mb-3 text-body text-hx-secondary">Load a plugin from a folder on this computer: it is reviewed first (its manifest, tools, routes, pages, permissions, code and tests), then loaded whole. Its pages run in sandboxed frames (asking for access like any other); its server code (tools, routes, skills) runs in this app's engine. Edits reload as you save. New plugin: <code>npm run plugin -- new my-plugin</code>, or ask an agent to build one (the build-a-plugin skill).</p>
       <div className="flex flex-wrap gap-2">
         <Button icon="folder-plus" onClick={add} data-load-plugin-folder>Load a plugin folder…</Button>
         <Button icon="upload" onClick={importFile} data-import-plugin>Import a plugin file…</Button>
       </div>
-      <p className="mt-2 text-[12px] text-hx-muted">A plugin file (.tgz) comes from Export on any plugin, here or on another computer or server: it is reviewed, then loaded; open it as its own app from its card.</p>
+      <p className="mt-2 text-small text-hx-muted">A plugin file (.tgz) comes from Export on any plugin, here or on another computer or server: it is reviewed, then loaded; open it as its own app from its card.</p>
       {staged && <ReviewModal target={{ dir: staged.dir, title: `${staged.name} ${staged.version}` }} onClose={() => { void desktop.importCancel(staged.dir); setStaged(null); }} onLoad={commit} />}
       {reviewing && <ReviewModal target={reviewing} onClose={() => setReviewing(null)} {...(reviewing.load && reviewing.dir ? { onLoad: () => load(reviewing.dir!) } : {})} />}
       <div className="mt-3 space-y-2">
         {dev.map((d) => (
-          <div key={d.dir} className="flex items-center gap-2 rounded-lg border border-hx-border-subtle p-2.5 text-[13px]">
-            <Icon name="code" size={15} className="text-hx-muted" /><span className="font-medium">{d.name}</span><span className="min-w-0 flex-1 truncate text-[11.5px] text-hx-muted">{d.dir}</span>
+          <div key={d.dir} className="flex items-center gap-2 rounded-lg border border-hx-border-subtle p-2.5 text-body">
+            <Icon name="code" size={15} className="text-hx-muted" /><span className="font-medium">{d.name}</span><span className="min-w-0 flex-1 truncate text-caption text-hx-muted">{d.dir}</span>
             {d.uiError && <Badge tone="danger">UI error</Badge>}
             <Button size="sm" variant="ghost" icon="shield" onClick={() => setReviewing({ dir: d.dir, title: d.name })}>Review</Button>
             <Button size="sm" variant="ghost" onClick={() => void desktop.removeDevPlugin(d.dir).then(() => useData.getState().refreshPlugins())}>Remove</Button>

@@ -5,7 +5,7 @@
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, ConfirmDialog, EmptyState, Icon, Input, Kbd, Modal, SchemaForm, Select, Spinner, cx, schemaText, toast, Textarea, Field } from '@harness/ui';
+import { Button, ConfirmDialog, EmptyState, Icon, Input, Kbd, Modal, SchemaForm, Select, Spinner, cx, schemaText, toast, Textarea, Field, IconButton } from '@harness/ui';
 import { formatChord } from '../registry/keybindings';
 import type { Effort, Mode, WorkflowInfo } from '@harness/client';
 import type { JsonSchema } from '@harness/plugin-ui';
@@ -34,12 +34,12 @@ export function EngineGate(): React.ReactElement | null {
   const message = engine.status === 'crashed' ? engine.message : engine.status === 'stopped' ? (engine.message ?? 'The engine is stopped.') : `Starting the engine${engine.attempt > 1 ? ` (attempt ${engine.attempt})` : ''}…`;
   if (everReady) {
     return (
-      <div data-engine-banner role="alert" className="flex items-center gap-3 border-b border-hx-warning/30 bg-hx-warning/12 px-4 py-2 text-[13px] text-hx-primary">
+      <div data-engine-banner role="alert" className="flex items-center gap-3 border-b border-hx-warning-border bg-hx-warning-soft px-4 py-2 text-body text-hx-primary">
         {engine.status === 'starting' ? <Spinner /> : <Icon name="warning" size={16} className="text-hx-warning" />}
         <span className="min-w-0 flex-1 truncate">{engine.status === 'starting' ? 'Reconnecting to the engine…' : `The engine stopped. ${engine.status === 'crashed' ? `Trying again in ${Math.round(engine.retryInMs / 1000)}s.` : ''}`} Your conversations are safe.</span>
         <Button size="sm" onClick={() => setShowLogs((v) => !v)}>{showLogs ? 'Hide log' : 'Log'}</Button>
         <Button size="sm" variant="primary" onClick={restart}>Restart</Button>
-        {showLogs && <pre className="fixed bottom-8 right-4 z-50 max-h-72 w-[min(640px,90vw)] overflow-auto rounded-xl border border-hx-border bg-hx-elevated p-3 font-mono text-[11px] shadow-[var(--hx-shadow)]">{logs.join('\n')}</pre>}
+        {showLogs && <pre className="fixed bottom-8 right-4 z-50 max-h-72 w-[min(640px,90vw)] overflow-auto rounded-xl border border-hx-border bg-hx-elevated p-3 font-mono text-tiny shadow-[var(--hx-shadow)]">{logs.join('\n')}</pre>}
       </div>
     );
   }
@@ -48,10 +48,10 @@ export function EngineGate(): React.ReactElement | null {
       <div className="w-full max-w-xl">
         <div className="flex items-center gap-3">
           {engine.status === 'starting' ? <Spinner size={22} className="text-hx-accent-text" /> : <Icon name="alert" size={22} className="text-hx-danger" />}
-          <h1 className="text-[18px] font-semibold text-hx-primary">{engine.status === 'starting' ? 'Getting things ready' : 'The engine could not start'}</h1>
+          <h1 className="text-title font-semibold text-hx-primary">{engine.status === 'starting' ? 'Getting things ready' : 'The engine could not start'}</h1>
         </div>
-        <p className="mt-2 whitespace-pre-wrap text-[13px] text-hx-secondary">{message}</p>
-        <pre data-engine-log className="hx-scroll mt-4 max-h-64 overflow-auto rounded-xl border border-hx-border-subtle bg-hx-code p-3 font-mono text-[11.5px] leading-5 text-hx-secondary">{logs.length ? logs.join('\n') : 'No output yet.'}</pre>
+        <p className="mt-2 whitespace-pre-wrap text-body text-hx-secondary">{message}</p>
+        <pre data-engine-log className="hx-scroll mt-4 max-h-64 overflow-auto rounded-xl border border-hx-border-subtle bg-hx-code p-3 font-mono text-caption leading-5 text-hx-secondary">{logs.length ? logs.join('\n') : 'No output yet.'}</pre>
         <div className="mt-4 flex gap-2">
           <Button variant="primary" icon="refresh" onClick={restart}>Restart the engine</Button>
           <Button onClick={() => useApp.getState().openSettings('core.settings:servers')}>Use a server instead</Button>
@@ -75,9 +75,9 @@ export function Onboarding(): React.ReactElement | null {
     <Modal open onClose={finish} size="lg" bare label="Welcome">
       <div data-onboarding className="flex max-h-[calc(100vh-48px)] flex-col">
         <div className="border-b border-hx-border-subtle px-6 py-4">
-          <div className="text-[12px] font-medium text-hx-muted">Welcome to {useApp.getState().info?.product.name ?? 'Harness'} · Step {i + 1} of {steps.length}</div>
-          <div className="mt-1 text-[17px] font-semibold">{step.title}</div>
-          {step.description && <div className="mt-0.5 text-[13px] text-hx-muted">{step.description}</div>}
+          <div className="text-small font-medium text-hx-muted">Welcome to {useApp.getState().info?.product.name ?? 'Harness'} · Step {i + 1} of {steps.length}</div>
+          <div className="mt-1 text-title font-semibold">{step.title}</div>
+          {step.description && <div className="mt-0.5 text-body text-hx-muted">{step.description}</div>}
           <div className="mt-3 flex gap-1.5">{steps.map((s, k) => <span key={s.qid} className={cx('h-1 flex-1 rounded-full', k <= i ? 'bg-hx-accent' : 'bg-hx-pill')} />)}</div>
         </div>
         <div className="hx-scroll min-h-[320px] flex-1 overflow-auto">{view ? <ViewHost view={view} params={{ onboarding: '1' }} /> : <EmptyState title="This step is not available" />}</div>
@@ -119,21 +119,21 @@ export function SettingsModal(): React.ReactElement | null {
               lastGroup = g;
               return (
                 <React.Fragment key={s.qid}>
-                  {head && <div className="px-2.5 pb-1 pt-3 text-[11px] font-medium uppercase tracking-wide text-hx-muted">{head}</div>}
+                  {head && <div className="px-2.5 pb-1 pt-3 text-tiny font-semibold uppercase tracking-wide text-hx-muted">{head}</div>}
                   <button type="button" data-settings-section={s.qid} onClick={() => useApp.setState({ settingsSection: s.qid })}
-                    className={cx('flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px]', current?.qid === s.qid ? 'bg-hx-active font-medium text-hx-primary' : 'text-hx-secondary hover:bg-hx-hover')}>
+                    className={cx('flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-body', current?.qid === s.qid ? 'bg-hx-active font-medium text-hx-primary' : 'text-hx-secondary hover:bg-hx-hover')}>
                     <Icon name={s.icon ?? 'settings'} size={15} /><span className="truncate">{s.title}</span>
                   </button>
                 </React.Fragment>
               );
             })}
-            {!filtered.length && <div className="px-2.5 py-2 text-[12px] text-hx-muted">No section matches.</div>}
+            {!filtered.length && <div className="px-2.5 py-2 text-small text-hx-muted">No section matches.</div>}
           </nav>
         </div>
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex items-center border-b border-hx-border-subtle px-6 py-3.5">
-            <h2 className="flex-1 text-[16px] font-semibold" data-settings-title>{current?.title}</h2>
-            <button type="button" aria-label="Close settings" onClick={close} className="rounded-md p-1.5 text-hx-muted hover:bg-hx-hover hover:text-hx-primary"><Icon name="x" size={16} /></button>
+            <h2 className="flex-1 text-title font-semibold" data-settings-title>{current?.title}</h2>
+            <IconButton icon="x" label="Close settings" onClick={close} />
           </div>
           <div className="hx-scroll min-h-0 flex-1 overflow-y-auto px-6 py-4">{current ? <SectionBody s={current} /> : null}</div>
         </div>
@@ -175,7 +175,7 @@ function SchemaSection({ s }: { s: SettingsSection }) {
   if (!saved) return <Spinner />;
   return (
     <div data-schema-section={s.qid}>
-      <p className="mb-2 text-[12px] text-hx-muted">From the plugin {s.plugin} · {s.scope === 'app' ? 'kept on this computer' : s.scope === 'account' ? 'kept with your account on the server' : 'set by the operator'}</p>
+      <p className="mb-2 text-small text-hx-muted">From the plugin {s.plugin} · {s.scope === 'app' ? 'kept on this computer' : s.scope === 'account' ? 'kept with your account on the server' : 'set by the operator'}</p>
       <SchemaForm schema={s.schema as JsonSchema} value={value} onChange={setValue} disabled={locked} lockedReason={locked ? 'Set by your administrator' : undefined} pickPath={() => desktop.openFolder()} idPrefix={s.qid.replace(/[^a-z0-9]/gi, '-')} />
       {!locked && <div className="mt-4 flex justify-end gap-2"><Button disabled={JSON.stringify(value) === JSON.stringify(saved)} onClick={() => setValue(saved)}>Reset</Button><Button variant="primary" disabled={JSON.stringify(value) === JSON.stringify(saved)} onClick={() => void save()}>Save</Button></div>}
     </div>
@@ -218,12 +218,12 @@ export function ShortcutsSheet(): React.ReactElement | null {
         <div className="mt-3 grid gap-x-6 gap-y-4 sm:grid-cols-2">
           {groups.map((g) => (
             <section key={g}>
-              <h3 className="mb-1 text-[11.5px] font-medium uppercase tracking-wide text-hx-muted">{g}</h3>
-              {rows.filter((r) => r.group === g).map((r) => <div key={r.id} data-shortcut={r.id} className="flex items-center gap-2 py-1 text-[13px]"><span className="min-w-0 flex-1 truncate">{r.title}</span><Kbd keys={formatChord(r.keys, platform)} /></div>)}
+              <h3 className="mb-1 text-tiny font-semibold uppercase tracking-wide text-hx-muted">{g}</h3>
+              {rows.filter((r) => r.group === g).map((r) => <div key={r.id} data-shortcut={r.id} className="flex items-center gap-2 py-1 text-body"><span className="min-w-0 flex-1 truncate">{r.title}</span><Kbd keys={formatChord(r.keys, platform)} /></div>)}
             </section>
           ))}
         </div>
-        {!rows.length && <p className="text-[12.5px] text-hx-muted">No shortcut matches.</p>}
+        {!rows.length && <p className="text-small text-hx-muted">No shortcut matches.</p>}
       </div>
     </Modal>
   );
@@ -243,7 +243,7 @@ export function FullWindow(): React.ReactElement | null {
     <div data-full-window role="dialog" aria-modal="true" aria-label={fw.title} className="fixed inset-0 z-[85] flex flex-col bg-hx-bg">
       <div className="app-drag flex h-10 shrink-0 items-center gap-2 border-b border-hx-border-subtle px-3" style={{ paddingRight: 'max(12px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 12px))' }}>
         <Icon name="expand" size={14} className="text-hx-muted" />
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{fw.title}</span>
+        <span className="min-w-0 flex-1 truncate text-body font-medium">{fw.title}</span>
         <Button className="app-no-drag" size="sm" icon="collapse" data-close-full onClick={() => useApp.setState({ fullWindow: null })}>Close</Button>
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-3">{fw.body}</div>

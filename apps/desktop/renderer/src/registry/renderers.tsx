@@ -17,7 +17,7 @@ import { PluginFrame } from './Frame';
  */
 export function OffPluginNote({ off }: { off: OffRenderer }): React.ReactElement {
   return (
-    <div data-plugin-off={off.plugin} className="mt-1 flex items-center gap-2 rounded-md bg-hx-pill px-2 py-1 text-[11.5px] text-hx-muted">
+    <div data-plugin-off={off.plugin} className="mt-1 flex items-center gap-2 rounded-md bg-hx-pill px-2 py-1 text-caption text-hx-muted">
       <Icon name="puzzle" size={12} className="shrink-0" />
       <span className="min-w-0 flex-1">Made with {off.title}, which is off. Switch it on to view it fully</span>
       <button type="button" data-open-plugins className="shrink-0 font-medium text-hx-secondary underline-offset-2 hover:text-hx-primary hover:underline" onClick={() => navigate({ view: 'core.plugins:plugins' })}>Plugins</button>

@@ -115,7 +115,7 @@ export function Grid({ visuals, render, edit, width, columns = 12, rowHeight = L
           <div key={v.id} className={cx('absolute', drag?.id === v.id && 'z-20 opacity-90')} style={{ left: l.x * colW, top: l.y * (rowHeight + LGAP), width: l.w * colW - LGAP, height: l.h * (rowHeight + LGAP) - LGAP }} data-bi-cell={v.id}
             onPointerDown={edit ? (e) => { if ((e.target as HTMLElement).closest('[data-drag-handle]')) start(e, v, 'move'); } : undefined}>
             {render(v)}
-            {edit && !v.locked && <div data-resize-handle aria-label="Resize" className="absolute bottom-0 right-0 z-10 h-3 w-3 cursor-se-resize rounded-br border-b-2 border-r-2 border-hx-accent/60" onPointerDown={(e) => start(e, v, 'resize')} />}
+            {edit && !v.locked && <div data-resize-handle aria-label="Resize" className="absolute bottom-0 right-0 z-10 h-3 w-3 cursor-se-resize rounded-br border-b-2 border-r-2 border-hx-accent-border" onPointerDown={(e) => start(e, v, 'resize')} />}
           </div>
         );
       })}
@@ -168,7 +168,7 @@ function Canvas(p: LayoutProps & { l: LayoutSpec }) {
               onPointerDown={edit ? (e) => { if ((e.target as HTMLElement).closest('[data-drag-handle]')) start(e, v, 'move'); } : undefined}>
               {p.render(v)}
               {edit && v.locked && <span className="absolute right-1 top-1 text-hx-muted" title="Locked"><Icon name="lock" size={12} /></span>}
-              {edit && !v.locked && <div data-resize-handle aria-label="Resize" className="absolute bottom-0 right-0 z-10 h-3 w-3 cursor-se-resize rounded-br border-b-2 border-r-2 border-hx-accent/60" onPointerDown={(e) => start(e, v, 'resize')} />}
+              {edit && !v.locked && <div data-resize-handle aria-label="Resize" className="absolute bottom-0 right-0 z-10 h-3 w-3 cursor-se-resize rounded-br border-b-2 border-r-2 border-hx-accent-border" onPointerDown={(e) => start(e, v, 'resize')} />}
             </div>
           );
         })}
@@ -191,8 +191,8 @@ function Sections(p: LayoutProps & { l: LayoutSpec }) {
         const closed = p.collapsed[s.id] ?? !!s.collapsed;
         return (
           <section key={s.id} data-bi-section={s.id} aria-label={s.title}>
-            <button type="button" aria-expanded={!closed} className="mb-1 flex w-full items-center gap-1.5 border-b border-hx-border-subtle pb-1 text-left text-[14px] font-semibold" onClick={() => p.onCollapse(s.id)}>
-              <Icon name={closed ? 'chevron-right' : 'chevron-down'} size={14} />{s.title}<span className="text-[11.5px] font-normal text-hx-muted">{vs.length}</span>
+            <button type="button" aria-expanded={!closed} className="mb-1 flex w-full items-center gap-1.5 border-b border-hx-border-subtle pb-1 text-left text-body-lg font-semibold" onClick={() => p.onCollapse(s.id)}>
+              <Icon name={closed ? 'chevron-right' : 'chevron-down'} size={14} />{s.title}<span className="text-caption font-normal text-hx-muted">{vs.length}</span>
             </button>
             {!closed && (p.width < 640 && !p.edit ? <Phone visuals={vs} render={p.render} /> : <Grid visuals={vs} render={p.render} edit={p.edit} width={p.width} columns={p.l.columns} rowHeight={p.l.rowHeight} />)}
           </section>
@@ -210,7 +210,7 @@ function Tabbed(p: LayoutProps & { l: LayoutSpec }) {
   return (
     <div data-bi-grid="tabs">
       <div role="tablist" aria-label="Panels" className="mb-2 flex gap-1 border-b border-hx-border-subtle">
-        {tabs.map((t) => <button key={t.id} type="button" role="tab" aria-selected={t.id === cur.id} data-bi-panel-tab={t.id} onClick={() => p.onTab?.(t.id)} className={cx('-mb-px border-b-2 px-3 py-1.5 text-[13px]', t.id === cur.id ? 'border-hx-accent font-medium text-hx-primary' : 'border-transparent text-hx-secondary hover:text-hx-primary')}>{t.title}</button>)}
+        {tabs.map((t) => <button key={t.id} type="button" role="tab" aria-selected={t.id === cur.id} data-bi-panel-tab={t.id} onClick={() => p.onTab?.(t.id)} className={cx('-mb-px border-b-2 px-3 py-1.5 text-body', t.id === cur.id ? 'border-hx-accent font-medium text-hx-primary' : 'border-transparent text-hx-secondary hover:text-hx-primary')}>{t.title}</button>)}
       </div>
       {p.width < 640 && !p.edit ? <Phone visuals={vs} render={p.render} /> : <Grid visuals={vs} render={p.render} edit={p.edit} width={p.width} columns={p.l.columns} rowHeight={p.l.rowHeight} />}
     </div>
@@ -343,11 +343,11 @@ function Print(p: LayoutProps & { l: LayoutSpec }) {
       {pages.map((rows, i) => (
         <div key={i} data-bi-paper-wrap style={{ height: p.print ? undefined : size.h * fit }}>
           <div data-bi-paper={i + 1} className="relative overflow-hidden bg-white text-[#1f1e1c] shadow-[var(--hx-shadow)]" style={{ width: size.w, height: size.h, padding: m, transform: p.print ? undefined : `scale(${fit})`, transformOrigin: 'top left' }}>
-            <div className="flex items-center justify-between border-b border-[#ddd] pb-1 text-[11px] text-[#555]" style={{ height: headH }} data-bi-paper-header>{fill(p.doc.header ?? '{title}', i)}<span>{p.page.name}</span></div>
+            <div className="flex items-center justify-between border-b border-[#ddd] pb-1 text-tiny text-[#555]" style={{ height: headH }} data-bi-paper-header>{fill(p.doc.header ?? '{title}', i)}<span>{p.page.name}</span></div>
             <div className="flex flex-col" style={{ height: contentH }}>
               {rows.map((r, j) => <div key={j} className="flex gap-2" style={{ marginBottom: LGAP }}>{r.map((v) => <div key={v.id} style={{ width: (Math.min(12, v.layout.w) / 12) * contentW - LGAP, height: v.layout.h * LROW }} data-bi-cell={v.id}>{p.render(v)}</div>)}</div>)}
             </div>
-            <div className="absolute inset-x-0 bottom-0 flex items-center justify-between border-t border-[#ddd] text-[10.5px] text-[#555]" style={{ height: footH, marginLeft: m, marginRight: m, marginBottom: m / 2 }} data-bi-paper-footer><span>{fill(p.doc.footer ?? '{date}', i)}</span><span>{before + i + 1} / {total}</span></div>
+            <div className="absolute inset-x-0 bottom-0 flex items-center justify-between border-t border-[#ddd] text-micro text-[#555]" style={{ height: footH, marginLeft: m, marginRight: m, marginBottom: m / 2 }} data-bi-paper-footer><span>{fill(p.doc.footer ?? '{date}', i)}</span><span>{before + i + 1} / {total}</span></div>
           </div>
         </div>
       ))}

@@ -97,12 +97,12 @@ function Viewer() {
   };
   const base = (f: string) => f.replace(/:.*$/, '');
   const carried = linked?.filters?.filter((f) => fields.includes(f.field) || fields.some((x) => base(x) === base(f.field) && !f.field.includes(':')));
-  if (error) return <div className="flex h-full items-center justify-center p-8 text-center text-[15px] text-hx-secondary" data-bi-error>{error}</div>;
+  if (error) return <div className="flex h-full items-center justify-center p-8 text-center text-body-lg text-hx-secondary" data-bi-error>{error}</div>;
   if (!doc) return <div className="flex h-full items-center justify-center text-hx-muted">Loading…</div>;
   return (
     <div className="flex h-full flex-col">
-      {!print && !doc.pages.filter((p) => !p.kind).every((p) => p.layout?.type === 'tv') && <header className="flex items-center gap-2 border-b border-hx-border-subtle px-3 py-2"><h1 className="min-w-0 flex-1 truncate text-[16px] font-semibold" data-bi-title>{doc.title}</h1>{stat && <span className="text-[11.5px] text-hx-muted">Static export · interactions need the live page</span>}</header>}
-      {linked && <div className="flex items-center gap-2 border-b border-hx-border-subtle px-3 py-1 text-[12px]"><button type="button" className="text-hx-accent-text hover:underline" onClick={() => history.back()} data-bi-linked-back>Back</button><span className="text-hx-muted">Opened from a linked dashboard{carried?.length ? ` with ${carried.length} filter${carried.length === 1 ? '' : 's'}` : ''}</span></div>}
+      {!print && !doc.pages.filter((p) => !p.kind).every((p) => p.layout?.type === 'tv') && <header className="flex items-center gap-2 border-b border-hx-border-subtle px-3 py-2"><h1 className="min-w-0 flex-1 truncate text-title font-semibold" data-bi-title>{doc.title}</h1>{stat && <span className="text-caption text-hx-muted">Static export · interactions need the live page</span>}</header>}
+      {linked && <div className="flex items-center gap-2 border-b border-hx-border-subtle px-3 py-1 text-small"><button type="button" className="text-hx-accent-text hover:underline" onClick={() => history.back()} data-bi-linked-back>Back</button><span className="text-hx-muted">Opened from a linked dashboard{carried?.length ? ` with ${carried.length} filter${carried.length === 1 ? '' : 's'}` : ''}</span></div>}
       <div className="min-h-0 flex-1"><DocView key={linked?.id ?? 'main'} doc={doc} client={client} hierarchies={hier} dark={dark} mode={stat ? 'static' : 'published'} print={print} renderMarkdown={renderMarkdown} renderFence={renderFence} page={linked?.page} initialFilters={carried} onOpenDoc={openDoc} /></div>
     </div>
   );

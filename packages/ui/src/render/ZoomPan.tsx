@@ -41,7 +41,7 @@ export function ZoomPan({ children, actions, className = '' }: { children: React
       <div className="absolute right-1 top-1 flex items-center gap-0.5 rounded-lg border border-hx-border-subtle bg-hx-bg/90 p-0.5 backdrop-blur">
         {actions}
         <IconButton size="xs" icon="zoom-out" label="Zoom out" onClick={() => zoomTo(scale / STEP)} />
-        <span className="min-w-[2.4rem] text-center text-[10px] tabular-nums text-hx-muted">{Math.round(scale * 100)}%</span>
+        <span className="min-w-[2.4rem] text-center text-micro tabular-nums text-hx-muted">{Math.round(scale * 100)}%</span>
         <IconButton size="xs" icon="zoom-in" label="Zoom in" onClick={() => zoomTo(scale * STEP)} />
         <IconButton size="xs" icon="fit" label="Reset zoom" onClick={() => { setScale(1); setOffset({ x: 0, y: 0 }); }} />
       </div>

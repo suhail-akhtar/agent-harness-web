@@ -44,8 +44,8 @@ function SchemaField({ path, name, schema: s, root, set, errors, show, disabled,
   if (w === 'object') {
     return (
       <fieldset className="py-2.5">
-        <legend className="text-[13px] font-semibold text-hx-primary">{label}</legend>
-        {s.description && <div className="mt-0.5 text-[12px] text-hx-muted">{s.description}</div>}
+        <legend className="text-body font-semibold text-hx-primary">{label}</legend>
+        {s.description && <div className="mt-0.5 text-small text-hx-muted">{s.description}</div>}
         <div className="mt-1 border-l border-hx-border-subtle pl-3">
           {fieldsOf(s).map(([k, sub]) => <SchemaField key={k} path={`${path}.${k}`} name={k} schema={sub} root={root} set={set} errors={errors} show={show} disabled={disabled} lockedReason={lockedReason} pickPath={pickPath} required={s.required?.includes(k)} idPrefix={idPrefix} />)}
         </div>
@@ -62,7 +62,7 @@ function SchemaField({ path, name, schema: s, root, set, errors, show, disabled,
         <div role="radiogroup" aria-label={label} className="inline-flex rounded-lg bg-hx-pill p-0.5">
           {optionLabels(s).map((o) => (
             <button key={o.value} type="button" role="radio" aria-checked={String(v ?? s.default) === o.value} disabled={disabled} onClick={() => set(path, coerce(s, o.value))}
-              className={cx('h-7 rounded-md px-2.5 text-[12.5px]', String(v ?? s.default) === o.value ? 'bg-hx-elevated font-medium text-hx-primary shadow-sm' : 'text-hx-muted hover:text-hx-primary')}>{o.label}</button>
+              className={cx('h-7 rounded-md px-2.5 text-small', String(v ?? s.default) === o.value ? 'bg-hx-elevated font-medium text-hx-primary shadow-sm' : 'text-hx-muted hover:text-hx-primary')}>{o.label}</button>
           ))}
         </div>
       );
@@ -114,10 +114,10 @@ export function SecretInput({ value, onChange, ...rest }: { value: string; onCha
 function Suggestions({ values, chosen, onPick, disabled }: { values: string[]; chosen: (v: string) => boolean; onPick: (v: string) => void; disabled?: boolean }): React.ReactElement {
   return (
     <div className="flex flex-wrap items-center gap-1.5" data-suggestions>
-      <span className="text-[11.5px] text-hx-muted">Suggestions:</span>
+      <span className="text-caption text-hx-muted">Suggestions:</span>
       {values.map((x) => (
         <button key={x} type="button" disabled={disabled || chosen(x)} data-suggestion={x} onClick={() => onPick(x)}
-          className={cx('rounded-full border px-2 py-0.5 text-[12px]', chosen(x) ? 'border-hx-accent/40 bg-hx-accent-soft text-hx-accent-text' : 'border-hx-border-subtle text-hx-secondary hover:border-hx-accent/40 hover:text-hx-primary')}>{x}</button>
+          className={cx('rounded-full border px-2 py-0.5 text-small', chosen(x) ? 'border-hx-accent-border bg-hx-accent-soft text-hx-accent-text' : 'border-hx-border-subtle text-hx-secondary hover:border-hx-accent-border hover:text-hx-primary')}>{x}</button>
       ))}
     </div>
   );
@@ -132,14 +132,14 @@ function ListInput({ id, schema, value, onChange, disabled }: { id: string; sche
     return (
       <div className="flex flex-col gap-1" role="group" aria-label={schema.title} data-choices>
         {optionLabels(item).map((o) => (
-          <label key={o.value} className={cx('flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-[13px]', has(o.value) ? 'bg-hx-accent-soft/60 text-hx-primary' : 'hover:bg-hx-hover')} data-choice={o.value}>
+          <label key={o.value} className={cx('flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-body', has(o.value) ? 'bg-hx-accent-soft text-hx-primary' : 'hover:bg-hx-hover')} data-choice={o.value}>
             <input type="checkbox" className="h-3.5 w-3.5 accent-[var(--hx-accent)]" disabled={disabled} checked={has(o.value)}
               onChange={(e) => onChange(e.target.checked ? [...value, coerce(item, o.value)] : value.filter((x) => String(x) !== o.value))} />
             {o.label}
           </label>
         ))}
         {item.enum.length > 3 && (
-          <div className="flex gap-3 px-2 pt-0.5 text-[12px]">
+          <div className="flex gap-3 px-2 pt-0.5 text-small">
             <button type="button" disabled={disabled} className="text-hx-accent-text hover:underline" onClick={() => onChange(item.enum!.map((x) => x))}>Select all</button>
             <button type="button" disabled={disabled} className="text-hx-muted hover:underline" onClick={() => onChange([])}>Clear</button>
           </div>
@@ -154,7 +154,7 @@ function ListInput({ id, schema, value, onChange, disabled }: { id: string; sche
       {value.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {value.map((x, i) => (
-            <span key={i} className="inline-flex items-center gap-1 rounded-md bg-hx-pill py-0.5 pl-2 pr-1 text-[12px]">
+            <span key={i} className="inline-flex items-center gap-1 rounded-md bg-hx-pill py-0.5 pl-2 pr-1 text-small">
               {String(x)}
               <button type="button" disabled={disabled} aria-label={`Remove ${String(x)}`} className="text-hx-muted hover:text-hx-danger" onClick={() => onChange(value.filter((_, j) => j !== i))}>×</button>
             </span>

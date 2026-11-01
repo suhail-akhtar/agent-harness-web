@@ -40,7 +40,7 @@ export const CodeBlock = React.memo(function CodeBlock({ code, language = '', fi
   const shown = collapsed ? body.split('\n').slice(0, Math.max(12, collapseAt - 12)).join('\n') : body;
   return (
     <figure data-block="code" data-lang={language || 'text'} className={`group/code my-3 overflow-hidden rounded-xl border border-hx-border-subtle bg-hx-code ${className ?? ''}`}>
-      <figcaption className="flex items-center gap-1 border-b border-hx-border-subtle px-3 py-1 text-[11.5px] text-hx-muted">
+      <figcaption className="flex items-center gap-1 border-b border-hx-border-subtle px-3 py-1 text-caption text-hx-muted">
         <span className="font-medium">{filename ?? languageLabel(language)}</span>
         <span className="ml-1 opacity-70">{lines > 1 ? `${lines} lines` : ''}</span>
         <div className="flex-1" />
@@ -57,12 +57,12 @@ export const CodeBlock = React.memo(function CodeBlock({ code, language = '', fi
             {shown}
           </SyntaxHighlighter>
         ) : (
-          <pre className="m-0"><code className="font-mono text-[12.5px] leading-5 text-hx-primary" style={{ whiteSpace: wrap ? 'pre-wrap' : 'pre' }}>{shown}</code></pre>
+          <pre className="m-0"><code className="font-mono text-small leading-5 text-hx-primary" style={{ whiteSpace: wrap ? 'pre-wrap' : 'pre' }}>{shown}</code></pre>
         )}
         {collapsed && <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-[var(--hx-code-bg)] to-transparent" />}
       </div>
       {lines > collapseAt && !streaming && (
-        <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full items-center justify-center gap-1 border-t border-hx-border-subtle py-1 text-[11.5px] text-hx-muted hover:bg-hx-hover hover:text-hx-primary">
+        <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full items-center justify-center gap-1 border-t border-hx-border-subtle py-1 text-caption text-hx-muted hover:bg-hx-hover hover:text-hx-primary">
           <Icon name={open ? 'chevron-up' : 'chevron-down'} size={13} />{open ? 'Show less' : `Show all ${lines} lines`}
         </button>
       )}

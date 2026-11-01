@@ -37,7 +37,7 @@ export function Chart({ source, streaming }: { source: string; streaming?: boole
     if (host.current) ro.observe(host.current);
     return () => { disposed = true; ro.disconnect(); inst?.dispose(); };
   }, [source, streaming]);
-  if (streaming) return <p className="p-2 text-[11.5px] text-hx-muted">Chart arriving…</p>;
+  if (streaming) return <p className="p-2 text-caption text-hx-muted">Chart arriving…</p>;
   if (error) throw new Error(error);
   return <div ref={host} data-chart="echarts" className="h-[320px] w-full" />;
 }
@@ -77,7 +77,7 @@ export function Viz({ source, streaming }: { source: string; streaming?: boolean
     }).catch((e: unknown) => { if (!disposed) setError(e instanceof Error ? e.message : String(e)); });
     return () => { disposed = true; view?.finalize(); };
   }, [source, streaming]);
-  if (streaming) return <p className="p-2 text-[11.5px] text-hx-muted">Figure arriving…</p>;
+  if (streaming) return <p className="p-2 text-caption text-hx-muted">Figure arriving…</p>;
   if (error) throw new Error(error);
   return <div ref={host} data-chart="vega" className="w-full overflow-x-auto" />;
 }

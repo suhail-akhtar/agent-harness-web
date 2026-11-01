@@ -46,17 +46,17 @@ export function Working({ s, depth = 0 }: { s: SessionMeta; depth?: number }) {
       <div className="mb-2 rounded-xl border border-hx-border-subtle bg-hx-elevated p-3">
         <div className="flex items-center gap-2">
           <Dot status={s.status ?? 'idle'} />
-          <button type="button" onClick={() => openSession(s.id)} className="min-w-0 flex-1 truncate text-left text-[13.5px] font-medium hover:underline">{s.title || 'Conversation'}</button>
+          <button type="button" onClick={() => openSession(s.id)} className="min-w-0 flex-1 truncate text-left text-body font-medium hover:underline">{s.title || 'Conversation'}</button>
           {s.parent && <Badge>linked</Badge>}
           <Badge tone={s.status === 'waiting' ? 'warning' : 'accent'}>{s.status === 'waiting' ? 'Needs you' : 'Working'}</Badge>
-          <span className="text-[11.5px] text-hx-muted">{s.model} · {money(s.cost)}</span>
+          <span className="text-caption text-hx-muted">{s.model} · {money(s.cost)}</span>
           <Button size="sm" variant="ghost" icon="split" onClick={() => openSplit({ view: 'core.chat:session', params: { id: s.id } })}>Beside</Button>
           <Button size="sm" variant="ghost" icon="stop" data-stop={s.id} onClick={() => stop(s.id)}>Stop</Button>
         </div>
         {(agents.length > 0 || tasks.length > 0) && (
           <div className="ml-4 mt-2 space-y-1">
             {agents.map((a) => <AgentRow key={a.name} a={a} />)}
-            {tasks.map((t) => <div key={t.id} className="flex items-center gap-2 text-[12.5px] text-hx-secondary"><Icon name={t.kind === 'shell' ? 'terminal' : t.kind === 'workflow' ? 'workflow' : 'eye'} size={13} /><span className="min-w-0 flex-1 truncate">{t.description}</span><span className="text-[11px] text-hx-muted">{t.kind}</span></div>)}
+            {tasks.map((t) => <div key={t.id} className="flex items-center gap-2 text-small text-hx-secondary"><Icon name={t.kind === 'shell' ? 'terminal' : t.kind === 'workflow' ? 'workflow' : 'eye'} size={13} /><span className="min-w-0 flex-1 truncate">{t.description}</span><span className="text-tiny text-hx-muted">{t.kind}</span></div>)}
           </div>
         )}
       </div>
@@ -71,9 +71,9 @@ export function SessionProposals({ s }: { s: SessionMeta }) {
   return (
     <>
       {list.map((p) => (
-        <div key={p.id} data-page-proposal={p.id} className="flex items-start gap-3 rounded-xl border border-hx-accent/40 bg-hx-accent-soft/30 p-3">
+        <div key={p.id} data-page-proposal={p.id} className="flex items-start gap-3 rounded-xl border border-hx-accent-border bg-hx-accent-soft p-3">
           <Icon name="split" size={16} className="mt-0.5 text-hx-accent-text" />
-          <div className="min-w-0 flex-1"><div className="text-[13.5px] font-medium">{p.title}</div><div className="line-clamp-2 text-[12px] text-hx-muted">{p.brief}</div><button type="button" onClick={() => openSession(s.id)} className="text-[11.5px] text-hx-accent-text hover:underline">from {s.title}</button></div>
+          <div className="min-w-0 flex-1"><div className="text-body font-medium">{p.title}</div><div className="line-clamp-2 text-small text-hx-muted">{p.brief}</div><button type="button" onClick={() => openSession(s.id)} className="text-caption text-hx-accent-text hover:underline">from {s.title}</button></div>
           <Button size="sm" variant="primary" onClick={() => void startProposal(s.id, p.id)}>Start</Button>
           <Button size="sm" variant="ghost" onClick={() => void dismissProposal(s.id, p.id)}>Dismiss</Button>
         </div>
@@ -92,20 +92,20 @@ export function AgentsPage(): React.ReactElement {
   const recent = useMemo(() => [...sessions].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 30), [sessions]);
   useEffect(() => { for (const s of recent) void refreshProposals(s.id); }, [recent.map((s) => s.id).join(',')]);
   return (
-    <Page data-agents-page width="wide" title="Agents" actions={active.length > 0 ? <Button variant="ghost" icon="stop" onClick={() => { for (const s of active) stop(s.id); }}>Stop all</Button> : undefined}>
+    <Page data-agents-page title="Agents" actions={active.length > 0 ? <Button variant="ghost" icon="stop" onClick={() => { for (const s of active) stop(s.id); }}>Stop all</Button> : undefined}>
         <Section title="Working now" className="mb-0">
         {!roots.length ? <PageState kind="empty" icon="bot" title="No agent is working" detail="Conversations at work, their sub-agents, background tasks and linked sessions show here." /> : roots.map((s) => <Working key={s.id} s={s} />)}
         </Section>
         <div className="mt-6 space-y-2" data-proposals-waiting>{recent.map((s) => <SessionProposals key={s.id} s={s} />)}</div>
         {items.length > 0 && (
           <>
-            <h2 className="mb-2 mt-6 text-[12px] font-medium uppercase tracking-wide text-hx-muted">Linked sessions, lately</h2>
+            <h2 className="mb-2 mt-6 text-tiny font-semibold uppercase tracking-wide text-hx-muted">Linked sessions, lately</h2>
             <div className="divide-y divide-hx-border-subtle rounded-xl border border-hx-border-subtle" data-linked-news>
               {items.slice(0, 20).map((n, i) => (
                 <button key={i} type="button" onClick={() => openSession(n.id || n.sessionId)} className="flex w-full items-center gap-2.5 px-3 py-2 text-left hover:bg-hx-hover">
                   <Icon name={n.type === 'report' ? 'check-circle' : n.type === 'message' ? 'mail' : 'split'} size={14} className="text-hx-muted" />
-                  <span className="min-w-0 flex-1"><span className="block truncate text-[13px]">{n.title}</span>{n.preview && <span className="block truncate text-[11.5px] text-hx-muted">{n.preview}</span>}</span>
-                  <span className="text-[11px] text-hx-muted">{n.type}{n.reason ? ` (${n.reason})` : ''}</span>
+                  <span className="min-w-0 flex-1"><span className="block truncate text-body">{n.title}</span>{n.preview && <span className="block truncate text-caption text-hx-muted">{n.preview}</span>}</span>
+                  <span className="text-tiny text-hx-muted">{n.type}{n.reason ? ` (${n.reason})` : ''}</span>
                 </button>
               ))}
             </div>

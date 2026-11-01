@@ -17,9 +17,9 @@ export function ReviewReport({ review }: { review: PluginReview }): React.ReactE
   for (const f of review.findings) counts[f.level]++;
   const adds = Object.entries(review.adds).filter(([, v]) => (Array.isArray(v) ? v.length : v)).map(([k, v]) => `${Array.isArray(v) ? v.length : v} ${k}`);
   return (
-    <div data-plugin-review={review.plugin} data-review-ok={review.ok ? '1' : '0'} className="space-y-3 text-[13px]">
+    <div data-plugin-review={review.plugin} data-review-ok={review.ok ? '1' : '0'} className="space-y-3 text-body">
       <div className="flex items-center gap-3 rounded-lg border border-hx-border-subtle p-3">
-        <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-[15px] font-semibold ${review.ok ? 'bg-hx-success/12 text-hx-success' : 'bg-hx-danger/12 text-hx-danger'}`} data-review-score>{review.score}</div>
+        <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-body-lg font-semibold ${review.ok ? 'bg-hx-success-soft text-hx-success' : 'bg-hx-danger-soft text-hx-danger'}`} data-review-score>{review.score}</div>
         <div className="min-w-0 flex-1">
           <div className="font-medium">{review.plugin} {review.version} · {review.ok ? 'Ready to use' : 'Not ready'}</div>
           <div className="text-hx-muted">{adds.length ? `Adds ${adds.join(', ')}` : 'Adds nothing'}{review.tests ? ` · tests ${review.tests.passed ? 'pass' : 'fail'} (${review.tests.files} file${review.tests.files === 1 ? '' : 's'})` : ''}</div>
@@ -32,18 +32,18 @@ export function ReviewReport({ review }: { review: PluginReview }): React.ReactE
             <li key={i} className="rounded-lg border border-hx-border-subtle px-3 py-2" data-finding-level={f.level}>
               <div className="flex items-start gap-2">
                 <Badge tone={TONE[f.level]}>{f.level}</Badge>
-                <span className="shrink-0 text-[12px] text-hx-muted">{f.area}</span>
+                <span className="shrink-0 text-small text-hx-muted">{f.area}</span>
                 <span className="min-w-0 flex-1">{f.message}</span>
               </div>
-              {f.fix && <div className="mt-1 pl-1 text-[12.5px] text-hx-secondary">→ {f.fix}</div>}
+              {f.fix && <div className="mt-1 pl-1 text-small text-hx-secondary">→ {f.fix}</div>}
             </li>
           ))}
         </ul>
       )}
       {review.tests && !review.tests.passed && (
         <div>
-          <button type="button" className="text-[12.5px] text-hx-accent-text" onClick={() => setShowTests((v) => !v)}>{showTests ? 'Hide' : 'Show'} the test output</button>
-          {showTests && <pre className="mt-1 max-h-56 overflow-auto rounded-lg bg-hx-code-bg p-2 font-mono text-[11.5px]">{review.tests.output}</pre>}
+          <button type="button" className="text-small text-hx-accent-text" onClick={() => setShowTests((v) => !v)}>{showTests ? 'Hide' : 'Show'} the test output</button>
+          {showTests && <pre className="mt-1 max-h-56 overflow-auto rounded-lg bg-hx-code-bg p-2 font-mono text-caption">{review.tests.output}</pre>}
         </div>
       )}
     </div>

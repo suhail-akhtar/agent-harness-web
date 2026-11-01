@@ -46,7 +46,7 @@ const LZ = {
 // The biology blocks (biology/kinds.ts) load with their first use too, as one chunk.
 const bioLazy = new Map<string, React.ComponentType<Record<string, unknown>>>();
 const bioComponent = (name: string) => bioLazy.get(name) ?? bioLazy.set(name, React.lazy(() => import('./biology/Biology.tsx').then((m) => ({ default: (m as unknown as Record<string, React.ComponentType<Record<string, unknown>>>)[name]! })))).get(name)!;
-const loadingBlock = <p className="p-3 text-[12px] text-hx-muted">Loading…</p>;
+const loadingBlock = <p className="p-3 text-small text-hx-muted">Loading…</p>;
 const nestedMarkdown = (text: string) => <Markdown text={text} />;
 
 /** Replaces the default for a fence language (a plugin renderer). Return undefined to keep the default. */
@@ -78,7 +78,7 @@ function textOf(children: React.ReactNode): string {
 export function FencedBlock({ lang, source, streaming = false, renderFence, onFix }: { lang: string; source: string; streaming?: boolean; renderFence?: FenceRenderer; onFix?: MarkdownProps['onFix'] }): React.ReactElement {
   const custom = renderFence?.(lang, source, streaming);
   if (custom !== undefined && custom !== null) {
-    return <RenderBoundary fallback={(e, retry) => <div className="my-2 rounded-lg border border-hx-danger/40 p-2 text-[12px] text-hx-danger" data-render-error>A plugin renderer for {lang} failed: {e} <button type="button" className="underline" onClick={retry}>Try again</button><CodeBlock code={source} language={lang} /></div>}>{custom}</RenderBoundary>;
+    return <RenderBoundary fallback={(e, retry) => <div className="my-2 rounded-lg border border-hx-danger-border p-2 text-small text-hx-danger" data-render-error>A plugin renderer for {lang} failed: {e} <button type="button" className="underline" onClick={retry}>Try again</button><CodeBlock code={source} language={lang} /></div>}>{custom}</RenderBoundary>;
   }
   const kind = fenceKind(lang, source);
   const bio = bioBlock(kind, lang);

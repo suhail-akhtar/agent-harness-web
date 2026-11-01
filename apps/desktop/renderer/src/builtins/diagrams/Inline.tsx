@@ -70,13 +70,13 @@ function StoredDiagram({ sessionId, id, version, inline, title, compare }: { ses
     })();
     return () => { alive = false; };
   }, [sessionId, id, version, inline, compare]);
-  if (error && !doc) return <div className="text-[12px] text-hx-muted">The diagram {id} v{version} could not be read: {error}</div>;
+  if (error && !doc) return <div className="text-small text-hx-muted">The diagram {id} v{version} could not be read: {error}</div>;
   if (!doc) return null;
   return (
     <div className="my-1.5 overflow-hidden rounded-xl border border-hx-border bg-hx-bg" data-diagram-artifact={id} data-version={version}>
       <div className="flex items-center gap-2 border-b border-hx-border-subtle px-2.5 py-1.5">
         <span className="flex h-6 w-6 items-center justify-center rounded-md bg-hx-accent-soft text-hx-accent-text"><Icon name="layers" size={14} /></span>
-        <span className="min-w-0 flex-1"><span className="block truncate text-[12.5px] font-medium text-hx-primary">{doc.title}</span><span className="block text-[11px] text-hx-muted">Diagram · v{version}{compare ? ' · updated' : ''}</span></span>
+        <span className="min-w-0 flex-1"><span className="block truncate text-small font-medium text-hx-primary">{doc.title}</span><span className="block text-tiny text-hx-muted">Diagram · v{version}{compare ? ' · updated' : ''}</span></span>
       </div>
       <DiagramBlock source={doc.content} title={doc.title} bare changed={changed} stableKey={`${sessionId}/${id}`} onOpen={() => openStored(sessionId, id, compare && version > 1 ? version - 1 : undefined)} />
     </div>

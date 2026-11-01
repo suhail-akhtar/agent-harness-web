@@ -34,8 +34,8 @@ function Header({ title, caption, children }: { title: string; caption: string; 
     <div className="flex h-11 shrink-0 items-center gap-2 border-b border-hx-border-subtle px-3" data-diagram-page-header>
       <Button size="sm" variant="ghost" icon="arrow-left" disabled={!back.length} onClick={() => useApp.getState().goBack()}>Back</Button>
       <span className="flex h-6 w-6 items-center justify-center rounded-md bg-hx-accent-soft text-hx-accent-text"><Icon name="layers" size={14} /></span>
-      <span className="min-w-0"><span className="block truncate text-[13.5px] font-semibold text-hx-primary" data-diagram-page-title>{title}</span></span>
-      <span className="truncate text-[12px] text-hx-muted">{caption}</span>
+      <span className="min-w-0"><span className="block truncate text-body font-semibold text-hx-primary" data-diagram-page-title>{title}</span></span>
+      <span className="truncate text-small text-hx-muted">{caption}</span>
       <span className="ml-auto flex items-center gap-1.5">{children}</span>
     </div>
   );
@@ -86,7 +86,7 @@ function ArtifactPage({ sessionId, id, compareTo }: { sessionId: string; id: str
   const [asked, setAsked] = useState(false);
   useEffect(() => { if (!live.waiting) setAsked(false); }, [live.waiting]);
   if (live.error && !live.doc) return <div className="flex h-full flex-col"><Header title="Diagram" caption={id} /><EmptyState icon="alert" title="This diagram could not be opened">{live.error}</EmptyState></div>;
-  if (!live.doc || !parsed) return <div className="flex h-full items-center justify-center text-[12.5px] text-hx-muted"><Spinner size={14} className="mr-2" />Opening the diagram…</div>;
+  if (!live.doc || !parsed) return <div className="flex h-full items-center justify-center text-small text-hx-muted"><Spinner size={14} className="mr-2" />Opening the diagram…</div>;
   const title = live.doc.meta.title;
   return (
     <div className="flex h-full flex-col" data-diagram-page="artifact" data-artifact={id} data-version={live.doc.version}>
@@ -183,7 +183,7 @@ function CodeMapPage({ sessionId }: { sessionId: string }) {
       </Header>
       <div className="min-h-0 flex-1">
         {error ? <EmptyState icon="alert" title="The code map could not be made">{error}</EmptyState>
-          : !spec ? <div className="flex h-full items-center justify-center text-[12.5px] text-hx-muted"><Spinner size={14} className="mr-2" />Reading the imports…</div>
+          : !spec ? <div className="flex h-full items-center justify-center text-small text-hx-muted"><Spinner size={14} className="mr-2" />Reading the imports…</div>
             : !spec.nodes.length ? <EmptyState icon="code" title="No TypeScript, JavaScript or Python files here">The code map draws imports between folders of TS/JS and Python sources.</EmptyState>
               : <DiagramCanvas spec={spec} title={title} stableKey={`code:${sessionId}`} details="external" detailsOpen={detailsOpen} onDetails={onDetails} onOpenLink={(l) => void openLink(l)} apiRef={api} />}
       </div>

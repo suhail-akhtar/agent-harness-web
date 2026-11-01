@@ -50,7 +50,7 @@ export function Widget({ title, kind, source, extension = 'txt', children, actio
   return (
     <div data-widget={kind} data-state={failure ? 'error' : 'ok'} className={`my-3 overflow-hidden rounded-xl border border-hx-border bg-hx-bg ${expanded ? 'fixed inset-4 z-50 my-0 shadow-2xl' : ''}`}>
       <div className="flex items-center gap-0.5 border-b border-hx-border-subtle px-2 py-1">
-        <span className="mr-auto truncate text-[11.5px] font-medium text-hx-secondary">
+        <span className="mr-auto truncate text-caption font-medium text-hx-secondary">
           {title ?? kind}
           {failure && <span className="ml-1.5 text-hx-danger">· did not render</span>}
         </span>
@@ -65,12 +65,12 @@ export function Widget({ title, kind, source, extension = 'txt', children, actio
         <div className={expanded ? 'flex h-[calc(100%-2.25rem)] min-h-0 flex-col overflow-auto p-2' : 'p-2'}>
           {failure ? (
             <div className="space-y-2" data-render-error>
-              <p className="text-[12.5px] text-hx-danger">This {kind} did not render: {failure}</p>
+              <p className="text-small text-hx-danger">This {kind} did not render: {failure}</p>
               <div className="flex items-center gap-1.5">
-                {onFix && <button type="button" onClick={() => onFix({ kind, source, error: failure })} className="rounded-md bg-hx-accent px-2 py-1 text-[11.5px] font-medium text-hx-on-accent">Ask to fix</button>}
-                <button type="button" onClick={() => { setFailure(undefined); setAttempt((n) => n + 1); }} className="rounded-md px-1.5 py-0.5 text-[11.5px] text-hx-muted hover:bg-hx-hover hover:text-hx-primary">Try again</button>
+                {onFix && <button type="button" onClick={() => onFix({ kind, source, error: failure })} className="rounded-md bg-hx-accent px-2 py-1 text-caption font-medium text-hx-on-accent">Ask to fix</button>}
+                <button type="button" onClick={() => { setFailure(undefined); setAttempt((n) => n + 1); }} className="rounded-md px-1.5 py-0.5 text-caption text-hx-muted hover:bg-hx-hover hover:text-hx-primary">Try again</button>
               </div>
-              <pre className="max-h-48 overflow-auto rounded-md bg-hx-code p-2 font-mono text-[11.5px] leading-4 text-hx-muted">{source}</pre>
+              <pre className="max-h-48 overflow-auto rounded-md bg-hx-code p-2 font-mono text-caption leading-4 text-hx-muted">{source}</pre>
             </div>
           ) : (
             <ExpandedContext.Provider value={expanded}>

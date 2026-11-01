@@ -50,13 +50,13 @@ export function TreeView({ source, streaming, format }: { source: string; stream
       <div className="flex flex-wrap items-center gap-1.5">
         <Stat label="leaves" value={t.leaves} />
         <Stat label="branch lengths" value={t.hasLengths ? 'yes' : 'no (cladogram)'} />
-        {collapsed.size > 0 && <button type="button" className="text-[11.5px] text-hx-muted underline" onClick={() => setCollapsed(new Set())}>expand all</button>}
+        {collapsed.size > 0 && <button type="button" className="text-caption text-hx-muted underline" onClick={() => setCollapsed(new Set())}>expand all</button>}
         <span className="flex-1" />
         {t.hasSupport && <Toggle on={support} onChange={setSupport}>Support values</Toggle>}
         <Seg label="Layout" value={mode} onChange={setMode} options={[['rectangular', 'Rectangular'], ['circular', 'Circular']]} />
       </div>
       {tall ? <div className="max-h-[520px] overflow-y-auto pt-8">{svg}</div> : <ZoomPan className="pt-8">{svg}</ZoomPan>}
-      <p className="text-[11px] text-hx-muted">Click a node to collapse or expand its clade.</p>
+      <p className="text-tiny text-hx-muted">Click a node to collapse or expand its clade.</p>
     </div>
   );
 }

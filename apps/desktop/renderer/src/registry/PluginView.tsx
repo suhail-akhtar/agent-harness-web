@@ -42,10 +42,10 @@ export function Failed({ what, error, retry, plugin }: { what: string; error: st
   const name = entry?.ui?.displayName ?? plugin;
   const canDisable = !!entry && !entry.required && !useApp.getState().info?.product.plugins.required.includes(entry.name);
   return (
-    <div className="m-6 rounded-xl border border-hx-danger/30 bg-hx-danger/8 p-4 text-[13px]" data-render-error data-failed-plugin={plugin}>
+    <div className="m-6 rounded-xl border border-hx-danger-border bg-hx-danger-soft p-4 text-body" data-render-error data-failed-plugin={plugin}>
       <div className="flex items-center gap-2"><Icon name="alert" size={16} className="text-hx-danger" /><b>{what} failed.</b></div>
       <p className="mt-1 break-words text-hx-secondary">{error}</p>
-      {plugin && <p className="mt-1 text-[12px] text-hx-muted">It comes from the plugin {name}.</p>}
+      {plugin && <p className="mt-1 text-small text-hx-muted">It comes from the plugin {name}.</p>}
       <div className="mt-3 flex flex-wrap gap-2">
         <Button size="sm" icon="refresh" onClick={retry}>Try again</Button>
         {canDisable && <Button size="sm" variant="ghost" icon="x-circle" data-disable-plugin={plugin} onClick={() => void disablePlugin(plugin!).then(() => { toast(`${name} is switched off`, { kind: 'info' }); if (useApp.getState().route.view.startsWith(`${plugin}:`)) navigate(HOME, { replace: true }); }).catch((e: Error) => toast(e.message, { kind: 'error' }))}>Disable {name}</Button>}
@@ -129,8 +129,8 @@ export function HomeCardHost({ card }: { card: HomeCard }): React.ReactElement |
   })();
   if (!body) return null;
   return (
-    <section data-home-card={card.qid} className="rounded-2xl border border-hx-border-subtle bg-hx-elevated p-4">
-      <div className="mb-2 text-[12px] font-medium uppercase tracking-wide text-hx-muted">{card.title}</div>
+    <section data-home-card={card.qid} className="hx-compact-md rounded-xl border border-hx-border-subtle bg-hx-elevated p-4 text-body">
+      <div className="mb-2 text-tiny font-semibold uppercase tracking-wide text-hx-muted">{card.title}</div>
       <RenderBoundary fallback={(e, retry) => <Failed what={card.title} error={e} retry={retry} plugin={card.plugin} />}>{body}</RenderBoundary>
     </section>
   );

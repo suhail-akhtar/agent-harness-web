@@ -101,6 +101,27 @@
     off and says so; only the person turns it on again. The feedback log says which detector.
   - `GET/PUT /api/noticing`, `POST /api/noticing/clear`, `POST /api/noticing/check`, `POST /api/inbox/:id` with
     `accept`, a `noticing` event topic.
+- **A design system for the desktop app** (docs/desktop/DESIGN-SYSTEM.md): one kit, one set of tokens, every page.
+  - Type: nine roles (`text-micro` to `text-display`), each a share of the Text size setting, which now scales all
+    text (it changed almost nothing: 842 fixed pixel sizes in 18 values). Markdown follows it too.
+  - Colour: a fill and a border token for each status tone (`bg-hx-danger-soft`, `border-hx-warning-border`), in
+    place of opacities made up page by page; seven tints that drew nothing (`accent-soft/50`) now draw. One map from
+    a status to a tone (`statusTone`): working is accent, waiting is warning, failed is danger.
+  - The kit's blocks: `Card` (padding, interactive, selected, tone, muted), `StatCard`/`StatGrid`, `Callout` (inline
+    or a banner with actions; `InfoNote` is one), `ChoiceGroup` (chips or segmented, arrow keys), `OptionCards`,
+    `CheckboxGroup`, `Meta`, `StatusDot`, `IconTile`, `PageHeader` (with an icon for a module's home), `Section`
+    (description, count, actions, dense), `EmptyState` variants (page, section, inline). All in the gallery.
+  - Pages: one content width for every page of lists, cards and settings (moving between them no longer moves the
+    edge); page buttons in the header; the pages' own copies of a section heading (9), a stat tile (2), a choice row
+    and hand-made error notes replaced by the kit's. Inbox, Scheduled, Your agents and the agent builder, the
+    schedule dialog, Noticing, Agents and Dashboards homes, module homes, Plugins and Settings use it.
+  - Disabled primary buttons are grey (they read as a broken pink); the confirm dialog uses the kit's buttons; at most
+    three toasts, a repeat replaces the one on screen, and a schedule's time is shown on the person's clock, not as
+    an ISO string.
+  - `test/ui-standards.test.ts` fails a pixel text size, an opacity on a tone, or a page's own section, stat tile or
+    choice row.
+- Fixed: the command palette showed at most 60 entries with nothing typed, so the last plugins' pages and commands
+  were dropped without a word.
 - **Custom agents** (docs/agents-mcp/PLAN.md, phase 1): a person's own agents, made in the app (Agents > Your agents),
   drafted from a description (Generate: instructions with a role, procedure, checks, limits and report, the fewest
   tools, autonomy; what the server does not have is left out and said; nothing is saved until the person saves),

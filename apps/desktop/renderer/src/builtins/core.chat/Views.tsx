@@ -87,10 +87,10 @@ export function Home(): React.ReactElement {
         <div className="mx-auto flex w-full max-w-column flex-col items-center px-4 pt-[14vh] sm:px-6">
           <div className="mb-6 flex items-center gap-3">
             <ProductMark size={36} />
-            <h1 className="text-[26px] font-semibold tracking-tight text-hx-primary" data-greeting>{info?.product.brand.tagline ?? 'Where should we begin?'}</h1>
+            <h1 className="text-display font-semibold tracking-tight text-hx-primary" data-greeting>{info?.product.brand.tagline ?? 'Where should we begin?'}</h1>
           </div>
           {noModel && (
-            <button type="button" onClick={() => useApp.setState({ onboardingOpen: true })} className="mb-4 flex w-full items-center gap-3 rounded-xl border border-hx-warning/35 bg-hx-warning/8 px-4 py-3 text-left text-[13px]">
+            <button type="button" onClick={() => useApp.setState({ onboardingOpen: true })} className="mb-4 flex w-full items-center gap-3 rounded-xl border border-hx-warning-border bg-hx-warning-soft px-4 py-3 text-left text-body">
               <Icon name="key" size={16} className="text-hx-warning" /><span className="flex-1">No model has a key yet. Set one up to start.</span><span className="font-medium text-hx-accent-text">Set up</span>
             </button>
           )}
@@ -99,7 +99,7 @@ export function Home(): React.ReactElement {
         <div className="mx-auto w-full max-w-column px-4 sm:px-6">
           {homePrompts.length > 0 && (
             <div className="mt-2 flex flex-wrap justify-center gap-2" data-home-prompts>
-              {homePrompts.map((p) => <button key={p.qid} type="button" onClick={() => useApp.setState({ prefill: { text: p.prompt, nonce: Date.now() } })} className="inline-flex items-center gap-1.5 rounded-full border border-hx-border-subtle bg-hx-elevated px-3 py-1.5 text-[12.5px] text-hx-secondary hover:border-hx-border hover:text-hx-primary"><Icon name={p.icon ?? 'sparkles'} size={13} />{p.title}</button>)}
+              {homePrompts.map((p) => <button key={p.qid} type="button" onClick={() => useApp.setState({ prefill: { text: p.prompt, nonce: Date.now() } })} className="inline-flex items-center gap-1.5 rounded-full border border-hx-border-subtle bg-hx-elevated px-3 py-1.5 text-small text-hx-secondary hover:border-hx-border hover:text-hx-primary"><Icon name={p.icon ?? 'sparkles'} size={13} />{p.title}</button>)}
             </div>
           )}
           <div className="mt-8 grid gap-3 pb-10 md:grid-cols-2">
@@ -123,7 +123,7 @@ function WorkIn({ value, onChange, projects, scratch }: { value: string; onChang
   ];
   return (
     <>
-      <button ref={ref} type="button" data-work-in onClick={() => setOpen(!open)} title={value || scratch} className="inline-flex h-7 max-w-[200px] items-center gap-1 rounded-lg px-2 text-[12.5px] text-hx-secondary hover:bg-hx-hover hover:text-hx-primary">
+      <button ref={ref} type="button" data-work-in onClick={() => setOpen(!open)} title={value || scratch} className="inline-flex h-7 max-w-[200px] items-center gap-1 rounded-lg px-2 text-small text-hx-secondary hover:bg-hx-hover hover:text-hx-primary">
         <Icon name={current ? 'folder' : 'box'} size={14} /><span className="truncate">Work in: {current?.name ?? 'Scratch'}</span><Icon name="chevron-down" size={12} />
       </button>
       <Popover open={open} onClose={() => setOpen(false)} anchor={ref} placement="top-start" className="w-[320px]" role="presentation"><MenuList items={items} onDone={() => setOpen(false)} /></Popover>
@@ -198,7 +198,7 @@ export function Session({ params }: { params: Record<string, string> }): React.R
     <div className="flex h-full flex-col" data-session={id} data-status={s.status}>
       <TopBar title={s.meta?.title}>
         {s.meta && (
-          <div className="mr-1 hidden items-center gap-3 text-[11.5px] text-hx-muted md:flex" data-session-meter>
+          <div className="mr-1 hidden items-center gap-3 text-caption text-hx-muted md:flex" data-session-meter>
             <ContextMeter sessionId={id} tokens={s.live.contextTokens} window={Math.min(s.live.contextWindow || Infinity, compactAt ?? Infinity) || s.live.contextWindow} />
             <UsageButton meta={s.meta} />
             <ExportButton id={id} />
@@ -206,9 +206,9 @@ export function Session({ params }: { params: Record<string, string> }): React.R
         )}
         <Tooltip label="Run a workflow"><IconButton icon="workflow" size="sm" label="Run a workflow" onClick={() => useApp.setState({ workflowDialog: { sessionId: id } })} /></Tooltip>
       </TopBar>
-      {s.stream === 'retrying' && <div className="bg-hx-warning/12 px-4 py-1 text-center text-[12px] text-hx-warning">Reconnecting to the conversation…</div>}
+      {s.stream === 'retrying' && <div className="bg-hx-warning-soft px-4 py-1 text-center text-small text-hx-warning">Reconnecting to the conversation…</div>}
       <Transcript sessionId={id} items={s.live.items} running={running} onRetry={(t) => void send(t, [], 'send')} onEdit={editFrom} onBranch={branchFrom} sources={sources} />
-      {s.live.retry && <div className="mx-auto w-full max-w-column px-6 pb-1 text-[12px] text-hx-warning">{s.live.retry}</div>}
+      {s.live.retry && <div className="mx-auto w-full max-w-column px-6 pb-1 text-small text-hx-warning">{s.live.retry}</div>}
       {s.pending.length > 0 && (
         <div data-attention className="hx-scroll mx-auto max-h-[65vh] w-full max-w-column shrink-0 space-y-2 overflow-y-auto px-4 pb-2 sm:px-6">
           {s.pending.map((p) => <PendingCard key={p.requestId} p={p} respond={respond} />)}
@@ -249,9 +249,9 @@ function UsageButton({ meta }: { meta: import('@harness/client').SessionMeta }) 
       <Tooltip label="What this conversation has cost, per model"><button ref={ref} type="button" data-cost onClick={() => setOpen(!open)} className="rounded px-1 hover:bg-hx-hover hover:text-hx-primary">{fmtCost(meta.cost)}{models > 1 ? ` · ${models} models` : ''}</button></Tooltip>
       <Popover open={open} onClose={() => setOpen(false)} anchor={ref} placement="bottom-end" className="w-[360px]" role="dialog" label="Usage">
         <div className="p-3" data-usage-panel>
-          <div className="mb-2 text-[12px] font-medium uppercase tracking-wide text-hx-muted">Usage</div>
+          <div className="mb-2 text-tiny font-semibold uppercase tracking-wide text-hx-muted">Usage</div>
           <CostByModel meta={meta} />
-          {meta.delegationCost ? <p className="mt-2 text-[11.5px] text-hx-muted">Agents on other models: {fmtCost(meta.delegationCost)} (Settings › Models & providers › Delegation).</p> : null}
+          {meta.delegationCost ? <p className="mt-2 text-caption text-hx-muted">Agents on other models: {fmtCost(meta.delegationCost)} (Settings › Models & providers › Delegation).</p> : null}
         </div>
       </Popover>
     </>
@@ -285,7 +285,7 @@ export function Search(): React.ReactElement {
 export function RecentCard(): React.ReactElement {
   const sessions = useData((s) => s.sessions);
   const recent = useMemo(() => sessions.slice(0, 5), [sessions]);
-  if (!recent.length) return <p className="text-[12.5px] text-hx-muted">Your conversations will show here.</p>;
+  if (!recent.length) return <p className="text-small text-hx-muted">Your conversations will show here.</p>;
   return (
     <div className="space-y-0.5">
       {recent.map((s) => <ListRow key={s.id} icon="chat" onClick={() => openSession(s.id)} className="px-1.5 py-1" title={s.title || 'New conversation'} meta={new Date(s.updatedAt).toLocaleDateString()} />)}

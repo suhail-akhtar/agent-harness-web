@@ -27,20 +27,20 @@ export function ProposalCard({ item, sessionId }: { item: ProposalItem; sessionI
   const go = async (what: 'start' | 'dismiss') => { setBusy(what); try { if (what === 'start') await startProposal(sessionId, item.id); else await dismissProposal(sessionId, item.id); } finally { setBusy(null); } };
   const long = item.brief.length > 320;
   return (
-    <div data-proposal={item.id} data-proposal-status={status} className={cx('my-1 rounded-xl border p-3', isOpen ? 'border-hx-accent/40 bg-hx-accent-soft/40' : 'border-hx-border-subtle bg-hx-elevated')}>
+    <div data-proposal={item.id} data-proposal-status={status} className={cx('my-1 rounded-xl border p-3', isOpen ? 'border-hx-accent-border bg-hx-accent-soft' : 'border-hx-border-subtle bg-hx-elevated')}>
       <div className="flex items-center gap-2">
         <Icon name="split" size={15} className="text-hx-accent-text" />
-        <span className="text-[11.5px] font-medium uppercase tracking-wide text-hx-accent-text">{item.initiation === 'own_initiative' ? 'The agent suggests a session' : 'Offered: a separate session'}</span>
+        <span className="text-tiny font-semibold uppercase tracking-wide text-hx-accent-text">{item.initiation === 'own_initiative' ? 'The agent suggests a session' : 'Offered: a separate session'}</span>
         <span className="flex-1" />
         {status === 'started' && <Badge tone="success">Started</Badge>}
         {status === 'dismissed' && <Badge>Dismissed</Badge>}
         {status === 'expired' && <Badge>Expired</Badge>}
         {status === 'resolved' && <Badge>Closed</Badge>}
       </div>
-      <div className="mt-1 text-[14px] font-medium text-hx-primary" data-proposal-title>{item.title}</div>
-      {item.brief && <div className={cx('mt-1 text-[13px] text-hx-secondary', !more && long && 'line-clamp-4')}><Markdown text={item.brief} /></div>}
-      {long && <button type="button" className="mt-0.5 text-[12px] text-hx-accent-text hover:underline" onClick={() => setMore(!more)}>{more ? 'Less' : 'More'}</button>}
-      <div className="mt-2 flex flex-wrap items-center gap-2 text-[11.5px] text-hx-muted">
+      <div className="mt-1 text-body-lg font-medium text-hx-primary" data-proposal-title>{item.title}</div>
+      {item.brief && <div className={cx('mt-1 text-body text-hx-secondary', !more && long && 'line-clamp-4')}><Markdown text={item.brief} /></div>}
+      {long && <button type="button" className="mt-0.5 text-small text-hx-accent-text hover:underline" onClick={() => setMore(!more)}>{more ? 'Less' : 'More'}</button>}
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-caption text-hx-muted">
         <span>{item.context === 'fork' ? 'Takes this conversation so far' : 'Starts fresh from the brief'}</span>
         {item.model && <><span>·</span><span>on {item.model}{item.effort ? ` (${item.effort})` : ''}</span></>}
       </div>
@@ -65,13 +65,13 @@ export function LinkCard({ item }: { item: LinkItem; sessionId: string }): React
     <div data-link={item.id} data-link-phase={item.phase} className="my-1 rounded-xl border border-hx-border-subtle bg-hx-elevated p-3">
       <div className="flex items-center gap-2">
         <Icon name={item.phase === 'message' ? 'mail' : item.phase === 'report' ? 'check-circle' : 'split'} size={15} className={item.phase === 'report' ? (item.reason && item.reason !== 'done' ? 'text-hx-warning' : 'text-hx-success') : 'text-hx-accent-text'} />
-        <span className="text-[11.5px] font-medium uppercase tracking-wide text-hx-muted">{label}</span>
+        <span className="text-tiny font-semibold uppercase tracking-wide text-hx-muted">{label}</span>
         <span className="flex-1" />
         {status && <Badge tone={status === 'waiting' ? 'warning' : 'accent'}>{status === 'waiting' ? 'Needs you' : 'Working'}</Badge>}
       </div>
-      <div className="mt-1 text-[13.5px] font-medium text-hx-primary">{s?.title || item.title}</div>
-      {item.preview && <div className={cx('mt-1 whitespace-pre-wrap break-words rounded-lg bg-hx-bg px-2.5 py-1.5 text-[12.5px] text-hx-secondary', !more && 'line-clamp-5')} data-link-preview>{item.preview}</div>}
-      {item.preview && item.preview.length > 300 && <button type="button" className="mt-0.5 text-[12px] text-hx-accent-text hover:underline" onClick={() => setMore(!more)}>{more ? 'Less' : 'More'}</button>}
+      <div className="mt-1 text-body font-medium text-hx-primary">{s?.title || item.title}</div>
+      {item.preview && <div className={cx('mt-1 whitespace-pre-wrap break-words rounded-lg bg-hx-bg px-2.5 py-1.5 text-small text-hx-secondary', !more && 'line-clamp-5')} data-link-preview>{item.preview}</div>}
+      {item.preview && item.preview.length > 300 && <button type="button" className="mt-0.5 text-small text-hx-accent-text hover:underline" onClick={() => setMore(!more)}>{more ? 'Less' : 'More'}</button>}
       <div className="mt-2 flex gap-2">
         <Button size="sm" icon="arrow-right" data-link-open onClick={() => openSession(item.id)}>Open</Button>
         <Button size="sm" variant="ghost" icon="split" data-link-split onClick={() => openSplit({ view: 'core.chat:session', params: { id: item.id } })}>Open beside</Button>
@@ -83,10 +83,10 @@ export function LinkCard({ item }: { item: LinkItem; sessionId: string }): React
 export function ChapterDivider({ item }: { item: ChapterItem; sessionId: string }): React.ReactElement {
   return (
     <div data-chapter={item.index} className="mb-1 mt-4 flex items-center gap-3" id={`chapter-${item.index}`}>
-      <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-hx-accent-soft px-1.5 text-[11px] font-semibold text-hx-accent-text">{item.index}</span>
+      <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-hx-accent-soft px-1.5 text-tiny font-semibold text-hx-accent-text">{item.index}</span>
       <div className="min-w-0">
-        <div className="text-[14px] font-semibold text-hx-primary">{item.title}</div>
-        {item.summary && <div className="text-[12px] text-hx-muted">{item.summary}</div>}
+        <div className="text-body-lg font-semibold text-hx-primary">{item.title}</div>
+        {item.summary && <div className="text-small text-hx-muted">{item.summary}</div>}
       </div>
       <span className="h-px flex-1 bg-hx-border-subtle" />
     </div>

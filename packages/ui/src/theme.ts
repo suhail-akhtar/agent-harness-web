@@ -74,6 +74,8 @@ export const TOKEN_NAMES = [
   '--hx-bg', '--hx-surface', '--hx-elevated', '--hx-hover', '--hx-active', '--hx-text-primary', '--hx-text-secondary', '--hx-text-muted',
   '--hx-border', '--hx-border-subtle', '--hx-accent', '--hx-accent-hover', '--hx-accent-soft', '--hx-accent-text', '--hx-on-accent',
   '--hx-success', '--hx-warning', '--hx-danger', '--hx-info', '--hx-code-bg', '--hx-focus',
+  '--hx-success-soft', '--hx-success-border', '--hx-warning-soft', '--hx-warning-border', '--hx-danger-soft', '--hx-danger-border', '--hx-info-soft', '--hx-info-border', '--hx-accent-border',
+  '--hx-shadow-pop',
   '--hx-diff-add-bg', '--hx-diff-add-gutter', '--hx-diff-remove-bg', '--hx-diff-remove-gutter', '--hx-diff-context',
   '--hx-sidebar', '--hx-pill', '--hx-shadow', '--hx-scrim',
 ] as const;
@@ -100,6 +102,11 @@ export function buildTheme(colors: ThemeColors, opts: ThemeOptions = {}): Record
   const warning: RGB = dark ? [240, 176, 64] : [168, 108, 20];
   const danger: RGB = dark ? [242, 102, 96] : [196, 48, 48];
   const info: RGB = dark ? [96, 178, 220] : [40, 118, 160];
+  // Status colours as they are drawn, and their tints: one fill and one border each, the same everywhere
+  // (a badge, a callout, a selected card), never an opacity a page makes up.
+  const tone = { success: ensure(success, bg, 3), warning: ensure(warning, bg, 3), danger: ensure(danger, bg, 3), info: ensure(info, bg, 3) };
+  const soft = (c: RGB) => rgba(c, dark ? 0.16 : 0.1);
+  const edge = (c: RGB) => rgba(c, dark ? 0.42 : 0.32);
 
   return {
     '--hx-bg': toHex(bg),
@@ -117,10 +124,15 @@ export function buildTheme(colors: ThemeColors, opts: ThemeOptions = {}): Record
     '--hx-accent-soft': rgba(accent0, dark ? 0.18 : 0.12),
     '--hx-accent-text': toHex(accentText),
     '--hx-on-accent': onAccent,
-    '--hx-success': toHex(ensure(success, bg, 3)),
-    '--hx-warning': toHex(ensure(warning, bg, 3)),
-    '--hx-danger': toHex(ensure(danger, bg, 3)),
-    '--hx-info': toHex(ensure(info, bg, 3)),
+    '--hx-success': toHex(tone.success),
+    '--hx-warning': toHex(tone.warning),
+    '--hx-danger': toHex(tone.danger),
+    '--hx-info': toHex(tone.info),
+    '--hx-success-soft': soft(tone.success), '--hx-success-border': edge(tone.success),
+    '--hx-warning-soft': soft(tone.warning), '--hx-warning-border': edge(tone.warning),
+    '--hx-danger-soft': soft(tone.danger), '--hx-danger-border': edge(tone.danger),
+    '--hx-info-soft': soft(tone.info), '--hx-info-border': edge(tone.info),
+    '--hx-accent-border': rgba(accent0, dark ? 0.5 : 0.4),
     '--hx-code-bg': toHex(mix(bg, fg, dark ? 0.055 : 0.04)),
     '--hx-focus': rgba(accent0, 0.55),
     '--hx-diff-add-bg': dark ? 'rgba(63, 185, 80, 0.16)' : 'rgba(46, 160, 67, 0.12)',
@@ -131,6 +143,7 @@ export function buildTheme(colors: ThemeColors, opts: ThemeOptions = {}): Record
     '--hx-sidebar': toHex(mix(bg, fg, dark ? 0.03 : 0.025)),
     '--hx-pill': toHex(mix(bg, fg, dark ? 0.09 : 0.06)),
     '--hx-shadow': dark ? '0 10px 32px rgba(0,0,0,0.5)' : '0 10px 32px rgba(0,0,0,0.12)',
+    '--hx-shadow-pop': dark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 4px 16px rgba(0,0,0,0.08)',
     '--hx-scrim': dark ? 'rgba(0,0,0,0.55)' : 'rgba(20,18,16,0.32)',
   };
 }

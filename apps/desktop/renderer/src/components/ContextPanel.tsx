@@ -56,7 +56,7 @@ export function ContextPanel({ sessionId, tokens }: { sessionId: string; tokens:
     client.sessions.context(sessionId).then((x) => { if (alive) { setB(x); setError(''); } }).catch((e: Error) => alive && setError(e.message));
     return () => { alive = false; };
   }, [sessionId, tokens]);
-  if (error && !b) return <div className="p-4 text-[12.5px] text-hx-danger" data-context-panel>{error}</div>;
+  if (error && !b) return <div className="p-4 text-small text-hx-danger" data-context-panel>{error}</div>;
   if (!b) return <div className="flex justify-center p-6" data-context-panel><Spinner size={16} /></div>;
   // The room the conversation gets: up to the compaction point (it is summarised there), never the whole window.
   const room = Math.max(1, Math.min(b.compactAt || b.window, b.window));
@@ -69,15 +69,15 @@ export function ContextPanel({ sessionId, tokens }: { sessionId: string; tokens:
   ];
   return (
     <div className="p-4" data-context-panel>
-      <div className="mb-1 text-[13px] font-semibold text-hx-primary">Context</div>
-      <div className="mb-2 flex items-baseline justify-between text-[13px]">
+      <div className="mb-1 text-body font-semibold text-hx-primary">Context</div>
+      <div className="mb-2 flex items-baseline justify-between text-body">
         <span className="text-hx-primary" data-context-used>{used < 10 ? used.toFixed(1) : Math.round(used)}% used</span>
         <span className="text-hx-muted" data-context-room>{fmt(b.used)} / {fmt(room)}</span>
       </div>
       <div className="mb-3 flex h-2 w-full overflow-hidden rounded-full bg-hx-pill" role="img" aria-label={`${fmt(b.used)} of ${fmt(room)} tokens used`}>
         {rows.filter((r) => r.id !== 'free').map((r) => <span key={r.id} className="h-full" style={{ width: `${Math.min(100, (r.tokens / room) * 100)}%`, background: r.colour }} />)}
       </div>
-      <ul className="space-y-1.5 text-[12.5px]">
+      <ul className="space-y-1.5 text-small">
         {rows.map((r) => (
           <li key={r.id} className="flex items-center gap-2.5" data-context-part={r.id} title={r.hint}>
             <span className="h-2.5 w-2.5 shrink-0 rounded-[3px]" style={{ background: r.colour, boxShadow: r.id === 'free' ? 'inset 0 0 0 1px var(--hx-border)' : undefined }} />
@@ -95,7 +95,7 @@ export function ContextPanel({ sessionId, tokens }: { sessionId: string; tokens:
           </li>
         )}
       </ul>
-      <p className="mt-3 border-t border-hx-border-subtle pt-2 text-[11.5px] leading-relaxed text-hx-muted">
+      <p className="mt-3 border-t border-hx-border-subtle pt-2 text-caption leading-relaxed text-hx-muted">
         {b.measured ? 'Total from the model provider’s count of the last request; the parts are estimates, the messages the rest.' : 'Estimated: nothing has been sent yet.'}
         {b.compactions ? ` Compacted ${b.compactions}×.` : ''} {fmt(free)} until it is compacted, at {fmt(room)}{room < b.window ? ` (the model's window is ${fmt(b.window)})` : ''}.
       </p>

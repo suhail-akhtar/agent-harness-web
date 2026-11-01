@@ -57,7 +57,7 @@ export function QuestionCard({ p, respond }: { p: Question; respond: Respond }):
   const footer = (
     <div className="flex flex-wrap items-center gap-2" data-question-actions>
       <Button size="sm" variant="ghost" icon="x" disabled={busy} data-skip-question onClick={skip} title="The agent decides on its own and says what it assumed">Skip question</Button>
-      <span className={cx('min-w-0 flex-1 truncate text-[11.5px] text-hx-muted', note && schema && !reviewing ? 'invisible' : 'hidden sm:block')}>
+      <span className={cx('min-w-0 flex-1 truncate text-caption text-hx-muted', note && schema && !reviewing ? 'invisible' : 'hidden sm:block')}>
         {schema ? (reviewing ? 'Check your answers, then send them.' : 'Pick a suggestion, fill in the form, or write your own answer.') : 'Pick an answer, or write your own.'}
       </span>
       <span className="flex-1 sm:hidden" />
@@ -78,18 +78,18 @@ export function QuestionCard({ p, respond }: { p: Question; respond: Respond }):
   return (
     <ActionPanel data-pending="question" data-request={p.requestId} data-question-form={schema ? '' : undefined} label={p.agent ? `Question from ${p.agent}` : 'Question'} icon="help" tone="accent" footer={footer}>
       <div data-question={p.requestId}>
-        <div className="text-[14px] font-semibold leading-snug text-hx-primary [&_p]:my-0"><Markdown text={p.question} /></div>
-        {schema?.description && <p className="mt-1 text-[12.5px] text-hx-secondary">{schema.description}</p>}
+        <div className="text-body-lg font-semibold leading-snug text-hx-primary [&_p]:my-0"><Markdown text={p.question} /></div>
+        {schema?.description && <p className="mt-1 text-small text-hx-secondary">{schema.description}</p>}
 
         {choices.length > 0 && !reviewing && (
           <div className="mt-2.5" data-question-choices>
-            {schema && <div className="mb-1 text-[11.5px] font-medium uppercase tracking-wide text-hx-muted">Quick answers</div>}
+            {schema && <div className="mb-1 text-tiny font-semibold uppercase tracking-wide text-hx-muted">Quick answers</div>}
             <div className={cx(described ? 'grid gap-1.5 sm:grid-cols-2' : 'flex flex-wrap gap-2')}>
               {choices.map((c) => described ? (
                 <button key={c.label} type="button" disabled={busy} data-choice={c.label} onClick={() => pick(c)}
-                  className={cx('group flex flex-col items-start rounded-lg border px-3 py-2 text-left transition-colors disabled:opacity-60', c.recommended ? 'border-hx-accent/50 bg-hx-accent-soft/50 hover:bg-hx-accent-soft' : 'border-hx-border-subtle hover:border-hx-accent/40 hover:bg-hx-hover')}>
-                  <span className="flex items-center gap-1.5 text-[13px] font-medium text-hx-primary">{c.label}{c.recommended && <Badge tone="accent">Recommended</Badge>}</span>
-                  {c.description && <span className="mt-0.5 text-[12px] leading-snug text-hx-secondary">{c.description}</span>}
+                  className={cx('group flex flex-col items-start rounded-lg border px-3 py-2 text-left transition-colors disabled:opacity-60', c.recommended ? 'border-hx-accent-border bg-hx-accent-soft hover:bg-hx-accent-soft' : 'border-hx-border-subtle hover:border-hx-accent-border hover:bg-hx-hover')}>
+                  <span className="flex items-center gap-1.5 text-body font-medium text-hx-primary">{c.label}{c.recommended && <Badge tone="accent">Recommended</Badge>}</span>
+                  {c.description && <span className="mt-0.5 text-small leading-snug text-hx-secondary">{c.description}</span>}
                 </button>
               ) : (
                 <Button key={c.label} size="sm" variant={c.recommended ? 'primary' : 'secondary'} disabled={busy} data-choice={c.label} onClick={() => pick(c)}>{c.label}</Button>
@@ -101,7 +101,7 @@ export function QuestionCard({ p, respond }: { p: Question; respond: Respond }):
         {schema && !reviewing && (
           <div className="mt-3">
             {tried && problems.length > 0 && (
-              <div role="alert" className="mb-2 flex items-start gap-1.5 rounded-lg bg-hx-danger/10 px-2.5 py-1.5 text-[12.5px] text-hx-danger" data-form-problems>
+              <div role="alert" className="mb-2 flex items-start gap-1.5 rounded-lg bg-hx-danger-soft px-2.5 py-1.5 text-small text-hx-danger" data-form-problems>
                 <Icon name="alert" size={14} className="mt-0.5 shrink-0" />
                 <span>{problems.length === 1 ? 'One field needs' : `${problems.length} fields need`} attention: {problems.map((k) => labelOf(k.split('.').pop()!.replace(/\[\d+\]$/, ''), schema.properties?.[k.split('.')[0]!.replace(/\[\d+\]$/, '')] ?? {})).join(', ')}.</span>
               </div>
@@ -111,7 +111,7 @@ export function QuestionCard({ p, respond }: { p: Question; respond: Respond }):
         )}
 
         {schema && reviewing && (
-          <dl className="mt-3 divide-y divide-hx-border-subtle rounded-lg border border-hx-border-subtle bg-hx-bg px-3 text-[13px]" data-answer-review>
+          <dl className="mt-3 divide-y divide-hx-border-subtle rounded-lg border border-hx-border-subtle bg-hx-bg px-3 text-body" data-answer-review>
             {fieldsOf(schema).map(([k, sub]) => (
               <div key={k} className="flex gap-3 py-1.5"><dt className="w-2/5 shrink-0 text-hx-muted">{labelOf(k, sub)}</dt><dd className="min-w-0 flex-1 break-words text-hx-primary">{shown(sub, value[k])}</dd></div>
             ))}

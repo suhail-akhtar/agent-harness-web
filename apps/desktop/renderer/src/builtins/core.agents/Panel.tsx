@@ -26,12 +26,12 @@ function useTick(on: boolean) {
 const STATUS_DOT: Record<string, string> = { running: 'bg-hx-accent animate-pulse', waiting: 'bg-hx-warning', done: 'bg-hx-success', completed: 'bg-hx-success', idle: 'bg-hx-muted', failed: 'bg-hx-danger', stopped: 'bg-hx-muted' };
 export function Dot({ status }: { status: string }) { return <span className={cx('mt-1.5 h-2 w-2 shrink-0 rounded-full', STATUS_DOT[status] ?? 'bg-hx-muted')} title={status} />; }
 
-function Section({ title, count, children, icon }: { title: string; count?: number; icon: string; children: React.ReactNode }) {
+function PanelGroup({ title, count, children, icon }: { title: string; count?: number; icon: string; children: React.ReactNode }) {
   const [open, setOpen] = useState(true);
   return (
     <section className="mb-3">
-      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="flex w-full items-center gap-1.5 px-1 py-1 text-[11.5px] font-medium uppercase tracking-wide text-hx-muted hover:text-hx-secondary">
-        <Icon name={icon} size={13} />{title}{count !== undefined && <span className="ml-1 rounded-full bg-hx-pill px-1.5 text-[10.5px] normal-case">{count}</span>}
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="flex w-full items-center gap-1.5 px-1 py-1 text-tiny font-semibold uppercase tracking-wide text-hx-muted hover:text-hx-secondary">
+        <Icon name={icon} size={13} />{title}{count !== undefined && <span className="ml-1 rounded-full bg-hx-pill px-1.5 text-micro normal-case">{count}</span>}
         <Icon name={open ? 'chevron-down' : 'chevron-right'} size={12} className="ml-auto" />
       </button>
       {open && <div className="mt-1 space-y-1">{children}</div>}
@@ -45,9 +45,9 @@ export function AgentRow({ a }: { a: SubAgent }) {
     <div data-subagent={a.name} data-subagent-status={a.status} className="flex gap-2 rounded-lg border border-hx-border-subtle bg-hx-elevated px-2.5 py-2">
       <Dot status={a.status} />
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5"><span className="truncate font-mono text-[12.5px] text-hx-primary">{a.name}</span>{a.background && <Badge>background</Badge>}</div>
-        {a.description && <div className="truncate text-[12px] text-hx-secondary">{a.description}</div>}
-        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-hx-muted">
+        <div className="flex items-center gap-1.5"><span className="truncate font-mono text-small text-hx-primary">{a.name}</span>{a.background && <Badge>background</Badge>}</div>
+        {a.description && <div className="truncate text-small text-hx-secondary">{a.description}</div>}
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-tiny text-hx-muted">
           <span>{a.type}</span>
           {a.model && <span data-subagent-model className="rounded bg-hx-pill px-1">{a.model}</span>}
           {a.worktree && <span className="inline-flex items-center gap-0.5" title="Works in its own git worktree"><Icon name="git-branch" size={11} />{a.worktree}</span>}
@@ -65,7 +65,7 @@ function TaskRow({ t }: { t: TaskView }) {
     <div data-task={t.id} className="flex gap-2 rounded-lg border border-hx-border-subtle bg-hx-elevated px-2.5 py-2">
       <Dot status={t.status} />
       <Icon name={t.kind === 'shell' ? 'terminal' : t.kind === 'workflow' ? 'workflow' : t.kind === 'monitor' ? 'eye' : 'bot'} size={13} className="mt-0.5 text-hx-muted" />
-      <div className="min-w-0 flex-1"><div className="truncate text-[12.5px]">{t.description}</div><div className="text-[11px] text-hx-muted">{t.kind} · {t.id} · {t.status}{t.endedAt ? ` · ${duration(t.endedAt - t.startedAt)}` : ''}{t.cost ? ` · ${money(t.cost)}` : ''}</div></div>
+      <div className="min-w-0 flex-1"><div className="truncate text-small">{t.description}</div><div className="text-tiny text-hx-muted">{t.kind} · {t.id} · {t.status}{t.endedAt ? ` · ${duration(t.endedAt - t.startedAt)}` : ''}{t.cost ? ` · ${money(t.cost)}` : ''}</div></div>
     </div>
   );
 }
@@ -80,8 +80,8 @@ export function LinkedRow({ id, fallback, reason }: { id: string; fallback?: str
       <div className="flex gap-2">
         <Dot status={status === 'idle' ? (reason && reason !== 'done' ? 'failed' : 'done') : status} />
         <div className="min-w-0 flex-1">
-          <button type="button" onClick={() => openSession(id)} className="block max-w-full truncate text-left text-[12.5px] font-medium hover:underline">{s?.title || fallback || id}</button>
-          <div className="text-[11px] text-hx-muted">{status === 'running' ? 'working' : status === 'waiting' ? 'needs you' : reason ? `ended: ${reason}` : 'idle'}{s ? ` · ${s.model} · ${money(s.cost)}` : ''}</div>
+          <button type="button" onClick={() => openSession(id)} className="block max-w-full truncate text-left text-small font-medium hover:underline">{s?.title || fallback || id}</button>
+          <div className="text-tiny text-hx-muted">{status === 'running' ? 'working' : status === 'waiting' ? 'needs you' : reason ? `ended: ${reason}` : 'idle'}{s ? ` · ${s.model} · ${money(s.cost)}` : ''}</div>
         </div>
         <Tooltip label="Open beside"><IconButton icon="split" size="xs" label="Open beside this one" onClick={() => openSplit({ view: 'core.chat:session', params: { id } })} /></Tooltip>
       </div>
@@ -94,7 +94,7 @@ export function Todos({ todos }: { todos: Todo[] }) {
   return (
     <ol data-todos className="space-y-0.5">
       {todos.map((t, i) => (
-        <li key={i} data-todo-status={t.status} className="flex items-start gap-2 px-1 text-[12.5px]">
+        <li key={i} data-todo-status={t.status} className="flex items-start gap-2 px-1 text-small">
           <Icon name={t.status === 'completed' ? 'check-circle' : t.status === 'in_progress' ? 'play' : 'dot'} size={13} className={cx('mt-0.5 shrink-0', t.status === 'completed' ? 'text-hx-success' : t.status === 'in_progress' ? 'text-hx-accent-text' : 'text-hx-muted')} />
           <span className={cx(t.status === 'completed' && 'text-hx-muted line-through', t.status === 'in_progress' && 'font-medium')}>{t.content}</span>
         </li>
@@ -119,29 +119,29 @@ export function AgentsPanel({ params }: NativeProps): React.ReactElement {
   const todos = s.meta?.todos ?? [];
   const nothing = !agents.length && !tasks.length && !linked.length && !(openProps?.length) && !todos.length;
   return (
-    <div data-agents-panel={id} className="text-[13px]">
+    <div data-agents-panel={id} className="text-body">
       <div className="mb-3 flex items-center gap-2 rounded-xl bg-hx-pill/60 px-3 py-2">
         <Dot status={s.status} />
-        <div className="min-w-0 flex-1"><div className="truncate font-medium">{s.meta?.title}</div><div className="text-[11.5px] text-hx-muted">{s.status === 'running' ? 'Working' : s.status === 'waiting' ? 'Needs you' : 'Idle'} · {s.meta?.model} · {money(s.meta?.cost ?? 0)}</div></div>
+        <div className="min-w-0 flex-1"><div className="truncate font-medium">{s.meta?.title}</div><div className="text-caption text-hx-muted">{s.status === 'running' ? 'Working' : s.status === 'waiting' ? 'Needs you' : 'Idle'} · {s.meta?.model} · {money(s.meta?.cost ?? 0)}</div></div>
       </div>
-      {parent && <button type="button" onClick={() => openSession(parent.id)} className="mb-3 flex w-full items-center gap-2 rounded-lg border border-hx-border-subtle px-2.5 py-1.5 text-left text-[12px] text-hx-secondary hover:bg-hx-hover"><Icon name="arrow-up" size={13} />Started by <b className="truncate font-medium">{parent.title}</b></button>}
+      {parent && <button type="button" onClick={() => openSession(parent.id)} className="mb-3 flex w-full items-center gap-2 rounded-lg border border-hx-border-subtle px-2.5 py-1.5 text-left text-small text-hx-secondary hover:bg-hx-hover"><Icon name="arrow-up" size={13} />Started by <b className="truncate font-medium">{parent.title}</b></button>}
       {nothing && <EmptyState icon="bot" title="Only the main agent so far">Sub-agents, background tasks, linked sessions and proposals show here as they start.</EmptyState>}
-      {todos.length > 0 && <Section title="Tasks" icon="list" count={todos.filter((t) => t.status !== 'completed').length}><Todos todos={todos} /></Section>}
-      {agents.length > 0 && <Section title="Sub-agents" icon="bot" count={agents.length}>{agents.map((a) => <AgentRow key={a.name} a={a} />)}</Section>}
-      {tasks.length > 0 && <Section title="Background" icon="activity" count={tasks.filter((t) => t.status === 'running').length}>{tasks.map((t) => <TaskRow key={t.id} t={t} />)}</Section>}
-      {linked.length > 0 && <Section title="Linked sessions" icon="split" count={linked.length}>{linked.map((l) => <LinkedRow key={l} id={l} fallback={reasons[l]?.title} reason={reasons[l]?.reason} />)}</Section>}
+      {todos.length > 0 && <PanelGroup title="Tasks" icon="list" count={todos.filter((t) => t.status !== 'completed').length}><Todos todos={todos} /></PanelGroup>}
+      {agents.length > 0 && <PanelGroup title="Sub-agents" icon="bot" count={agents.length}>{agents.map((a) => <AgentRow key={a.name} a={a} />)}</PanelGroup>}
+      {tasks.length > 0 && <PanelGroup title="Background" icon="activity" count={tasks.filter((t) => t.status === 'running').length}>{tasks.map((t) => <TaskRow key={t.id} t={t} />)}</PanelGroup>}
+      {linked.length > 0 && <PanelGroup title="Linked sessions" icon="split" count={linked.length}>{linked.map((l) => <LinkedRow key={l} id={l} fallback={reasons[l]?.title} reason={reasons[l]?.reason} />)}</PanelGroup>}
       {!!openProps?.length && (
-        <Section title="Proposals" icon="sparkles" count={openProps.length}>
+        <PanelGroup title="Proposals" icon="sparkles" count={openProps.length}>
           {openProps.map((p) => (
-            <div key={p.id} data-panel-proposal={p.id} className="rounded-lg border border-hx-accent/40 bg-hx-accent-soft/30 px-2.5 py-2">
-              <div className="text-[12.5px] font-medium">{p.title}</div>
-              <div className="line-clamp-2 text-[11.5px] text-hx-muted">{p.brief}</div>
+            <div key={p.id} data-panel-proposal={p.id} className="rounded-lg border border-hx-accent-border bg-hx-accent-soft px-2.5 py-2">
+              <div className="text-small font-medium">{p.title}</div>
+              <div className="line-clamp-2 text-caption text-hx-muted">{p.brief}</div>
               <div className="mt-1.5 flex gap-1.5"><Button size="sm" variant="primary" onClick={() => void startProposal(id, p.id)}>Start</Button><Button size="sm" variant="ghost" onClick={() => void dismissProposal(id, p.id)}>Dismiss</Button></div>
             </div>
           ))}
-        </Section>
+        </PanelGroup>
       )}
-      {s.meta && <Section title="Cost by model" icon="dollar"><CostByModel meta={s.meta} /></Section>}
+      {s.meta && <PanelGroup title="Cost by model" icon="dollar"><CostByModel meta={s.meta} /></PanelGroup>}
     </div>
   );
 }

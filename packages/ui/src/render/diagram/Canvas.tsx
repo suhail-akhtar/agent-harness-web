@@ -372,7 +372,7 @@ export function DiagramCanvas(props: DiagramCanvasProps): React.ReactElement {
           data-diagram-viewport=""
         >
           {scene && <MemoDrawing scene={scene} view={shown.view} state={drawState} live cameraRef={cameraG} svgRef={svg} title={title ?? shown.title} />}
-          {(!scene || busy) && <div className="absolute inset-0 flex items-center justify-center" data-ui=""><span className="flex items-center gap-2 rounded-full border border-hx-border-subtle bg-hx-elevated px-3 py-1.5 text-[12px] text-hx-muted shadow-sm"><Spinner size={12} />Laying out…</span></div>}
+          {(!scene || busy) && <div className="absolute inset-0 flex items-center justify-center" data-ui=""><span className="flex items-center gap-2 rounded-full border border-hx-border-subtle bg-hx-elevated px-3 py-1.5 text-small text-hx-muted shadow-sm"><Spinner size={12} />Laying out…</span></div>}
 
           {/* top-left: search, not connected, changed, flows */}
           <div data-ui="" className="absolute left-3 top-3 flex max-w-[60%] flex-wrap items-start gap-1.5">
@@ -381,41 +381,41 @@ export function DiagramCanvas(props: DiagramCanvasProps): React.ReactElement {
               <input data-diagram-search value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => {
                 if (e.key === 'Enter' && matches?.size) { const id = [...matches][0]!; select({ type: 'node', id }); }
                 if (e.key === 'Escape') { setQuery(''); wrap.current?.focus(); }
-              }} placeholder="Search boxes" className="w-36 bg-transparent text-[12.5px] text-hx-primary outline-none placeholder:text-hx-muted" />
-              {q && <span className="text-[11px] tabular-nums text-hx-muted">{matches?.size ?? 0}</span>}
+              }} placeholder="Search boxes" className="w-36 bg-transparent text-small text-hx-primary outline-none placeholder:text-hx-muted" />
+              {q && <span className="text-tiny tabular-nums text-hx-muted">{matches?.size ?? 0}</span>}
             </label>
             {lonely.length > 0 && (
               <div className="relative">
-                <button type="button" data-diagram-lonely={lonely.length} onClick={() => setLonelyOpen((v) => !v)} className="flex h-8 items-center gap-1.5 rounded-lg border border-hx-border-subtle bg-hx-elevated/95 px-2.5 text-[12px] text-hx-secondary shadow-sm hover:text-hx-primary">
+                <button type="button" data-diagram-lonely={lonely.length} onClick={() => setLonelyOpen((v) => !v)} className="flex h-8 items-center gap-1.5 rounded-lg border border-hx-border-subtle bg-hx-elevated/95 px-2.5 text-small text-hx-secondary shadow-sm hover:text-hx-primary">
                   <span className="h-2 w-2 rounded-full border border-hx-muted" />{lonely.length} not connected
                 </button>
                 {lonelyOpen && (
                   <ul className="absolute left-0 top-9 z-20 max-h-64 w-56 overflow-auto rounded-lg border border-hx-border bg-hx-elevated p-1 shadow-lg">
-                    {lonely.map((id) => <li key={id}><button type="button" className="w-full truncate rounded-md px-2 py-1 text-left text-[12.5px] hover:bg-hx-hover" onClick={() => { select({ type: 'node', id }); setLonelyOpen(false); }}>{shown.nodes.find((n) => n.id === id)?.title ?? id}</button></li>)}
+                    {lonely.map((id) => <li key={id}><button type="button" className="w-full truncate rounded-md px-2 py-1 text-left text-small hover:bg-hx-hover" onClick={() => { select({ type: 'node', id }); setLonelyOpen(false); }}>{shown.nodes.find((n) => n.id === id)?.title ?? id}</button></li>)}
                   </ul>
                 )}
               </div>
             )}
             {changed && (changed.nodes.length > 0 || changed.edges.length > 0) && (
-              <span data-diagram-changed={changed.nodes.length} className="flex h-8 items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/12 px-2.5 text-[12px] font-medium text-hx-warning shadow-sm">
+              <span data-diagram-changed={changed.nodes.length} className="flex h-8 items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/12 px-2.5 text-small font-medium text-hx-warning shadow-sm">
                 {changed.note ?? `${changed.nodes.length} changed`}
                 {onClearChanged && <button type="button" aria-label="Clear the changed marks" className="rounded p-0.5 hover:bg-hx-hover" onClick={onClearChanged}><Icon name="x" size={12} /></button>}
               </span>
             )}
             {overview && implied.size > 0 && (
-              <button type="button" data-diagram-implied={implied.size} onClick={() => setAllLinks((v) => !v)} className="flex h-8 items-center gap-1.5 rounded-lg border border-hx-border-subtle bg-hx-elevated/95 px-2.5 text-[12px] text-hx-secondary shadow-sm hover:text-hx-primary" title="Links a longer chain already implies, and single imports">
+              <button type="button" data-diagram-implied={implied.size} onClick={() => setAllLinks((v) => !v)} className="flex h-8 items-center gap-1.5 rounded-lg border border-hx-border-subtle bg-hx-elevated/95 px-2.5 text-small text-hx-secondary shadow-sm hover:text-hx-primary" title="Links a longer chain already implies, and single imports">
                 {allLinks ? `Hide ${implied.size} minor links` : `${implied.size} minor links hidden`}
               </button>
             )}
             {flows.length > 0 && (
-              <button type="button" data-diagram-flows-toggle onClick={() => setFlowsOpen((v) => !v)} className={cx('flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[12px] shadow-sm', flowsOpen ? 'border-hx-accent/50 bg-hx-accent-soft text-hx-accent-text' : 'border-hx-border-subtle bg-hx-elevated/95 text-hx-secondary hover:text-hx-primary')}>
+              <button type="button" data-diagram-flows-toggle onClick={() => setFlowsOpen((v) => !v)} className={cx('flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-small shadow-sm', flowsOpen ? 'border-hx-accent-border bg-hx-accent-soft text-hx-accent-text' : 'border-hx-border-subtle bg-hx-elevated/95 text-hx-secondary hover:text-hx-primary')}>
                 <Icon name="play" size={12} />{flows.length} flow{flows.length === 1 ? '' : 's'}
               </button>
             )}
           </div>
           {flowsOpen && flows.length > 0 && (
             <div data-ui="" data-diagram-flows="" className="absolute left-3 top-14 z-10 w-[300px] rounded-xl border border-hx-border-subtle bg-hx-elevated/97 p-2 shadow-lg backdrop-blur">
-              <select data-flow-select value={play.flow ?? ''} onChange={(e) => { const id = e.target.value || null; dispatch({ type: 'select', flow: id, length: id ? resolveFlow(shown, id).length : 0 }); }} className="mb-2 w-full rounded-md border border-hx-border bg-hx-bg px-2 py-1 text-[12.5px] text-hx-primary">
+              <select data-flow-select value={play.flow ?? ''} onChange={(e) => { const id = e.target.value || null; dispatch({ type: 'select', flow: id, length: id ? resolveFlow(shown, id).length : 0 }); }} className="mb-2 w-full rounded-md border border-hx-border bg-hx-bg px-2 py-1 text-small text-hx-primary">
                 <option value="">Choose a flow…</option>
                 {flows.map((f) => <option key={f.id} value={f.id}>{f.title}</option>)}
               </select>
@@ -425,15 +425,15 @@ export function DiagramCanvas(props: DiagramCanvasProps): React.ReactElement {
                     <IconButton size="sm" icon="chevron-left" label="Previous step" data-flow-prev onClick={() => dispatch({ type: 'prev' })} disabled={play.step < 0} />
                     <IconButton size="sm" icon={play.playing ? 'pause' : 'play'} label={play.playing ? 'Pause' : 'Play'} data-flow-play onClick={() => dispatch({ type: 'toggle' })} active={play.playing} />
                     <IconButton size="sm" icon="chevron-right" label="Next step" data-flow-next onClick={() => dispatch({ type: 'next' })} disabled={play.step >= play.length - 1} />
-                    <span className="ml-1 text-[11.5px] tabular-nums text-hx-muted" data-flow-position>{play.step < 0 ? `${play.length} steps` : `${play.step + 1} / ${play.length}`}</span>
+                    <span className="ml-1 text-caption tabular-nums text-hx-muted" data-flow-position>{play.step < 0 ? `${play.length} steps` : `${play.step + 1} / ${play.length}`}</span>
                     <span className="ml-auto flex rounded-md border border-hx-border-subtle p-0.5">
-                      {PLAYBACK_SPEEDS.map((s) => <button key={s} type="button" data-flow-speed={s} onClick={() => dispatch({ type: 'speed', speed: s })} className={cx('rounded px-1.5 text-[11px]', play.speed === s ? 'bg-hx-active text-hx-primary' : 'text-hx-muted hover:text-hx-primary')}>{s}×</button>)}
+                      {PLAYBACK_SPEEDS.map((s) => <button key={s} type="button" data-flow-speed={s} onClick={() => dispatch({ type: 'speed', speed: s })} className={cx('rounded px-1.5 text-tiny', play.speed === s ? 'bg-hx-active text-hx-primary' : 'text-hx-muted hover:text-hx-primary')}>{s}×</button>)}
                     </span>
                   </div>
                   <ol className="max-h-56 space-y-0.5 overflow-auto" data-flow-steps>
                     {steps.map((s) => (
                       <li key={s.index}>
-                        <button type="button" onClick={() => dispatch({ type: 'goto', step: s.index })} data-flow-step-item={s.index} data-active={s.index === play.step ? '1' : '0'} className={cx('flex w-full gap-2 rounded-md px-1.5 py-1 text-left text-[12px]', s.index === play.step ? 'bg-hx-accent-soft text-hx-accent-text' : s.index < play.step ? 'text-hx-secondary hover:bg-hx-hover' : 'text-hx-muted hover:bg-hx-hover')}>
+                        <button type="button" onClick={() => dispatch({ type: 'goto', step: s.index })} data-flow-step-item={s.index} data-active={s.index === play.step ? '1' : '0'} className={cx('flex w-full gap-2 rounded-md px-1.5 py-1 text-left text-small', s.index === play.step ? 'bg-hx-accent-soft text-hx-accent-text' : s.index < play.step ? 'text-hx-secondary hover:bg-hx-hover' : 'text-hx-muted hover:bg-hx-hover')}>
                           <span className="w-4 shrink-0 text-right tabular-nums">{s.index + 1}.</span><span className="min-w-0 flex-1">{s.label}</span>
                         </button>
                       </li>
@@ -447,11 +447,11 @@ export function DiagramCanvas(props: DiagramCanvasProps): React.ReactElement {
           {/* top-right: mode, zoom, fit, details, export */}
           <div data-ui="" className="absolute right-3 top-3 flex items-center gap-1 rounded-lg border border-hx-border-subtle bg-hx-elevated/95 p-0.5 shadow-sm backdrop-blur">
             <span className="flex rounded-md bg-hx-pill p-0.5" role="tablist">
-              <button type="button" role="tab" aria-selected={overview} data-mode-button="overview" onClick={() => setMode('overview')} className={cx('rounded px-2 py-0.5 text-[12px]', overview ? 'bg-hx-elevated text-hx-primary shadow-sm' : 'text-hx-muted hover:text-hx-primary')}>Overview</button>
-              <button type="button" role="tab" aria-selected={!overview} data-mode-button="neighbourhood" onClick={() => toNeighbourhood(center && !selNode ? center : null)} className={cx('rounded px-2 py-0.5 text-[12px]', !overview ? 'bg-hx-elevated text-hx-primary shadow-sm' : 'text-hx-muted hover:text-hx-primary')}>Neighbourhood</button>
+              <button type="button" role="tab" aria-selected={overview} data-mode-button="overview" onClick={() => setMode('overview')} className={cx('rounded px-2 py-0.5 text-small', overview ? 'bg-hx-elevated text-hx-primary shadow-sm' : 'text-hx-muted hover:text-hx-primary')}>Overview</button>
+              <button type="button" role="tab" aria-selected={!overview} data-mode-button="neighbourhood" onClick={() => toNeighbourhood(center && !selNode ? center : null)} className={cx('rounded px-2 py-0.5 text-small', !overview ? 'bg-hx-elevated text-hx-primary shadow-sm' : 'text-hx-muted hover:text-hx-primary')}>Neighbourhood</button>
             </span>
             {!overview && (
-              <select aria-label="Hops" value={hops} onChange={(e) => setHops(Number(e.target.value))} data-diagram-hops className="rounded-md bg-transparent px-1 text-[12px] text-hx-secondary">
+              <select aria-label="Hops" value={hops} onChange={(e) => setHops(Number(e.target.value))} data-diagram-hops className="rounded-md bg-transparent px-1 text-small text-hx-secondary">
                 {[1, 2, 3].map((h) => <option key={h} value={h}>{h} hop{h > 1 ? 's' : ''}</option>)}
               </select>
             )}
@@ -478,8 +478,8 @@ export function DiagramCanvas(props: DiagramCanvasProps): React.ReactElement {
           {onAsk && (
             <form data-ui="" data-diagram-ask="" onSubmit={(e) => { e.preventDefault(); const t = ask.trim(); if (!t || askState?.pending) return; void Promise.resolve(onAsk(t)).then(() => setAsk('')); }} className="absolute bottom-3 left-1/2 flex w-[min(520px,calc(100%-260px))] -translate-x-1/2 items-center gap-1.5 rounded-xl border border-hx-border bg-hx-elevated/97 p-1 pl-3 shadow-md backdrop-blur">
               <Icon name="sparkles" size={14} className="shrink-0 text-hx-accent-text" />
-              <input data-diagram-ask-input value={ask} onChange={(e) => setAsk(e.target.value)} placeholder={askState?.note ?? 'Ask the agent to change the design…'} disabled={askState?.pending} className="min-w-0 flex-1 bg-transparent text-[13px] text-hx-primary outline-none placeholder:text-hx-muted disabled:opacity-60" />
-              {askState?.pending ? <span className="flex items-center gap-1.5 px-2 text-[11.5px] text-hx-muted"><Spinner size={12} />{askState.note ?? 'Waiting…'}</span>
+              <input data-diagram-ask-input value={ask} onChange={(e) => setAsk(e.target.value)} placeholder={askState?.note ?? 'Ask the agent to change the design…'} disabled={askState?.pending} className="min-w-0 flex-1 bg-transparent text-body text-hx-primary outline-none placeholder:text-hx-muted disabled:opacity-60" />
+              {askState?.pending ? <span className="flex items-center gap-1.5 px-2 text-caption text-hx-muted"><Spinner size={12} />{askState.note ?? 'Waiting…'}</span>
                 : <button type="submit" disabled={!ask.trim()} aria-label="Send to the agent" className="flex h-7 w-7 items-center justify-center rounded-lg bg-hx-accent text-hx-on-accent disabled:opacity-40"><Icon name="send" size={14} /></button>}
             </form>
           )}
@@ -528,7 +528,7 @@ function neighbourInDirection(scene: Scene, from: string, [dx, dy]: [number, num
 
 function ZoomLabel({ store }: { store: ReturnType<typeof cameraStore> }) {
   const k = useSyncExternalStore(store.subscribe, () => store.get().k, () => 1);
-  return <span className="min-w-[3rem] text-center text-[11.5px] tabular-nums text-hx-muted" data-diagram-zoom-label>{Math.round(k * 100)}%</span>;
+  return <span className="min-w-[3rem] text-center text-caption tabular-nums text-hx-muted" data-diagram-zoom-label>{Math.round(k * 100)}%</span>;
 }
 
 function Minimap({ scene, store, viewport, onJump }: { scene: Scene; store: ReturnType<typeof cameraStore>; viewport: React.RefObject<HTMLDivElement | null>; onJump: (c: Camera) => void }) {
@@ -559,7 +559,7 @@ function Minimap({ scene, store, viewport, onJump }: { scene: Scene; store: Retu
 export function Legend({ summary, view, compact }: { summary: string; view: string; compact?: boolean }): React.ReactElement {
   const dot = (c: string, hollow = false) => <span className={cx('inline-block h-2.5 w-2.5 rounded-full', hollow && 'border border-dashed border-hx-muted')} style={hollow ? undefined : { background: c }} />;
   return (
-    <div data-diagram-legend="" className={cx('flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-hx-border-subtle bg-hx-bg text-[11.5px] text-hx-muted', compact ? 'px-2.5 py-1.5' : 'px-3 py-2')}>
+    <div data-diagram-legend="" className={cx('flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-hx-border-subtle bg-hx-bg text-caption text-hx-muted', compact ? 'px-2.5 py-1.5' : 'px-3 py-2')}>
       {view !== 'code' && view !== 'data' && <>
         <span className="flex items-center gap-1.5">{dot('#16a34a')}done</span>
         <span className="flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 rounded-full border-2 border-amber-500 border-r-transparent" />in progress</span>
@@ -567,7 +567,7 @@ export function Legend({ summary, view, compact }: { summary: string; view: stri
         <span className="flex items-center gap-1.5">{dot('', true)}planned</span>
         <span className="flex items-center gap-1.5"><span className="inline-block h-2.5 w-4 rounded-[3px] border border-dashed border-hx-muted" />dashed = integrated / bought</span>
       </>}
-      {view === 'code' && <span className="flex items-center gap-1.5"><span className="rounded-full border border-hx-border px-1.5 text-[10px] leading-4">12</span>imports between folders</span>}
+      {view === 'code' && <span className="flex items-center gap-1.5"><span className="rounded-full border border-hx-border px-1.5 text-micro leading-4">12</span>imports between folders</span>}
       {view === 'data' && <span className="flex items-center gap-1.5"><b className="text-hx-secondary">n · 1</b>many rows point at one</span>}
       {view !== 'code' && <span className="flex items-center gap-1.5"><svg width="18" height="6" aria-hidden="true"><path d="M0 3h18" stroke="currentColor" strokeWidth="1.4" strokeDasharray="4 3" /></svg>dashed line = asynchronous</span>}
       <span className="ml-auto font-medium text-hx-secondary" data-diagram-summary>{summary}</span>

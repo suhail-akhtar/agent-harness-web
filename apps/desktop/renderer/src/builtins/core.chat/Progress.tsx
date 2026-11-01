@@ -15,7 +15,7 @@ export function TaskCard({ todos }: { todos: Todo[] }): React.ReactElement {
     <div className="mx-auto w-full max-w-column shrink-0 px-4 pb-2 sm:px-6">
       <ol data-task-card aria-label="Tasks" className="hx-scroll max-h-[40vh] space-y-1.5 overflow-y-auto rounded-xl border border-hx-border-subtle bg-hx-surface px-4 py-3">
         {todos.map((t, i) => (
-          <li key={i} data-todo-status={t.status} className="flex items-start gap-2.5 text-[13px] leading-5">
+          <li key={i} data-todo-status={t.status} className="flex items-start gap-2.5 text-body leading-5">
             <span className="mt-[3px] flex h-[14px] w-[14px] shrink-0 items-center justify-center">
               {t.status === 'completed' ? <Icon name="check-circle" size={14} className="text-hx-muted" />
                 : t.status === 'in_progress' ? <Spinner size={13} className="text-hx-accent-text" />
@@ -36,7 +36,7 @@ export function ActivityLine({ items, todos, style }: { items: Item[]; todos: To
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
   const what = activityLine(items, todos);
   return (
-    <div className="mx-auto flex w-full max-w-column items-center gap-2 px-6 pb-1 text-[12.5px] text-hx-muted" data-working>
+    <div className="mx-auto flex w-full max-w-column items-center gap-2 px-6 pb-1 text-small text-hx-muted" data-working>
       <Working style={style} className="shrink-0 text-hx-accent-text" />
       <span className="min-w-0 truncate text-hx-secondary" data-activity>{what}</span>
       <span className="shrink-0 tabular-nums" data-elapsed>{duration(now - started.current)}</span>

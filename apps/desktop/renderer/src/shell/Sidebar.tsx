@@ -37,10 +37,10 @@ export function Sidebar({ collapsed: forced, onToggle }: { collapsed?: boolean; 
   return (
     <aside ref={pane.paneRef} id={pane.paneId} data-sidebar data-collapsed={collapsed ? '1' : '0'} className="relative flex h-full shrink-0 flex-col border-r border-hx-border-subtle bg-hx-sidebar" style={pane.paneStyle}>
       <div className="app-drag flex h-10 shrink-0 items-center gap-2 px-3">
-        {!collapsed && !focused && <span className="flex items-center gap-2 text-[14px] font-semibold tracking-tight text-hx-primary"><Logo />{info?.product.brand.wordmark ?? info?.product.name ?? 'Harness'}</span>}
+        {!collapsed && !focused && <span className="flex items-center gap-2 text-body-lg font-semibold tracking-tight text-hx-primary"><Logo />{info?.product.brand.wordmark ?? info?.product.name ?? 'Harness'}</span>}
         {!collapsed && focused && (
           // A window focused on one plugin: its name and icon; the full app is a click away.
-          <span data-focus-header={FOCUS} className="flex min-w-0 items-center gap-2 text-[14px] font-semibold tracking-tight text-hx-primary">
+          <span data-focus-header={FOCUS} className="flex min-w-0 items-center gap-2 text-body-lg font-semibold tracking-tight text-hx-primary">
             <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-hx-accent-soft text-hx-accent-text"><Icon name={focused.ui?.icon ?? 'puzzle'} size={14} /></span>
             <span className="truncate">{focused.ui?.displayName ?? focused.name}</span>
           </span>
@@ -54,7 +54,7 @@ export function Sidebar({ collapsed: forced, onToggle }: { collapsed?: boolean; 
         {collapsed && registry.groups.map((g) => <RailGroup key={g.plugin} group={g} />)}
         {more.length > 0 && (
           <>
-            <button type="button" onClick={() => setMoreOpen((o) => !o)} aria-expanded={moreOpen} className={cx('flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13px] text-hx-secondary hover:bg-hx-hover', collapsed && 'justify-center px-0')}>
+            <button type="button" onClick={() => setMoreOpen((o) => !o)} aria-expanded={moreOpen} className={cx('flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-body text-hx-secondary hover:bg-hx-hover', collapsed && 'justify-center px-0')}>
               <Icon name={moreOpen ? 'chevron-down' : 'more'} size={16} />{!collapsed && 'More'}
             </button>
             {moreOpen && more.map((n) => <NavRow key={n.qid} item={n} collapsed={collapsed} indent />)}
@@ -65,8 +65,8 @@ export function Sidebar({ collapsed: forced, onToggle }: { collapsed?: boolean; 
       {collapsed && <div className="flex-1" />}
       <div className="flex flex-col gap-0.5 border-t border-hx-border-subtle p-2">
         {footer.map((n) => <NavRow key={n.qid} item={n} collapsed={collapsed} />)}
-        {registry.commands.some((c) => c.qid === 'core.settings:open') && <button type="button" data-open-settings onClick={() => void runCommand('core.settings:open')} className={cx('flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13px] text-hx-secondary hover:bg-hx-hover hover:text-hx-primary', collapsed && 'justify-center px-0')} title="Settings">
-          <Icon name="settings" size={16} />{!collapsed && <span className="flex-1 text-left">Settings</span>}{!collapsed && <span className="text-[11px] text-hx-muted">{formatChord(registry.commands.find((c) => c.qid === 'core.settings:open')?.keys ?? '', platform)}</span>}
+        {registry.commands.some((c) => c.qid === 'core.settings:open') && <button type="button" data-open-settings onClick={() => void runCommand('core.settings:open')} className={cx('flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-body text-hx-secondary hover:bg-hx-hover hover:text-hx-primary', collapsed && 'justify-center px-0')} title="Settings">
+          <Icon name="settings" size={16} />{!collapsed && <span className="flex-1 text-left">Settings</span>}{!collapsed && <span className="text-tiny text-hx-muted">{formatChord(registry.commands.find((c) => c.qid === 'core.settings:open')?.keys ?? '', platform)}</span>}
         </button>}
         <Profile collapsed={collapsed} />
       </div>
@@ -88,11 +88,11 @@ function NavRow({ item, collapsed, indent, depth = 0 }: { item: NavItem; collaps
         { id: 'open', label: `Open ${item.title}`, icon: item.icon ?? 'puzzle', onSelect: () => navigate({ view: item.view, ...(item.params ? { params: item.params } : {}) }) },
         ...(item.plugin.startsWith('core.') ? [] : [{ id: 'app', label: 'Open as its own app', icon: 'external', onSelect: () => void desktop.openPluginWindow(item.plugin) }]),
       ], item.title)}
-      className={cx('relative flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition-colors', collapsed && 'justify-center px-0', indent && !collapsed && 'pl-6', depth === 1 && !collapsed && 'pl-7', depth >= 2 && !collapsed && 'h-7 pl-11 text-[12.5px]',
+      className={cx('relative flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-body transition-colors', collapsed && 'justify-center px-0', indent && !collapsed && 'pl-6', depth === 1 && !collapsed && 'pl-7', depth >= 2 && !collapsed && 'h-7 pl-11 text-small',
         active ? 'bg-hx-active font-medium text-hx-primary' : 'text-hx-secondary hover:bg-hx-hover hover:text-hx-primary')}>
       <Icon name={item.icon ?? 'puzzle'} size={16} />
       {!collapsed && <span className="min-w-0 flex-1 truncate text-left">{item.title}</span>}
-      {badge !== undefined && badge !== null && badge !== 0 && <span data-badge={item.badge} className={cx('flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-hx-accent px-1 text-[10.5px] font-semibold text-hx-on-accent', collapsed && 'absolute right-1 top-0.5')}>{String(badge)}</span>}
+      {badge !== undefined && badge !== null && badge !== 0 && <span data-badge={item.badge} className={cx('flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-hx-accent px-1 text-micro font-semibold text-hx-on-accent', collapsed && 'absolute right-1 top-0.5')}>{String(badge)}</span>}
     </button>
   );
   return collapsed ? <Tooltip label={item.title} placement="right-start">{row}</Tooltip> : row;
@@ -167,7 +167,7 @@ function GroupBlock({ group: g, first, last, over, setOver }: { group: MenuGroup
       { id: 'sep2', label: '', separator: true },
       ...(g.plugin.startsWith('core.') ? [] : [{ id: 'app', label: 'Open as its own app', icon: 'external', onSelect: () => void desktop.openPluginWindow(g.plugin) }]),
       { id: 'manage', label: 'Manage plugins…', icon: 'puzzle', onSelect: () => navigate({ view: 'core.plugins:plugins' }) },
-    ], g.title)} className={cx('mb-0.5 rounded-lg', over && 'ring-1 ring-hx-accent/60')}
+    ], g.title)} className={cx('mb-0.5 rounded-lg', over && 'ring-1 ring-hx-accent-border')}
       onDragOver={(e) => { if (e.dataTransfer.types.includes('application/x-harness-group')) { e.preventDefault(); setOver(g.plugin); } }}
       onDragLeave={() => setOver(null)}
       onDrop={(e) => { const from = e.dataTransfer.getData('application/x-harness-group'); setOver(null); if (from && from !== g.plugin) { e.preventDefault(); moveGroup(from, { before: g.plugin }); } }}>
@@ -184,10 +184,10 @@ function GroupBlock({ group: g, first, last, over, setOver }: { group: MenuGroup
             else if (e.key === 'ArrowRight' && folded) { e.preventDefault(); setFolded(g.plugin, false); }
           }}
           onDragStart={(e) => { e.dataTransfer.setData('application/x-harness-group', g.plugin); e.dataTransfer.effectAllowed = 'move'; }}
-          className={cx('flex h-8 min-w-0 flex-1 items-center gap-2.5 rounded-lg pl-6 pr-8 text-[13px] font-medium transition-colors', isHome ? 'bg-hx-active text-hx-primary' : 'text-hx-secondary hover:bg-hx-hover hover:text-hx-primary')}>
+          className={cx('flex h-8 min-w-0 flex-1 items-center gap-2.5 rounded-lg pl-6 pr-8 text-body font-medium transition-colors', isHome ? 'bg-hx-active text-hx-primary' : 'text-hx-secondary hover:bg-hx-hover hover:text-hx-primary')}>
           <Icon name={g.icon} size={16} />
           <span className="min-w-0 flex-1 truncate text-left">{g.title}</span>
-          {count > 0 && <span data-group-badge={g.plugin} className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-hx-accent px-1 text-[10.5px] font-semibold text-hx-on-accent">{count}</span>}
+          {count > 0 && <span data-group-badge={g.plugin} className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-hx-accent px-1 text-micro font-semibold text-hx-on-accent">{count}</span>}
         </button>
         <Menu placement="bottom-end" items={actions} trigger={({ ref, toggle, open: o }) => <IconButton ref={ref} tabIndex={-1} icon="more" size="xs" label={`${g.title} menu`} data-group-menu={g.plugin} onClick={toggle} className={cx('absolute right-1 top-1.5 opacity-0 group-hover/head:opacity-100 focus:opacity-100', o && 'opacity-100')} />} />
       </div>
@@ -228,9 +228,9 @@ function RailGroup({ group: g }: { group: MenuGroup }) {
     <Menu placement="right-start" items={items} className="min-w-[220px]" trigger={({ ref, toggle, open }) => (
       <Tooltip label={g.title} placement="right-start">
         <button ref={ref} type="button" data-group-rail={g.plugin} aria-haspopup="menu" aria-expanded={open} aria-label={g.title} onClick={toggle}
-          className={cx('relative flex h-8 w-full items-center justify-center rounded-lg text-[13px] transition-colors', inside || open ? 'bg-hx-active text-hx-primary' : 'text-hx-secondary hover:bg-hx-hover hover:text-hx-primary')}>
+          className={cx('relative flex h-8 w-full items-center justify-center rounded-lg text-body transition-colors', inside || open ? 'bg-hx-active text-hx-primary' : 'text-hx-secondary hover:bg-hx-hover hover:text-hx-primary')}>
           <Icon name={g.icon} size={16} />
-          {count > 0 && <span className="absolute right-1 top-0.5 flex h-[16px] min-w-[16px] items-center justify-center rounded-full bg-hx-accent px-1 text-[10px] font-semibold text-hx-on-accent">{count}</span>}
+          {count > 0 && <span className="absolute right-1 top-0.5 flex h-[16px] min-w-[16px] items-center justify-center rounded-full bg-hx-accent px-1 text-micro font-semibold text-hx-on-accent">{count}</span>}
         </button>
       </Tooltip>
     )} />
@@ -256,7 +256,7 @@ function Projects() {
               { id: 'sep', label: '', separator: true },
               { id: 'remove', label: 'Remove from projects', icon: 'x', onSelect: () => void desktop.removeProject(p.path).then((projects) => useApp.getState().setPrefs({ projects })) },
             ], p.name)}
-            className={cx('flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-[13px]', active ? 'bg-hx-active text-hx-primary' : 'text-hx-secondary hover:bg-hx-hover')}>
+            className={cx('flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-body', active ? 'bg-hx-active text-hx-primary' : 'text-hx-secondary hover:bg-hx-hover')}>
             <Icon name="folder" size={15} /><span className="min-w-0 flex-1 truncate text-left">{p.name}</span>
           </button>
         );
@@ -268,7 +268,7 @@ function Projects() {
 function SectionHead({ label, open, onToggle, action }: { label: string; open: boolean; onToggle: () => void; action?: React.ReactNode }) {
   return (
     <div className="group flex h-7 items-center px-2.5">
-      <button type="button" onClick={onToggle} aria-expanded={open} className="flex flex-1 items-center gap-1 text-[11.5px] font-medium text-hx-muted hover:text-hx-secondary">
+      <button type="button" onClick={onToggle} aria-expanded={open} className="flex flex-1 items-center gap-1 text-caption font-medium text-hx-muted hover:text-hx-secondary">
         {label}<Icon name={open ? 'chevron-down' : 'chevron-right'} size={12} className="opacity-0 group-hover:opacity-100" />
       </button>
       {action}
@@ -285,9 +285,9 @@ function Conversations() {
   return (
     <div className="mt-2" data-conversations>
       <SectionHead label="Recents" open={open} onToggle={() => setOpen(!open)} />
-      {open && loaded && !sorted.length && <div className="px-2.5 py-1 text-[12px] text-hx-muted">No conversations yet.</div>}
+      {open && loaded && !sorted.length && <div className="px-2.5 py-1 text-small text-hx-muted">No conversations yet.</div>}
       {open && sorted.slice(0, limit).map((s) => <ConversationRow key={s.id} s={s} />)}
-      {open && sorted.length > limit && <button type="button" className="px-2.5 py-1 text-[12px] text-hx-muted hover:text-hx-primary" onClick={() => setLimit(limit + 100)}>Show more</button>}
+      {open && sorted.length > limit && <button type="button" className="px-2.5 py-1 text-small text-hx-muted hover:text-hx-primary" onClick={() => setLimit(limit + 100)}>Show more</button>}
     </div>
   );
 }
@@ -318,7 +318,7 @@ function ConversationRow({ s }: { s: SessionMeta }) {
   ];
   return (
     <div data-session-row={s.id} onContextMenu={contextItems(() => items, 'Conversation')} className={cx('group relative flex h-8 items-center rounded-lg pr-1', active ? 'bg-hx-active' : 'hover:bg-hx-hover')}>
-      <button type="button" onClick={() => openSession(s.id)} className="flex h-full min-w-0 flex-1 items-center gap-2 pl-2.5 text-left text-[13px]">
+      <button type="button" onClick={() => openSession(s.id)} className="flex h-full min-w-0 flex-1 items-center gap-2 pl-2.5 text-left text-body">
         {s.status === 'running' ? <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-hx-accent" title="Working" /> : s.status === 'waiting' ? <span className="h-2 w-2 shrink-0 rounded-full bg-hx-warning" title="Needs you" /> : s.pinned ? <Icon name="pin" size={12} className="shrink-0 text-hx-muted" /> : null}
         <span className={cx('min-w-0 flex-1 truncate', active ? 'text-hx-primary' : 'text-hx-secondary')}>{s.title || 'New conversation'}</span>
       </button>
@@ -334,10 +334,10 @@ function Profile({ collapsed }: { collapsed: boolean }) {
   if (collapsed) return null;
   return (
     <div className="flex items-center gap-2.5 px-2.5 py-1.5">
-      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-hx-pill text-[12px] font-semibold text-hx-secondary">{(me?.name ?? '?').slice(0, 1).toUpperCase()}</span>
+      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-hx-pill text-small font-semibold text-hx-secondary">{(me?.name ?? '?').slice(0, 1).toUpperCase()}</span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[12.5px] font-medium text-hx-primary">{me?.name === 'operator' ? 'You' : me?.name ?? '...'}</span>
-        <span className="block truncate text-[11px] text-hx-muted">{remote ? engine.origin.replace(/^https?:\/\//, '') : 'This computer'}</span>
+        <span className="block truncate text-small font-medium text-hx-primary">{me?.name === 'operator' ? 'You' : me?.name ?? '...'}</span>
+        <span className="block truncate text-tiny text-hx-muted">{remote ? engine.origin.replace(/^https?:\/\//, '') : 'This computer'}</span>
       </span>
     </div>
   );

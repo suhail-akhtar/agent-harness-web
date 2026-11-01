@@ -9,7 +9,7 @@ import React, { useEffect, useState } from 'react';
 import type { Schedule, ScheduleRun, ScheduleStats } from '@harness/client';
 import { duration, isMissing } from '@harness/client';
 import { create } from 'zustand';
-import { Badge, Button, ConfirmDialog, Icon, IconButton, InfoNote, Menu, Page, Spinner, Switch, Tooltip, cx, toast } from '@harness/ui';
+import { Badge, Button, ConfirmDialog, Icon, IconButton, InfoNote, Menu, Page, Spinner, Switch, Tooltip, cx, toast, Card, IconTile, Section, Callout } from '@harness/ui';
 import { useData, client } from '../../state/data';
 import { navigate, openSession, prefill, useApp } from '../../state/app';
 import { money } from '../../components/CostByModel';
@@ -56,10 +56,10 @@ export function RunRow({ run, showTitle }: { run: ScheduleRun; showTitle?: boole
   const took = run.endedAt && run.status !== 'skipped' ? duration(run.endedAt - run.startedAt) : '';
   const text = run.status === 'completed' ? run.summary : run.reason ?? run.summary;
   return (
-    <div data-run={run.id} data-run-status={run.status} className="flex items-start gap-2 px-3 py-2 text-[12.5px]">
+    <div data-run={run.id} data-run-status={run.status} className="flex items-start gap-2 px-3 py-2 text-small">
       <div className="w-[118px] shrink-0 pt-0.5"><RunStatus run={run} /></div>
       <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-x-2 text-[11.5px] text-hx-muted">
+        <div className="flex flex-wrap items-center gap-x-2 text-caption text-hx-muted">
           {showTitle && <span className="font-medium text-hx-secondary">{run.title}</span>}
           <span>{fmt(run.startedAt)}</span>
           {took && <span>· {took}</span>}
@@ -77,9 +77,9 @@ export function RunRow({ run, showTitle }: { run: ScheduleRun; showTitle?: boole
 
 function Runs({ id }: { id: string }) {
   const { value: runs, error } = useScheduled(() => client.schedules.runs(id, 20), [id]);
-  if (error) return <div className="px-3 py-2 text-[12px] text-hx-danger">{error}</div>;
+  if (error) return <div className="px-3 py-2 text-small text-hx-danger">{error}</div>;
   if (!runs) return <div className="px-3 py-2"><Spinner /></div>;
-  if (!runs.length) return <div className="px-3 py-2 text-[12px] text-hx-muted" data-runs-empty>No runs yet.</div>;
+  if (!runs.length) return <div className="px-3 py-2 text-small text-hx-muted" data-runs-empty>No runs yet.</div>;
   return <div className="divide-y divide-hx-border-subtle" data-runs={id}>{runs.map((r) => <RunRow key={r.id} run={r} />)}</div>;
 }
 
@@ -129,13 +129,13 @@ function ScheduleItem({ s, stats, onEdit, reload }: { s: Schedule; stats?: Sched
   const asks = s.newSession ? ({ dontAsk: 'never asks', auto: 'a checker decides', acceptEdits: 'asks you for commands', default: 'asks you' } as Record<string, string>)[s.newSession.mode ?? 'dontAsk'] : undefined;
   const tells = s.notify ? ({ important: 'tells you what matters', digest: 'in your digest', silent: 'tells you nothing' } as Record<string, string>)[s.notify] : undefined;
   return (
-    <div data-schedule={s.id} className={cx('rounded-xl border bg-hx-elevated', s.enabled ? 'border-hx-border-subtle' : 'border-dashed border-hx-border-subtle opacity-75')}>
+    <Card padding="none" data-schedule={s.id} muted={!s.enabled}>
       <div className="flex items-start gap-3 px-4 py-3">
-        <span className={cx('mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg', s.enabled ? 'bg-hx-accent-soft text-hx-accent-text' : 'bg-hx-hover text-hx-muted')}><Icon name={s.trigger ? 'link' : s.watch ? 'eye' : s.workflow ? 'workflow' : 'clock'} size={16} /></span>
+        <IconTile icon={s.trigger ? 'link' : s.watch ? 'eye' : s.workflow ? 'workflow' : 'clock'} tone={s.enabled ? 'accent' : 'neutral'} />
         <button type="button" className="min-w-0 flex-1 text-left" onClick={() => setOpen(!open)} aria-expanded={open} data-schedule-toggle>
-          <span className="block truncate text-[14px] font-medium">{s.title || s.prompt}</span>
-          <span className="block truncate text-[12.5px] text-hx-secondary" data-schedule-when>{!s.cron && !s.trigger && s.at ? `Once, ${fmt(s.at)}` : s.when ?? timing(s)}</span>
-          <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11.5px] text-hx-muted">
+          <span className="block truncate text-body-lg font-medium">{s.title || s.prompt}</span>
+          <span className="block truncate text-small text-hx-secondary" data-schedule-when>{!s.cron && !s.trigger && s.at ? `Once, ${fmt(s.at)}` : s.when ?? timing(s)}</span>
+          <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-caption text-hx-muted">
             {s.watch ? (
               <span data-schedule-watch className={ws?.error ? 'text-hx-danger' : undefined}>
                 <Icon name="eye" size={11} className="mr-1 inline" />
@@ -164,21 +164,20 @@ function ScheduleItem({ s, stats, onEdit, reload }: { s: Schedule; stats?: Sched
           ]} trigger={({ ref, toggle }) => <IconButton ref={ref} size="sm" icon="more" label="More" onClick={toggle} data-schedule-menu />} />
         </div>
       </div>
-      {ws?.error && <div className="mx-4 mb-3 rounded-lg bg-hx-danger/10 px-3 py-1.5 text-[12px] text-hx-danger" data-schedule-watch-error>The last check failed: {ws.error}</div>}
-      {last && /^(failed|stopped|interrupted|skipped|completed, but)/i.test(last) && <div className="mx-4 mb-3 rounded-lg bg-hx-hover px-3 py-1.5 text-[12px] text-hx-secondary" data-schedule-last-reason>{last}</div>}
+      {ws?.error && <Callout tone="danger" className="mx-4 mb-3" data-schedule-watch-error>The last check failed: {ws.error}</Callout>}
+      {last && /^(failed|stopped|interrupted|skipped|completed, but)/i.test(last) && <Callout tone={/^failed/i.test(last) ? 'danger' : 'warning'} className="mx-4 mb-3" data-schedule-last-reason>{last}</Callout>}
       {/* Mostly unwanted: it offers to be quieter (never louder, never by itself). */}
       {stats?.quieter && (s.notify ?? 'always') !== 'digest' && s.notify !== 'silent' && (
-        <div className="mx-4 mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-hx-warning/30 bg-hx-warning/10 px-3 py-2 text-[12.5px]" data-schedule-quieter>
-          <span className="min-w-0 flex-1">{stats.quieter}. Make it quieter?</span>
+        <Callout variant="banner" tone="warning" className="mx-4 mb-3" data-schedule-quieter actions={<>
           {!s.notify && <Button size="sm" onClick={() => void client.schedules.update(s.id, { notify: 'important' }).then(reload).catch(fail)} data-quieter="important">Only when it matters</Button>}
           <Button size="sm" onClick={() => void client.schedules.update(s.id, { notify: 'digest' }).then(reload).catch(fail)} data-quieter="digest">In my digest</Button>
           {s.notify === 'important' && <Button size="sm" onClick={() => void client.schedules.update(s.id, { notify: 'silent' }).then(reload).catch(fail)} data-quieter="silent">Don't tell me</Button>}
-        </div>
+        </>}>{stats.quieter}. Make it quieter?</Callout>
       )}
       {open && (
         <div className="border-t border-hx-border-subtle">
           {stats && stats.runs + stats.skipped > 0 && (
-            <div className="flex flex-wrap gap-x-3 px-3 pt-2 text-[11.5px] text-hx-muted" data-schedule-stats>
+            <div className="flex flex-wrap gap-x-3 px-3 pt-2 text-caption text-hx-muted" data-schedule-stats>
               <span>Last 30 days: {stats.runs} run{stats.runs === 1 ? '' : 's'}</span>
               <span>{stats.found} found something</span>
               {stats.updates > 0 && <span>{stats.opened} of {stats.updates} update{stats.updates === 1 ? '' : 's'} opened</span>}
@@ -191,7 +190,7 @@ function ScheduleItem({ s, stats, onEdit, reload }: { s: Schedule; stats?: Sched
         </div>
       )}
       <ConfirmDialog open={confirm} title={`Delete "${s.title}"?`} body="It stops running, and its run history goes with it. The conversations it made stay." confirmLabel="Delete" danger onAnswer={(yes) => { setConfirm(false); if (yes) void client.schedules.remove(s.id).then(reload).catch(fail); }} />
-    </div>
+    </Card>
   );
 }
 
@@ -225,21 +224,21 @@ export function ScheduleManager({ embedded }: { embedded?: boolean }): React.Rea
         </InfoNote>
       )}
       {active && keepInTray && !startAtLogin && (
-        <p className="flex flex-wrap items-center gap-2 text-[12px] text-hx-muted" data-schedules-login-note>
+        <p className="flex flex-wrap items-center gap-2 text-small text-hx-muted" data-schedules-login-note>
           They also stop when this computer restarts, until the app is opened again.
           <Button size="sm" variant="ghost" onClick={() => { useApp.getState().setPrefs({ startAtLogin: true }); void desktop.setLoginItem(true).catch(() => {}); }}>Start the app at login</Button>
         </p>
       )}
       {!list.length ? (
-        embedded ? <p className="text-[13px] text-hx-muted">Nothing scheduled.</p> : (
-          <div className="rounded-2xl border border-hx-border-subtle p-6" data-schedules-empty>
-            <div className="mb-1 text-[15px] font-semibold">Let agents work while you are away</div>
-            <p className="mb-4 text-[13px] text-hx-secondary">A schedule runs a prompt or a workflow at set times, in a new conversation each time or the same one. What it finds comes to your Inbox; what needs your approval waits there.</p>
+        embedded ? <p className="text-body text-hx-muted">Nothing scheduled.</p> : (
+          <Card className="p-6" data-schedules-empty>
+            <div className="mb-1 text-title font-semibold">Let agents work while you are away</div>
+            <p className="mb-4 text-body text-hx-secondary">A schedule runs a prompt or a workflow at set times, in a new conversation each time or the same one. What it finds comes to your Inbox; what needs your approval waits there.</p>
             <div className="mb-4 grid gap-2 sm:grid-cols-2">
               {TEMPLATES.map((t) => (
-                <button key={t.id} type="button" data-empty-template={t.id} onClick={() => openNew(t.draft)} className="flex items-start gap-2.5 rounded-xl border border-hx-border-subtle px-3 py-2.5 text-left hover:border-hx-border hover:bg-hx-hover">
+                <button key={t.id} type="button" data-empty-template={t.id} onClick={() => openNew(t.draft)} className="flex items-start gap-2.5 rounded-lg border border-hx-border-subtle bg-hx-bg px-3 py-2.5 text-left transition-colors hover:border-hx-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-hx-focus">
                   <Icon name={t.icon} size={16} className="mt-0.5 shrink-0 text-hx-accent-text" />
-                  <span><span className="block text-[13px] font-medium">{t.title}</span><span className="block text-[12px] text-hx-muted">{t.blurb}</span></span>
+                  <span><span className="block text-body font-medium">{t.title}</span><span className="block text-small text-hx-muted">{t.blurb}</span></span>
                 </button>
               ))}
             </div>
@@ -247,12 +246,11 @@ export function ScheduleManager({ embedded }: { embedded?: boolean }): React.Rea
               <Button variant="primary" icon="plus" onClick={() => openNew()} data-schedule-new>New schedule</Button>
               <Button icon="sparkles" onClick={() => prefill(ASK_AGENT, true)} data-schedule-ask-agent>Ask an agent to set it up</Button>
             </div>
-          </div>
+          </Card>
         )
       ) : <div className="space-y-2" data-schedule-list>{list.map((s) => <ScheduleItem key={s.id} s={s} stats={stats?.[s.id]} onEdit={() => setEditing(s)} reload={reload} />)}</div>}
-      {(embedded || list.length > 0) && (
-        <div className="flex justify-end gap-2">
-          {!embedded && <Button icon="sparkles" variant="ghost" onClick={() => prefill(ASK_AGENT, true)} data-schedule-ask-agent>Ask an agent to set it up</Button>}
+      {embedded && (
+        <div className="mt-3 flex justify-end gap-2">
           <Button icon="plus" onClick={() => openNew()} data-schedule-new>New schedule</Button>
         </div>
       )}
@@ -262,7 +260,15 @@ export function ScheduleManager({ embedded }: { embedded?: boolean }): React.Rea
 }
 
 export function ScheduledPage(): React.ReactElement {
-  return <Page data-scheduled title="Scheduled" subtitle="Prompts and workflows that run at set times or when called, and what each run came to."><ScheduleManager /></Page>;
+  return (
+    <Page data-scheduled title="Scheduled" subtitle="Prompts and workflows that run at set times, when something changes or when called, and what each run came to."
+      actions={<>
+        <Button icon="sparkles" variant="ghost" onClick={() => prefill(ASK_AGENT, true)} data-schedule-ask-agent>Ask an agent to set it up</Button>
+        <Button icon="plus" variant="primary" onClick={() => useScheduleDialog.getState().open()} data-schedule-new>New schedule</Button>
+      </>}>
+      <ScheduleManager />
+    </Page>
+  );
 }
 
 /** The latest runs of every schedule (Activity). */
@@ -270,9 +276,8 @@ export function RecentRuns({ limit = 15 }: { limit?: number }): React.ReactEleme
   const { value: runs } = useScheduled(() => client.schedules.allRuns(limit), [limit]);
   if (!runs?.length) return null;
   return (
-    <section data-recent-runs className="mt-6">
-      <h2 className="mb-2 text-[12px] font-medium uppercase tracking-wide text-hx-muted">Recent scheduled runs</h2>
-      <div className="divide-y divide-hx-border-subtle rounded-xl border border-hx-border-subtle">{runs.map((r) => <RunRow key={r.id} run={r} showTitle />)}</div>
-    </section>
+    <Section title="Recent scheduled runs" data-recent-runs>
+      <Card padding="none" className="divide-y divide-hx-border-subtle">{runs.map((r) => <RunRow key={r.id} run={r} showTitle />)}</Card>
+    </Section>
   );
 }

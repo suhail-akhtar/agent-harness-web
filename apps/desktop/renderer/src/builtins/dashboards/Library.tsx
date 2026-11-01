@@ -31,9 +31,9 @@ export function Library({ params }: { params: Record<string, string> }): React.R
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {list.map((d) => (
               <button key={d.id} type="button" data-doc-card={d.id} onClick={() => navigate({ view: 'core.dashboards:doc', params: { id: d.id } })} className="flex flex-col gap-2 rounded-xl border border-hx-border-subtle bg-hx-elevated p-4 text-left hover:border-hx-border">
-                <div className="flex items-start gap-2"><Icon name={d.type === 'report' ? 'file-text' : 'chart'} size={18} className="mt-0.5 text-hx-accent-text" /><span className="min-w-0 flex-1 truncate text-[14px] font-medium">{d.title}</span>{d.published && <Badge tone="accent">Published</Badge>}</div>
-                <div className="text-[12px] text-hx-muted">{d.pages} page{d.pages === 1 ? '' : 's'} · {d.visuals} visual{d.visuals === 1 ? '' : 's'}{d.model ? ` · model ${d.model}` : ''}</div>
-                <div className="flex items-center gap-2 text-[11.5px] text-hx-muted"><span>v{d.version}</span><span>· {new Date(d.updatedAt).toLocaleString()}</span><span className="ml-auto" title="Views (app and published)"><Icon name="eye" size={12} className="mr-0.5 inline" />{d.views}</span>{d.refresh !== 'manual' && <span title="Refreshes on its own"><Icon name="refresh" size={12} className="inline" /></span>}</div>
+                <div className="flex items-start gap-2"><Icon name={d.type === 'report' ? 'file-text' : 'chart'} size={18} className="mt-0.5 text-hx-accent-text" /><span className="min-w-0 flex-1 truncate text-body-lg font-medium">{d.title}</span>{d.published && <Badge tone="accent">Published</Badge>}</div>
+                <div className="text-small text-hx-muted">{d.pages} page{d.pages === 1 ? '' : 's'} · {d.visuals} visual{d.visuals === 1 ? '' : 's'}{d.model ? ` · model ${d.model}` : ''}</div>
+                <div className="flex items-center gap-2 text-caption text-hx-muted"><span>v{d.version}</span><span>· {new Date(d.updatedAt).toLocaleString()}</span><span className="ml-auto" title="Views (app and published)"><Icon name="eye" size={12} className="mr-0.5 inline" />{d.views}</span>{d.refresh !== 'manual' && <span title="Refreshes on its own"><Icon name="refresh" size={12} className="inline" /></span>}</div>
               </button>
             ))}
           </div>

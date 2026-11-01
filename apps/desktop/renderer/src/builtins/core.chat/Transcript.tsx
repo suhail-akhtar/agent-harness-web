@@ -98,15 +98,15 @@ function Contents({ chapters, onJump }: { chapters: Array<{ key: string; index: 
   return (
     <div className="absolute left-3 top-2 z-10" data-toc>
       <button ref={btn} type="button" onClick={() => setOpen(!open)} aria-expanded={open} aria-label="Chapters" data-toc-toggle
-        className="flex h-8 items-center gap-1.5 rounded-full border border-hx-border bg-hx-elevated px-3 text-[12px] text-hx-secondary shadow-sm hover:text-hx-primary">
-        <Icon name="list" size={14} />Chapters<span className="rounded-full bg-hx-pill px-1.5 text-[10.5px]">{chapters.length}</span>
+        className="flex h-8 items-center gap-1.5 rounded-full border border-hx-border bg-hx-elevated px-3 text-small text-hx-secondary shadow-sm hover:text-hx-primary">
+        <Icon name="list" size={14} />Chapters<span className="rounded-full bg-hx-pill px-1.5 text-micro">{chapters.length}</span>
       </button>
       <Popover open={open} onClose={() => setOpen(false)} anchor={btn} placement="bottom-start" className="w-[300px]" role="dialog">
         <nav aria-label="Chapters" className="max-h-[60vh] overflow-auto p-1.5" data-toc-list>
           {chapters.map((c) => (
             <button key={c.key} type="button" data-toc-entry={c.index} onClick={() => { onJump(c.key); setOpen(false); }} className="flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-hx-hover">
-              <span className="mt-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-hx-accent-soft px-1 text-[10.5px] font-semibold text-hx-accent-text">{c.index}</span>
-              <span className="min-w-0"><span className="block text-[13px] text-hx-primary">{c.title}</span>{c.summary && <span className="block truncate text-[11.5px] text-hx-muted">{c.summary}</span>}</span>
+              <span className="mt-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-hx-accent-soft px-1 text-micro font-semibold text-hx-accent-text">{c.index}</span>
+              <span className="min-w-0"><span className="block text-body text-hx-primary">{c.title}</span>{c.summary && <span className="block truncate text-caption text-hx-muted">{c.summary}</span>}</span>
             </button>
           ))}
         </nav>
@@ -139,14 +139,14 @@ function DefaultItem({ item, sessionId, fence, sources, running, isLastAnswer, o
     case 'user': return <UserMessage item={item} />;
     case 'assistant': return <AssistantMessage item={item} fence={fence} sources={sources} canRetry={!!isLastAnswer && !running} onRetry={onRetry} compact={inSteps} />;
     case 'tool': return <ToolCard item={item} sessionId={sessionId} />;
-    case 'notice': return <div data-notice={item.level} className={cx('my-1 flex items-start gap-2 rounded-lg px-3 py-2 text-[12.5px]', item.level === 'error' ? 'bg-hx-danger/8 text-hx-danger' : item.level === 'warn' ? 'bg-hx-warning/8 text-hx-warning' : 'bg-hx-pill text-hx-secondary')}><Icon name={item.level === 'error' ? 'alert' : item.level === 'warn' ? 'warning' : 'info'} size={14} className="mt-0.5 shrink-0" /><span className="whitespace-pre-wrap">{item.text}</span></div>;
-    case 'compaction': return <div className="my-2 flex items-center gap-3 text-[11.5px] text-hx-muted"><span className="h-px flex-1 bg-hx-border-subtle" />Context compacted{item.before ? ` · ${fmtTokens(item.before)} → ${fmtTokens(item.after ?? 0)} tokens` : ''}<span className="h-px flex-1 bg-hx-border-subtle" /></div>;
+    case 'notice': return <div data-notice={item.level} className={cx('my-1 flex items-start gap-2 rounded-lg px-3 py-2 text-small', item.level === 'error' ? 'bg-hx-danger-soft text-hx-danger' : item.level === 'warn' ? 'bg-hx-warning-soft text-hx-warning' : 'bg-hx-pill text-hx-secondary')}><Icon name={item.level === 'error' ? 'alert' : item.level === 'warn' ? 'warning' : 'info'} size={14} className="mt-0.5 shrink-0" /><span className="whitespace-pre-wrap">{item.text}</span></div>;
+    case 'compaction': return <div className="my-2 flex items-center gap-3 text-caption text-hx-muted"><span className="h-px flex-1 bg-hx-border-subtle" />Context compacted{item.before ? ` · ${fmtTokens(item.before)} → ${fmtTokens(item.after ?? 0)} tokens` : ''}<span className="h-px flex-1 bg-hx-border-subtle" /></div>;
     case 'workflow': return <WorkflowCard item={item} sessionId={sessionId} />;
     case 'progress': return <ProgressCard item={item} />;
     // Without the plugin that draws them (core.agents): a line each.
-    case 'chapter': return <div data-chapter={item.index} className="mt-4 text-[14px] font-semibold">{item.index}. {item.title}</div>;
-    case 'proposal': return <div data-proposal={item.id} className="rounded-lg bg-hx-pill px-3 py-2 text-[12.5px]">Proposed session: <b>{item.title}</b></div>;
-    case 'link': return <div data-link={item.id} className="rounded-lg bg-hx-pill px-3 py-2 text-[12.5px]">Linked session {item.phase}: <b>{item.title}</b></div>;
+    case 'chapter': return <div data-chapter={item.index} className="mt-4 text-body-lg font-semibold">{item.index}. {item.title}</div>;
+    case 'proposal': return <div data-proposal={item.id} className="rounded-lg bg-hx-pill px-3 py-2 text-small">Proposed session: <b>{item.title}</b></div>;
+    case 'link': return <div data-link={item.id} className="rounded-lg bg-hx-pill px-3 py-2 text-small">Linked session {item.phase}: <b>{item.title}</b></div>;
   }
 }
 
@@ -156,19 +156,19 @@ const PROGRESS_TITLE: Record<Extract<Item, { kind: 'progress' }>['phase'], strin
 
 /** A progress review at a step checkpoint: why it extended, restarted fresh or stopped. */
 function ProgressCard({ item }: { item: Extract<Item, { kind: 'progress' }> }) {
-  const tone = item.phase === 'stopped' || item.phase === 'flagged' ? 'bg-hx-warning/8 text-hx-warning' : item.phase === 'refreshed' ? 'bg-hx-pill text-hx-primary' : 'bg-hx-pill text-hx-secondary';
+  const tone = item.phase === 'stopped' || item.phase === 'flagged' ? 'bg-hx-warning-soft text-hx-warning' : item.phase === 'refreshed' ? 'bg-hx-pill text-hx-primary' : 'bg-hx-pill text-hx-secondary';
   const icon = item.phase === 'stopped' ? 'stop' : item.phase === 'flagged' ? 'warning' : item.phase === 'refreshed' ? 'refresh' : item.phase === 'extended' ? 'check-circle' : 'activity';
   // The first line of a stop is its headline; the rest (done, stuck on, what to do) follows.
   const [head, ...rest] = item.text.split('\n');
   const small = item.phase === 'nudge' || item.phase === 'extended' || item.phase === 'checkpoint';
   return (
-    <div data-progress={item.phase} className={cx('my-1 rounded-lg px-3 py-2 text-[12.5px]', tone)}>
+    <div data-progress={item.phase} className={cx('my-1 rounded-lg px-3 py-2 text-small', tone)}>
       <div className="flex items-start gap-2">
         {item.phase === 'checkpoint' ? <Spinner size={13} className="mt-0.5 shrink-0" /> : <Icon name={icon} size={14} className="mt-0.5 shrink-0" />}
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-baseline gap-x-2">
             <span className="font-medium">{PROGRESS_TITLE[item.phase]}{item.agent ? ` · ${item.agent}` : ''}</span>
-            <span className="text-[11px] opacity-70">step {item.step}{item.budget && item.phase !== 'nudge' ? ` of ${item.budget}` : ''} · {item.by === 'review' ? 'reviewed' : 'from signals'}</span>
+            <span className="text-tiny opacity-70">step {item.step}{item.budget && item.phase !== 'nudge' ? ` of ${item.budget}` : ''} · {item.by === 'review' ? 'reviewed' : 'from signals'}</span>
           </div>
           <div className="whitespace-pre-wrap break-words">{small ? item.text : head}</div>
           {!small && rest.length ? <div className="mt-1 whitespace-pre-wrap break-words opacity-90">{rest.join('\n')}</div> : null}
@@ -180,7 +180,7 @@ function ProgressCard({ item }: { item: Extract<Item, { kind: 'progress' }> }) {
 }
 
 function UserMessage({ item }: { item: Extract<Item, { kind: 'user' }> }) {
-  if (item.origin === 'auto' && !item.text && !item.images?.length) return <div data-user-message="auto" className="my-1 flex items-center gap-3 text-[11.5px] text-hx-muted"><span className="h-px flex-1 bg-hx-border-subtle" /><Icon name="refresh" size={12} />Continued on its own after a linked session reported<span className="h-px flex-1 bg-hx-border-subtle" /></div>;
+  if (item.origin === 'auto' && !item.text && !item.images?.length) return <div data-user-message="auto" className="my-1 flex items-center gap-3 text-caption text-hx-muted"><span className="h-px flex-1 bg-hx-border-subtle" /><Icon name="refresh" size={12} />Continued on its own after a linked session reported<span className="h-px flex-1 bg-hx-border-subtle" /></div>;
   const { turnOf, running, onEdit, onBranch } = React.useContext(UserActionsContext);
   const turn = turnOf.get(item.key);
   const [editing, setEditing] = useState(false);
@@ -207,14 +207,14 @@ function UserMessage({ item }: { item: Extract<Item, { kind: 'user' }> }) {
         <div className="w-full max-w-[85%] rounded-2xl border border-hx-border bg-hx-elevated p-2" data-user-edit>
           <Textarea autoFocus value={draft} onChange={(e) => setDraft(e.target.value)} rows={Math.min(12, Math.max(3, draft.split('\n').length + 1))}
             onKeyDown={(e) => { if (e.key === 'Escape') setEditing(false); if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void resend(draft); } }}
-            className="resize-y border-0 bg-transparent px-2 py-1.5 text-[14.5px] leading-6 focus:ring-0" aria-label="Edit your message" />
+            className="resize-y border-0 bg-transparent px-2 py-1.5 text-body-lg leading-6 focus:ring-0" aria-label="Edit your message" />
           <div className="flex items-center gap-2 px-1 pt-1">
-            <span className="flex-1 text-[11.5px] text-hx-muted">The conversation goes back to this message; what came after it is removed. Files are not changed back.</span>
+            <span className="flex-1 text-caption text-hx-muted">The conversation goes back to this message; what came after it is removed. Files are not changed back.</span>
             <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>
             <Button size="sm" variant="primary" data-user-edit-send loading={busy} disabled={!draft.trim() || running} onClick={() => void resend(draft)}>Send</Button>
           </div>
         </div>
-      ) : item.text && <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl bg-hx-pill px-4 py-2.5 text-[14.5px] leading-6 text-hx-primary">{item.text}</div>}
+      ) : item.text && <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl bg-hx-pill px-4 py-2.5 text-body-lg leading-6 text-hx-primary">{item.text}</div>}
       {!editing && (
         <div className="mt-0.5 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100" data-user-actions>
           <IconButton size="xs" icon="copy" label="Copy" onClick={copy} />
@@ -238,7 +238,7 @@ function AssistantMessage({ item, fence, sources, canRetry, onRetry, compact }: 
       ...(canRetry && onRetry ? [{ id: 'retry', label: 'Retry', icon: 'refresh', onSelect: onRetry }] : []),
     ], 'Reply')}>
       {item.reasoning && <Reasoning text={item.reasoning} streaming={streamingReasoning} ms={item.reasoningMs} />}
-      {item.text && <div ref={body} className={compact ? 'text-[13.5px]' : ''}><Markdown text={item.text} streaming={item.streaming} renderFence={fence} sources={sources} /></div>}
+      {item.text && <div ref={body} className={compact ? 'text-body' : ''}><Markdown text={item.text} streaming={item.streaming} renderFence={fence} sources={sources} /></div>}
       {item.streaming && item.text && <span className="hx-thinking ml-0.5 inline-block h-3 w-1.5 rounded-sm bg-hx-accent align-middle" aria-label="Writing" />}
       {!item.streaming && item.text && !compact && (
         <div className="mt-1 flex items-center gap-0.5 opacity-60 transition-opacity group-hover:opacity-100" data-message-actions>
@@ -260,7 +260,7 @@ function Steps({ row, sessionId, fence, defaultOpen }: { row: Extract<Row, { kin
   const last = [...row.items].reverse().find((i): i is ToolItem => i.kind === 'tool');
   return (
     <div data-steps data-open={isOpen ? '1' : '0'} className="my-1">
-      <button type="button" onClick={() => setOpen(!isOpen)} aria-expanded={isOpen} className="group flex w-full items-center gap-2 rounded-lg py-1 text-left text-[13px] text-hx-muted hover:text-hx-secondary">
+      <button type="button" onClick={() => setOpen(!isOpen)} aria-expanded={isOpen} className="group flex w-full items-center gap-2 rounded-lg py-1 text-left text-body text-hx-muted hover:text-hx-secondary">
         {row.running ? <Spinner size={13} className="text-hx-accent-text" /> : <Icon name={errors ? 'warning' : 'check-circle'} size={14} className={errors ? 'text-hx-warning' : 'text-hx-success'} />}
         <span data-worked>{workedLabel(row)}</span>
         {errors > 0 && !row.running && <span className="text-hx-warning">· {errors} failed</span>}
@@ -319,16 +319,16 @@ export function ToolCard({ item, sessionId }: { item: ToolItem; sessionId: strin
     <div data-tool={item.name} data-tool-status={status} className={cx('rounded-lg', item.isError && 'bg-hx-danger/[0.04]')}>
       <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="group flex w-full items-center gap-2 rounded-lg px-1.5 py-1 text-left hover:bg-hx-hover">
         <Icon name={TOOL_ICON[item.name] ?? (item.name.startsWith('mcp__') ? 'plug' : 'wrench')} size={14} className={cx('shrink-0', item.running ? 'hx-thinking text-hx-accent-text' : item.isError ? 'text-hx-danger' : 'text-hx-muted')} />
-        <span className={cx('shrink-0 text-[13px]', item.isError ? 'text-hx-danger' : 'text-hx-secondary')}>{VERB[item.name] ?? item.name}</span>
-        <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-hx-muted" title={summarize(item.name, item.input)}>{summarize(item.name, item.input)}</span>
+        <span className={cx('shrink-0 text-body', item.isError ? 'text-hx-danger' : 'text-hx-secondary')}>{VERB[item.name] ?? item.name}</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-small text-hx-muted" title={summarize(item.name, item.input)}>{summarize(item.name, item.input)}</span>
         {diff && !item.isError && <DiffCount before={diff.before} after={diff.after} />}
-        {item.running ? <Spinner size={12} className="text-hx-accent-text" /> : item.isError ? <span className="text-[11px] text-hx-danger">failed</span> : item.ms !== undefined ? <span className="text-[11px] tabular-nums text-hx-muted">{item.ms < 1000 ? `${item.ms}ms` : duration(item.ms)}</span> : null}
+        {item.running ? <Spinner size={12} className="text-hx-accent-text" /> : item.isError ? <span className="text-tiny text-hx-danger">failed</span> : item.ms !== undefined ? <span className="text-tiny tabular-nums text-hx-muted">{item.ms < 1000 ? `${item.ms}ms` : duration(item.ms)}</span> : null}
         <Icon name={open ? 'chevron-up' : 'chevron-down'} size={12} className="shrink-0 text-hx-muted opacity-0 group-hover:opacity-100" />
       </button>
       {!(custom && custom.kind === 'frame') && <div className="ml-6"><NativeToolOutput item={item} sessionId={sessionId} /></div>}
       {off && !item.running && <div className="ml-6"><OffPluginNote off={off} /></div>}
       {item.name === 'agent' && item.activity.length > 0 && (
-        <div className="ml-7 space-y-0.5 py-0.5 text-[12px] text-hx-muted">{item.activity.slice(open ? 0 : -3).map((a, i) => <div key={i} className={a.isError ? 'text-hx-danger' : ''}>{a.done ? (a.isError ? '✕' : '✓') : '…'} <b className="font-medium">{a.name}</b> {a.summary}</div>)}</div>
+        <div className="ml-7 space-y-0.5 py-0.5 text-small text-hx-muted">{item.activity.slice(open ? 0 : -3).map((a, i) => <div key={i} className={a.isError ? 'text-hx-danger' : ''}>{a.done ? (a.isError ? '✕' : '✓') : '…'} <b className="font-medium">{a.name}</b> {a.summary}</div>)}</div>
       )}
       {custom && !item.running && custom.kind === 'frame' && custom.entry ? (
         <div className="ml-6 mt-1" data-plugin-renderer={custom.qid}><PluginFrame plugin={custom.plugin} contribution={custom.qid} entry={custom.entry} height={custom.height ?? 140} context={toolRendererContext(item, sessionId)} /></div>
@@ -346,7 +346,7 @@ export function ToolCard({ item, sessionId }: { item: ToolItem; sessionId: strin
               {item.result !== undefined && (item.name === 'agent' ? <Markdown text={item.result} />
                 : resultLooksJson ? <JsonView source={item.result} />
                   : item.name === 'read' && !item.isError ? <CodeBlock code={item.result.slice(0, 200_000)} language={extOf(s('path'))} filename={s('path')} />
-                    : <pre className={cx('hx-scroll max-h-80 overflow-auto rounded-lg bg-hx-code px-3 py-2 font-mono text-[12px] leading-5 whitespace-pre-wrap break-words', item.isError ? 'text-hx-danger' : 'text-hx-secondary')}>{item.result.slice(-60_000)}</pre>)}
+                    : <pre className={cx('hx-scroll max-h-80 overflow-auto rounded-lg bg-hx-code px-3 py-2 font-mono text-small leading-5 whitespace-pre-wrap break-words', item.isError ? 'text-hx-danger' : 'text-hx-secondary')}>{item.result.slice(-60_000)}</pre>)}
             </div>
           )}
         </>
@@ -358,7 +358,7 @@ export function ToolCard({ item, sessionId }: { item: ToolItem; sessionId: strin
 function DiffCount({ before, after }: { before: string; after: string }) {
   const a = after ? after.split('\n').length : 0;
   const r = before ? before.split('\n').length : 0;
-  return <span className="shrink-0 text-[11px] tabular-nums"><span className="text-[var(--hx-diff-add-gutter)]">+{a}</span> <span className="text-[var(--hx-diff-remove-gutter)]">−{r}</span></span>;
+  return <span className="shrink-0 text-tiny tabular-nums"><span className="text-[var(--hx-diff-add-gutter)]">+{a}</span> <span className="text-[var(--hx-diff-remove-gutter)]">−{r}</span></span>;
 }
 
 const FILE_ICON: Record<string, string> = { html: 'globe', htm: 'globe', svg: 'image', png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image', md: 'file-text', txt: 'file-text', csv: 'table', tsv: 'table', json: 'code', js: 'code', ts: 'code', tsx: 'code', jsx: 'code', py: 'code', css: 'palette', pdf: 'file' };
@@ -392,7 +392,7 @@ function ArtifactCard({ f, sessionId }: { f: ArtifactFile; sessionId: string }) 
     <div data-artifact-card={f.path} className="rounded-xl border border-hx-border-subtle bg-hx-elevated">
       <div className="flex items-center gap-2.5 p-2.5">
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-hx-accent-soft text-hx-accent-text"><Icon name={FILE_ICON[ext] ?? 'file'} size={17} /></span>
-        <span className="min-w-0 flex-1"><span className="block truncate text-[13px] font-medium text-hx-primary">{name}</span><span className="block truncate text-[11px] text-hx-muted">{f.tool === 'write' ? 'Created' : 'Edited'} · {ext.toUpperCase() || 'file'} · {f.path}</span></span>
+        <span className="min-w-0 flex-1"><span className="block truncate text-body font-medium text-hx-primary">{name}</span><span className="block truncate text-tiny text-hx-muted">{f.tool === 'write' ? 'Created' : 'Edited'} · {ext.toUpperCase() || 'file'} · {f.path}</span></span>
         <Button size="sm" variant="ghost" onClick={() => void load().then(() => setPreview((v) => !v))}>{preview ? 'Hide' : 'Preview'}</Button>
         <Button size="sm" onClick={() => void open()}>Open</Button>
       </div>
@@ -424,10 +424,10 @@ function WorkflowCard({ item, sessionId }: { item: Extract<Item, { kind: 'workfl
           <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={14} />
         </button>
         <Icon name="workflow" size={15} className="text-hx-accent-text" />
-        <b className="text-[13px]">{run.workflow}</b>
+        <b className="text-body">{run.workflow}</b>
         <Badge tone={run.status === 'succeeded' ? 'success' : run.status === 'failed' ? 'danger' : run.status === 'waiting' ? 'warning' : 'accent'}>{live && <Spinner size={10} className="mr-1" />}{({ running: 'Running', waiting: 'Needs you', succeeded: 'Succeeded', failed: 'Failed', aborted: 'Stopped', interrupted: 'Interrupted' } as Record<string, string>)[run.status] ?? run.status}</Badge>
-        {!expanded && last && <span className="min-w-0 truncate text-[11.5px] text-hx-muted" data-workflow-last>· {title(last.node)}</span>}
-        <span className="ml-auto shrink-0 text-[11.5px] text-hx-muted">{run.history.length} steps · ${run.cost.toFixed(run.cost < 0.01 ? 4 : 2)}</span>
+        {!expanded && last && <span className="min-w-0 truncate text-caption text-hx-muted" data-workflow-last>· {title(last.node)}</span>}
+        <span className="ml-auto shrink-0 text-caption text-hx-muted">{run.history.length} steps · ${run.cost.toFixed(run.cost < 0.01 ? 4 : 2)}</span>
         {expanded && graphable && <Tabs size="sm" value={view} onChange={(v) => setView(v as 'graph' | 'steps')} tabs={[{ id: 'graph', label: 'Graph' }, { id: 'steps', label: 'Steps' }]} />}
         {!expanded && <Button size="sm" variant="ghost" onClick={() => setShown(true)} data-workflow-show>{graphable ? 'Show graph' : 'Show steps'}</Button>}
       </div>
@@ -436,13 +436,13 @@ function WorkflowCard({ item, sessionId }: { item: Extract<Item, { kind: 'workfl
           const acts = h.status === 'running' ? item.activity[h.node] ?? [] : [];
           return (
             <li key={i}>
-              <button type="button" disabled={!h.summary} onClick={() => setOpen(open === i ? null : i)} className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-[12.5px] hover:bg-hx-hover disabled:hover:bg-transparent">
+              <button type="button" disabled={!h.summary} onClick={() => setOpen(open === i ? null : i)} className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-small hover:bg-hx-hover disabled:hover:bg-transparent">
                 {h.status === 'running' ? <Spinner size={12} /> : <Icon name={h.status === 'failed' ? 'x-circle' : h.status === 'waiting' ? 'clock' : 'check-circle'} size={13} className={h.status === 'failed' ? 'text-hx-danger' : 'text-hx-success'} />}
                 <span className="flex-1 truncate">{title(h.node)}</span>
-                {h.outcome && <span className="rounded bg-hx-pill px-1.5 text-[11px] text-hx-secondary">{h.outcome}</span>}
-                <span className="text-[11px] text-hx-muted">{duration((h.endedAt ?? Date.now()) - h.startedAt)}</span>
+                {h.outcome && <span className="rounded bg-hx-pill px-1.5 text-tiny text-hx-secondary">{h.outcome}</span>}
+                <span className="text-tiny text-hx-muted">{duration((h.endedAt ?? Date.now()) - h.startedAt)}</span>
               </button>
-              {acts.length > 0 && <div className="ml-7 text-[11.5px] text-hx-muted">{acts.slice(-3).map((a, j) => <div key={j}>{a.done ? '✓' : '…'} {a.name} {a.summary}</div>)}</div>}
+              {acts.length > 0 && <div className="ml-7 text-caption text-hx-muted">{acts.slice(-3).map((a, j) => <div key={j}>{a.done ? '✓' : '…'} {a.name} {a.summary}</div>)}</div>}
               {open === i && h.summary && <div className="ml-7 mr-2 rounded-md bg-hx-bg p-2"><Markdown text={h.type === 'gate' ? `\`\`\`\n${h.summary}\n\`\`\`` : h.summary} /></div>}
             </li>
           );
@@ -450,7 +450,7 @@ function WorkflowCard({ item, sessionId }: { item: Extract<Item, { kind: 'workfl
       </ol>}
       {(run.error || resumable) && (
         <div className="flex items-center gap-2 border-t border-hx-border-subtle px-3 py-2">
-          {run.error && <span className="min-w-0 flex-1 text-[12px] text-hx-danger">{run.error}</span>}
+          {run.error && <span className="min-w-0 flex-1 text-small text-hx-danger">{run.error}</span>}
           {resumable && <Button size="sm" icon="play" className="ml-auto shrink-0" loading={resuming} onClick={resume} data-workflow-resume>Resume from {title(run.current!)}</Button>}
         </div>
       )}

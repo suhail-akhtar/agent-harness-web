@@ -51,12 +51,12 @@ export function ArtifactsPanel({ params }: NativeProps): React.ReactElement {
   if (selected && meta) return <ArtifactDetail sessionId={sessionId} meta={meta} onBack={() => select()} />;
   return (
     <div data-artifacts-panel={sessionId} className="space-y-1.5">
-      {err && <p className="px-1 text-[12px] text-hx-danger">{err}</p>}
+      {err && <p className="px-1 text-small text-hx-danger">{err}</p>}
       {!list.length && <EmptyState icon="layers" title="No artifacts yet">Documents, apps, diagrams and data the agent makes for you to keep show here, with every version.</EmptyState>}
       {list.map((a) => (
         <button key={a.id} type="button" data-artifact-item={a.id} onClick={() => select(a.id)} className="flex w-full items-center gap-2.5 rounded-xl border border-hx-border-subtle bg-hx-elevated p-2.5 text-left hover:border-hx-border">
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-hx-accent-soft text-hx-accent-text"><Icon name={KIND_ICON[a.kind] ?? 'file'} size={16} /></span>
-          <span className="min-w-0 flex-1"><span className="block truncate text-[13px] font-medium">{a.title}</span><span className="block truncate text-[11.5px] text-hx-muted">{a.kind}{a.language ? ` · ${a.language}` : ''} · v{a.version} · {ago(a.updatedAt)}</span></span>
+          <span className="min-w-0 flex-1"><span className="block truncate text-body font-medium">{a.title}</span><span className="block truncate text-caption text-hx-muted">{a.kind}{a.language ? ` · ${a.language}` : ''} · v{a.version} · {ago(a.updatedAt)}</span></span>
           <Icon name="chevron-right" size={14} className="text-hx-muted" />
         </button>
       ))}
@@ -85,8 +85,8 @@ export function ArtifactDetail({ sessionId, meta, onBack, full }: { sessionId: s
       <div className="flex items-center gap-1.5 pb-2">
         {onBack && <IconButton icon="arrow-left" size="sm" label="All artifacts" onClick={onBack} />}
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[13.5px] font-medium" data-artifact-title>{meta.title}</div>
-          <div className="truncate text-[11px] text-hx-muted">{meta.kind}{meta.language ? ` · ${meta.language}` : ''} · {meta.id}</div>
+          <div className="truncate text-body font-medium" data-artifact-title>{meta.title}</div>
+          <div className="truncate text-tiny text-hx-muted">{meta.kind}{meta.language ? ` · ${meta.language}` : ''} · {meta.id}</div>
         </div>
         <Tooltip label="Copy"><IconButton icon="copy" size="sm" label="Copy the content" disabled={!c || !text} onClick={() => c && copyArtifact(c)} /></Tooltip>
         <Tooltip label="Download"><IconButton icon="download" size="sm" label="Download this version" disabled={!c} onClick={() => c && saveArtifact(c, meta.title)} /></Tooltip>
@@ -94,21 +94,21 @@ export function ArtifactDetail({ sessionId, meta, onBack, full }: { sessionId: s
       </div>
       <div className="flex flex-wrap items-center gap-2 pb-2">
         <Select aria-label="Version" data-version-picker value={String(version)} onChange={(v) => { setPinned(Number(v) !== meta.version); setVersion(Number(v)); if (Number(v) <= against) setAgainst(Math.max(1, Number(v) - 1)); }}
-          options={versions.map((v) => ({ value: String(v.n), label: `v${v.n} · ${v.action === 'create' ? 'created' : v.action === 'update' ? 'edited' : 'rewritten'} · ${ago(v.at)}${v.n === meta.version ? ' (latest)' : ''}` }))} className="h-7 max-w-[260px] text-[12px]" />
+          options={versions.map((v) => ({ value: String(v.n), label: `v${v.n} · ${v.action === 'create' ? 'created' : v.action === 'update' ? 'edited' : 'rewritten'} · ${ago(v.at)}${v.n === meta.version ? ' (latest)' : ''}` }))} className="h-7 max-w-[260px] text-small" />
         {versions.length > 1 && <Badge tone="accent">{versions.length} versions</Badge>}
         <div className="flex-1" />
         <Tabs size="sm" value={tab} onChange={(t) => setTab(t as typeof tab)} tabs={[{ id: 'preview', label: 'Preview' }, ...(text ? [{ id: 'code', label: 'Code' }] : []), ...(text && versions.length > 1 ? [{ id: 'changes', label: 'Changes' }] : [])]} />
       </div>
-      {err && <p className="text-[12.5px] text-hx-danger">{err}</p>}
+      {err && <p className="text-small text-hx-danger">{err}</p>}
       <div className={cx('min-h-0 flex-1 overflow-auto', tab === 'preview' && (meta.kind === 'html' || meta.kind === 'react') && 'overflow-hidden')}>
         {!c ? <div className="flex justify-center p-6"><Spinner /></div>
           : tab === 'preview' ? <ArtifactBody c={c} title={meta.title} fill={meta.kind === 'html' || meta.kind === 'react' || meta.kind === 'svg'} />
             : tab === 'code' ? <CodeBlock code={c.content ?? ''} language={codeLanguage(meta.kind, meta.language)} collapseAt={1e9} />
               : (
                 <div data-artifact-diff>
-                  <div className="mb-2 flex items-center gap-2 text-[12px] text-hx-secondary">
+                  <div className="mb-2 flex items-center gap-2 text-small text-hx-secondary">
                     <span>Changes from</span>
-                    <Select aria-label="Compare with" value={String(against)} onChange={(v) => setAgainst(Number(v))} options={versions.filter((v) => v.n !== version).map((v) => ({ value: String(v.n), label: `v${v.n}` }))} className="h-7 w-20 text-[12px]" />
+                    <Select aria-label="Compare with" value={String(against)} onChange={(v) => setAgainst(Number(v))} options={versions.filter((v) => v.n !== version).map((v) => ({ value: String(v.n), label: `v${v.n}` }))} className="h-7 w-20 text-small" />
                     <span>to v{version}</span>
                   </div>
                   {other ? <DiffView path={`${meta.id}`} before={other.content ?? ''} after={c.content ?? ''} mode="unified" /> : <Spinner />}
@@ -126,9 +126,9 @@ export function ArtifactRefCard({ item, sessionId }: { item: { kind: 'artifact';
     <div className="grid gap-2 sm:grid-cols-2" data-artifact-refs>
       {refs.map((r) => (
         <button key={r.id} type="button" data-artifact-ref={r.id} data-artifact-version={r.version} onClick={() => openPluginPanel('core.artifacts:artifacts', { id: sessionId, artifact: r.id })}
-          className="flex items-center gap-2.5 rounded-xl border border-hx-border-subtle bg-hx-elevated p-2.5 text-left hover:border-hx-accent/50">
+          className="flex items-center gap-2.5 rounded-xl border border-hx-border-subtle bg-hx-elevated p-2.5 text-left hover:border-hx-accent-border">
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-hx-accent-soft text-hx-accent-text"><Icon name={KIND_ICON[r.kind] ?? 'layers'} size={17} /></span>
-          <span className="min-w-0 flex-1"><span className="block truncate text-[13px] font-medium text-hx-primary">{r.title}</span><span className="block truncate text-[11px] text-hx-muted">{r.action === 'create' ? 'Created' : 'Updated'} · {r.kind} · version {r.version}</span></span>
+          <span className="min-w-0 flex-1"><span className="block truncate text-body font-medium text-hx-primary">{r.title}</span><span className="block truncate text-tiny text-hx-muted">{r.action === 'create' ? 'Created' : 'Updated'} · {r.kind} · version {r.version}</span></span>
           <Icon name="panel-right" size={15} className="text-hx-muted" />
         </button>
       ))}

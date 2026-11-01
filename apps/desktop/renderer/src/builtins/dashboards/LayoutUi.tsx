@@ -19,11 +19,11 @@ export function LayoutDialog({ id, page, onClose }: { id: string; page: PageSpec
       <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Layout type">
         {LAYOUT_TYPES.map((t) => (
           <button key={t} type="button" role="radio" aria-checked={l.type === t} data-layout-type={t} onClick={() => setL({ ...(t === cur.type ? cur : {}), type: t })} className={cx('rounded-lg border p-2 text-left', l.type === t ? 'border-hx-accent bg-hx-accent-soft' : 'border-hx-border hover:bg-hx-hover')}>
-            <div className="text-[13px] font-medium">{LAYOUT_LABEL[t]}</div><div className="text-[11.5px] text-hx-muted">{LAYOUT_HELP[t]}</div>
+            <div className="text-body font-medium">{LAYOUT_LABEL[t]}</div><div className="text-caption text-hx-muted">{LAYOUT_HELP[t]}</div>
           </button>
         ))}
       </div>
-      {l.type !== cur.type && <p className="mt-2 text-[12px] text-hx-secondary">Every widget is kept and re-arranged for the new layout; Undo brings the old one back.</p>}
+      {l.type !== cur.type && <p className="mt-2 text-small text-hx-secondary">Every widget is kept and re-arranged for the new layout; Undo brings the old one back.</p>}
       <div className="mt-2 grid gap-x-4 sm:grid-cols-2">
         {['grid', 'sections', 'tabs', 'sidebar'].includes(l.type) && <Field label="Columns"><Input type="number" min={2} max={24} value={l.columns ?? 12} onChange={(e) => set({ columns: Number(e.target.value) || 12 })} /></Field>}
         {l.type === 'grid' && <Field label="Auto-pack"><Select value={l.compact ?? 'none'} onChange={(v) => set({ compact: v as 'up' })} options={[{ value: 'none', label: 'Off' }, { value: 'up', label: 'Pack up' }, { value: 'left', label: 'Pack left' }]} /></Field>}
@@ -72,14 +72,14 @@ export function TemplateDialog({ doc, onClose }: { doc?: DocDetail; onClose(): v
           <div className="grid max-h-[55vh] gap-2 overflow-auto sm:grid-cols-2" role="radiogroup" aria-label="Templates">
             {list.map((x) => (
               <button key={x.id} type="button" role="radio" aria-checked={pick === x.id} data-template={x.id} onClick={() => setPick(x.id)} className={cx('rounded-lg border p-2 text-left', pick === x.id ? 'border-hx-accent bg-hx-accent-soft' : 'border-hx-border hover:bg-hx-hover')}>
-                <div className="flex items-center gap-1 text-[13px] font-medium"><Icon name={x.id.startsWith('blank') ? 'grid' : 'chart'} size={13} />{x.title}{x.plugin && <span className="text-[11px] text-hx-muted">({x.plugin})</span>}</div>
-                <div className="text-[11.5px] text-hx-muted">{x.purpose}</div>
-                <div className="mt-1 text-[11px] text-hx-secondary">{x.pages.map((p) => `${LAYOUT_LABEL[p.layout?.type ?? 'grid']} · ${p.visuals.length} widgets`).join('; ')}</div>
+                <div className="flex items-center gap-1 text-body font-medium"><Icon name={x.id.startsWith('blank') ? 'grid' : 'chart'} size={13} />{x.title}{x.plugin && <span className="text-tiny text-hx-muted">({x.plugin})</span>}</div>
+                <div className="text-caption text-hx-muted">{x.purpose}</div>
+                <div className="mt-1 text-tiny text-hx-secondary">{x.pages.map((p) => `${LAYOUT_LABEL[p.layout?.type ?? 'grid']} · ${p.visuals.length} widgets`).join('; ')}</div>
               </button>
             ))}
           </div>
           <div className="space-y-2">
-            {t && <p className="text-[12.5px] text-hx-secondary">{t.description}</p>}
+            {t && <p className="text-small text-hx-secondary">{t.description}</p>}
             {!doc && <Field label="Title"><Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t?.title} /></Field>}
             <Field label="Model" help="Its measures, date and fields fill the template; a widget with nothing to fill is left out and named."><Select value={model} onChange={setModel} options={[{ value: '', label: 'None (blank templates only)' }, ...(catalog?.models ?? []).map((m) => ({ value: m.id, label: m.name }))]} /></Field>
           </div>
@@ -98,8 +98,8 @@ export function ArrangeSection({ docId, detail, v }: { docId: string; detail: Do
   if (!['sections', 'tabs', 'sidebar', 'canvas'].includes(type)) return null;
   return (
     <section className="border-b border-hx-border-subtle px-3 py-2.5" data-arrange>
-      <h3 className="mb-1.5 text-[11.5px] font-semibold uppercase tracking-wide text-hx-muted">Arrange</h3>
-      {(type === 'sections' || type === 'tabs') && <label className="flex items-center gap-2 text-[12.5px]"><span className="w-24 text-hx-secondary">{type === 'tabs' ? 'Tab' : 'Section'}</span><Select aria-label="Section" value={v.section ?? page.layout?.sections?.[0]?.id ?? ''} onChange={(s) => void act('layout.drag', { doc: docId, visual: v.id, section: s }).catch(() => {})} options={(page.layout?.sections ?? []).map((s) => ({ value: s.id, label: s.title }))} /></label>}
+      <h3 className="mb-1.5 text-tiny font-semibold uppercase tracking-wide text-hx-muted">Arrange</h3>
+      {(type === 'sections' || type === 'tabs') && <label className="flex items-center gap-2 text-small"><span className="w-24 text-hx-secondary">{type === 'tabs' ? 'Tab' : 'Section'}</span><Select aria-label="Section" value={v.section ?? page.layout?.sections?.[0]?.id ?? ''} onChange={(s) => void act('layout.drag', { doc: docId, visual: v.id, section: s }).catch(() => {})} options={(page.layout?.sections ?? []).map((s) => ({ value: s.id, label: s.title }))} /></label>}
       {type === 'sidebar' && <Switch checked={v.section === 'sidebar'} onChange={(on) => void act('layout.drag', { doc: docId, visual: v.id, section: on ? 'sidebar' : null }).catch(() => {})} label="In the sidebar" />}
       {type === 'canvas' && <div className="space-y-1.5">
         <div className="flex gap-1"><Button size="sm" onClick={() => void act('layout.front', { doc: docId, visual: v.id, z: 'front' }).catch(() => {})} data-bring-front>Bring to front</Button><Button size="sm" onClick={() => void act('layout.back', { doc: docId, visual: v.id, z: 'back' }).catch(() => {})}>Send to back</Button></div>
@@ -121,7 +121,7 @@ export function SectionsEditor({ docId, page }: { docId: string; page: PageSpec 
   return (
     <div className="space-y-1" data-sections-editor>
       {list.map((s, i) => (
-        <div key={s.id} className="flex items-center gap-1 text-[12.5px]">
+        <div key={s.id} className="flex items-center gap-1 text-small">
           <Input aria-label="Section title" key={s.title} defaultValue={s.title} onBlur={(e) => { if (e.target.value && e.target.value !== s.title) void act('layout.edit-section', { doc: docId, page: page.id, section: s.id, patch: { title: e.target.value } }).catch(() => {}); }} />
           {i > 0 && <IconButton size="xs" icon="arrow-up" label="Move up" onClick={() => void act('layout.edit-section', { doc: docId, page: page.id, section: s.id, patch: { to: i - 1 } }).catch(() => {})} />}
           {list.length > 1 && <IconButton size="xs" icon="x" label="Remove" onClick={() => void act('layout.remove-section', { doc: docId, page: page.id, section: s.id }).catch(() => {})} />}

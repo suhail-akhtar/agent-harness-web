@@ -30,7 +30,7 @@ export function ModelsProviders({ onboarding }: { onboarding?: boolean }): React
   const admin = me?.role === 'admin';
   return (
     <div data-section="models">
-      {!onboarding && <p className="mb-3 text-[13px] text-hx-secondary">A key is stored in the server's key vault (never shown again, never sent to this window). A key in the server's environment wins over a stored one.</p>}
+      {!onboarding && <p className="mb-3 text-body text-hx-secondary">A key is stored in the server's key vault (never shown again, never sent to this window). A key in the server's environment wins over a stored one.</p>}
       {!admin && <InfoNote tone="warning">Only administrators change keys on this server.</InfoNote>}
       <div className="space-y-3">
         {[...providers].sort((a, b) => Number(b.configured) - Number(a.configured)).map((p) => <ProviderCard key={p.id} p={p} admin={admin} models={models.filter((m) => m.provider === p.id)} onChanged={refresh} />)}
@@ -77,8 +77,8 @@ export function DelegationSettings(): React.ReactElement {
   };
   return (
     <section data-delegation className="mt-6 rounded-xl border border-hx-border-subtle bg-hx-elevated p-4">
-      <div className="flex items-center gap-2"><Icon name="split" size={16} className="text-hx-muted" /><h3 className="text-[14px] font-medium">Delegation</h3></div>
-      <p className="mt-1 text-[12.5px] text-hx-secondary">Models your agents may hand work to (sub-agents, linked sessions, workflow steps), besides the conversation's own. What they pass on goes to that model's company. Without any, agents use the conversation's model only.</p>
+      <div className="flex items-center gap-2"><Icon name="split" size={16} className="text-hx-muted" /><h3 className="text-body-lg font-medium">Delegation</h3></div>
+      <p className="mt-1 text-small text-hx-secondary">Models your agents may hand work to (sub-agents, linked sessions, workflow steps), besides the conversation's own. What they pass on goes to that model's company. Without any, agents use the conversation's model only.</p>
       <div className="mt-3"><Switch checked={any} onChange={(on) => setV({ ...v, allowedModels: on ? '*' : [] })} label="Any model the server allows" /></div>
       {!any && (
         <div className="mt-2 grid gap-1 sm:grid-cols-2" data-delegation-models>
@@ -86,8 +86,8 @@ export function DelegationSettings(): React.ReactElement {
             const ok = allowedByOperator(m.id);
             return (
               <div key={m.id} data-delegation-model={m.id} className={cx('rounded-lg px-2 py-1.5', ok && 'hover:bg-hx-hover')} title={ok ? m.notes : 'Not allowed by the operator'}>
-                <Checkbox className="flex w-full text-[12.5px]" checked={list.includes(m.id)} disabled={!ok} onChange={(v) => toggle(m.id, v)}
-                  label={<><span className="min-w-0 flex-1 truncate">{m.label}</span><span className="text-[11px] text-hx-muted">{m.provider}{m.available ? '' : ' · no key'}</span></>} />
+                <Checkbox className="flex w-full text-small" checked={list.includes(m.id)} disabled={!ok} onChange={(v) => toggle(m.id, v)}
+                  label={<><span className="min-w-0 flex-1 truncate">{m.label}</span><span className="text-tiny text-hx-muted">{m.provider}{m.available ? '' : ' · no key'}</span></>} />
               </div>
             );
           })}
@@ -99,8 +99,8 @@ export function DelegationSettings(): React.ReactElement {
           <Input type="number" min={0} step={0.05} className="w-40" aria-label="Cost cap in USD" data-delegation-cap value={v.maxCostUsd ?? ''} onChange={(e) => { const n = Number(e.target.value); setV({ ...v, maxCostUsd: e.target.value === '' || !(n > 0) ? undefined : n }); }} />
         </Field>
       </div>
-      {cap !== null && cap !== '*' && <p className="mt-2 text-[11.5px] text-hx-muted">The operator allows: {cap.join(', ') || 'no other model'}.</p>}
-      {err && <p className="mt-2 text-[12.5px] text-hx-danger">{err}</p>}
+      {cap !== null && cap !== '*' && <p className="mt-2 text-caption text-hx-muted">The operator allows: {cap.join(', ') || 'no other model'}.</p>}
+      {err && <p className="mt-2 text-small text-hx-danger">{err}</p>}
       <div className="mt-3 flex justify-end gap-2"><Button disabled={!dirty || busy} onClick={() => setV(saved)}>Reset</Button><Button variant="primary" loading={busy} disabled={!dirty} data-save-delegation onClick={() => void save()}>Save</Button></div>
     </section>
   );
@@ -116,11 +116,11 @@ function ProviderCard({ p, admin, models, onChanged }: { p: ProviderInfo; admin:
     <div data-provider={p.id} className="rounded-xl border border-hx-border-subtle bg-hx-elevated p-4">
       <div className="flex items-center gap-2">
         <Icon name="key" size={16} className="text-hx-muted" />
-        <span className="text-[14px] font-medium">{p.label ?? p.id}</span>
+        <span className="text-body-lg font-medium">{p.label ?? p.id}</span>
         {p.configured ? <Badge tone="success">{p.keyless ? 'No key needed' : p.source === 'env' ? 'Key from environment' : p.source === 'vault' ? 'Key stored' : 'Ready'}</Badge> : <Badge>No key</Badge>}
-        <span className="ml-auto text-[11.5px] text-hx-muted">{p.keyEnv?.join(' or ')}</span>
+        <span className="ml-auto text-caption text-hx-muted">{p.keyEnv?.join(' or ')}</span>
       </div>
-      {models.length > 0 && <div className="mt-2 flex flex-wrap gap-1">{models.map((m) => <span key={m.id} className={cx('rounded-md px-1.5 py-0.5 text-[11.5px]', m.available ? 'bg-hx-pill text-hx-secondary' : 'bg-hx-pill/60 text-hx-muted')}>{m.label}</span>)}</div>}
+      {models.length > 0 && <div className="mt-2 flex flex-wrap gap-1">{models.map((m) => <span key={m.id} className={cx('rounded-md px-1.5 py-0.5 text-caption', m.available ? 'bg-hx-pill text-hx-secondary' : 'bg-hx-pill/60 text-hx-muted')}>{m.label}</span>)}</div>}
       {admin && !p.keyless && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <div className="min-w-[220px] flex-1"><SecretInput value={key} onChange={setKey} placeholder={p.configured ? 'Replace the key' : 'Paste an API key'} /></div>
@@ -129,17 +129,17 @@ function ProviderCard({ p, admin, models, onChanged }: { p: ProviderInfo; admin:
           {p.source === 'vault' && <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => void run('remove', async () => { await client.providers.removeKey(p.id); toast('Key removed'); })}>Remove key</Button>}
         </div>
       )}
-      {test && <div data-test-result={test.ok ? 'ok' : 'error'} className={cx('mt-2 text-[12.5px]', test.ok ? 'text-hx-success' : 'text-hx-danger')}>{test.text}</div>}
+      {test && <div data-test-result={test.ok ? 'ok' : 'error'} className={cx('mt-2 text-small', test.ok ? 'text-hx-success' : 'text-hx-danger')}>{test.text}</div>}
       {admin && p.baseUrlEditable && (
         <div className="mt-3 flex items-center gap-2">
-          <Input className="font-mono text-[12px]" value={base} placeholder="Default address" onChange={(e) => setBase(e.target.value)} aria-label={`${p.label ?? p.id} address`} />
+          <Input className="font-mono text-small" value={base} placeholder="Default address" onChange={(e) => setBase(e.target.value)} aria-label={`${p.label ?? p.id} address`} />
           <Button size="sm" disabled={!!busy || base === (p.baseUrl ?? '')} onClick={() => void run('base', async () => { await client.providers.set(p.id, { baseUrl: base.trim() || null }); toast('Address saved'); })}>Save address</Button>
         </div>
       )}
       {admin && (p.options ?? []).map((o) => (
         <div key={o.id} className="mt-3 flex items-start gap-3" data-provider-option={`${p.id}:${o.id}`}>
           <Switch checked={o.value} disabled={!!busy || !p.configured} label={o.label} onChange={(v) => void run('option', async () => { await client.providers.set(p.id, { options: { [o.id]: v } }); toast(`${o.label}: ${v ? 'on' : 'off'}`); })} />
-          <div className="min-w-0 flex-1"><div className="text-[13px] text-hx-primary">{o.label}</div>{o.help && <div className="text-[12px] text-hx-muted">{o.help}{!p.configured ? ' Needs a key first.' : ''}</div>}</div>
+          <div className="min-w-0 flex-1"><div className="text-body text-hx-primary">{o.label}</div>{o.help && <div className="text-small text-hx-muted">{o.help}{!p.configured ? ' Needs a key first.' : ''}</div>}</div>
         </div>
       ))}
     </div>
@@ -147,7 +147,7 @@ function ProviderCard({ p, admin, models, onChanged }: { p: ProviderInfo; admin:
 }
 
 export function OnboardProvider(): React.ReactElement {
-  return <div className="px-6 py-4"><p className="mb-3 text-[13px] text-hx-secondary">Add a key for at least one provider. DeepSeek (inexpensive) or Anthropic (Claude Sonnet) are good places to start.</p><ModelsProviders onboarding /></div>;
+  return <div className="px-6 py-4"><p className="mb-3 text-body text-hx-secondary">Add a key for at least one provider. DeepSeek (inexpensive) or Anthropic (Claude Sonnet) are good places to start.</p><ModelsProviders onboarding /></div>;
 }
 
 /** The defaults onboarding suggests, in order. */
@@ -166,10 +166,10 @@ export function OnboardModel(): React.ReactElement {
     <div className="px-6 py-4" data-onboard-model data-recommended={rec?.id}>
       {!available.length ? <InfoNote tone="warning">No model has a key yet: go back a step and add one.</InfoNote> : (
         <div className="space-y-1.5">
-          {rec && <p className="mb-2 text-[12.5px] text-hx-secondary">{rec.why}</p>}
+          {rec && <p className="mb-2 text-small text-hx-secondary">{rec.why}</p>}
           {available.map((m) => (
             <button key={m.id} type="button" data-model-choice={m.id} onClick={() => useApp.getState().setPrefs({ defaultModel: m.id })} className={cx('flex w-full items-center gap-3 rounded-xl border p-3 text-left', prefs.defaultModel === m.id ? 'border-hx-accent bg-hx-accent-soft' : 'border-hx-border-subtle hover:border-hx-border')}>
-              <Icon name="cpu" size={16} /><span className="flex-1"><span className="block text-[13.5px] font-medium">{m.label}{m.id === rec?.id && <span className="ml-2 rounded bg-hx-accent-soft px-1.5 py-0.5 text-[10.5px] font-medium text-hx-accent-text" data-recommended-badge>Recommended</span>}</span><span className="block text-[11.5px] text-hx-muted">{m.provider} · {Math.round(m.contextWindow / 1000)}K context{m.notes ? ` · ${m.notes}` : ''}</span></span>{prefs.defaultModel === m.id && <Icon name="check" size={16} className="text-hx-accent-text" />}
+              <Icon name="cpu" size={16} /><span className="flex-1"><span className="block text-body font-medium">{m.label}{m.id === rec?.id && <span className="ml-2 rounded bg-hx-accent-soft px-1.5 py-0.5 text-micro font-medium text-hx-accent-text" data-recommended-badge>Recommended</span>}</span><span className="block text-caption text-hx-muted">{m.provider} · {Math.round(m.contextWindow / 1000)}K context{m.notes ? ` · ${m.notes}` : ''}</span></span>{prefs.defaultModel === m.id && <Icon name="check" size={16} className="text-hx-accent-text" />}
             </button>
           ))}
         </div>
@@ -194,9 +194,9 @@ export function Permissions(): React.ReactElement {
   const save = async () => { try { await client.settings.saveMine({ permissions: { allow: lines(draft.allow), deny: lines(draft.deny), ask: lines(draft.ask) }, maxSteps: num(draft.maxSteps), maxCostUsd: num(draft.maxCostUsd), maxTurnMinutes: num(draft.maxTurnMinutes) }); toast('Saved', { kind: 'success' }); reload(); } catch (e) { fail(e); } };
   return (
     <div data-section="permissions">
-      <p className="mb-2 text-[13px] text-hx-secondary">Your rules are added to the operator's: a deny or ask there can never be loosened here, and your limits apply only where they are lower. One rule per line, e.g. <code>bash(npm test)</code> or <code>edit(src/**)</code>.</p>
+      <p className="mb-2 text-body text-hx-secondary">Your rules are added to the operator's: a deny or ask there can never be loosened here, and your limits apply only where they are lower. One rule per line, e.g. <code>bash(npm test)</code> or <code>edit(src/**)</code>.</p>
       <div className="grid gap-3 md:grid-cols-3">
-        {(['allow', 'ask', 'deny'] as const).map((k) => <Field key={k} label={k === 'allow' ? 'Allow without asking' : k === 'ask' ? 'Always ask' : 'Never allow'}><Textarea rows={6} className="font-mono text-[12px]" value={draft[k]} onChange={(e) => setDraft({ ...draft, [k]: e.target.value })} /></Field>)}
+        {(['allow', 'ask', 'deny'] as const).map((k) => <Field key={k} label={k === 'allow' ? 'Allow without asking' : k === 'ask' ? 'Always ask' : 'Never allow'}><Textarea rows={6} className="font-mono text-small" value={draft[k]} onChange={(e) => setDraft({ ...draft, [k]: e.target.value })} /></Field>)}
       </div>
       <div className="grid gap-3 md:grid-cols-3">
         <Field label="Steps per turn"><Input type="number" value={draft.maxSteps} onChange={(e) => setDraft({ ...draft, maxSteps: e.target.value })} placeholder="operator default" /></Field>
@@ -212,10 +212,10 @@ export function Permissions(): React.ReactElement {
 function EffectiveTable({ rows }: { rows: EffectiveSetting[] }) {
   return (
     <div className="mt-6" data-effective>
-      <h3 className="mb-1 text-[12px] font-medium uppercase tracking-wide text-hx-muted">In force now</h3>
+      <h3 className="mb-1 text-tiny font-semibold uppercase tracking-wide text-hx-muted">In force now</h3>
       <div className="divide-y divide-hx-border-subtle rounded-xl border border-hx-border-subtle">
         {rows.map((r) => (
-          <div key={r.key} className="flex items-center gap-3 px-3 py-1.5 text-[12.5px]">
+          <div key={r.key} className="flex items-center gap-3 px-3 py-1.5 text-small">
             <span className="w-48 shrink-0 truncate font-mono text-hx-secondary">{r.key}</span>
             <span className="min-w-0 flex-1 truncate">{typeof r.value === 'object' ? JSON.stringify(r.value) : String(r.value)}</span>
             {r.locked && <Icon name="lock" size={12} className="text-hx-muted" />}
@@ -235,9 +235,9 @@ export function Instructions(): React.ReactElement {
   if (text === null) return <Spinner />;
   return (
     <div data-section="instructions">
-      <p className="mb-2 text-[13px] text-hx-secondary">Read at the start of every conversation you own (like a personal CLAUDE.md). The operator's and the project's instructions still apply.</p>
-      <Textarea rows={16} className="font-mono text-[12.5px]" value={text} onChange={(e) => setText(e.target.value)} placeholder="E.g. I work in TypeScript; prefer small commits; answer briefly." />
-      <div className="mt-2 flex items-center justify-between"><span className="text-[11.5px] text-hx-muted">{text.length} / 24,000</span><Button variant="primary" disabled={text === v?.content} onClick={() => void client.settings.saveInstructions(text).then(() => toast('Saved', { kind: 'success' })).catch(fail)}>Save</Button></div>
+      <p className="mb-2 text-body text-hx-secondary">Read at the start of every conversation you own (like a personal CLAUDE.md). The operator's and the project's instructions still apply.</p>
+      <Textarea rows={16} className="font-mono text-small" value={text} onChange={(e) => setText(e.target.value)} placeholder="E.g. I work in TypeScript; prefer small commits; answer briefly." />
+      <div className="mt-2 flex items-center justify-between"><span className="text-caption text-hx-muted">{text.length} / 24,000</span><Button variant="primary" disabled={text === v?.content} onClick={() => void client.settings.saveInstructions(text).then(() => toast('Saved', { kind: 'success' })).catch(fail)}>Save</Button></div>
     </div>
   );
 }
@@ -253,12 +253,12 @@ export function Memory(): React.ReactElement {
       <Field label="Through the conversation" help="Memory is shared across your conversations; the project scope follows the conversation's folder." inline><Select value={sid} onChange={setSid} options={sessions.slice(0, 50).map((s: SessionMeta) => ({ value: s.id, label: s.title || s.id }))} className="w-64" /></Field>
       {err ? <InfoNote>{err}</InfoNote> : !data ? <Spinner /> : (
         <>
-          <div className="mb-2 text-[12px] text-hx-muted">Mode: {data.mode === 'read' ? 'read only' : 'on'}</div>
-          {!data.files.length ? <p className="text-[13px] text-hx-muted">Nothing remembered yet.</p> : (
+          <div className="mb-2 text-small text-hx-muted">Mode: {data.mode === 'read' ? 'read only' : 'on'}</div>
+          {!data.files.length ? <p className="text-body text-hx-muted">Nothing remembered yet.</p> : (
             <div className="divide-y divide-hx-border-subtle rounded-xl border border-hx-border-subtle">
               {data.files.map((f) => (
-                <div key={f.path} className="flex items-center gap-2 px-3 py-2 text-[13px]">
-                  <Icon name="file-text" size={14} className="text-hx-muted" /><span className="min-w-0 flex-1 truncate font-mono text-[12px]">{f.path}</span>
+                <div key={f.path} className="flex items-center gap-2 px-3 py-2 text-body">
+                  <Icon name="file-text" size={14} className="text-hx-muted" /><span className="min-w-0 flex-1 truncate font-mono text-small">{f.path}</span>
                   <Button size="sm" variant="ghost" onClick={() => void client.memory.read(sid, f.path).then((r) => setOpen(r)).catch(fail)}>Open</Button>
                   <IconButton size="xs" icon="trash" tone="danger" label="Forget" onClick={() => void client.memory.remove(sid, f.path).then(reload).catch(fail)} />
                 </div>
@@ -267,8 +267,8 @@ export function Memory(): React.ReactElement {
           )}
           {open && (
             <div className="mt-3">
-              <div className="mb-1 font-mono text-[12px] text-hx-muted">{open.path}</div>
-              <Textarea rows={10} className="font-mono text-[12px]" value={open.content} onChange={(e) => setOpen({ ...open, content: e.target.value })} />
+              <div className="mb-1 font-mono text-small text-hx-muted">{open.path}</div>
+              <Textarea rows={10} className="font-mono text-small" value={open.content} onChange={(e) => setOpen({ ...open, content: e.target.value })} />
               <div className="mt-2 flex justify-end gap-2"><Button variant="ghost" onClick={() => setOpen(null)}>Close</Button><Button variant="primary" onClick={() => void client.memory.write(sid, open.path, open.content).then(() => { toast('Saved'); reload(); }).catch(fail)}>Save</Button></div>
             </div>
           )}
@@ -285,19 +285,19 @@ export function Vault(): React.ReactElement {
   if (!data) return <Spinner />;
   return (
     <div data-section="vault">
-      <p className="mb-3 text-[13px] text-hx-secondary">Secrets the agent's tools can use by name (never shown to the model, never returned here).</p>
-      {!data.entries.length ? <p className="mb-3 text-[13px] text-hx-muted">No entries yet.</p> : (
+      <p className="mb-3 text-body text-hx-secondary">Secrets the agent's tools can use by name (never shown to the model, never returned here).</p>
+      {!data.entries.length ? <p className="mb-3 text-body text-hx-muted">No entries yet.</p> : (
         <div className="mb-4 divide-y divide-hx-border-subtle rounded-xl border border-hx-border-subtle">
           {data.entries.map((e: VaultEntry) => (
-            <div key={`${e.scope}:${e.name}`} className="flex items-center gap-2 px-3 py-2 text-[13px]">
-              <Icon name="vault" size={14} className="text-hx-muted" /><span className="font-mono text-[12.5px]">{e.name}</span><Badge>{e.scope ?? 'user'}</Badge>
-              <span className="min-w-0 flex-1 truncate text-[12px] text-hx-muted">{e.description}</span>
+            <div key={`${e.scope}:${e.name}`} className="flex items-center gap-2 px-3 py-2 text-body">
+              <Icon name="vault" size={14} className="text-hx-muted" /><span className="font-mono text-small">{e.name}</span><Badge>{e.scope ?? 'user'}</Badge>
+              <span className="min-w-0 flex-1 truncate text-small text-hx-muted">{e.description}</span>
               <IconButton size="xs" icon="trash" tone="danger" label="Delete" onClick={() => void client.vault.remove(e.name, e.scope).then(reload).catch(fail)} />
             </div>
           ))}
         </div>
       )}
-      <h3 className="mb-1 text-[12px] font-medium uppercase tracking-wide text-hx-muted">Add an entry</h3>
+      <h3 className="mb-1 text-tiny font-semibold uppercase tracking-wide text-hx-muted">Add an entry</h3>
       <div className="grid gap-2 md:grid-cols-2">
         <Field label="Name"><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="github-token" /></Field>
         <Field label="Scope"><Select value={form.scope} onChange={(v) => setForm({ ...form, scope: v })} options={[{ value: 'user', label: 'Mine' }, { value: 'operator', label: 'Operator (administrators)' }]} /></Field>
@@ -331,10 +331,10 @@ export function McpBundles(): React.ReactElement {
   if (!list) return <Spinner />;
   return (
     <div data-section="mcp">
-      <div className="mb-3 flex items-center"><p className="flex-1 text-[13px] text-hx-secondary">MCP servers packed as .mcpb bundles, installed for every new conversation on this server.</p><Button icon="upload" onClick={install}>Install a bundle…</Button></div>
-      {!list.length ? <p className="text-[13px] text-hx-muted">No bundles installed.</p> : (
+      <div className="mb-3 flex items-center"><p className="flex-1 text-body text-hx-secondary">MCP servers packed as .mcpb bundles, installed for every new conversation on this server.</p><Button icon="upload" onClick={install}>Install a bundle…</Button></div>
+      {!list.length ? <p className="text-body text-hx-muted">No bundles installed.</p> : (
         <div className="divide-y divide-hx-border-subtle rounded-xl border border-hx-border-subtle">
-          {list.map((b: McpBundle) => <div key={b.name} className="flex items-center gap-2 px-3 py-2 text-[13px]"><Icon name="plug" size={14} className="text-hx-muted" /><span className="font-medium">{b.name}</span><span className="text-[11.5px] text-hx-muted">{b.version}</span><span className="min-w-0 flex-1 truncate text-[12px] text-hx-muted">{b.description}</span><IconButton size="xs" icon="trash" tone="danger" label="Remove" onClick={() => void client.mcpb.remove(b.name).then(reload).catch(fail)} /></div>)}
+          {list.map((b: McpBundle) => <div key={b.name} className="flex items-center gap-2 px-3 py-2 text-body"><Icon name="plug" size={14} className="text-hx-muted" /><span className="font-medium">{b.name}</span><span className="text-caption text-hx-muted">{b.version}</span><span className="min-w-0 flex-1 truncate text-small text-hx-muted">{b.description}</span><IconButton size="xs" icon="trash" tone="danger" label="Remove" onClick={() => void client.mcpb.remove(b.name).then(reload).catch(fail)} /></div>)}
         </div>
       )}
     </div>

@@ -28,7 +28,7 @@ export function AskPanel({ params }: { params?: Record<string, string> }): React
         <Textarea aria-label="Continue" rows={2} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder={running ? 'Working… (Enter steers)' : 'Ask for another change'} />
         <div className="flex flex-col gap-1"><Button size="sm" variant="primary" onClick={send}>Send</Button>{running && <Button size="sm" onClick={() => void client.sessions.abort(id)}>Stop</Button>}</div>
       </div>
-      <button type="button" className="border-t border-hx-border-subtle p-1.5 text-[12px] text-hx-accent-text hover:underline" onClick={() => navigate({ view: 'core.chat:session', params: { id } })}>Open the whole conversation</button>
+      <button type="button" className="border-t border-hx-border-subtle p-1.5 text-small text-hx-accent-text hover:underline" onClick={() => navigate({ view: 'core.chat:session', params: { id } })}>Open the whole conversation</button>
     </div>
   );
 }
@@ -54,7 +54,7 @@ export function PinPanel({ data }: { data?: unknown }): React.ReactElement {
   };
   return (
     <div className="space-y-2 p-2" data-pin-panel>
-      <p className="text-[12.5px] text-hx-secondary">Adds this {block.kind ?? 'block'} as a visual. Its data becomes a <b>static dataset marked as typed by a model</b>; bind the visual to a real source to make the numbers the engine's.</p>
+      <p className="text-small text-hx-secondary">Adds this {block.kind ?? 'block'} as a visual. Its data becomes a <b>static dataset marked as typed by a model</b>; bind the visual to a real source to make the numbers the engine's.</p>
       <Field label="Into"><Select value={target} onChange={setTarget} options={[{ value: 'new', label: 'A new dashboard' }, { value: 'new-report', label: 'A new report' }, ...(docs ?? []).map((d) => ({ value: d.id, label: `${d.type === 'report' ? 'Report' : 'Dashboard'}: ${d.title}` }))]} data-pin-target /></Field>
       {target.startsWith('new') && <Field label="Title"><Input value={title} onChange={(e) => setTitle(e.target.value)} data-pin-title /></Field>}
       <Button variant="primary" loading={busy} onClick={() => void pin()} data-pin-go>Add</Button>
@@ -72,8 +72,8 @@ export function ToolResult({ input, result, isError }: { tool: string; input: Re
   const doc = versions.find((v) => v.target !== 'catalog')?.target ?? (typeof input.doc === 'string' && /^(dash|rep)-/.test(input.doc) ? input.doc : undefined);
   if (!changed.length && !doc) return null;
   return (
-    <div className="mt-1 rounded-lg border border-hx-border-subtle bg-hx-elevated p-2 text-[12px]" data-data-change>
-      {changed.length > 0 && <ul className="space-y-0.5 font-mono text-[11.5px]">{changed.slice(0, 12).map((l, i) => <li key={i} className={l.includes(': +') || l.startsWith('+') ? 'text-hx-success' : l.includes(': -') || l.startsWith('-') ? 'text-hx-danger' : 'text-hx-secondary'}>{l}</li>)}{changed.length > 12 && <li className="text-hx-muted">… {changed.length - 12} more</li>}</ul>}
+    <div className="mt-1 rounded-lg border border-hx-border-subtle bg-hx-elevated p-2 text-small" data-data-change>
+      {changed.length > 0 && <ul className="space-y-0.5 font-mono text-caption">{changed.slice(0, 12).map((l, i) => <li key={i} className={l.includes(': +') || l.startsWith('+') ? 'text-hx-success' : l.includes(': -') || l.startsWith('-') ? 'text-hx-danger' : 'text-hx-secondary'}>{l}</li>)}{changed.length > 12 && <li className="text-hx-muted">… {changed.length - 12} more</li>}</ul>}
       <div className="mt-1 flex items-center gap-1">
         {versions.map((v) => <Badge key={v.target}>{v.target} v{v.version}</Badge>)}
         {doc && <Button size="sm" icon="chart" onClick={() => navigate({ view: 'core.dashboards:doc', params: { id: doc } })} data-open-doc>Open</Button>}
@@ -88,6 +88,6 @@ export function DashboardsCard(): React.ReactElement {
   const docs = useDataStore((s) => s.docs);
   useEffect(() => { void useDataStore.getState().refreshDocs(); }, []);
   const top = [...(docs ?? [])].sort((a, b) => b.views - a.views || b.updatedAt - a.updatedAt).slice(0, 4);
-  if (!top.length) return <p className="text-[12.5px] text-hx-muted">No dashboards yet. Ask for one, or pin a chart from a conversation.</p>;
-  return <div className="space-y-1">{top.map((d) => <button key={d.id} type="button" className="block w-full truncate rounded px-1 py-0.5 text-left text-[13px] hover:bg-hx-hover" onClick={() => navigate({ view: 'core.dashboards:doc', params: { id: d.id } })}>{d.title} <span className="text-[11px] text-hx-muted">{d.views} views</span></button>)}</div>;
+  if (!top.length) return <p className="text-small text-hx-muted">No dashboards yet. Ask for one, or pin a chart from a conversation.</p>;
+  return <div className="space-y-1">{top.map((d) => <button key={d.id} type="button" className="block w-full truncate rounded px-1 py-0.5 text-left text-body hover:bg-hx-hover" onClick={() => navigate({ view: 'core.dashboards:doc', params: { id: d.id } })}>{d.title} <span className="text-tiny text-hx-muted">{d.views} views</span></button>)}</div>;
 }

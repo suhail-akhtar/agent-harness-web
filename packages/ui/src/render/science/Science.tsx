@@ -32,7 +32,7 @@ export function FunctionPlot({ source, streaming }: { source: string; streaming?
   const [view, setView] = useState<{ x: [number, number]; y?: [number, number] } | null>(null);
   const drag = useRef<{ px: number; py: number; x: [number, number]; y: [number, number] } | null>(null);
   const svg = useRef<SVGSVGElement>(null);
-  if (parsed.error) { if (streaming) return <p className="p-2 text-[11.5px] text-hx-muted">Plot arriving…</p>; throw new Error(parsed.error); }
+  if (parsed.error) { if (streaming) return <p className="p-2 text-caption text-hx-muted">Plot arriving…</p>; throw new Error(parsed.error); }
   const spec = parsed.spec!;
   const W = 640; const H = 340; const P = { l: 44, r: 12, t: spec.title ? 26 : 10, b: 26 };
   const xd = view?.x ?? spec.domain;
@@ -69,7 +69,7 @@ export function FunctionPlot({ source, streaming }: { source: string; streaming?
           {spec.points?.map(([x, y], i) => <circle key={i} cx={sx(x)} cy={sy(y)} r={3} fill="var(--hx-accent)" />)}
         </g>
       </svg>
-      <div className="mt-1 flex flex-wrap items-center gap-3 text-[11.5px] text-hx-secondary">
+      <div className="mt-1 flex flex-wrap items-center gap-3 text-caption text-hx-secondary">
         {spec.fns.map((f, i) => <span key={i} className="inline-flex items-center gap-1"><span className="h-0.5 w-4" style={{ background: f.color ?? SERIES[i % SERIES.length] }} />{f.label}</span>)}
         <span className="flex-1" />
         <IconButton size="xs" icon="zoom-in" label="Zoom in" onClick={() => zoom(0.8)} />
@@ -98,9 +98,9 @@ export function GraphvizView({ source, streaming }: { source: string; streaming?
     }).catch((e: unknown) => { if (alive) setError(e instanceof Error ? e.message : String(e)); });
     return () => { alive = false; };
   }, [source, streaming]);
-  if (streaming) return <p className="p-2 text-[11.5px] text-hx-muted">Graph arriving…</p>;
+  if (streaming) return <p className="p-2 text-caption text-hx-muted">Graph arriving…</p>;
   if (error) throw new Error(error.split('\n')[0]);
-  if (!svg) return <p className="p-4 text-[12px] text-hx-muted">Laying out…</p>;
+  if (!svg) return <p className="p-4 text-small text-hx-muted">Laying out…</p>;
   return <ZoomPan className="h-[22rem]"><div data-graphviz="svg" className="h-full w-full text-hx-primary [&>svg]:h-full [&>svg]:w-full [&>svg]:max-h-[21rem]" dangerouslySetInnerHTML={{ __html: svg }} /></ZoomPan>;
 }
 
@@ -113,7 +113,7 @@ export function SmilesView({ source, streaming }: { source: string; streaming?: 
   const lines = useMemo(() => source.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 12), [source]);
   const bad = lines.find((l) => !SMILES.test(l.split(/\s+/)[0]!));
   if (bad && !streaming) throw new Error(`not a SMILES string: "${bad.slice(0, 60)}"`);
-  if (streaming) return <p className="p-2 text-[11.5px] text-hx-muted">Structure arriving…</p>;
+  if (streaming) return <p className="p-2 text-caption text-hx-muted">Structure arriving…</p>;
   return <div className="grid gap-2 sm:grid-cols-2" data-smiles>{lines.map((l, i) => <Molecule2D key={i} line={l} />)}</div>;
 }
 function Molecule2D({ line }: { line: string }) {
@@ -136,7 +136,7 @@ function Molecule2D({ line }: { line: string }) {
   return (
     <figure className="rounded-lg border border-hx-border-subtle p-2" data-smiles-drawn={done ? '1' : '0'}>
       <svg ref={ref} width="100%" height="200" viewBox="0 0 280 200" role="img" aria-label={`Structure of ${name.join(' ') || smiles}`} />
-      <figcaption className="truncate text-center font-mono text-[11px] text-hx-muted">{name.length ? `${name.join(' ')} · ` : ''}{smiles}</figcaption>
+      <figcaption className="truncate text-center font-mono text-tiny text-hx-muted">{name.length ? `${name.join(' ')} · ` : ''}{smiles}</figcaption>
     </figure>
   );
 }
@@ -144,7 +144,7 @@ function Molecule2D({ line }: { line: string }) {
 /** ```pdb / ```sdf / ```mol ...: a 3D viewer (3Dmol.js) in a sandboxed frame. */
 export function Molecule3D({ source, format, streaming }: { source: string; format: string; streaming?: boolean }): React.ReactElement {
   const doc = useMemo(() => moleculeDocument(source, format, artifactHost().runtimeUrl), [source, format]);
-  if (streaming) return <p className="p-2 text-[11.5px] text-hx-muted">Structure arriving…</p>;
+  if (streaming) return <p className="p-2 text-caption text-hx-muted">Structure arriving…</p>;
   if (!/^\s*\S/.test(source) || source.length > 3_000_000) throw new Error('the structure is empty or too large');
   return <SandboxFrame doc={doc} scripted label="3D structure" marker="molecule" initialHeight={340} fixedHeight />;
 }
@@ -152,7 +152,7 @@ export function Molecule3D({ source, format, streaming }: { source: string; form
 /** ```geojson: an SVG map from the data alone (no tiles, no network). */
 export function GeoMap({ source, streaming }: { source: string; streaming?: boolean }): React.ReactElement {
   const parsed = useMemo(() => parseGeoJson(source), [source]);
-  if (parsed.error) { if (streaming) return <p className="p-2 text-[11.5px] text-hx-muted">Map arriving…</p>; throw new Error(parsed.error); }
+  if (parsed.error) { if (streaming) return <p className="p-2 text-caption text-hx-muted">Map arriving…</p>; throw new Error(parsed.error); }
   const m = layoutMap(parsed.features!, 640, 380);
   return (
     <ZoomPan className="h-[24rem]">
@@ -168,26 +168,26 @@ export function GeoMap({ source, streaming }: { source: string; streaming?: bool
 /** ```ipynb: a notebook's cells and outputs. Markdown and code render as usual; HTML outputs are sanitized into the page. */
 export function NotebookView({ source, streaming, renderMarkdown }: { source: string; streaming?: boolean; renderMarkdown: (text: string) => React.ReactNode }): React.ReactElement {
   const parsed = useMemo(() => parseNotebook(source), [source]);
-  if (parsed.error) { if (streaming) return <p className="p-2 text-[11.5px] text-hx-muted">Notebook arriving…</p>; throw new Error(parsed.error); }
+  if (parsed.error) { if (streaming) return <p className="p-2 text-caption text-hx-muted">Notebook arriving…</p>; throw new Error(parsed.error); }
   const nb = parsed.nb!;
   const out = (o: NbOutput, k: number) => {
     switch (o.kind) {
-      case 'text': return <pre key={k} className={`overflow-x-auto whitespace-pre-wrap px-3 py-1.5 font-mono text-[12px] ${o.stream === 'stderr' ? 'bg-hx-danger/8 text-hx-danger' : 'text-hx-primary'}`}>{o.text}</pre>;
+      case 'text': return <pre key={k} className={`overflow-x-auto whitespace-pre-wrap px-3 py-1.5 font-mono text-small ${o.stream === 'stderr' ? 'bg-hx-danger-soft text-hx-danger' : 'text-hx-primary'}`}>{o.text}</pre>;
       case 'image': return <img key={k} src={`data:${o.mime};base64,${o.data}`} alt="Cell output" className="my-1 max-w-full rounded" />;
       // Through the allowlist sanitizer into the page itself (no frame to measure, no scripts, no styles of its own).
-      case 'html': return <div key={k} data-notebook-html className="hx-nb-html hx-scroll overflow-x-auto px-3 py-1.5 text-[12.5px]" dangerouslySetInnerHTML={{ __html: sanitizeHtml(o.html) }} />;
+      case 'html': return <div key={k} data-notebook-html className="hx-nb-html hx-scroll overflow-x-auto px-3 py-1.5 text-small" dangerouslySetInnerHTML={{ __html: sanitizeHtml(o.html) }} />;
       case 'markdown': return <div key={k} className="px-3">{renderMarkdown(o.text)}</div>;
       case 'json': return <div key={k} className="px-2"><JsonView source={o.json} /></div>;
-      case 'error': return <pre key={k} className="overflow-x-auto whitespace-pre-wrap bg-hx-danger/8 px-3 py-1.5 font-mono text-[12px] text-hx-danger">{o.name}: {o.value}{o.traceback ? `\n${o.traceback}` : ''}</pre>;
+      case 'error': return <pre key={k} className="overflow-x-auto whitespace-pre-wrap bg-hx-danger-soft px-3 py-1.5 font-mono text-small text-hx-danger">{o.name}: {o.value}{o.traceback ? `\n${o.traceback}` : ''}</pre>;
     }
   };
   return (
     <div data-notebook={nb.cells.length} className="space-y-2">
       {nb.cells.map((c, i) => (
         <div key={i} data-cell={c.kind} className="flex gap-2">
-          <div className="w-10 shrink-0 pt-2 text-right font-mono text-[11px] text-hx-muted">{c.kind === 'code' ? `[${c.count ?? ' '}]` : ''}</div>
+          <div className="w-10 shrink-0 pt-2 text-right font-mono text-tiny text-hx-muted">{c.kind === 'code' ? `[${c.count ?? ' '}]` : ''}</div>
           <div className="min-w-0 flex-1">
-            {c.kind === 'markdown' ? renderMarkdown(c.source) : c.kind === 'code' ? <div className="[&_figure]:my-0"><CodeBlock code={c.source} language={nb.language} collapseAt={40} /></div> : <pre className="font-mono text-[12px] text-hx-muted">{c.source}</pre>}
+            {c.kind === 'markdown' ? renderMarkdown(c.source) : c.kind === 'code' ? <div className="[&_figure]:my-0"><CodeBlock code={c.source} language={nb.language} collapseAt={40} /></div> : <pre className="font-mono text-small text-hx-muted">{c.source}</pre>}
             {c.outputs.length > 0 && <div className="mt-1 rounded-lg border border-hx-border-subtle bg-hx-bg">{c.outputs.map(out)}</div>}
           </div>
         </div>
@@ -206,9 +206,9 @@ function Kpi({ k }: { k: DashboardKpi }) {
   const good = k.direction === 'flat' || !k.direction ? undefined : (k.direction === (k.good ?? 'up'));
   return (
     <div data-kpi className="rounded-xl border border-hx-border-subtle bg-hx-bg p-3">
-      <div className="truncate text-[11.5px] font-medium text-hx-muted">{k.label}</div>
-      <div className="mt-0.5 flex items-baseline gap-1.5"><span className="text-[22px] font-semibold tabular-nums text-hx-primary">{typeof k.value === 'number' ? k.value.toLocaleString() : k.value}</span>{k.unit && <span className="text-[12px] text-hx-muted">{k.unit}</span>}</div>
-      {k.delta && <div className={`text-[12px] font-medium ${good === undefined ? 'text-hx-muted' : good ? 'text-hx-success' : 'text-hx-danger'}`}>{k.direction === 'up' ? '▲' : k.direction === 'down' ? '▼' : '•'} {k.delta}</div>}
+      <div className="truncate text-caption font-medium text-hx-muted">{k.label}</div>
+      <div className="mt-0.5 flex items-baseline gap-1.5"><span className="text-heading font-semibold tabular-nums text-hx-primary">{typeof k.value === 'number' ? k.value.toLocaleString() : k.value}</span>{k.unit && <span className="text-small text-hx-muted">{k.unit}</span>}</div>
+      {k.delta && <div className={`text-small font-medium ${good === undefined ? 'text-hx-muted' : good ? 'text-hx-success' : 'text-hx-danger'}`}>{k.direction === 'up' ? '▲' : k.direction === 'down' ? '▼' : '•'} {k.delta}</div>}
       {k.series && <Spark values={k.series} />}
     </div>
   );
@@ -217,13 +217,13 @@ function Kpi({ k }: { k: DashboardKpi }) {
 /** ```dashboard: KPI cards, charts and tables in a responsive grid (the DashboardSpec of @harness/plugin-ui). */
 export function Dashboard({ source, streaming, renderMarkdown }: { source: string; streaming?: boolean; renderMarkdown: (text: string) => React.ReactNode }): React.ReactElement {
   const parsed = useMemo((): { spec?: DashboardSpec; error?: string } => { try { return validateDashboard(JSON.parse(source)); } catch (e) { return { error: `not valid JSON: ${(e as Error).message}` }; } }, [source]);
-  if (parsed.error) { if (streaming) return <p className="p-2 text-[11.5px] text-hx-muted">Dashboard arriving…</p>; throw new Error(parsed.error); }
+  if (parsed.error) { if (streaming) return <p className="p-2 text-caption text-hx-muted">Dashboard arriving…</p>; throw new Error(parsed.error); }
   const d = parsed.spec!;
   const cols = d.columns ?? 2;
   const span = (s?: number) => (s === 3 || (s === 2 && cols === 2) ? 'md:col-span-full' : s === 2 ? 'md:col-span-2' : '');
   return (
     <div data-dashboard={d.panels.length} className="space-y-3">
-      {(d.title || d.subtitle) && <div>{d.title && <div className="text-[16px] font-semibold">{d.title}</div>}{d.subtitle && <div className="text-[12.5px] text-hx-muted">{d.subtitle}</div>}</div>}
+      {(d.title || d.subtitle) && <div>{d.title && <div className="text-title font-semibold">{d.title}</div>}{d.subtitle && <div className="text-small text-hx-muted">{d.subtitle}</div>}</div>}
       {d.kpis && <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">{d.kpis.map((k, i) => <Kpi key={i} k={k} />)}</div>}
       <div className={`grid gap-3 ${cols === 1 ? '' : cols === 3 ? 'md:grid-cols-3' : 'md:grid-cols-2'}`}>
         {d.panels.map((p, i) => {
@@ -232,9 +232,9 @@ export function Dashboard({ source, streaming, renderMarkdown }: { source: strin
             : p.kind === 'markdown' ? <>{renderMarkdown(String(p.spec))}</> : (() => { const t = parseTableSpec(src); if (t.error) throw new Error(t.error); return <TableBody spec={t.spec!} maxHeight={260} />; })();
           return (
             <section key={i} data-panel={p.kind} className={`min-w-0 rounded-xl border border-hx-border-subtle bg-hx-bg p-3 ${span(p.span)}`}>
-              {p.title && <div className="mb-1 text-[12.5px] font-medium text-hx-secondary">{p.title}</div>}
-              <RenderBoundary fallback={(e) => <p className="text-[12px] text-hx-danger" data-render-error>This panel did not render: {e}</p>}>{body}</RenderBoundary>
-              {p.note && <div className="mt-1 text-[11.5px] text-hx-muted">{p.note}</div>}
+              {p.title && <div className="mb-1 text-small font-medium text-hx-secondary">{p.title}</div>}
+              <RenderBoundary fallback={(e) => <p className="text-small text-hx-danger" data-render-error>This panel did not render: {e}</p>}>{body}</RenderBoundary>
+              {p.note && <div className="mt-1 text-caption text-hx-muted">{p.note}</div>}
             </section>
           );
         })}

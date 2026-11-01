@@ -50,10 +50,10 @@ export function PendingCard({ p, respond, compact }: { p: PendingRequest; respon
     const cmd = typeof p.input.command === 'string' ? p.input.command : null;
     body = (
       <>
-        <div className="text-[13.5px] text-hx-primary">{p.agent ? <><b>{p.agent}</b> wants to use </> : 'Allow '}<b className="font-mono">{p.tool}</b>?</div>
-        {cmd ? <CodeBlock code={cmd} language="bash" collapseAt={12} /> : <div className="mt-1 text-[13px] text-hx-secondary">{p.summary}</div>}
+        <div className="text-body text-hx-primary">{p.agent ? <><b>{p.agent}</b> wants to use </> : 'Allow '}<b className="font-mono">{p.tool}</b>?</div>
+        {cmd ? <CodeBlock code={cmd} language="bash" collapseAt={12} /> : <div className="mt-1 text-body text-hx-secondary">{p.summary}</div>}
         {(p.input.elevated === true || p.input.elevated === 'true') && (
-          <div className="mt-2 flex items-start gap-1.5 rounded-lg bg-hx-danger/10 px-2.5 py-1.5 text-[12.5px] text-hx-danger" data-elevated-warning>
+          <div className="mt-2 flex items-start gap-1.5 rounded-lg bg-hx-danger-soft px-2.5 py-1.5 text-small text-hx-danger" data-elevated-warning>
             <Icon name="shield" size={14} className="mt-0.5 shrink-0" />
             <span><b>Runs as administrator</b> on this computer: it can change anything on it. Allow it only if you expect this command; {navigator.platform.toLowerCase().startsWith('win') ? 'Windows' : 'the system'} will ask you again. This is asked every time.</span>
           </div>
@@ -68,7 +68,7 @@ export function PendingCard({ p, respond, compact }: { p: PendingRequest; respon
           <Button variant="primary" size="sm" disabled={busy} data-decision="allow" onClick={() => go({ requestId: p.requestId, decision: 'allow' })}>Allow once</Button>
           {p.suggestion && <Button size="sm" disabled={busy} data-decision="allow_always" onClick={() => go({ requestId: p.requestId, decision: 'allow_always' })}>{p.suggestion === 'edit_all' ? 'Allow all edits this session' : `Always allow ${p.suggestion}`}</Button>}
           <Button size="sm" variant="ghost" disabled={busy} data-decision="deny" onClick={() => go({ requestId: p.requestId, decision: 'deny', ...(feedback ? { feedback } : {}) })}>Deny</Button>
-          <Input className="h-7 min-w-[160px] flex-1 text-[12.5px]" placeholder="Note for the agent if you deny" value={feedback} onChange={(e) => setFeedback(e.target.value)} />
+          <Input className="h-7 min-w-[160px] flex-1 text-small" placeholder="Note for the agent if you deny" value={feedback} onChange={(e) => setFeedback(e.target.value)} />
         </div>
       </>
     );
@@ -95,7 +95,7 @@ export function PendingCard({ p, respond, compact }: { p: PendingRequest; respon
         <Markdown text={p.message} />
         {p.files.length > 0 && (
           <div className="mt-2">
-            <div className="flex flex-wrap gap-1">{p.files.map((x, i) => <button key={x.path} type="button" onClick={() => setFile(i)} className={cx('rounded-md px-2 py-0.5 text-[12px]', i === file ? 'bg-hx-accent-soft text-hx-accent-text' : 'bg-hx-pill text-hx-secondary')}>{x.path}</button>)}</div>
+            <div className="flex flex-wrap gap-1">{p.files.map((x, i) => <button key={x.path} type="button" onClick={() => setFile(i)} className={cx('rounded-md px-2 py-0.5 text-small', i === file ? 'bg-hx-accent-soft text-hx-accent-text' : 'bg-hx-pill text-hx-secondary')}>{x.path}</button>)}</div>
             {f && <div className="mt-1 rounded-lg border border-hx-border-subtle bg-hx-bg px-3 py-2"><Markdown text={f.path.endsWith('.md') ? f.content : `\`\`\`${f.path.split('.').pop() ?? ''}\n${f.content}\n\`\`\``} /></div>}
           </div>
         )}
@@ -103,7 +103,7 @@ export function PendingCard({ p, respond, compact }: { p: PendingRequest; respon
     );
     actions = (
       <div className="flex items-center gap-2">
-        <Input className="h-8 min-w-0 flex-1 text-[12.5px]" placeholder="What to change, if you send it back" value={feedback} onChange={(e) => setFeedback(e.target.value)} />
+        <Input className="h-8 min-w-0 flex-1 text-small" placeholder="What to change, if you send it back" value={feedback} onChange={(e) => setFeedback(e.target.value)} />
         <Button size="sm" variant="ghost" disabled={busy || !feedback.trim()} title={feedback.trim() ? '' : 'Say what to change'} onClick={() => go({ requestId: p.requestId, decision: 'reject', feedback })}>Send back</Button>
         <Button size="sm" variant="primary" disabled={busy} data-decision="approve" onClick={() => go({ requestId: p.requestId, decision: 'approve', ...(feedback ? { feedback } : {}) })}>Approve</Button>
       </div>

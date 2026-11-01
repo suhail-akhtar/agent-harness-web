@@ -219,7 +219,8 @@ export function describeSchedule(s: Pick<Schedule, 'cron' | 'at' | 'timeZone' | 
   if (s.triggerHash) return 'When its URL is called';
   if (s.watch) return describeWatch(s.watch);
   if (s.cron) { try { return `${describeCron(s.cron)}${s.timeZone ? ` (${s.timeZone})` : ''}`; } catch { return s.cron; } }
-  return s.at ? `Once, at ${new Date(s.at).toISOString()}` : 'Once';
+  // Read by people (and agents): to the minute, in UTC (the app shows its own clock's time).
+  return s.at ? `Once, at ${new Date(s.at).toISOString().slice(0, 16).replace('T', ' ')} UTC` : 'Once';
 }
 
 /** The next `n` times a cron expression runs (in its time zone), from `from`. */

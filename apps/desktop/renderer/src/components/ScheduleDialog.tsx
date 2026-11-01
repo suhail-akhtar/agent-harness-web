@@ -8,7 +8,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import type { Schedule, WatchSpec, WorkflowInfo } from '@harness/client';
-import { Button, Field, Icon, Input, Modal, Select, Textarea, cx, toast } from '@harness/ui';
+import { Button, Field, Icon, Input, Modal, Select, Textarea, cx, toast, ChoiceGroup, Section, OptionCards, Callout } from '@harness/ui';
 import { useData, client } from '../state/data';
 import { useApp } from '../state/app';
 import { recommendedModel } from '../state/recommend';
@@ -38,19 +38,8 @@ const ASKS: Array<{ id: Asks; title: string; detail: string }> = [
   { id: 'default', title: 'Ask me for everything', detail: 'Every edit and command waits for you in the Inbox.' },
 ];
 
-/** A row of choices, one selected (radio semantics). */
-export function Choice<T extends string>({ value, options, onChange, label, name }: { value: T; options: Array<{ id: T; label: string }>; onChange: (v: T) => void; label: string; name: string }) {
-  return (
-    <div role="radiogroup" aria-label={label} className="flex flex-wrap gap-1.5" data-choice={name}>
-      {options.map((o) => (
-        <button key={o.id} type="button" role="radio" aria-checked={value === o.id} data-value={o.id} onClick={() => onChange(o.id)}
-          className={cx('h-8 rounded-lg border px-3 text-[12.5px] transition-colors', value === o.id ? 'border-hx-accent bg-hx-accent-soft font-medium text-hx-accent-text' : 'border-hx-border text-hx-secondary hover:bg-hx-hover hover:text-hx-primary')}>
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
-}
+/** A row of choices, one selected: the kit's ChoiceGroup. */
+const Choice = ChoiceGroup;
 
 /** When it runs: the plain choices, and what they come to. */
 function WhenPicker({ when, set, zone }: { when: When; set: (w: When) => void; zone: string }) {
@@ -90,7 +79,7 @@ function WhenPicker({ when, set, zone }: { when: When; set: (w: When) => void; z
               <div className="flex flex-wrap gap-1" role="group" aria-label="Days" data-when-days>
                 {[1, 2, 3, 4, 5, 6, 0].map((d) => {
                   const on = when.days.includes(d);
-                  return <button key={d} type="button" aria-pressed={on} data-day={d} onClick={() => set({ ...when, days: on ? when.days.filter((x) => x !== d) : [...when.days, d] })} className={cx('h-8 w-11 rounded-lg border text-[12px]', on ? 'border-hx-accent bg-hx-accent-soft font-medium text-hx-accent-text' : 'border-hx-border text-hx-secondary hover:bg-hx-hover')}>{DAY_SHORT[d]}</button>;
+                  return <button key={d} type="button" aria-pressed={on} data-day={d} onClick={() => set({ ...when, days: on ? when.days.filter((x) => x !== d) : [...when.days, d] })} className={cx('h-8 w-11 rounded-lg border text-small', on ? 'border-hx-accent bg-hx-accent-soft font-medium text-hx-accent-text' : 'border-hx-border text-hx-secondary hover:bg-hx-hover')}>{DAY_SHORT[d]}</button>;
                 })}
               </div>
             </Field>
@@ -105,7 +94,7 @@ function WhenPicker({ when, set, zone }: { when: When; set: (w: When) => void; z
         )}
         {when.freq === 'custom' && <Field label="Cron (five fields)" help="minute hour day-of-month month day-of-week, e.g. 0 9 * * 1-5"><Input className="font-mono" value={when.cron} onChange={(e) => set({ ...when, cron: e.target.value })} placeholder="0 9 * * 1-5" data-schedule-cron /></Field>}
       </div>
-      <div className={cx('mt-1 flex items-start gap-2 rounded-lg px-3 py-2 text-[12.5px]', preview?.error ? 'bg-hx-danger/10 text-hx-danger' : 'bg-hx-hover text-hx-secondary')} data-when-preview aria-live="polite">
+      <div className={cx('mt-1 flex items-start gap-2 rounded-lg px-3 py-2 text-small', preview?.error ? 'bg-hx-danger-soft text-hx-danger' : 'bg-hx-hover text-hx-secondary')} data-when-preview aria-live="polite">
         <Icon name={preview?.error ? 'alert' : 'calendar'} size={14} className="mt-0.5 shrink-0" />
         <span>
           {preview?.error ? preview.error : preview?.when ? (
@@ -165,7 +154,7 @@ function WatchPicker({ d, set }: { d: WatchDraft; set: (d: WatchDraft) => void }
         <Field label="Run" help="Changes in a row wait until it has been quiet this long"><Select value={String(d.settleSeconds)} onChange={(v) => set({ ...d, settleSeconds: Number(v) })} options={SETTLE} data-watch-settle /></Field>
         <div className="md:col-span-2"><Field label="Only when (optional)" help="A small model with no tools checks each change against this first; a change that does not match costs no run"><Input value={d.onlyWhen} onChange={(e) => set({ ...d, onlyWhen: e.target.value })} placeholder="a test fails" data-watch-only-when /></Field></div>
       </div>
-      <div className={cx('mt-1 flex items-start gap-2 rounded-lg px-3 py-2 text-[12.5px]', preview?.error ? 'bg-hx-danger/10 text-hx-danger' : 'bg-hx-hover text-hx-secondary')} data-when-preview aria-live="polite">
+      <div className={cx('mt-1 flex items-start gap-2 rounded-lg px-3 py-2 text-small', preview?.error ? 'bg-hx-danger-soft text-hx-danger' : 'bg-hx-hover text-hx-secondary')} data-when-preview aria-live="polite">
         <Icon name={preview?.error ? 'alert' : 'eye'} size={14} className="mt-0.5 shrink-0" />
         <span>{preview?.error ? preview.error : preview?.when ? <><b className="font-medium text-hx-primary" data-when-words>{preview.when}</b> · no model runs until it changes</> : d.kind === 'url' ? 'Give the address.' : d.kind === 'command' ? 'Give the command.' : 'Pick what it watches.'}</span>
       </div>
@@ -173,9 +162,6 @@ function WatchPicker({ d, set }: { d: WatchDraft; set: (d: WatchDraft) => void }
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return <section className="mb-5"><h3 className="mb-2 text-[11.5px] font-semibold uppercase tracking-wide text-hx-muted">{title}</h3>{children}</section>;
-}
 
 /** A draft as the dialog's state. */
 function initial(edit?: Schedule, draft?: ScheduleDraft) {
@@ -252,7 +238,7 @@ export function ScheduleDialog({ open, edit, draft, onClose, onDone }: { open: b
           title: f.title.trim() || undefined, prompt: f.what === 'prompt' ? f.prompt : '', ...workflow, ...timing, ...where,
           misfire: f.misfire as 'once' | 'skip', ...(cost ? { maxCostUsd: cost } : {}), ...(waits ? { askTimeoutMinutes: waitMin } : {}), notify: f.notify,
         });
-        toast(`Scheduled: ${s.when ?? s.title}`, { kind: 'success' });
+        toast(`Scheduled “${s.title}”`, { kind: 'success', detail: s.at ? `Once, ${new Date(s.at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}` : s.when });
       }
       onDone?.(s);
       onClose();
@@ -260,7 +246,7 @@ export function ScheduleDialog({ open, edit, draft, onClose, onDone }: { open: b
   };
   const footer = (
     <>
-      {missing.length > 0 && <span className="mr-auto text-[12px] text-hx-muted" data-schedule-missing>Still needed: {missing.join(', ')}</span>}
+      {missing.length > 0 && <span className="mr-auto text-small text-hx-muted" data-schedule-missing>Still needed: {missing.join(', ')}</span>}
       <Button variant="ghost" onClick={onClose}>Cancel</Button>
       <Button variant="primary" disabled={missing.length > 0 || busy} onClick={() => void save()} data-schedule-create>{edit ? 'Save' : 'Schedule it'}</Button>
     </>
@@ -269,21 +255,20 @@ export function ScheduleDialog({ open, edit, draft, onClose, onDone }: { open: b
     <Modal open={open} onClose={onClose} title={edit ? `Edit "${edit.title}"` : 'New schedule'} size="lg" footer={footer}>
       <div data-schedule-form={edit ? 'edit' : 'new'}>
         {!edit && (
-          <div className="mb-5" data-schedule-templates>
-            <div className="mb-2 text-[12px] text-hx-muted">Start from</div>
+          <Section dense title="Start from" data-schedule-templates>
             <div className="grid gap-2 sm:grid-cols-2">
               {TEMPLATES.map((t) => (
                 <button key={t.id} type="button" data-template={t.id} onClick={() => setF({ ...initial(undefined, t.draft), folder: f.folder, model: f.model })}
-                  className="flex items-start gap-2.5 rounded-xl border border-hx-border-subtle px-3 py-2.5 text-left hover:border-hx-border hover:bg-hx-hover">
+                  className="flex items-start gap-2.5 rounded-lg border border-hx-border-subtle bg-hx-elevated px-3 py-2.5 text-left transition-colors hover:border-hx-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-hx-focus">
                   <Icon name={t.icon} size={16} className="mt-0.5 shrink-0 text-hx-accent-text" />
-                  <span className="min-w-0"><span className="block text-[13px] font-medium">{t.title}</span><span className="block text-[12px] text-hx-muted">{t.blurb}</span></span>
+                  <span className="min-w-0"><span className="block text-body font-medium">{t.title}</span><span className="block text-small text-hx-muted">{t.blurb}</span></span>
                 </button>
               ))}
             </div>
-          </div>
+          </Section>
         )}
 
-        <Section title="What it does">
+        <Section dense title="What it does">
           {!trigger && <div className="mb-2"><Choice name="what" label="What it runs" value={f.what} options={[{ id: 'prompt', label: 'A prompt' }, { id: 'workflow', label: 'A workflow' }]} onChange={(what) => set({ what })} /></div>}
           <Field label="Title"><Input value={f.title} onChange={(e) => set({ title: e.target.value })} placeholder="Morning briefing" data-schedule-title /></Field>
           {f.what === 'prompt' ? (
@@ -303,14 +288,14 @@ export function ScheduleDialog({ open, edit, draft, onClose, onDone }: { open: b
         </Section>
 
         {!trigger && (
-          <Section title="When">
+          <Section dense title="When">
             {!edit && <div className="mb-3"><Choice name="trigger" label="When it runs" value={f.trigger} options={[{ id: 'time', label: 'At set times' }, { id: 'change', label: 'When something changes' }]} onChange={(trigger) => set({ trigger })} /></div>}
             {watching ? <WatchPicker d={f.watch} set={(w) => set({ watch: w })} /> : <WhenPicker when={f.when} set={(when) => set({ when })} zone={f.timeZone.trim()} />}
           </Section>
         )}
 
         {!edit && (
-          <Section title="Where">
+          <Section dense title="Where">
             <Choice name="target" label="Runs in" value={f.target as 'new' | 'existing'} options={[{ id: 'new', label: 'A new conversation each time' }, { id: 'existing', label: 'The same conversation each time' }]} onChange={(target) => set({ target })} />
             <div className="mt-3">
               {f.target === 'new' ? (
@@ -328,30 +313,24 @@ export function ScheduleDialog({ open, edit, draft, onClose, onDone }: { open: b
         )}
 
         {!edit && f.target === 'new' && (
-          <Section title="When it needs your approval">
-            <div role="radiogroup" aria-label="When it needs your approval" className="grid gap-2 sm:grid-cols-2" data-schedule-asks>
-              {ASKS.map((a) => (
-                <button key={a.id} type="button" role="radio" aria-checked={f.asks === a.id} data-value={a.id} onClick={() => set({ asks: a.id })}
-                  className={cx('rounded-xl border px-3 py-2.5 text-left', f.asks === a.id ? 'border-hx-accent bg-hx-accent-soft' : 'border-hx-border-subtle hover:bg-hx-hover')}>
-                  <span className={cx('block text-[13px] font-medium', f.asks === a.id && 'text-hx-accent-text')}>{a.title}</span>
-                  <span className="block text-[12px] text-hx-muted">{a.detail}</span>
-                </button>
-              ))}
+          <Section dense title="When it needs your approval">
+            <div data-schedule-asks>
+              <OptionCards name="asks" label="When it needs your approval" value={f.asks} options={ASKS.map((a) => ({ id: a.id, title: a.title, detail: a.detail }))} onChange={(asks) => set({ asks })} />
             </div>
           </Section>
         )}
         {waits && (
-          <div className="-mt-2 mb-5 flex items-center gap-2 text-[12.5px] text-hx-secondary" data-schedule-wait-row>
+          <div className="-mt-2 mb-5 flex items-center gap-2 text-small text-hx-secondary" data-schedule-wait-row>
             Wait for my answer up to <Input type="number" min={0.1} step={0.5} className="w-20" value={f.waitHours} onChange={(e) => set({ waitHours: e.target.value })} data-schedule-wait /> hours, then refuse and go on.
           </div>
         )}
 
-        <Section title="Tell me">
+        <Section dense title="Tell me">
           <Choice name="notify" label="Tell me" value={f.notify} options={NOTIFY} onChange={(notify) => set({ notify })} />
-          <p className="mt-1.5 text-[12px] text-hx-muted" data-notify-help>{NOTIFY_HELP[f.notify]}</p>
+          <p className="mt-1.5 text-small text-hx-muted" data-notify-help>{NOTIFY_HELP[f.notify]}</p>
         </Section>
 
-        <button type="button" className="mb-2 inline-flex items-center gap-1 text-[12.5px] text-hx-secondary hover:text-hx-primary" onClick={() => setMore(!more)} aria-expanded={more} data-schedule-more>
+        <button type="button" className="mb-2 inline-flex items-center gap-1 text-small text-hx-secondary hover:text-hx-primary" onClick={() => setMore(!more)} aria-expanded={more} data-schedule-more>
           <Icon name={more ? 'chevron-down' : 'chevron-right'} size={13} />More options
         </button>
         {more && (
@@ -361,7 +340,7 @@ export function ScheduleDialog({ open, edit, draft, onClose, onDone }: { open: b
             {!trigger && cron && <Field label="If the app was closed at the time"><Select value={f.misfire} onChange={(v) => set({ misfire: v as 'once' | 'skip' })} options={[{ value: 'once', label: 'Run it once when it is back' }, { value: 'skip', label: 'Skip it' }]} data-schedule-misfire /></Field>}
           </div>
         )}
-        {error && <p role="alert" className="mt-2 rounded-lg bg-hx-danger/10 px-3 py-2 text-[12.5px] text-hx-danger" data-schedule-error>{error}</p>}
+        {error && <Callout tone="danger" className="mt-2" data-schedule-error>{error}</Callout>}
       </div>
     </Modal>
   );

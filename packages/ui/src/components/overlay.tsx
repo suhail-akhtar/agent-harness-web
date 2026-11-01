@@ -7,7 +7,8 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from '../icons.tsx';
-import { cx, IconButton, Kbd } from './primitives.tsx';
+import { Button, cx, IconButton, Kbd } from './primitives.tsx';
+import { Callout } from './blocks.tsx';
 
 export type Placement = 'bottom-start' | 'bottom-end' | 'top-start' | 'top-end' | 'right-start' | 'left-start' | 'bottom' | 'top';
 
@@ -159,7 +160,7 @@ export function MenuList({ items, onDone, activeIndex, onActiveIndex, className 
     >
       {items.map((it, i) => {
         if (it.separator) return <div key={it.id} className="my-1 h-px bg-hx-border-subtle" />;
-        if (it.section) return <div key={it.id} className="px-2.5 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-hx-muted">{it.label}</div>;
+        if (it.section) return <div key={it.id} className="px-2.5 pb-1 pt-2 text-tiny font-semibold uppercase tracking-wide text-hx-muted">{it.label}</div>;
         return (
           <button
             key={it.id}
@@ -170,11 +171,11 @@ export function MenuList({ items, onDone, activeIndex, onActiveIndex, className 
             disabled={it.disabled}
             onMouseEnter={() => selectable(i) && setActive(i)}
             onClick={() => { it.onSelect?.(); onDone?.(); }}
-            className={cx('flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] disabled:opacity-45',
+            className={cx('flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-body disabled:opacity-45',
               i === active && 'bg-hx-hover', it.danger ? 'text-hx-danger' : 'text-hx-primary')}
           >
             {it.icon && <Icon name={it.icon} size={15} className={it.danger ? '' : 'text-hx-secondary'} />}
-            <span className="min-w-0 flex-1 truncate">{it.label}{it.hint && <span className="ml-2 text-[12px] text-hx-muted">{it.hint}</span>}</span>
+            <span className="min-w-0 flex-1 truncate">{it.label}{it.hint && <span className="ml-2 text-small text-hx-muted">{it.hint}</span>}</span>
             {it.checked && <Icon name="check" size={14} className="text-hx-accent-text" />}
             {it.shortcut && <Kbd keys={it.shortcut} />}
           </button>
@@ -229,7 +230,7 @@ function TooltipBox({ anchor, placement, children }: { anchor: React.RefObject<H
   }, [anchor, placement]);
   return (
     <div ref={box} role="tooltip" style={{ position: 'fixed', left: pos?.left ?? -9999, top: pos?.top ?? -9999, zIndex: 80 }}
-      className="hx-fade-in pointer-events-none flex max-w-xs items-center rounded-md bg-hx-primary px-2 py-1 text-[12px] text-hx-bg shadow-lg">
+      className="hx-fade-in pointer-events-none flex max-w-xs items-center rounded-md bg-hx-primary px-2 py-1 text-small text-hx-bg shadow-lg">
       {children}
     </div>
   );
@@ -287,7 +288,7 @@ export function Modal({ open, onClose, title, children, footer, size = 'md', bar
             <>
               {title !== undefined && (
                 <div className="flex items-center gap-3 border-b border-hx-border-subtle px-5 py-3.5">
-                  <div className="min-w-0 flex-1 truncate text-[15px] font-semibold">{title}</div>
+                  <div className="min-w-0 flex-1 truncate text-body-lg font-semibold">{title}</div>
                   <IconButton icon="x" label="Close" size="sm" onClick={onClose} />
                 </div>
               )}
@@ -306,22 +307,15 @@ export function ConfirmDialog({ open, title, body, confirmLabel = 'Confirm', dan
   return (
     <Modal open={open} onClose={() => onAnswer(false)} title={title} size="sm"
       footer={<>
-        <button type="button" className="h-8 rounded-lg px-3 text-[13px] text-hx-secondary hover:bg-hx-hover" onClick={() => onAnswer(false)}>Cancel</button>
-        <button type="button" data-autofocus className={cx('h-8 rounded-lg px-3 text-[13px] font-medium', danger ? 'bg-hx-danger text-white' : 'bg-hx-accent text-hx-on-accent')} onClick={() => onAnswer(true)}>{confirmLabel}</button>
+        <Button variant="ghost" onClick={() => onAnswer(false)}>Cancel</Button>
+        <Button data-autofocus variant={danger ? 'danger' : 'primary'} onClick={() => onAnswer(true)}>{confirmLabel}</Button>
       </>}>
-      <div className="text-[13.5px] leading-6 text-hx-secondary">{body}</div>
+      <div className="text-body leading-6 text-hx-secondary">{body}</div>
     </Modal>
   );
 }
 
+/** A note in a form or a list (kept for existing callers): a Callout. */
 export function InfoNote({ tone = 'info', children, icon }: { tone?: 'info' | 'warning' | 'danger' | 'success'; children: React.ReactNode; icon?: string }): React.ReactElement {
-  const t = { info: 'border-hx-info/30 bg-hx-info/8 text-hx-primary', warning: 'border-hx-warning/35 bg-hx-warning/8 text-hx-primary', danger: 'border-hx-danger/35 bg-hx-danger/8 text-hx-primary', success: 'border-hx-success/30 bg-hx-success/8 text-hx-primary' }[tone];
-  const ic = icon ?? { info: 'info', warning: 'warning', danger: 'alert', success: 'check-circle' }[tone];
-  const col = { info: 'text-hx-info', warning: 'text-hx-warning', danger: 'text-hx-danger', success: 'text-hx-success' }[tone];
-  return (
-    <div className={cx('flex gap-2.5 rounded-lg border px-3 py-2.5 text-[13px] leading-5', t)}>
-      <Icon name={ic} size={16} className={cx('mt-0.5 shrink-0', col)} />
-      <div className="min-w-0 flex-1">{children}</div>
-    </div>
-  );
+  return <Callout tone={tone} {...(icon ? { icon } : {})}>{children}</Callout>;
 }
