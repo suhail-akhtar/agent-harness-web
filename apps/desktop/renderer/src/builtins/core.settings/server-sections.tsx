@@ -10,6 +10,7 @@ import { Badge, Button, EmptyState, Field, Icon, IconButton, Input, InfoNote, Se
 import { useData, client } from '../../state/data';
 import { useApp } from '../../state/app';
 import { recommendedModel } from '../../state/recommend';
+import { ScheduleForm } from '../../components/ScheduleForm';
 
 const fail = (e: unknown) => toast((e as Error).message, { kind: 'error' });
 function useLoad<T>(f: () => Promise<T>, deps: unknown[] = []): [T | null, string, () => void] {
@@ -310,32 +311,32 @@ export function Vault(): React.ReactElement {
 
 export function Schedules(): React.ReactElement {
   const [list, err, reload] = useLoad(() => client.schedules.list());
-  const [form, setForm] = useState({ title: '', prompt: '', cron: '', inMinutes: '' });
+  const keepInTray = useApp((x) => x.prefs.keepInTray);
   if (err) return <InfoNote>{err}</InfoNote>;
   if (!list) return <Spinner />;
   return (
     <div data-section="schedules">
+      {list.some((s) => s.enabled) && !keepInTray && (
+        <InfoNote>
+          <span data-schedules-tray-note>Schedules run only while this app is open. Closing the window quits it unless it keeps running in the tray.</span>{' '}
+          <Button size="sm" onClick={() => useApp.getState().setPrefs({ keepInTray: true })}>Keep running in the tray</Button>
+        </InfoNote>
+      )}
       {!list.length ? <p className="mb-3 text-[13px] text-hx-muted">Nothing scheduled.</p> : (
         <div className="mb-4 divide-y divide-hx-border-subtle rounded-xl border border-hx-border-subtle">
           {list.map((s: Schedule) => (
-            <div key={s.id} className="flex items-center gap-2 px-3 py-2 text-[13px]">
+            <div key={s.id} data-schedule={s.id} className="flex items-center gap-2 px-3 py-2 text-[13px]">
               <Icon name="clock" size={14} className="text-hx-muted" />
-              <span className="min-w-0 flex-1"><span className="block truncate">{s.title || s.prompt}</span><span className="block text-[11.5px] text-hx-muted">{s.cron ?? (s.at ? new Date(s.at).toLocaleString() : 'trigger')}{s.nextRun ? ` · next ${new Date(s.nextRun).toLocaleString()}` : ''}</span></span>
+              <span className="min-w-0 flex-1"><span className="block truncate">{s.title || s.prompt}</span><span className="block text-[11.5px] text-hx-muted">{s.cron ?? (s.at ? new Date(s.at).toLocaleString() : 'trigger')}{s.nextRun ? ` · next ${new Date(s.nextRun).toLocaleString()}` : ''}{s.lastResult ? ` · last: ${s.lastResult}` : ''}</span></span>
               <Switch checked={s.enabled} onChange={(v) => void client.schedules.setEnabled(s.id, v).then(reload).catch(fail)} label="Enabled" />
-              <IconButton size="xs" icon="play" label="Run now" onClick={() => void client.schedules.run(s.id).then(() => toast('Started')).catch(fail)} />
+              <IconButton size="xs" icon="play" label="Run now" onClick={() => void client.schedules.run(s.id).then(() => { toast('Started'); reload(); }).catch(fail)} />
               <IconButton size="xs" icon="trash" tone="danger" label="Delete" onClick={() => void client.schedules.remove(s.id).then(reload).catch(fail)} />
             </div>
           ))}
         </div>
       )}
       <h3 className="mb-1 text-[12px] font-medium uppercase tracking-wide text-hx-muted">New schedule</h3>
-      <Field label="Title"><Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></Field>
-      <Field label="Prompt"><Textarea rows={3} value={form.prompt} onChange={(e) => setForm({ ...form, prompt: e.target.value })} /></Field>
-      <div className="grid gap-2 md:grid-cols-2">
-        <Field label="Cron (five fields)" help="e.g. 0 9 * * 1-5"><Input className="font-mono" value={form.cron} onChange={(e) => setForm({ ...form, cron: e.target.value })} /></Field>
-        <Field label="Or once, in minutes"><Input type="number" value={form.inMinutes} onChange={(e) => setForm({ ...form, inMinutes: e.target.value })} /></Field>
-      </div>
-      <div className="flex justify-end"><Button variant="primary" disabled={!form.prompt.trim() || (!form.cron.trim() && !form.inMinutes)} onClick={() => void client.schedules.create({ title: form.title || undefined, prompt: form.prompt, ...(form.cron.trim() ? { cron: form.cron.trim() } : { inMinutes: Number(form.inMinutes) }) }).then(() => { setForm({ title: '', prompt: '', cron: '', inMinutes: '' }); reload(); toast('Scheduled'); }).catch(fail)}>Schedule</Button></div>
+      <ScheduleForm onCreated={reload} />
     </div>
   );
 }

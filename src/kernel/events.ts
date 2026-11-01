@@ -74,8 +74,9 @@ export class EventHub {
     } else if (ev.kind === 'request_resolved') {
       this.asked.delete(ev.requestId);
       this.publish('approvals', { type: 'resolved', sessionId: s.meta.id, requestId: ev.requestId, at: Date.now(), decision: ev.decision }, owner);
-    } else if (ev.kind === 'notice' && ev.level !== 'info') {
-      this.publish('notices', { level: ev.level, text: ev.text, sessionId: s.meta.id }, owner);
+    } else if (ev.kind === 'notice' && (ev.level !== 'info' || ev.notify)) {
+      // Warnings and errors, and what the agent asked to tell the person (notify_user): they reach them wherever they are.
+      this.publish('notices', { level: ev.level, text: ev.text, sessionId: s.meta.id, ...(ev.notify ? { notify: true, title: s.meta.title } : {}) }, owner);
     } else if (ev.kind === 'session_proposal') {
       const { kind: _k, ...p } = ev;
       this.publish('proposals', { type: 'added', sessionId: s.meta.id, ...p }, owner);

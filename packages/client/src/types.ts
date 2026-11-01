@@ -121,7 +121,8 @@ export type HarnessEvent =
   | { kind: 'todos'; todos: Todo[] }
   | { kind: 'mode'; mode: Mode }
   | { kind: 'compaction'; before: number; after: number; summaryTokens: number }
-  | { kind: 'notice'; level: 'info' | 'warn' | 'error'; text: string; agent?: string }
+  /** notify: the agent asked to tell the person now (notify_user): it reaches them outside the conversation too. */
+  | { kind: 'notice'; level: 'info' | 'warn' | 'error'; text: string; agent?: string; notify?: boolean }
   /** A progress review at a step checkpoint: started, extended, refreshed (a fresh start), stopped, a flagged "done", a test-discipline nudge. */
   | { kind: 'progress'; phase: 'checkpoint' | 'extended' | 'refreshed' | 'stopped' | 'flagged' | 'nudge'; step: number; budget: number; by: 'signals' | 'review'; text: string; reasons: string[]; verdict?: string; advice?: string; agent?: string }
   | { kind: 'retry'; attempt: number; delayMs: number; reason: string }
@@ -229,7 +230,7 @@ export interface GitStatus { repo: boolean; branch?: string; upstream?: string; 
 export interface GitLogEntry { hash: string; subject: string; author?: string; email?: string; at?: number }
 
 export interface VaultEntry { name: string; kind?: string; scope?: string; description?: string; updatedAt?: number; createdAt?: number; backend?: string; rotateBy?: number; allow?: string[] }
-export interface Schedule { id: string; title?: string; prompt: string; cron?: string; at?: number; enabled: boolean; nextRun?: number | null; lastRun?: number | null; sessionId?: string; trigger?: boolean }
+export interface Schedule { id: string; title?: string; prompt: string; cron?: string; at?: number; enabled: boolean; nextRun?: number | null; lastRun?: number | null; lastResult?: string; runs?: number; sessionId?: string; newSession?: { model: string; runtime: { kind: string; path?: string; network?: string }; mode?: string }; trigger?: boolean; triggerHash?: string }
 export interface McpBundle { name: string; version: string; description?: string; installedAt?: number }
 export interface EffectiveSetting { key: string; value: unknown; source: 'default' | 'operator' | 'account' | 'project' | string; scope?: string; locked?: boolean; max?: number; layers?: Array<{ source: string; value: unknown }> }
 

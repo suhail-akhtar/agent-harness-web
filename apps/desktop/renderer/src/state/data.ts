@@ -209,7 +209,17 @@ export function applyGlobal(e: GlobalEvent): void {
     }
     // A plugin's server half signalled (api.signal): its badge sources read again (state/badges.ts); nothing else changed.
     case 'plugins': if (p.type === 'signal') return; void d.refreshPlugins(); return;
-    case 'notices': if (p.level === 'error' || p.level === 'warn') toast(String(p.text ?? ''), { kind: p.level === 'error' ? 'error' : 'warning' }); return;
+    case 'notices': {
+      // The agent asked to tell the person (notify_user): a toast here, and a system notification when the window is not in front.
+      if (p.notify === true) {
+        const text = String(p.text ?? '').replace(/^The agent says: /, '');
+        toast(`${p.title ? `${String(p.title)}: ` : ''}${text}`, { kind: 'info' });
+        void desktop.notify({ title: String(p.title ?? 'A conversation'), body: text.slice(0, 280), ...(typeof p.sessionId === 'string' ? { route: `core.chat:session?id=${p.sessionId}` } : {}) });
+        return;
+      }
+      if (p.level === 'error' || p.level === 'warn') toast(String(p.text ?? ''), { kind: p.level === 'error' ? 'error' : 'warning' });
+      return;
+    }
     case 'schedules': if (p.type === 'fired') toast(`Scheduled: ${String(p.title ?? 'a prompt')} ran`, { kind: 'info' }); return;
   }
 }

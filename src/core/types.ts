@@ -102,7 +102,8 @@ export type HarnessEvent =
   | { kind: 'todos'; todos: Todo[] }
   | { kind: 'mode'; mode: PermissionMode }
   | { kind: 'compaction'; before: number; after: number; summaryTokens: number }
-  | { kind: 'notice'; level: 'info' | 'warn' | 'error'; text: string; agent?: string }
+  /** notify: the agent asked to tell the person now (notify_user): it reaches them outside the conversation too. */
+  | { kind: 'notice'; level: 'info' | 'warn' | 'error'; text: string; agent?: string; notify?: boolean }
   /**
    * Progress review at a step checkpoint: a review started (checkpoint), the budget grew (extended),
    * a fresh start from a handoff (refreshed), the turn stopped with why (stopped), a "done" the

@@ -1075,7 +1075,7 @@ export class Session {
       ...(main && this.meta.client ? { client: this.clientService() } : {}),
       ...(main ? { sessions: this.sessionsService() } : {}),
       notify: async (message: string) => {
-        this.emit({ kind: 'notice', level: 'info', text: `The agent says: ${message}` });
+        this.emit({ kind: 'notice', level: 'info', text: `The agent says: ${message}`, notify: true });
         fireHooks(this.settings, this.host, 'Notification', { type: 'agent', session: this.meta.id, title: this.meta.title, message }, this.deps.registry.hooks, (m) => this.emit({ kind: 'notice', level: 'warn', text: m }));
       },
       charge: (what, cost) => {

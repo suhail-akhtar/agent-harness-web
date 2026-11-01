@@ -220,10 +220,10 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     const why = concurrencyRefusal(what, owner, counted(), limits);
     if (why) throw new HttpError(429, why);
   }
-  // Scheduled prompts and triggers count against the same limits as typed messages.
-  // Sessions plugins start (an alert's investigation) count against them too.
-  harness.bridge.mayRun = (owner) => concurrencyRefusal('running', owner, counted(), limits);
-  if (harness.scheduler) harness.scheduler.mayRun = (owner, sched) => concurrencyRefusal('running', owner, counted(), limits) ?? (sched.newSession && sandboxed(sched.newSession.runtime) ? concurrencyRefusal('sandboxes', owner, counted(), limits) : undefined);
+  // Scheduled prompts and triggers count against the same limits as typed messages: the daily spend
+  // limit and the concurrency limits. Sessions plugins start (an alert's investigation) count against them too.
+  harness.bridge.mayRun = (owner) => o.spend?.over(owner) ?? concurrencyRefusal('running', owner, counted(), limits);
+  if (harness.scheduler) harness.scheduler.mayRun = (owner, sched) => o.spend?.over(owner) ?? concurrencyRefusal('running', owner, counted(), limits) ?? (sched.newSession && sandboxed(sched.newSession.runtime) ? concurrencyRefusal('sandboxes', owner, counted(), limits) : undefined);
 
   async function serveStatic(res: http.ServerResponse, pathname: string): Promise<boolean> {
     const rel = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');

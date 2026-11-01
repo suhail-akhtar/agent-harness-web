@@ -327,7 +327,8 @@ export class HarnessClient {
   };
   schedules = {
     list: () => this.get<Schedule[]>('/api/schedules'),
-    create: (b: { title?: string; prompt: string; cron?: string; at?: string; inMinutes?: number; sessionId?: string; trigger?: boolean }) => this.post<Schedule>('/api/schedules', b),
+    /** Goes to `sessionId`, or makes a new session each run from `newSession` (one of the two). */
+    create: (b: { title?: string; prompt: string; cron?: string; at?: string; inMinutes?: number; sessionId?: string; newSession?: { model: string; runtime: 'local' | 'docker'; path?: string; network?: 'none' | 'allowlist' | 'full'; mode?: string }; trigger?: boolean }) => this.post<Schedule>('/api/schedules', b),
     remove: (id: string) => this.del<{ ok: boolean }>(`/api/schedules/${id}`),
     run: (id: string) => this.post<unknown>(`/api/schedules/${id}/run`),
     setEnabled: (id: string, on: boolean) => this.post<Schedule>(`/api/schedules/${id}/${on ? 'enable' : 'disable'}`),
