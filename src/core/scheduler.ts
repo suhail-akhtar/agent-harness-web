@@ -713,7 +713,7 @@ export class Scheduler {
 
 /** A run's outcome in a few words, for the schedule's last result. */
 export function describeRun(r: ScheduleRun): string {
-  if (r.status === 'completed') return r.noOp ? 'completed: nothing to report' : 'completed';
+  if (r.status === 'completed') return r.refused ? `completed, but ${r.refused === 1 ? 'a step was' : `${r.refused} steps were`} refused` : r.noOp ? 'completed: nothing to report' : 'completed';
   // A reason that already names how it ended ("Stopped: this scheduled run reached ...", "skipped: ...") is said once.
   return r.reason && r.reason.toLowerCase().startsWith(`${r.status}:`) ? r.reason : `${r.status}${r.reason ? `: ${r.reason}` : ''}`;
 }

@@ -17,7 +17,7 @@ export const scheduleTool: Tool = {
   sendsOut: false,
   spec: {
     name: 'schedule',
-    description: 'Run a prompt or workflow later: once (in_minutes or ISO at) or on a cron (five fields; time_zone, else the server\'s). It comes back here, or with new_conversation runs each time in a new one like this (routines the user asks for; results go to their Inbox; asks: refuse or inbox for approvals). list, delete, run_now.',
+    description: 'Run a prompt or workflow later: once (in_minutes or ISO at) or on a cron (five fields; time_zone, else the server\'s). It comes back here, or with new_conversation runs each time in a new one like this (routines the user asks for; results go to their Inbox; a checker approves its steps unless asks says refuse (never ask) or inbox (ask the user); asks is about approvals, not notifications: omit it unless the user says). list, delete, run_now.',
     input_schema: {
       type: 'object',
       properties: {
@@ -58,7 +58,7 @@ export const scheduleTool: Tool = {
       const raw = input.input && typeof input.input === 'object' ? input.input as Record<string, unknown> : {};
       const s = await sch.create({
         prompt: str(input.prompt), cron: str(input.cron) || undefined, inMinutes: num(input.in_minutes), at,
-        timeZone: str(input.time_zone) || undefined, newConversation: bool(input.new_conversation), asks: str(input.asks) === 'inbox' ? 'inbox' : 'refuse',
+        timeZone: str(input.time_zone) || undefined, newConversation: bool(input.new_conversation), ...(str(input.asks) === 'inbox' || str(input.asks) === 'refuse' ? { asks: str(input.asks) as 'inbox' | 'refuse' } : {}),
         ...(input.watch && typeof input.watch === 'object' ? { watch: input.watch as Record<string, unknown> } : {}),
         ...(str(input.workflow) ? { workflow: { name: str(input.workflow), input: Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)])) } } : {}),
       });

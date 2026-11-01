@@ -384,3 +384,23 @@ test('a run still at work when the server shuts down is written down as interrup
     assert.equal(stopped!.reason, 'stopped by the person');
   } finally { await h2.close(); }
 });
+
+test('a run that was refused steps is not "nothing to report", even if the agent says so: it is blocked, says what was refused, and warns in the inbox', async () => {
+  const t = await harness([
+    { calls: [{ name: 'bash', input: { command: 'node scripts/changes.js' } }] },
+    { text: `I could not run the script: commands are not allowed here. ${NOTHING_TO_REPORT}` },
+  ]);
+  try {
+    const s = await t.sch.create({ owner: 'al', title: 'Changes', prompt: 'summarise what changed', inMinutes: 5, newSession: { ...t.newSession, mode: 'dontAsk' } });
+    await t.sch.runNow(s.id);
+    await t.sch.settled();
+    const [run] = await t.sch.runs.list({ scheduleId: s.id });
+    assert.deepEqual([run!.status, run!.refused, run!.noOp], ['completed', 1, false]);
+    assert.equal(t.sch.get(s.id)!.lastResult, 'completed, but a step was refused');
+    assert.match(JSON.stringify(t.h.sessions.get(run!.sessionId!)!.history[0]), /if you could not do the task \(a step was refused, something failed\), say what stopped you instead/);
+    await until(() => t.h.inbox.list('al').some((i) => i.scheduleId === s.id), 'its update');
+    const [u] = t.h.inbox.list('al').filter((i) => i.scheduleId === s.id);
+    assert.equal(u!.level, 'warn');
+    assert.match(u!.body, /It could not do everything: a step was refused \(not allowed with nobody watching\)/);
+  } finally { await t.close(); }
+});

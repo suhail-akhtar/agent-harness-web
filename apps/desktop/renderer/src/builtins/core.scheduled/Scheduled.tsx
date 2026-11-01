@@ -46,6 +46,7 @@ const TONE: Record<ScheduleRun['status'], 'success' | 'accent' | 'danger' | 'war
 const LABEL: Record<ScheduleRun['status'], string> = { completed: 'Completed', running: 'Running', failed: 'Failed', stopped: 'Stopped', skipped: 'Skipped', interrupted: 'Interrupted' };
 
 export function RunStatus({ run }: { run: ScheduleRun }): React.ReactElement {
+  if (run.status === 'completed' && run.refused) return <Badge tone="warning">Blocked</Badge>;
   if (run.status === 'completed' && run.noOp) return <Badge tone="neutral">Nothing to report</Badge>;
   return <Badge tone={TONE[run.status]}>{run.status === 'running' && <Spinner size={10} className="mr-1" />}{LABEL[run.status]}</Badge>;
 }
@@ -105,7 +106,8 @@ export function relativePast(t: number, now = Date.now()): string {
   return new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-const LAST_ICON = (last: string) => /^completed: nothing/i.test(last) ? { icon: 'check', tone: 'text-hx-muted', label: 'Nothing to report' }
+const LAST_ICON = (last: string) => /^completed, but/i.test(last) ? { icon: 'alert', tone: 'text-hx-warning', label: 'Blocked' }
+  : /^completed: nothing/i.test(last) ? { icon: 'check', tone: 'text-hx-muted', label: 'Nothing to report' }
   : /^completed/i.test(last) ? { icon: 'check-circle', tone: 'text-hx-success', label: 'Completed' }
     : /^(started|running)/i.test(last) ? { icon: 'activity', tone: 'text-hx-accent-text', label: 'Running' }
       : /^failed/i.test(last) ? { icon: 'x-circle', tone: 'text-hx-danger', label: 'Failed' }
@@ -163,7 +165,7 @@ function ScheduleItem({ s, stats, onEdit, reload }: { s: Schedule; stats?: Sched
         </div>
       </div>
       {ws?.error && <div className="mx-4 mb-3 rounded-lg bg-hx-danger/10 px-3 py-1.5 text-[12px] text-hx-danger" data-schedule-watch-error>The last check failed: {ws.error}</div>}
-      {last && /^(failed|stopped|interrupted|skipped)/i.test(last) && <div className="mx-4 mb-3 rounded-lg bg-hx-hover px-3 py-1.5 text-[12px] text-hx-secondary" data-schedule-last-reason>{last}</div>}
+      {last && /^(failed|stopped|interrupted|skipped|completed, but)/i.test(last) && <div className="mx-4 mb-3 rounded-lg bg-hx-hover px-3 py-1.5 text-[12px] text-hx-secondary" data-schedule-last-reason>{last}</div>}
       {/* Mostly unwanted: it offers to be quieter (never louder, never by itself). */}
       {stats?.quieter && (s.notify ?? 'always') !== 'digest' && s.notify !== 'silent' && (
         <div className="mx-4 mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-hx-warning/30 bg-hx-warning/10 px-3 py-2 text-[12.5px]" data-schedule-quieter>

@@ -188,7 +188,8 @@ function initial(edit?: Schedule, draft?: ScheduleDraft) {
     trigger: (edit?.watch ?? draft?.watch ? 'change' : 'time') as 'time' | 'change', watch: toDraft(edit?.watch ?? draft?.watch),
     maxCostUsd: edit?.maxCostUsd ? String(edit.maxCostUsd) : draft?.maxCostUsd ? String(draft.maxCostUsd) : '',
     target: 'new', sessionId: '', model: '', folder: SCRATCH,
-    asks: (edit?.newSession?.mode as Asks | undefined) ?? draft?.asks ?? 'dontAsk',
+    // A checker approves safe steps and the rest wait for the person: never asking leaves most tasks half done.
+    asks: (edit?.newSession?.mode as Asks | undefined) ?? draft?.asks ?? 'auto',
     waitHours: edit?.askTimeoutMinutes ? String(edit.askTimeoutMinutes / 60) : '8',
     notify: (edit?.notify ?? 'always') as NonNullable<Schedule['notify']>,
   };

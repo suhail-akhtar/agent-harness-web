@@ -21,7 +21,7 @@ export interface ScheduleSpec {
   prompt: string; title?: string; cron?: string; inMinutes?: number; at?: number; timeZone?: string;
   /** A new conversation each run (this one's model and folder) instead of this conversation. */
   newConversation?: boolean;
-  /** In a new conversation: what needs approval is refused, or waits in the person's inbox. */
+  /** In a new conversation: what needs approval is refused, or waits in the person's inbox (default: a checker decides, the rest waits). */
   asks?: 'refuse' | 'inbox';
   workflow?: { name: string; input: Record<string, string> };
   maxCostUsd?: number;

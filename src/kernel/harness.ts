@@ -960,7 +960,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
         return { sessionId: session.meta.id, result: 'started', finished };
       }
       try {
-        await session.send(`(${s.watch ? 'Watched' : s.triggerHash ? 'Triggered' : 'Scheduled'} task "${s.title}", run ${s.runs + 1}${s.watch && outside?.trim() ? ': what it watches changed' : ''}. Nobody is watching: if, when you finish, nothing needs the person's attention, end your reply with ${NOTHING_TO_REPORT}.)\n\n${s.prompt}${extra}`);
+        await session.send(`(${s.watch ? 'Watched' : s.triggerHash ? 'Triggered' : 'Scheduled'} task "${s.title}", run ${s.runs + 1}${s.watch && outside?.trim() ? ': what it watches changed' : ''}. Nobody is watching: if, when you finish, nothing needs the person's attention, end your reply with ${NOTHING_TO_REPORT}; if you could not do the task (a step was refused, something failed), say what stopped you instead.)\n\n${s.prompt}${extra}`);
       } catch (e) {
         session.capNextTurn(undefined);
         session.endUnattended();
@@ -1057,8 +1057,10 @@ ${neutralizeTags(change).slice(0, 20_000)}
     // A run that ended with something for the person is a result in their inbox: not one that found nothing,
     // and not a completed one that already reached them (what it told them, or work it offered, is there).
     const r = run?.record;
-    if (type === 'ended' && r && !(r.status === 'completed' && (r.noOp || r.notified || r.proposed))) {
-      void deliver({ kind: 'result', owner: s.owner, title: s.title, body: r.status === 'completed' ? r.summary || 'Done.' : r.reason ?? r.status, level: r.status === 'completed' ? 'info' : r.status === 'failed' ? 'error' : 'warn', scheduleId: s.id, runId: r.id, ...(r.sessionId ? { sessionId: r.sessionId } : {}) }, s.notify);
+    if (type === 'ended' && r && !(r.status === 'completed' && !r.refused && (r.noOp || r.notified || r.proposed))) {
+      // A run refused steps could not do everything: a warning that says so (it is not "nothing to report").
+      const blocked = r.status === 'completed' && r.refused ? `It could not do everything: ${r.refused === 1 ? 'a step was' : `${r.refused} steps were`} refused (not allowed with nobody watching). Let it ask you in the Inbox, or let a checker decide, in its settings.` : '';
+      void deliver({ kind: 'result', owner: s.owner, title: s.title, body: r.status === 'completed' ? [r.summary || 'Done.', blocked].filter(Boolean).join('\n\n') : r.reason ?? r.status, level: r.status === 'completed' ? (blocked ? 'warn' : 'info') : r.status === 'failed' ? 'error' : 'warn', scheduleId: s.id, runId: r.id, ...(r.sessionId ? { sessionId: r.sessionId } : {}) }, s.notify);
     }
   };
   // A schedule made for a plugin (by a session the plugin started) is skipped while the plugin is off.

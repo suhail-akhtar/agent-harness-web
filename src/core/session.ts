@@ -1085,7 +1085,8 @@ export class Session {
           const { worktree: _w, ...runtime } = this.meta.runtime;
           return this.deps.scheduler!.create({
             ...rest, owner: this.meta.owner, createdBy: this.meta.id, ...(this.meta.startedBy ? { plugin: this.meta.startedBy } : {}),
-            ...(newConversation ? { newSession: { model: this.meta.model, runtime, mode: asks === 'inbox' ? 'acceptEdits' : 'dontAsk' } } : { sessionId: this.meta.id }),
+            // By default a checker approves its safe steps and the rest wait in the inbox; refuse: it never asks.
+            ...(newConversation ? { newSession: { model: this.meta.model, runtime, mode: asks === 'inbox' ? 'acceptEdits' : asks === 'refuse' ? 'dontAsk' : 'auto' } } : { sessionId: this.meta.id }),
           });
         },
         list: async () => this.deps.scheduler!.list().filter((x) => x.sessionId === this.meta.id || x.createdBy === this.meta.id),

@@ -108,7 +108,7 @@ test('the schedule tool: run_now tries a routine it set up; a schedule that come
     const wf = h.scheduler!.list().find((x) => x.workflow)!;
     assert.deepEqual(wf.workflow, { name: 'daily-report', input: { topic: 'sales' } });
     assert.equal(wf.prompt, 'Run the workflow daily-report');
-    assert.equal(wf.newSession?.mode, 'dontAsk', 'refuse is the default');
+    assert.equal(wf.newSession?.mode, 'auto', 'a checker decides, the rest waits: the default');
     const here = h.scheduler!.list().find((x) => x.sessionId === s.meta.id)!;
     // run_now: the tool's own check.
     const { scheduleTool } = await import('../src/tools/schedule.ts');

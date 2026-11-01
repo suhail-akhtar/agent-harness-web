@@ -278,7 +278,7 @@ export interface ScheduleRun {
   startedAt: number; endedAt?: number;
   status: 'running' | 'completed' | 'failed' | 'stopped' | 'skipped' | 'interrupted';
   reason?: string; sessionId?: string; costUsd?: number; summary?: string;
-  tools?: number; actions?: number; notified?: boolean; noOp?: boolean; waited?: number;
+  tools?: number; actions?: number; notified?: boolean; noOp?: boolean; waited?: number; proposed?: number; refused?: number;
 }
 export interface McpBundle { name: string; version: string; description?: string; installedAt?: number }
 export interface EffectiveSetting { key: string; value: unknown; source: 'default' | 'operator' | 'account' | 'project' | string; scope?: string; locked?: boolean; max?: number; layers?: Array<{ source: string; value: unknown }> }

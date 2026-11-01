@@ -73,6 +73,12 @@
   last 30 days: runs, what they found, updates opened, dismissed as not useful or left unread, cost:
   `GET /api/schedules/stats`) is shown with its runs; a schedule whose updates are mostly unwanted offers to be quieter
   (one click: only when it matters, the digest, or nothing) - it is never made louder, and never changed by itself.
+- **A blocked run never reads as "nothing to report"** (found by a live run on Claude Sonnet 5.5): a scheduled run
+  whose steps were refused is recorded as blocked (`refused` on its record; "completed, but a step was refused"), and its
+  update is a warning that says what stopped it, even if the agent ended with [nothing to report]. The run's prompt asks
+  the agent to say what stopped it rather than report nothing. Routines an agent sets up, and the dialog's default, now
+  let a checker approve their steps (the rest wait in the Inbox) instead of refusing everything; the schedule tool says
+  that `asks` is about approvals, not notifications (the model had read "only tell me if it matters" as "never ask").
 - While a dialog is open, toasts sit under its backdrop (seen, dimmed), so they never cover its buttons.
 
 - **run_script works in the desktop app**: it started its helper with the app's own executable, which opened a

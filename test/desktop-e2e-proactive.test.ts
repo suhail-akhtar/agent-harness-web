@@ -123,7 +123,7 @@ test('desktop app end to end: proactive work', { timeout: 10 * 60_000 }, async (
       const s = made.find((x) => x.id === schedId)!;
       assert.equal(s.title, 'Build check');
       assert.equal(s.newSession?.model, 'deepseek-flash');
-      assert.equal(s.newSession?.mode, 'dontAsk', 'never stop to ask is the default');
+      assert.equal(s.newSession?.mode, 'auto', 'a checker decides, the rest waits for you: the default');
       assert.equal(s.newSession?.runtime.kind, 'local');
       scratch = s.newSession!.runtime.path!;
       assert.ok(scratch && fs.existsSync(scratch), 'a real scratch folder');
@@ -136,7 +136,7 @@ test('desktop app end to end: proactive work', { timeout: 10 * 60_000 }, async (
       const sessions = (await api('GET', '/api/sessions')).body as Array<{ id: string; title: string; mode: string }>;
       const run = sessions.find((x) => x.title === 'Scheduled: Build check');
       assert.ok(run, 'a conversation for the run');
-      assert.equal(run!.mode, 'dontAsk');
+      assert.equal(run!.mode, 'auto');
       await lastIs(schedId, '^completed$');
     });
 
@@ -339,6 +339,8 @@ test('desktop app end to end: proactive work', { timeout: 10 * 60_000 }, async (
       await page.fill('[data-schedule-prompt]', 'deploy the site');
       await freq('daily');
       await page.fill('[data-when-time]', '02:00');
+      assert.equal(await page.getAttribute('[data-schedule-asks] [data-value="auto"]', 'aria-checked'), 'true', 'a checker decides: the default');
+      await page.click('[data-schedule-asks] [data-value="dontAsk"]');
       assert.equal(await page.locator('[data-schedule-wait]').count(), 0, 'never asks: no wait');
       await page.click('[data-schedule-asks] [data-value="acceptEdits"]');
       await page.fill('[data-schedule-wait]', '2');
