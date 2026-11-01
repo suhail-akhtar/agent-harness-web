@@ -101,6 +101,27 @@
     off and says so; only the person turns it on again. The feedback log says which detector.
   - `GET/PUT /api/noticing`, `POST /api/noticing/clear`, `POST /api/noticing/check`, `POST /api/inbox/:id` with
     `accept`, a `noticing` event topic.
+- **Custom agents** (docs/agents-mcp/PLAN.md, phase 1): a person's own agents, made in the app (Agents > Your agents),
+  drafted from a description (Generate: instructions with a role, procedure, checks, limits and report, the fewest
+  tools, autonomy; what the server does not have is left out and said; nothing is saved until the person saves),
+  imported from an agent file, or opened in the builder filled in by an agent (`core.agents:new`). Each is versioned
+  (a stale save is refused; earlier versions come back as new ones), on or off, and chatted with directly.
+  - Claude Code's agent file fields (`tools`, `disallowedTools`, `model` and its aliases, `effort`, `permissionMode`,
+    `maxTurns`, `skills`, `mcpServers`, `isolation`, `background`, `color`), GitHub Copilot's (`mcp-servers`, its tool
+    aliases and `server/tool` names, `disable-model-invocation`, `user-invocable`) and Cursor's (`readonly`,
+    `is_background`) are read; an agent is written back as a Claude Code file.
+  - Enforced where it runs: its tools and deny list (globs), only its MCP servers' tools (inline, or behind its own
+    tool_search), only its skills (their instructions loaded up front), its autonomy never looser than the
+    conversation's, `maxTurns` a wall (the progress review no longer extends past it), a spend limit per run, a
+    worktree of its own, background by default, and whether the orchestrator may use it.
+  - A conversation can run as an agent (`POST /api/sessions` with `agent`): its instructions in the system prompt,
+    its tools, skills, mode and model.
+  - Fixed: an agent definition's own model reached another company without the person's allowed-models check; a
+    person's or a repository's agent now runs on the conversation's model (and says so) unless that model is allowed.
+  - The orchestrator lists the person's agents (long descriptions and tool lists cut, more so past 15 agents); a
+    step that runs a named agent says which.
+  - `GET /api/agents`, `GET /api/agents/options`, `/api/me/agents` (create, read, new version, delete, versions,
+    restore, export, import, generate).
 - **"The same error" is the error, not the bash tool's lines**: a failure's gist skipped nothing, so every failed command
   with output on stderr read as `exit code: # stderr:`, and the progress review counted different failures as "the same
   error N times" (a signal towards stopping or restarting a run). It now reads the error past those lines.

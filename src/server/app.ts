@@ -43,6 +43,11 @@ import { loadWorkflowDir } from '../plugins/loader.ts';
 import { usesNodeType } from '../graph/validate.ts';
 import { cleanName as cleanAttachmentName, codeImports, deletePath, fileTree, gitDiff, gitLog, gitStatus, renamePath, saveUploads, searchFiles, WorkspaceError, WRITE_LIMIT, writeFile } from './workspace-api.ts';
 import { tierOf, type LiveModel } from '../providers/catalog.ts';
+import { AgentDefError, agentToMarkdown, BUILTIN_AGENTS, INTERACTIVE_TOOLS, parseAgentFile } from '../agents/agents.ts';
+import { generateAgent } from '../agents/generate.ts';
+import { AgentStoreError, defOf } from '../agents/store.ts';
+import type { AgentDef } from '../plugins/api.ts';
+import { skillsIn } from '../skills/skills.ts';
 
 // The HTTP side: JSON API, an SSE stream per session, the built UI, and the
 // companion endpoints. Provider keys stay in this process.
@@ -629,7 +634,15 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
   }
 
   /** The model catalog as clients see it (GET /api/models, and /api/config's models). */
-  const modelCatalog = () => harness.registry.listModels().map((m) => ({ id: m.id, label: m.label, provider: m.provider, contextWindow: m.contextWindow, compactAt: m.compactAt, effort: m.effort, efforts: m.efforts, available: m.available, vision: m.vision, notes: m.notes, tier: tierOf(m), maxOutput: m.maxOutput, imageMaxEdge: m.imageMaxEdge ?? 2048, price: (({ input, output }) => ({ input, output }))(m.rate(0, new Date())) }));
+  /** The tools an agent can be given: not the ones that talk to the person or steer the conversation (an agent never gets those). */
+  const delegableTools = () => [...harness.registry.tools.values()].filter((t) => !INTERACTIVE_TOOLS.includes(t.spec.name) || t.spec.name === 'agent' || t.spec.name === 'todo_write');
+  /** The server's skills (operator plugins' folders), each name once: what an agent can be given. */
+  const serverSkills = async () => {
+    const m = new Map<string, { name: string; description: string }>();
+    for (const sd of harness.registry.skillDirs) for (const s of await skillsIn(sd.dir, sd.source).catch(() => [])) if (!m.has(s.name)) m.set(s.name, { name: s.name, description: s.description });
+    return [...m.values()].sort((a, b) => a.name.localeCompare(b.name));
+  };
+  const modelCatalog = () =>harness.registry.listModels().map((m) => ({ id: m.id, label: m.label, provider: m.provider, contextWindow: m.contextWindow, compactAt: m.compactAt, effort: m.effort, efforts: m.efforts, available: m.available, vision: m.vision, notes: m.notes, tier: tierOf(m), maxOutput: m.maxOutput, imageMaxEdge: m.imageMaxEdge ?? 2048, price: (({ input, output }) => ({ input, output }))(m.rate(0, new Date())) }));
   /** Each provider's own list of what it offers now, for ten minutes (GET /api/models/live). */
   const liveCache = new Map<string, { at: number; models?: LiveModel[]; error?: string }>();
 
@@ -1101,7 +1114,17 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       const b = await readJson(req);
       let client: ReturnType<typeof cleanClient> | undefined;
       try { client = b.client === undefined || b.client === null ? undefined : cleanClient(b.client); } catch (e) { if (e instanceof ClientDeclError) throw new HttpError(400, e.message); throw e; }
-      const model = String(b.model ?? registry.listModels().find((m) => m.available)?.id ?? '');
+      // A conversation that runs as an agent: one the person may start (built-in, a plugin's, or their own and on);
+      // its model when none is named and it has one that is available.
+      let agent: AgentDef | undefined;
+      if (typeof b.agent === 'string' && b.agent) {
+        const own = await harness.agentStore.get(me.id, b.agent);
+        agent = own?.enabled ? defOf(own) : BUILTIN_AGENTS.find((a) => a.name === b.agent) ?? registry.agents.get(b.agent);
+        if (!agent) throw new HttpError(400, `no agent named "${b.agent}" (or it is switched off)`);
+        if (agent.userInvocable === false) throw new HttpError(400, `the ${agent.name} agent is for the orchestrator only (userInvocable is off)`);
+      }
+      const agentModel = agent?.model && registry.listModels().some((m) => m.id === agent!.model && m.available) ? agent.model : undefined;
+      const model = String(b.model ?? agentModel ?? registry.listModels().find((m) => m.available)?.id ?? '');
       const kind = b.runtime === 'local' || b.runtime === 'companion' ? b.runtime : 'docker';
       const sandbox = kind === 'local' && ['auto', 'bwrap', 'seatbelt', 'docker', 'off'].includes(String(b.sandbox)) ? b.sandbox as SessionMeta['runtime']['sandbox'] : undefined;
       // An allowlist needs the egress proxy: a Docker sandbox (including a server folder mounted into one), or a
@@ -1140,8 +1163,9 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       const s = await sessions.create({
         title: typeof b.title === 'string' ? b.title : undefined,
         model,
-        effort: EFFORTS.includes(b.effort as Effort) ? b.effort as Effort : undefined,
+        effort: EFFORTS.includes(b.effort as Effort) ? b.effort as Effort : agent?.effort,
         mode: MODES.includes(b.mode as PermissionMode) ? b.mode as PermissionMode : undefined,
+        ...(agent ? { agent: agent.name, ...(!b.title ? { title: agent.name } : {}) } : {}),
         runtime,
         gitUrl: typeof b.gitUrl === 'string' && b.gitUrl ? b.gitUrl : undefined,
         owner: me.id,
@@ -1523,6 +1547,84 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       await harness.inbox.sync(true);
       return send(res, 200, { read: await harness.inbox.readAll(me.id) });
     }
+    // ---- agents: the catalogue (built-in, plugins', the person's own) and the person's own agents ----
+    if (p === '/api/agents' && method === 'GET') {
+      const mine = await harness.agentStore.list(me.id);
+      const shown = (d: AgentDef, source: string, extra: Record<string, unknown> = {}) => ({ ...d, prompt: undefined, source, ...extra });
+      return send(res, 200, [
+        ...BUILTIN_AGENTS.map((d) => shown(d, 'builtin')),
+        ...[...registry.agents.values()].map((d) => shown(d, 'plugin', { plugin: registry.ownerOf(d) })),
+        ...mine.map((r) => ({ ...r, source: 'user' })),
+      ]);
+    }
+    // What an agent can be given: tools, MCP servers, skills and models on this server.
+    if (p === '/api/agents/options' && method === 'GET') {
+      return send(res, 200, {
+        tools: delegableTools().map((t) => ({ name: t.spec.name, kind: t.kind, description: t.spec.description.split('\n')[0]!.slice(0, 200) })).sort((a, b) => a.name.localeCompare(b.name)),
+        mcpServers: [...registry.mcpServers.keys()].sort(),
+        skills: await serverSkills(),
+        models: registry.listModels().filter((m) => m.available).map((m) => ({ id: m.id, label: m.label, provider: m.provider, efforts: m.efforts })),
+      });
+    }
+    if (p === '/api/me/agents' && method === 'GET') return send(res, 200, await harness.agentStore.list(me.id));
+    if (p === '/api/me/agents' && method === 'POST') {
+      try { return send(res, 201, await harness.agentStore.create(me.id, await readJson(req))); } catch (e) { if (e instanceof AgentStoreError) throw new HttpError(e.status, e.message); throw e; }
+    }
+    // An agent file (Claude Code's .claude/agents, Copilot's .github/agents, Cursor's .cursor/agents): a new agent, or a new version of one of the same name.
+    if (p === '/api/me/agents/import' && method === 'POST') {
+      const b = await readJson(req);
+      if (typeof b.text !== 'string' || !b.text.trim() || b.text.length > 200_000) throw new HttpError(400, 'text is the agent file (Markdown with frontmatter)');
+      const def = parseAgentFile(b.text, typeof b.name === 'string' && b.name ? b.name : 'imported-agent', 'user');
+      if (!def) throw new HttpError(400, 'not an agent file: it needs frontmatter with a name and a description');
+      const { source: _s, ...clean } = def;
+      try {
+        const had = await harness.agentStore.get(me.id, def.name);
+        return send(res, had ? 200 : 201, had ? await harness.agentStore.update(me.id, def.name, clean) : await harness.agentStore.create(me.id, clean));
+      } catch (e) { if (e instanceof AgentStoreError) throw new HttpError(e.status, e.message); throw e; }
+    }
+    // A draft from what the person says it is for (nothing is saved: the builder shows it to change and save).
+    if (p === '/api/me/agents/generate' && method === 'POST') {
+      const b = await readJson(req);
+      limited(messageLimiter, me);
+      const over = o.spend?.over(me.id);
+      if (over) throw new HttpError(429, over);
+      const id = typeof b.model === 'string' && b.model ? b.model : registry.listModels().find((m) => m.available)?.id;
+      const model = id ? registry.listModels().find((m) => m.id === id && m.available) : undefined;
+      if (!model) throw new HttpError(400, 'no model is available to write the agent');
+      const taken = [...BUILTIN_AGENTS.map((a) => a.name), ...(await harness.agentStore.list(me.id)).map((a) => a.name)];
+      try {
+        const r = await generateAgent({
+          description: String(b.description ?? ''), model, provider: registry.provider(model),
+          // The tools a delegated agent can use (not the ones that talk to the person or start sessions).
+          tools: delegableTools().map((t) => ({ name: t.spec.name, description: t.spec.description })),
+          mcpServers: [...registry.mcpServers.keys()], skills: await serverSkills(), taken,
+        });
+        o.spend?.add(me.id, r.costUsd);
+        return send(res, 200, r);
+      } catch (e) { if (e instanceof AgentDefError) throw new HttpError(422, e.message); throw e; }
+    }
+    const agentPath = /^\/api\/me\/agents\/([A-Za-z0-9][\w-]{0,40})(?:\/(versions|restore|export))?$/.exec(p);
+    if (agentPath) {
+      const name = agentPath[1]!;
+      try {
+        if (!agentPath[2] && method === 'GET') { const r = await harness.agentStore.get(me.id, name); if (!r) throw new HttpError(404, `no agent named "${name}"`); return send(res, 200, r); }
+        if (!agentPath[2] && method === 'PUT') {
+          const b = await readJson(req);
+          return send(res, 200, await harness.agentStore.update(me.id, name, b.agent ?? b, { ...(typeof b.expectVersion === 'number' ? { expectVersion: b.expectVersion } : {}) }));
+        }
+        if (!agentPath[2] && method === 'DELETE') { if (!await harness.agentStore.remove(me.id, name)) throw new HttpError(404, `no agent named "${name}"`); return send(res, 200, { ok: true }); }
+        if (agentPath[2] === 'versions' && method === 'GET') return send(res, 200, await harness.agentStore.versions(me.id, name));
+        if (agentPath[2] === 'restore' && method === 'POST') return send(res, 200, await harness.agentStore.restore(me.id, name, Number((await readJson(req)).version)));
+        if (agentPath[2] === 'export' && method === 'GET') {
+          const r = await harness.agentStore.get(me.id, name);
+          if (!r) throw new HttpError(404, `no agent named "${name}"`);
+          res.writeHead(200, { 'content-type': 'text/markdown; charset=utf-8', 'content-disposition': `attachment; filename="${name}.md"`, 'cache-control': 'no-store' });
+          return void res.end(agentToMarkdown(defOf(r)));
+        }
+      } catch (e) { if (e instanceof AgentStoreError) throw new HttpError(e.status, e.message); throw e; }
+      throw new HttpError(405, 'method not allowed');
+    }
+
     // ---- noticing: what the harness notices by itself (src/core/noticing.ts) ----
     if (p === '/api/noticing' && method === 'GET') { await harness.inbox.sync(); return send(res, 200, await harness.noticer.overview(me.id)); }
     if (p === '/api/noticing' && method === 'PUT') {

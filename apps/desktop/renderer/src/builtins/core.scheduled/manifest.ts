@@ -18,8 +18,8 @@ export const ui = {
         agent: {
           description: 'Open the New schedule dialog filled in for the person to confirm.',
           inputSchema: { type: 'object', properties: {
-            title: { type: 'string', maxLength: 80 }, prompt: { type: 'string', maxLength: 4000 }, cron: { type: 'string', maxLength: 60 },
-            timeZone: { type: 'string', maxLength: 60 }, asks: { type: 'string', enum: ['dontAsk', 'auto', 'acceptEdits', 'default'] }, workflow: { type: 'string', maxLength: 80 },
+            title: { type: 'string' }, prompt: { type: 'string' }, cron: { type: 'string' },
+            timeZone: { type: 'string' }, asks: { type: 'string', enum: ['dontAsk', 'auto', 'acceptEdits', 'default'] }, workflow: { type: 'string' },
           } },
         },
       },

@@ -12,16 +12,47 @@ import type { Tool, ToolContext, ToolKind, ToolOutcome, ToolServices } from '../
 // (installed by the server's operator) may also ship code that registers
 // tools, models, providers, quality gates and in-process hooks.
 
-/** A named sub-agent: its own prompt, tool subset, and optionally model and effort. */
+/**
+ * A named agent: its own instructions, tool subset, and optionally model, effort, MCP servers, skills,
+ * autonomy and limits (Claude Code's agent file fields, src/agents/agents.ts). A person's own agents
+ * (src/agents/store.ts) carry a version and an owner.
+ */
 export interface AgentDef {
   name: string;
+  /** When to use it: what the orchestrator reads to choose it. */
   description: string;
+  /** Its role and instructions. */
   prompt: string;
-  /** Tool names it may use. Omit for every tool except the interactive ones. */
+  /** Tool names it may use (globs like `mcp__github__*`). Omit for every tool except the interactive ones. */
   tools?: string[];
+  /** Tools it never gets (checked first; globs). */
+  disallowedTools?: string[];
   model?: string;
   effort?: Effort;
   source?: string;
+  /** The MCP servers whose tools it may use (by server name). Omit for every server the session has. */
+  mcpServers?: string[];
+  /** Skills it starts with loaded (their instructions in its brief); the only ones it may load. */
+  skills?: string[];
+  /** How much it does without asking: never more than the conversation it runs in. */
+  permissionMode?: 'default' | 'acceptEdits' | 'auto' | 'dontAsk' | 'plan';
+  /** At most this many steps (model calls) a run. */
+  maxTurns?: number;
+  /** At most this much spent (USD) a run: it stops there. */
+  maxCostUsd?: number;
+  /** Works in a fresh git worktree of its own (where the folder is a repository). */
+  isolation?: 'worktree';
+  /** Starts in the background by default (its report arrives when it finishes). */
+  background?: boolean;
+  /** The orchestrator may delegate to it (default true); the person may start a conversation with it (default true). */
+  modelInvocable?: boolean;
+  userInvocable?: boolean;
+  /** A colour for it in the app ("#d97757" or a name). */
+  color?: string;
+  /** A person's own agent: whose, which version, when it last changed. */
+  owner?: string;
+  version?: number;
+  updatedAt?: number;
 }
 
 /** timeoutMs: how long one tool call may take (default 10 minutes). */

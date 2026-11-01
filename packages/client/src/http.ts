@@ -13,7 +13,7 @@ import { GlobalEvents, sessionEvents, type Fetch } from './events.ts';
 import {
   isPending, PENDING_KINDS, type Approval, type FileTree, type SearchHit, type Attachment, type CatalogueEntry, type PluginReview, type PluginUpdateInfo, type PluginRevisionInfo, type Config, type Capabilities, type ContextBreakdown, type LiveProviderModels, type EffectiveSetting, type Effort, type FileContent, type FileEntry,
   type GitLogEntry, type GitStatus, type Health, type HarnessEvent, type HistoryPage, type McpBundle, type Me, type Mode, type ModelInfo, type PendingRequest, type PluginInfo, type SolutionImportInfo,
-  type ProviderInfo, type ProviderTest, type InboxItem, type Interruptions, type NoticingOverview, type NoticeDetector, type Schedule, type ScheduleRun, type ScheduleStats, type WatchSpec, type SessionDetail, type SessionMeta, type SessionsPage, type TaskView, type VaultEntry, type VersionInfo, type WorkflowInfo, type WorkflowRunView,
+  type ProviderInfo, type ProviderTest, type InboxItem, type Interruptions, type NoticingOverview, type NoticeDetector, type AgentDef, type AgentInfo, type AgentOptions, type AgentRecord, type Schedule, type ScheduleRun, type ScheduleStats, type WatchSpec, type SessionDetail, type SessionMeta, type SessionsPage, type TaskView, type VaultEntry, type VersionInfo, type WorkflowInfo, type WorkflowRunView,
   type ArtifactContent, type ArtifactMeta, type Proposal, type TraceSpan,
 } from './types.ts';
 
@@ -51,6 +51,8 @@ export interface NewSession {
   title?: string; model?: string; effort?: Effort; mode?: Mode;
   runtime?: 'docker' | 'local' | 'companion'; path?: string; sandbox?: string; network?: 'none' | 'full' | 'allowlist';
   companionId?: string; worktree?: boolean; outputStyle?: string; gitUrl?: string;
+  /** Runs as this agent (its instructions, tools, skills and autonomy; its model when none is named). */
+  agent?: string;
   /** What the client can draw and answer (a server that does not know it ignores it). */
   client?: ClientDescriptor;
 }
@@ -334,6 +336,25 @@ export class HarnessClient {
     /** The person's limits on interruptions: quiet hours, a most a day, a digest time. */
     settings: () => this.get<Interruptions>('/api/inbox/settings'),
     setSettings: (b: Interruptions) => this.put<Interruptions>('/api/inbox/settings', b),
+  };
+  /** Agents: the catalogue, what one can be given, and the person's own (versioned). */
+  agents = {
+    list: () => this.get<AgentInfo[]>('/api/agents'),
+    options: () => this.get<AgentOptions>('/api/agents/options'),
+    mine: () => this.get<AgentRecord[]>('/api/me/agents'),
+    get: (name: string) => this.get<AgentRecord>(`/api/me/agents/${encodeURIComponent(name)}`),
+    create: (def: AgentDef & { enabled?: boolean }) => this.post<AgentRecord>('/api/me/agents', def),
+    /** A new version; with expectVersion, refused (409) when it changed since. `{enabled}` alone switches it on or off. */
+    update: (name: string, def: Partial<AgentDef> & { enabled?: boolean }, expectVersion?: number) => this.put<AgentRecord>(`/api/me/agents/${encodeURIComponent(name)}`, { agent: def, ...(expectVersion !== undefined ? { expectVersion } : {}) }),
+    remove: (name: string) => this.del<{ ok: boolean }>(`/api/me/agents/${encodeURIComponent(name)}`),
+    versions: (name: string) => this.get<Array<{ version: number; at: number; def: AgentDef }>>(`/api/me/agents/${encodeURIComponent(name)}/versions`),
+    restore: (name: string, version: number) => this.post<AgentRecord>(`/api/me/agents/${encodeURIComponent(name)}/restore`, { version }),
+    /** As a Claude Code agent file (.claude/agents/<name>.md). */
+    export: (name: string) => this.get<string>(`/api/me/agents/${encodeURIComponent(name)}/export`),
+    /** An agent file (Claude Code's, Copilot's, Cursor's): new, or a new version of one with its name. */
+    import: (text: string, name?: string) => this.post<AgentRecord>('/api/me/agents/import', { text, ...(name ? { name } : {}) }),
+    /** A draft from a description (not saved). */
+    generate: (description: string, model?: string) => this.post<{ draft: AgentDef; costUsd: number; dropped: string[] }>('/api/me/agents/generate', { description, ...(model ? { model } : {}) }),
   };
   /** What the harness notices by itself: its mode, detectors, what it would have said in practice, what it observed. */
   noticing = {

@@ -14,7 +14,7 @@ export const ui = {
       { id: 'artifact', for: { artifact: 'diagram' }, kind: 'native', component: 'Artifact' },
       { id: 'tool', for: { tool: 'artifact' }, kind: 'native', component: 'Tool' },
     ],
-    commands: [{ id: 'code-map', title: 'Show code map', category: 'Diagrams', icon: 'map', handler: 'codeMap', agent: { description: 'Opens the code map of the conversation on screen (its workspace by folder, TS/JS/Python imports) as an interactive diagram.' } }],
+    commands: [{ id: 'code-map', title: 'Show code map', category: 'Diagrams', icon: 'map', handler: 'codeMap', agent: { description: 'Open the code map (imports by folder) of the conversation on screen.' } }],
     slashCommands: [{ name: 'codemap', description: 'Show the code map of this conversation\'s workspace', action: { type: 'command', command: 'code-map' } }],
   },
 };

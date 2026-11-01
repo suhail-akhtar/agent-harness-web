@@ -29,7 +29,7 @@ export const ui = {
     commands: [
       {
         id: 'open', title: 'Open settings', category: 'Settings', icon: 'settings', keybinding: 'Mod+,', handler: 'open',
-        agent: { description: 'Open Settings, at a section (a settings id from desktop_describe, e.g. core.settings:models).', inputSchema: { type: 'object', properties: { section: { type: 'string', maxLength: 140 } } } },
+        agent: { description: 'Open Settings at a section (id from desktop_describe).', inputSchema: { type: 'object', properties: { section: { type: 'string', maxLength: 140 } } } },
       },
       { id: 'about', title: 'About', category: 'Help', icon: 'info', action: { type: 'open-view', view: 'about-page' } },
       { id: 'models', title: 'Models & providers', category: 'Settings', icon: 'cpu', handler: 'models' },

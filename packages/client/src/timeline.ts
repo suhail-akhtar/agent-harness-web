@@ -281,7 +281,8 @@ export function summarize(name: string, input: Record<string, unknown>): string 
     case 'grep': return `"${s('pattern')}"${s('glob') ? ` in ${s('glob')}` : ''}`;
     case 'web_fetch': return s('url');
     case 'web_search': return s('query');
-    case 'agent': return (input.run_in_background === true ? '[background] ' : '') + s('description');
+    // Which agent does it (a named one by its name), then what for.
+    case 'agent': return (input.run_in_background === true ? '[background] ' : '') + (s('type') && s('type') !== 'explore' && s('type') !== 'general' ? `${s('type')}: ` : '') + s('description');
     case 'send_message': return `${s('to')}: ${s('message').slice(0, 60)}`;
     case 'monitor': return s('task_id') + (s('pattern') ? ` /${s('pattern')}/` : ' until it ends');
     case 'task_output':
@@ -437,7 +438,7 @@ export function activityLine(items: Item[], todos: Array<{ content: string; stat
         case 'glob': case 'grep': return clip(`Searching for ${s(i, 'pattern')}`);
         case 'web_fetch': return clip(`Reading ${s(i, 'url')}`);
         case 'web_search': return clip(`Searching the web for ${s(i, 'query')}`);
-        case 'agent': return clip(`Waiting for an agent: ${s(i, 'description') || 'its report'}`);
+        case 'agent': return clip(`Waiting for ${s(i, 'type') && s(i, 'type') !== 'explore' && s(i, 'type') !== 'general' ? `the ${s(i, 'type')} agent` : 'an agent'}: ${s(i, 'description') || 'its report'}`);
         case 'monitor': return clip(`Waiting for ${s(i, 'task_id') || 'a background task'}`);
         case 'run_script': return 'Running a script';
         case 'ask_user': return 'Waiting for your answer';

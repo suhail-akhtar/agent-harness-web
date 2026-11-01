@@ -10,6 +10,9 @@
 //   "propose"  -> opens the New schedule dialog filled in (desktop_command core.scheduled:new), then says so
 //   "stuck"    -> runs a command that fails the same way twice (config.json is missing), then says so
 //   "away"     -> a step of work, then the model service fails (the turn ends on an error)
+//   "makeagent"-> opens the agent builder filled in (desktop_command core.agents:new), then says so
+//   "delegate" -> hands a review to the person's security-reviewer agent (agent tool), then reports what it said
+// The agent builder's Generate (its system prompt) gets a drafted security reviewer as JSON.
 //   anything else -> a short reply
 import path from 'node:path';
 import { createHarness } from '../../../src/kernel/harness.ts';
@@ -62,6 +65,14 @@ export const SCRIPTS: Record<string, Step[]> = {
     { calls: [{ name: 'glob', input: { pattern: '*' } }] },
     { fail: 'the model service is down' },
   ],
+  delegate: [
+    { calls: [{ name: 'agent', input: { description: 'security review', type: 'security-reviewer', prompt: 'Review the login change for security problems.' } }] },
+    { text: 'The security reviewer looked at the login change.' },
+  ],
+  makeagent: [
+    { calls: [{ name: 'desktop_command', input: { command: 'core.agents:new', args: { name: 'test-writer', description: 'Writes unit tests for a change and runs them.', prompt: 'Role: a test writer.', tools: ['read', 'write', 'bash'], permissionMode: 'acceptEdits' } } }] },
+    { text: 'I filled in an agent for you to check.' },
+  ],
   costly: [
     { calls: [{ name: 'glob', input: { pattern: '*' } }], costly: true },
     { calls: [{ name: 'glob', input: { pattern: '*' } }], costly: true },
@@ -70,9 +81,14 @@ export const SCRIPTS: Record<string, Step[]> = {
   ],
 };
 
+const DRAFT = { name: 'security-reviewer', description: 'Reviews code changes for security problems and returns each finding with a fix.', prompt: ['Role: a careful security reviewer.', 'Procedure: 1. Read the change. 2. Check auth, input handling and secrets.', 'Checks: re-read each finding against the code.', 'Never: change files.', 'Report: findings, each with a fix.'].join('\n'), tools: ['read', 'grep', 'glob', 'teleport'], effort: 'high', permissionMode: 'plan', maxTurns: 30 };
+
 class ScriptedProvider implements Provider {
   private n = 0;
   async send(req: ProviderRequest): Promise<ProviderResponse> {
+    if (req.system.startsWith('You design specialist AI agents')) {
+      return { message: { role: 'assistant', content: [{ type: 'text', text: JSON.stringify(DRAFT) }], raw: { provider: 'deepseek', model: req.model.id, payload: { role: 'assistant', content: JSON.stringify(DRAFT) } } } as never, stop: 'end', usage: { input: 900, cacheRead: 0, cacheWrite: 0, output: 120, reasoning: 0 } };
+    }
     const msgs = req.messages;
     let at = -1;
     for (let i = msgs.length - 1; i >= 0; i--) { const m = msgs[i]!; if (m.role === 'user' && !m.content.some((b) => b.type === 'tool_result') && stripped(textOf(m.content))) { at = i; break; } }

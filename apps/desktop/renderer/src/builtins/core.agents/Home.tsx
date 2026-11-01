@@ -13,6 +13,7 @@ import { HomeSection, ModuleHeader } from '../plugin-home';
 import { homeModel } from '../../registry/modules';
 import { SessionProposals, Working } from './Page';
 import { refreshProposals } from './proposals';
+import { YourAgentsSection } from './Mine';
 
 function Kpi({ label, value, tone, onClick, id }: { label: string; value: React.ReactNode; tone?: 'hot' | 'warm' | 'calm'; onClick?: () => void; id: string }) {
   return (
@@ -51,6 +52,7 @@ export function AgentsHome(): React.ReactElement {
         <HomeSection title="Working now" id="working" action={active.length > 0 ? <Button size="sm" variant="ghost" icon="stop" onClick={() => { for (const s of active) void client.sessions.abort(s.id).catch(() => {}); }}>Stop all</Button> : undefined}>
           {!roots.length ? <p className="rounded-xl border border-dashed border-hx-border-subtle p-4 text-[13px] text-hx-muted" data-empty>No agent is working. Start a conversation, a workflow or a linked session; sub-agents and background tasks show here as they run.</p> : roots.slice(0, 6).map((s) => <Working key={s.id} s={s} />)}
         </HomeSection>
+        <YourAgentsSection />
         <HomeSection title="Proposals waiting for you" id="proposals">
           <div className="space-y-2" data-home-proposals>{recent.map((s) => <SessionProposals key={s.id} s={s} />)}</div>
           <p className="mt-1 text-[12px] text-hx-muted">Agents propose linked sessions for work beside yours; Start runs one, Dismiss drops it.</p>

@@ -12,6 +12,7 @@ import { AgentsPanel } from './Panel';
 import { AgentsPage, watchLinkedNews } from './Page';
 import { ChapterDivider, LinkCard, ProposalCard } from './Cards';
 import { AgentsHome } from './Home';
+import { useAgentEditor, YourAgents } from './Mine';
 import { meta, ui } from './manifest';
 import guide from './GUIDE.md?raw';
 
@@ -19,7 +20,7 @@ export const coreAgents: BuiltinPlugin = {
   ...meta,
   ui,
   guide,
-  components: { AgentsHome, AgentsPanel, AgentsPage, ProposalCard, LinkCard, ChapterDivider },
+  components: { AgentsHome, AgentsPanel, AgentsPage, YourAgents, ProposalCard, LinkCard, ChapterDivider },
   handlers: {
     panel: () => {
       const r = useApp.getState().route;
@@ -29,6 +30,15 @@ export const coreAgents: BuiltinPlugin = {
       else openPluginPanel('core.agents:agents', { id: r.params.id });
     },
     closeSplit: () => useApp.setState({ split: null }),
+    // Prefilled from the command's arguments (an agent's proposal): the person checks it and saves.
+    newAgent: (args) => {
+      const a = (args ?? {}) as Record<string, unknown>;
+      const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+      const tools = Array.isArray(a.tools) ? a.tools.filter((t): t is string => typeof t === 'string') : undefined;
+      const mode = ['default', 'acceptEdits', 'auto', 'dontAsk', 'plan'].includes(String(a.permissionMode)) ? a.permissionMode as 'plan' : undefined;
+      navigate({ view: 'core.agents:mine' });
+      useAgentEditor.getState().open({ draft: { ...(str(a.name) ? { name: str(a.name) } : {}), ...(str(a.description) ? { description: str(a.description) } : {}), ...(str(a.prompt) ? { prompt: str(a.prompt) } : {}), ...(tools?.length ? { tools } : {}), ...(str(a.model) ? { model: str(a.model) } : {}), ...(mode ? { permissionMode: mode } : {}) } });
+    },
   },
   activate: () => {
     watchLinkedNews();

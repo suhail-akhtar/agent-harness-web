@@ -3,7 +3,7 @@ import { constants as fsc } from 'node:fs';
 import fs from 'node:fs/promises';
 import { resolveIn } from '../tools/paths.ts';
 import path from 'node:path';
-import { BUILTIN_AGENTS, INTERACTIVE_TOOLS, loadAgentDir, makeAgentTool, NESTING_TOOLS } from '../agents/agents.ts';
+import { BUILTIN_AGENTS, INTERACTIVE_TOOLS, loadAgentDir, makeAgentTool, mcpServerOf, NESTING_TOOLS, stricterMode, toolMatches } from '../agents/agents.ts';
 import { stopShellScript } from '../tools/exec.ts';
 import { describeWatch, TASK_TOOLS, type TaskEntry, TaskRegistry, type TaskService, watchTask } from '../tools/tasks.ts';
 import { formatGates, makeGatesTool, runGates } from '../gates/gates.ts';
@@ -131,6 +131,8 @@ export interface SessionMeta {
   startedBy?: string;
   /** Made by a schedule or trigger for its runs (each run a new conversation): its id. */
   scheduleId?: string;
+  /** Runs as this agent (one of the person's, a plugin's or a built-in): its instructions, tools, skills and autonomy. */
+  agent?: string;
   /** Put away by its owner (hidden from the default list; nothing else changes). */
   archived?: boolean;
   /** Kept at the top of the owner's list. */
@@ -232,6 +234,8 @@ export async function readFrom(file: string, offset: number, cap = 2_000_000, ro
 
 export interface SessionDeps {
   dataDir: string; companions: CompanionHub; registry: Registry; mcp: McpManager;
+  /** The person's own agents (src/agents/store.ts): in their conversations' catalogue of agents. */
+  agentStore?: { active(owner: string | undefined): Promise<AgentDef[]> };
   /** Every trace span as it is written (OpenTelemetry export). */
   onSpan?: (sessionId: string, span: TraceSpan & { at: number }) => void;
   /** Memory across sessions: where it lives, and whether agents may change it. */
@@ -295,6 +299,8 @@ const serverPurpose = (deps: SessionDeps) => (name: string): string | undefined 
 interface Toolbox {
   tools: Tool[];
   agents: AgentDef[];
+  /** Every MCP tool the session has (an agent limited to some servers gets only theirs). */
+  mcpEntries: McpEntry[];
   skills: Skill[];
   mcp: McpStatus[];
   workflows: WorkflowDef[];
@@ -304,6 +310,12 @@ interface Toolbox {
 }
 
 const EVENT_BUFFER = 4000;
+
+/**
+ * An agent's maxTurns is a wall, as in Claude Code: the progress review (which extends a step budget while work
+ * goes well) never takes it past that.
+ */
+const capTurns = (s: Settings, maxTurns?: number): Settings => (maxTurns && s.progressReview ? { ...s, progressReview: { ...s.progressReview, ceiling: Math.min(s.progressReview.ceiling, maxTurns) } } : s);
 
 /** What the injection scan looks for in outside content. */
 const INJECTION_POLICY = `The event's "content" came from outside (a web page, a search result, a service's answer) and will be shown to an AI agent that is working for a user.
@@ -440,7 +452,7 @@ export class Session {
     return r.kind === 'local' && r.path ? r.path : path.join(this.deps.dataDir, 'workspaces', this.meta.id);
   }
 
-  static async create(deps: SessionDeps, opts: { title?: string; model: string; effort?: Effort; mode?: PermissionMode; runtime: SessionMeta['runtime']; gitUrl?: string; owner?: string; allowHosts?: string[]; /** local with a path: work in a new git worktree of it. */ worktree?: boolean; /** A new worktree of this repository (from `base`, a commit), for any runtime but a companion: a linked session's own. */ worktreeOf?: { repo: string; base?: string }; /** default, concise, explanatory, or a workspace's or plugin's style by name. */ outputStyle?: string; /** The app the person uses (validated by cleanClient). */ client?: ClientDecl; /** Made by this schedule for one of its runs. */ scheduleId?: string }): Promise<Session> {
+  static async create(deps: SessionDeps, opts: { title?: string; model: string; effort?: Effort; mode?: PermissionMode; runtime: SessionMeta['runtime']; gitUrl?: string; owner?: string; allowHosts?: string[]; /** local with a path: work in a new git worktree of it. */ worktree?: boolean; /** A new worktree of this repository (from `base`, a commit), for any runtime but a companion: a linked session's own. */ worktreeOf?: { repo: string; base?: string }; /** default, concise, explanatory, or a workspace's or plugin's style by name. */ outputStyle?: string; /** The app the person uses (validated by cleanClient). */ client?: ClientDecl; /** Made by this schedule for one of its runs. */ scheduleId?: string; /** Runs as this agent (its instructions, tools, skills, autonomy). */ agent?: string }): Promise<Session> {
     const model = deps.registry.model(opts.model);
     const id = crypto.randomBytes(8).toString('hex');
     if (opts.worktree) {
@@ -457,6 +469,7 @@ export class Session {
       usage: emptyUsage(), cost: 0, byModel: {}, todos: [], contextStart: 0, compactions: 0, lastPromptTokens: 0, sessionRules: [], turns: 0,
       ...(opts.owner ? { owner: opts.owner } : {}),
       ...(opts.scheduleId ? { scheduleId: opts.scheduleId } : {}),
+      ...(opts.agent ? { agent: opts.agent } : {}),
       ...(opts.gitUrl ? { gitUrl: opts.gitUrl } : {}),
       // Rendered now and stored: the system prompt never changes under the session.
       ...(opts.client ? { client: opts.client, clientPrompt: clientPrompt(opts.client, { artifacts: true, purpose: serverPurpose(deps) }) } : {}),
@@ -1414,10 +1427,11 @@ export class Session {
     if (guides.length) { const g = new Set(guides.map((s) => s.name)); skills.splice(0, skills.length, ...skills.filter((s) => !g.has(s.name)), ...guides); }
     if (skills.length) tools.push(makeSkillTool(skills));
 
-    // Agents: built-in, plugins, then the workspace's definitions.
+    // Agents: built-in, plugins, the person's own, then the workspace's definitions (the nearest wins, as in Claude Code).
     const agents = new Map<string, AgentDef>();
     for (const a of BUILTIN_AGENTS) agents.set(a.name, a);
     for (const a of reg.agents.values()) agents.set(a.name, a);
+    for (const a of await this.deps.agentStore?.active(this.meta.owner).catch(() => []) ?? []) if (!BUILTIN_AGENTS.some((b) => b.name === a.name)) agents.set(a.name, a);
     if (host.kind !== 'companion') {
       for (const rel of ['.claude/agents', '.harness/agents']) {
         for (const a of await loadAgentDir(path.join(host.root, rel), 'project')) if (!BUILTIN_AGENTS.some((b) => b.name === a.name)) agents.set(a.name, a);
@@ -1429,7 +1443,8 @@ export class Session {
     const catalogue = modelCatalogue(delegableModels(settings.delegation, own, reg.listModels()), own) || undefined;
     // A sub-agent can get its own worktree where the session works in a server folder that is a git repository.
     const isolation = host instanceof LocalHost && this.meta.runtime.kind === 'local' && (await run('git', ['-C', host.root, 'rev-parse', '--is-inside-work-tree'], { timeoutMs: 5000 }).catch(() => undefined))?.code === 0;
-    tools.push(makeAgentTool([...agents.values()], { catalogue, isolation }));
+    // The orchestrator delegates to the agents it may (an agent the person keeps for themselves is not offered).
+    tools.push(makeAgentTool([...agents.values()].filter((a) => a.modelInvocable !== false && a.name !== this.meta.agent), { catalogue, isolation }));
     const linked = this.linkedOn(settings);
     tools.push(...TASK_TOOLS.filter((t) => t.spec.name !== 'send_message'), makeSendMessageTool(linked));
     // Only for sessions that use them, so every other session's prompt stays as it was.
@@ -1465,7 +1480,7 @@ export class Session {
     const groups = settings.efficiency.deferPluginTools ? pluginGroups(tools, (t) => reg.ownerOf(t), (p) => reg.plugins.find((x) => x.name === p)?.description) : [];
     // Loading one of a plugin's skills (its procedure for those tools) loads its tools too.
     for (const g of groups) { const own = skills.filter((s) => reg.ownerOf(s) === g.id).map((s) => s.name); if (own.length) g.skills = own; }
-    return { tools: sortTools(tools), agents: [...agents.values()], skills, mcp, workflows: [...workflows.values()], groups, closeProject: project.close };
+    return { tools: sortTools(tools), agents: [...agents.values()], mcpEntries: entries, skills, mcp, workflows: [...workflows.values()], groups, closeProject: project.close };
   }
 
   /** The tool schemas this session's main agent sends now, all of them, and its groups (scripts/tool-schema-size.ts). */
@@ -1624,11 +1639,13 @@ export class Session {
     const settings = await this.getSettings(host);
     const tb = await this.getToolbox(host);
     const model = this.deps.registry.model(this.meta.model);
+    // A conversation that runs as an agent: its tools, instructions, skills and step limit.
+    const as = await this.asAgent(tb);
     const cfg = {
-      name: 'main', model, provider: this.deps.registry.provider(model), effort: this.meta.effort, system: systemPrompt(this.meta.outputStyle?.prompt, this.meta.clientPrompt), tools: tb.tools, host, settings,
+      name: 'main', model, provider: this.deps.registry.provider(model), effort: this.meta.effort, system: systemPrompt(this.meta.outputStyle?.prompt, this.meta.clientPrompt) + (as?.system ?? ''), tools: as?.tools ?? tb.tools, host, settings: capTurns(settings, as?.def.maxTurns),
       // Deferred plugin groups, loaded as the session's whole history says (a load outlives a compaction).
-      toolGroups: model.deferTools === false ? [] : tb.groups, loadHistory: this.history, spill: this.spillFor(host),
-      cacheKey: this.meta.cacheKey ?? `hw-${this.meta.id}`, maxSteps: settings.maxSteps, readFiles: this.readFiles,
+      toolGroups: model.deferTools === false || as?.def.tools ? [] : as ? tb.groups.map((g) => ({ ...g, tools: g.tools.filter((n) => as.tools.some((t) => t.spec.name === n)) })).filter((g) => g.tools.length) : tb.groups, loadHistory: this.history, spill: this.spillFor(host),
+      cacheKey: this.meta.cacheKey ?? `hw-${this.meta.id}`, maxSteps: Math.min(as?.def.maxTurns ?? settings.maxSteps, settings.maxSteps), readFiles: this.readFiles,
       inProcessHooks: [...this.deps.registry.hooks, ...this.gatesOnStopHook(settings)],
       hookJudge: this.hookJudge(settings),
       hookRunners: this.hookRunners(),
@@ -1645,7 +1662,10 @@ export class Session {
       onTaint: () => { if (!this.meta.tainted) { this.meta.tainted = true; this.saveMeta().catch(() => {}); } },
     };
     if (!this.agent) {
-      this.agent = new Agent(cfg, this.hooksFor('main'), this.history.slice(this.meta.contextStart));
+      const hooks = this.hooksFor('main');
+      // An agent's autonomy never loosens the conversation's mode.
+      if (as?.def.permissionMode) hooks.getMode = () => stricterMode(this.meta.mode, as.def.permissionMode);
+      this.agent = new Agent(cfg, hooks, this.history.slice(this.meta.contextStart));
       this.agent.lastPromptTokens = this.meta.lastPromptTokens;
       // Reloaded after a restart: untrusted content already in the context still counts.
       const untrusted = new Set(tb.tools.filter((t) => t.kind === 'network' || t.kind === 'external' || t.untrusted).map((t) => t.spec.name));
@@ -1759,6 +1779,68 @@ export class Session {
   private autoCheck(settings: Settings): NonNullable<import('./agent.ts').AgentConfig['autoCheck']> {
     const judge = this.hookJudge(settings);
     return (call, signal) => judge(AUTO_POLICY, { event: 'AutoModeCheck', ...call }, settings.autoModel, signal);
+  }
+
+  private agentView?: { tb: Toolbox; def: AgentDef; tools: Tool[]; system: string };
+  /** What a conversation that runs as an agent (meta.agent) uses, worked out once per toolbox (the same tools each turn: the cache holds). */
+  private async asAgent(tb: Toolbox): Promise<{ def: AgentDef; tools: Tool[]; system: string } | undefined> {
+    if (!this.meta.agent) return undefined;
+    if (this.agentView?.tb === tb) return this.agentView;
+    const def = tb.agents.find((a) => a.name === this.meta.agent);
+    if (!def) {
+      this.emit({ kind: 'notice', level: 'warn', text: `The agent "${this.meta.agent}" is not available (switched off or removed): this conversation works as a plain one.` });
+      return undefined;
+    }
+    const tools = this.toolsFor(def, tb, () => true);
+    const system = `\n\n<agent name="${def.name}">\nIn this conversation you are the ${def.name} agent: ${def.description}${def.prompt ? `\n\n${def.prompt}` : ''}${await this.skillBriefs(def, tb)}\n</agent>`;
+    this.agentView = { tb, def, tools, system };
+    return this.agentView;
+  }
+
+  /**
+   * The tools an agent definition gets from the session's: its deny list first; MCP tools only from its servers
+   * (when it names them: inline, or behind a tool_search of its own past MCP_INLINE_MAX); its allow list (globs)
+   * for the rest, else what `keep` keeps; only its skills.
+   */
+  private toolsFor(def: AgentDef, tb: Toolbox, keep: (t: Tool) => boolean): Tool[] {
+    const clean = (s: string) => s.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const servers = def.mcpServers ? new Set(def.mcpServers.map(clean)) : undefined;
+    const denied = (n: string) => !!def.disallowedTools && toolMatches(def.disallowedTools, n);
+    const tools = tb.tools.filter((t) => {
+      const n = t.spec.name;
+      if (denied(n)) return false;
+      if (def.skills && n === 'skill') return false;
+      if (servers) {
+        if (n === 'tool_search' || n === 'tool_call') return false;
+        const srv = mcpServerOf(n);
+        if (srv !== undefined) return servers.has(srv);
+      }
+      return def.tools ? toolMatches(def.tools, n) : keep(t);
+    });
+    if (servers) {
+      const mine = tb.mcpEntries.filter((e) => servers.has(clean(e.server)) && !denied(e.qualified));
+      const have = new Set(tools.map((t) => t.spec.name));
+      if (mine.length <= MCP_INLINE_MAX) { for (const e of mine) if (!have.has(e.qualified)) tools.push(mcpTool(e)); } else { const d = deferredTools(mine); tools.push(d.search, d.call); }
+    }
+    if (def.skills) {
+      const mine = tb.skills.filter((s) => def.skills!.includes(s.name));
+      if (mine.length && !denied('skill')) tools.push(makeSkillTool(mine));
+    }
+    return sortTools(tools);
+  }
+
+  /** The instructions of the skills an agent definition starts with (Claude Code's `skills`: loaded up front). */
+  private async skillBriefs(def: AgentDef, tb: Toolbox): Promise<string> {
+    if (!def.skills?.length) return '';
+    const parts: string[] = [];
+    let total = 0;
+    for (const s of tb.skills.filter((x) => def.skills!.includes(x.name))) {
+      const body = (await s.load().catch(() => '')).trim();
+      if (!body || total + body.length > 60_000) continue;
+      total += body.length;
+      parts.push(`<skill name="${s.name}">\n${body}\n</skill>`);
+    }
+    return parts.length ? `\n\n${parts.join('\n\n')}` : '';
   }
 
   private subagentModel(def: AgentDef, settings: Settings): ModelSpec {
@@ -2054,15 +2136,29 @@ export class Session {
     const n = ++this.subagents;
     name = a.label ?? `${def.name}-${n}`;
     // A model the agent named is used as named (it was allowed); a definition's or the operator's falls back to the session's when missing.
-    const model = a.model && a.delegated ? this.deps.registry.model(a.model) : this.subagentModel({ ...def, model: a.model ?? def.model }, settings);
+    let model = a.model && a.delegated ? this.deps.registry.model(a.model) : this.subagentModel({ ...def, model: a.model ?? def.model }, settings);
+    // A person's or a repository's agent naming another model sends this session's data to that company too:
+    // only to a model the person allowed (else it runs on this session's, and says so).
+    if (!(a.model && a.delegated) && def.model && (def.source === 'user' || def.source === 'project') && model.id !== this.meta.model) {
+      try { await this.checkDelegation(model.id, { ask: true, signal: a.signal }); } catch (e) {
+        if (a.signal.aborted) throw e;
+        this.emit({ kind: 'notice', level: 'warn', text: `The ${def.name} agent runs on ${this.meta.model}, not ${model.id}: ${(e as Error).message}` });
+        model = this.deps.registry.model(this.meta.model);
+      }
+    }
     if (a.isolation === 'worktree') {
       if (!(sessionHost instanceof LocalHost)) this.isolationRefusal();
       isolated = await this.subWorktree(name, sessionHost as LocalHost);
+    } else if (def.isolation === 'worktree' && !a.host) {
+      // Its definition asks for a worktree of its own: where none can be made, it works in the session's folder (and says so).
+      if (sessionHost instanceof LocalHost) isolated = await this.subWorktree(name, sessionHost).catch((e: Error) => { this.emit({ kind: 'notice', level: 'warn', text: `The ${def.name} agent works in the session's folder: no worktree (${e.message})` }); return undefined; });
+      else this.emit({ kind: 'notice', level: 'warn', text: `The ${def.name} agent works in the session's folder: worktrees are made only in a server folder that is a git repository.` });
     }
     const host = isolated?.host ?? a.host ?? sessionHost;
     // agent and send_message only where it may start its own; never the user-facing tools.
     const banned = INTERACTIVE_TOOLS.filter((t) => !(a.allowTodos && t === 'todo_write') && !(nests && NESTING_TOOLS.includes(t)));
-    const tools = tb.tools.filter((t) => (def.tools ? def.tools.includes(t.spec.name) || (a.allowTodos && t.spec.name === 'todo_write') : !banned.includes(t.spec.name)) && (!NESTING_TOOLS.includes(t.spec.name) || nests));
+    const tools = this.toolsFor(def, tb, (t) => !banned.includes(t.spec.name)).filter((t) => !NESTING_TOOLS.includes(t.spec.name) || nests);
+    if (a.allowTodos && def.tools && !tools.some((t) => t.spec.name === 'todo_write')) { const td = tb.tools.find((t) => t.spec.name === 'todo_write'); if (td) tools.push(td); }
     const wanted = a.effort ?? def.effort;
     const effort = wanted && model.efforts.includes(wanted) ? wanted : (model.efforts.includes(this.meta.effort) ? this.meta.effort : model.effort);
     const cost = { n: 0 };
@@ -2071,15 +2167,18 @@ export class Session {
     const onOther = model.id !== this.meta.model;
     const hooks = this.hooksFor(name, (c) => { cost.n += c; if (onOther) this.meta.delegationCost = (this.meta.delegationCost ?? 0) + c; });
     if (onOther) { const base = hooks.overBudget; hooks.overBudget = () => base() ?? this.delegationOver(); }
+    // Its definition's autonomy (never more than the session's) and its spend limit for one run.
+    if (def.permissionMode) hooks.getMode = () => stricterMode(this.meta.mode, def.permissionMode);
+    if (def.maxCostUsd) { const base = hooks.overBudget; hooks.overBudget = () => base() ?? (cost.n >= def.maxCostUsd! ? `Stopped: the ${def.name} agent reached its spend limit of $${def.maxCostUsd} for one run ($${cost.n.toFixed(cost.n < 0.01 ? 6 : 4)} spent).` : undefined); }
     const sub = new Agent({
       name, model, provider: this.deps.registry.provider(model), effort,
       ...(nests ? { runSubagent: (x: SubagentArgs) => this.runSubagent(x, depth + 1, self.agent, a.signal, host === sessionHost ? undefined : host) } : {}),
-      system: SUBAGENT_PROMPT, tools, host, settings: a.noHooks ? { ...settings, hooks: {} } : settings,
+      system: SUBAGENT_PROMPT, tools, host, settings: capTurns(a.noHooks ? { ...settings, hooks: {} } : settings, def.maxTurns),
       // An agent type that names its tools gets them all (someone chose them); any other defers plugin groups like the main agent,
       // but for its own plugin's (a plugin's agent type, a plugin's workflow node), which it has from the start.
       toolGroups: def.tools || model.deferTools === false ? [] : tb.groups.filter((g) => g.id !== this.deps.registry.ownerOf(def) && !a.loadGroups?.includes(g.id)).map((g) => ({ ...g, tools: g.tools.filter((n) => tools.some((t) => t.spec.name === n)) })).filter((g) => g.tools.length),
       spill: this.spillFor(host),
-      cacheKey: `hw-${this.meta.id}-${def.name}`, maxSteps: Math.min(a.maxSteps ?? (a.allowTodos ? 150 : 60), settings.maxSteps), ...(a.toolBudget ? { toolBudget: a.toolBudget } : {}), readFiles: new Map<string, FileStamp>(),
+      cacheKey: `hw-${this.meta.id}-${def.name}`, maxSteps: Math.min(a.maxSteps ?? def.maxTurns ?? (a.allowTodos ? 150 : 60), settings.maxSteps), ...(a.toolBudget ? { toolBudget: a.toolBudget } : {}), readFiles: new Map<string, FileStamp>(),
       inProcessHooks: a.noHooks ? [] : this.deps.registry.hooks,
       hookJudge: this.hookJudge(settings),
       ...(a.noHooks ? {} : { hookRunners: this.hookRunners() }),
@@ -2103,7 +2202,7 @@ export class Session {
     for (const e of start.errors) this.emit({ kind: 'notice', level: 'warn', text: e, agent: name });
     const extra = start.feedback ? `\n\n<subagent_start_context>\n${start.feedback}\n</subagent_start_context>` : '';
     const where = isolated ? `\n\n<system-reminder>You work in your own git worktree (${isolated.w.dir}) on branch ${isolated.w.branch}. Commit your changes there when they are done.</system-reminder>` : '';
-    sub.append({ role: 'user', content: [{ type: 'text', text: `${env}${def.prompt ? `\n\n<role>\n${def.prompt}\n</role>` : ''}${extra}${where}\n\n<brief>\n${a.prompt}\n</brief>` }] });
+    sub.append({ role: 'user', content: [{ type: 'text', text: `${env}${def.prompt ? `\n\n<role>\n${def.prompt}\n</role>` : ''}${await this.skillBriefs(def, tb)}${extra}${where}\n\n<brief>\n${a.prompt}\n</brief>` }] });
     this.emit({ kind: 'notice', level: 'info', text: `Started ${name} (${def.name}, ${model.id})${isolated ? ` in worktree ${isolated.w.branch}` : ''}${a.description ? `: ${a.description}` : ''}`, agent: name });
     const r = await this.drive(entry, name, a.signal);
     if (isolated) r.report += await this.closeSubWorktree(isolated);

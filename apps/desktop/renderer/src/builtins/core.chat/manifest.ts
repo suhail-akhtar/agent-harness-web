@@ -18,7 +18,7 @@ export const ui = {
     commands: [
       {
         id: 'new', title: 'New chat', category: 'Chat', icon: 'edit', keybinding: 'Mod+N', handler: 'newChat',
-        agent: { description: 'Open a new chat, optionally with a prompt typed in for the person (it is never sent without them).', inputSchema: { type: 'object', properties: { prompt: { type: 'string', maxLength: 4000 } } } },
+        agent: { description: 'Open a new chat, optionally with a prompt typed in (never sent without the person).', inputSchema: { type: 'object', properties: { prompt: { type: 'string', maxLength: 4000 } } } },
       },
       { id: 'search', title: 'Search conversations', category: 'Chat', icon: 'search', keybinding: 'Mod+Shift+F', action: { type: 'open-view', view: 'search' } },
       { id: 'workflow', title: 'Run a workflow…', category: 'Chat', icon: 'workflow', handler: 'workflow' },

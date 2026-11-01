@@ -275,6 +275,31 @@ export interface InboxItem {
   detector?: NoticeDetector; fingerprint?: string; project?: string; inline?: boolean;
   draft?: NoticedDraft; action?: { label: string; prompt: string };
 }
+/** An agent: a specialist with its role, instructions, model, tools, MCP servers, skills, autonomy and limits (Claude Code's agent fields). */
+export interface AgentDef {
+  name: string;
+  /** When to use it: what the orchestrator reads to choose it. */
+  description: string;
+  /** Its role and instructions (absent in the catalogue for built-in and plugin agents). */
+  prompt?: string;
+  tools?: string[]; disallowedTools?: string[]; model?: string; effort?: Effort;
+  mcpServers?: string[]; skills?: string[];
+  permissionMode?: 'default' | 'acceptEdits' | 'auto' | 'dontAsk' | 'plan';
+  maxTurns?: number; maxCostUsd?: number; isolation?: 'worktree'; background?: boolean;
+  modelInvocable?: boolean; userInvocable?: boolean; color?: string;
+}
+/** One of the person's own agents (GET /api/me/agents). */
+export interface AgentRecord extends AgentDef { prompt: string; owner?: string; version: number; createdAt: number; updatedAt: number; enabled: boolean }
+/** An agent in the catalogue (GET /api/agents): built-in, a plugin's, or the person's own. */
+export type AgentInfo = (AgentDef | AgentRecord) & { source: 'builtin' | 'plugin' | 'user'; plugin?: string; version?: number; enabled?: boolean };
+/** What an agent can be given on this server (GET /api/agents/options). */
+export interface AgentOptions {
+  tools: Array<{ name: string; kind: string; description: string }>;
+  mcpServers: string[];
+  skills: Array<{ name: string; description: string }>;
+  models: Array<{ id: string; label?: string; provider: string; efforts: Effort[] }>;
+}
+
 /** A schedule a finding offers: the person's own words, at the time they usually asked. */
 export interface NoticedDraft { title: string; prompt: string; cron?: string; timeZone?: string; folder?: string; model?: string }
 export type NoticeDetector = 'away_failure' | 'routine_health' | 'stuck' | 'repeated_task';

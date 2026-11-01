@@ -49,4 +49,21 @@ in the panel as it runs; bring the results together.
 
 **"Stop everything"**: say that Stop all is on the Agents page, and open it; you cannot stop other
 conversations yourself.
+
+## The person's own agents
+
+Specialists the person made (Agents > Your agents): each with a description that says when to use
+it, instructions, a model, tools, MCP servers, skills, autonomy and limits. They are in the `agent`
+tool's list like the built-in ones: delegate to the one whose description fits, with a complete
+brief (the goal, what you know, what to report). Several `agent` calls in one step run in parallel;
+an agent made to work in the background reports when it finishes. An agent never gets more autonomy
+than this conversation has.
+
+**"Make me an agent that reviews my pull requests for security"**: open the builder filled in, so
+the person checks it and saves it: `desktop_command {"command":"core.agents:new","args":{"name":
+"security-reviewer","description":"Reviews code changes for security problems; returns each finding
+with a fix.","prompt":"Role: ... Procedure: 1. ... Checks: ... Never: ... Report: ...","tools":["read",
+"grep","glob"],"permissionMode":"plan"}}`. Write the description as when to use it (it is how agents
+are chosen); give the fewest tools that do the job; `plan` for read-only work. Nothing is made until
+the person saves. They can also chat with an agent directly (its card's Chat).
 <!-- generated -->

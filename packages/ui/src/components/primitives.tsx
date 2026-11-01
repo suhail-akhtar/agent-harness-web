@@ -148,6 +148,23 @@ export function Checkbox({ checked, onChange, label, disabled, className }: { ch
   );
 }
 
+/**
+ * Several checkboxes for picking some of a list (tools, servers, skills): a label each, an optional hint under
+ * it, in one or two columns. `name` marks the group (data-checks) and each box its id (data-check).
+ */
+export function CheckboxGroup({ items, value, onChange, name, cols = 2, mono }: { items: Array<{ id: string; label: React.ReactNode; hint?: string }>; value: string[]; onChange: (v: string[]) => void; name?: string; cols?: 1 | 2; mono?: boolean }): React.ReactElement {
+  return (
+    <div role="group" aria-label={name} className={cx('grid gap-x-4 gap-y-1.5', cols === 2 && 'sm:grid-cols-2')} data-checks={name}>
+      {items.map((i) => (
+        <label key={i.id} className="flex cursor-pointer items-start gap-2 rounded-md py-0.5 text-[12.5px] text-hx-primary" title={i.hint}>
+          <input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--hx-accent)]" checked={value.includes(i.id)} onChange={(e) => onChange(e.target.checked ? [...value, i.id] : value.filter((x) => x !== i.id))} data-check={i.id} />
+          <span className="min-w-0"><span className={cx(mono && 'font-mono text-[12px]')}>{i.label}</span>{i.hint && <span className="block truncate text-[11.5px] text-hx-muted">{i.hint}</span>}</span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
 export function Spinner({ size = 14, className }: { size?: number; className?: string }): React.ReactElement {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" className={cx('hx-spin shrink-0', className)} aria-label="Loading" role="status">
