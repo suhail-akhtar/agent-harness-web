@@ -5,7 +5,7 @@ import https from 'node:https';
 import path from 'node:path';
 import type { Effort } from '../core/models.ts';
 import { type Session, SessionElsewhereError, type SessionMeta } from '../core/session.ts';
-import type { Schedule } from '../core/scheduler.ts';
+import { checkScheduleTiming, describeSchedule, nextRuns, type Schedule } from '../core/scheduler.ts';
 import { InboxError } from '../core/inbox.ts';
 import { type LeaseRecord, leaseUrlSig } from '../util/lease.ts';
 import type { PermissionMode } from '../core/types.ts';
@@ -36,6 +36,8 @@ import { CLIENT_KINDS, type ClientKind, ClientDeclError, cleanClient } from '../
 import { LinkedError } from '../core/linked.ts';
 import { dataRoutes, type DataHttpContext, publishedRoutes } from '../data/http.ts';
 import { FormAnswerError, nodeViews } from '../core/session.ts';
+import { loadWorkflowDir } from '../plugins/loader.ts';
+import { usesNodeType } from '../graph/validate.ts';
 import { cleanName as cleanAttachmentName, codeImports, deletePath, fileTree, gitDiff, gitLog, gitStatus, renamePath, saveUploads, searchFiles, WorkspaceError, WRITE_LIMIT, writeFile } from './workspace-api.ts';
 import { tierOf, type LiveModel } from '../providers/catalog.ts';
 
@@ -1247,11 +1249,33 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       await Promise.all([scheduler.sync(), sessions.sync()]);
       const mine = (s: { owner?: string }) => mayUse(me, s.owner);
       // A trigger's hash stays on the server: a list says it is a trigger.
-      const view = (s: Schedule) => { const { triggerHash, ...rest } = s; return { ...rest, ...(triggerHash ? { trigger: true } : {}) }; };
+      // When it runs in words, and (repeating ones) its next few runs.
+      const view = (s: Schedule) => {
+        const { triggerHash, ...rest } = s;
+        const upcoming = s.enabled && s.cron ? (() => { try { return nextRuns(s.cron!, 3, s.timeZone); } catch { return []; } })() : [];
+        return { ...rest, when: describeSchedule(s), ...(upcoming.length ? { upcoming } : {}), ...(triggerHash ? { trigger: true } : {}) };
+      };
       const limit = Math.max(1, Math.min(Number(url.searchParams.get('limit') ?? 50) || 50, 500));
       // Runs of every schedule of the person's (administrators see their own too, as in the list).
       if (p === '/api/schedule-runs' && method === 'GET') return send(res, 200, (await scheduler.runs.list({ limit: 500, all: true })).filter(mine).slice(0, limit));
       if (p === '/api/schedules' && method === 'GET') return send(res, 200, scheduler.list().filter(mine).map(view));
+      // What a schedule's timing means before it is made: in words, its next runs, or why it is refused.
+      if (p === '/api/schedules/preview' && method === 'POST') {
+        const b = await readJson(req);
+        const tz = typeof b.timeZone === 'string' && b.timeZone.trim() ? b.timeZone.trim() : undefined;
+        try {
+          if (typeof b.cron === 'string' && b.cron.trim()) {
+            checkScheduleTiming({ cron: b.cron.trim(), timeZone: tz });
+            const next = nextRuns(b.cron.trim(), 3, tz);
+            if (!next.length) throw new Error('that cron expression never matches');
+            return send(res, 200, { when: describeSchedule({ cron: b.cron.trim(), timeZone: tz }), next });
+          }
+          const at = typeof b.at === 'string' ? Date.parse(b.at) : typeof b.at === 'number' ? b.at : typeof b.inMinutes === 'number' ? Date.now() + Math.max(1, b.inMinutes) * 60_000 : undefined;
+          if (at === undefined || Number.isNaN(at)) throw new Error('give cron, at or inMinutes');
+          if (at <= Date.now()) throw new Error('that time has passed');
+          return send(res, 200, { when: `Once, ${new Date(at).toISOString()}`, next: [at] });
+        } catch (e) { return send(res, 200, { error: (e as Error).message }); }
+      }
       if (p === '/api/schedules' && method === 'POST') {
         const b = await readJson(req);
         const sessionId = typeof b.sessionId === 'string' ? b.sessionId : undefined;
@@ -1268,7 +1292,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
           if (real && !o.localRoots.some((r) => real === r || real.startsWith(r + path.sep))) throw new HttpError(400, 'That folder is not under HARNESS_LOCAL_ROOTS.');
           if (real) ns.path = real;
         }
-        const timing = { ...(typeof b.timeZone === 'string' && b.timeZone ? { timeZone: b.timeZone } : {}), ...(b.misfire === 'once' || b.misfire === 'skip' ? { misfire: b.misfire as 'once' | 'skip' } : {}), ...(b.maxCostUsd !== undefined && b.maxCostUsd !== null && b.maxCostUsd !== '' ? { maxCostUsd: Number(b.maxCostUsd) } : {}), ...(b.askTimeoutMinutes !== undefined && b.askTimeoutMinutes !== null && b.askTimeoutMinutes !== '' ? { askTimeoutMinutes: Number(b.askTimeoutMinutes) } : {}) };
+        const timing = { ...(b.workflow && typeof b.workflow === 'object' ? { workflow: b.workflow as Schedule['workflow'] } : {}), ...(typeof b.timeZone === 'string' && b.timeZone ? { timeZone: b.timeZone } : {}), ...(b.misfire === 'once' || b.misfire === 'skip' ? { misfire: b.misfire as 'once' | 'skip' } : {}), ...(b.maxCostUsd !== undefined && b.maxCostUsd !== null && b.maxCostUsd !== '' ? { maxCostUsd: Number(b.maxCostUsd) } : {}), ...(b.askTimeoutMinutes !== undefined && b.askTimeoutMinutes !== null && b.askTimeoutMinutes !== '' ? { askTimeoutMinutes: Number(b.askTimeoutMinutes) } : {}) };
         const newSession = ns ? {
           model: String(ns.model ?? registry.listModels().find((m) => m.available)?.id ?? ''),
           runtime: { kind: (ns.runtime === 'local' ? 'local' : 'docker') as SessionMeta['runtime']['kind'], network: (ns.network === 'full' ? 'full' : ns.network === 'allowlist' ? 'allowlist' : 'none') as SessionMeta['runtime']['network'], ...(typeof ns.path === 'string' && ns.path ? { path: ns.path } : {}) },
@@ -1277,7 +1301,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         try {
           if (b.trigger === true) {
             // The URL is shown once: only its hash is kept.
-            const t = await scheduler.createTrigger({ owner: me.id, title: typeof b.title === 'string' ? b.title : undefined, prompt: String(b.prompt ?? ''), sessionId, newSession, ...(timing.maxCostUsd !== undefined ? { maxCostUsd: timing.maxCostUsd } : {}), ...(timing.askTimeoutMinutes !== undefined ? { askTimeoutMinutes: timing.askTimeoutMinutes } : {}) });
+            const t = await scheduler.createTrigger({ owner: me.id, title: typeof b.title === 'string' ? b.title : undefined, prompt: String(b.prompt ?? ''), sessionId, newSession, ...(timing.maxCostUsd !== undefined ? { maxCostUsd: timing.maxCostUsd } : {}), ...(timing.askTimeoutMinutes !== undefined ? { askTimeoutMinutes: timing.askTimeoutMinutes } : {}), ...(timing.workflow ? { workflow: timing.workflow } : {}) });
             const base = process.env.HARNESS_PUBLIC_URL?.replace(/\/+$/, '') || `http://${req.headers.host ?? '127.0.0.1'}`;
             return send(res, 201, { ...view(t.schedule), token: t.token, url: `${base}/api/triggers/${t.token}` });
           }
@@ -1302,6 +1326,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
             ...(b.misfire === 'once' || b.misfire === 'skip' ? { misfire: b.misfire } : {}),
             ...(nul('maxCostUsd') ? { maxCostUsd: null } : b.maxCostUsd !== undefined ? { maxCostUsd: Number(b.maxCostUsd) } : {}),
             ...(nul('askTimeoutMinutes') ? { askTimeoutMinutes: null } : b.askTimeoutMinutes !== undefined ? { askTimeoutMinutes: Number(b.askTimeoutMinutes) } : {}),
+            ...(b.workflow && typeof b.workflow === 'object' ? { workflow: b.workflow as Schedule['workflow'] } : {}),
           })));
         } catch (e) { throw new HttpError(400, (e as Error).message); }
       }
@@ -1435,6 +1460,19 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         }
       }
       return send(res, 200, out.sort((x, y) => Number(y.updatedAt) - Number(x.updatedAt)).slice(0, limit));
+    }
+
+    // ---- the workflows a new conversation in a folder can run (the plugins', the folder's own): for schedules ----
+    if (p === '/api/workflows' && method === 'GET') {
+      const list = new Map(harness.registry.workflows);
+      const folder = url.searchParams.get('path');
+      if (folder && admin) {
+        const real = path.resolve(folder);
+        if (!o.localRoots.some((r) => real === r || real.startsWith(r + path.sep))) throw new HttpError(400, 'That folder is not under HARNESS_LOCAL_ROOTS.');
+        // A project's own, except those with shell steps (they run only where its commands are trusted).
+        for (const w of await loadWorkflowDir(path.join(real, '.harness', 'workflows'), 'project').catch(() => [])) if (!usesNodeType(w, 'shell')) list.set(w.name, w);
+      }
+      return send(res, 200, [...list.values()].map((w) => ({ name: w.name, description: w.description, inputs: w.inputs ?? {}, source: w.source, start: w.start, nodes: nodeViews(w) })));
     }
 
     // ---- the agent inbox: results of unattended runs, what agents told the person, suggestions ----

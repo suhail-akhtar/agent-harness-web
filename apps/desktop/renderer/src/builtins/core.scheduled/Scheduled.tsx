@@ -8,11 +8,13 @@
 import React, { useEffect, useState } from 'react';
 import type { Schedule, ScheduleRun } from '@harness/client';
 import { duration, isMissing } from '@harness/client';
-import { Badge, Button, Icon, IconButton, InfoNote, Modal, Page, PageState, Spinner, Switch, Tooltip, toast } from '@harness/ui';
+import { create } from 'zustand';
+import { Badge, Button, ConfirmDialog, Icon, IconButton, InfoNote, Menu, Page, Spinner, Switch, Tooltip, cx, toast } from '@harness/ui';
 import { useData, client } from '../../state/data';
-import { openSession, useApp } from '../../state/app';
+import { navigate, openSession, prefill, useApp } from '../../state/app';
 import { money } from '../../components/CostByModel';
-import { ScheduleForm } from '../../components/ScheduleForm';
+import { ScheduleDialog } from '../../components/ScheduleDialog';
+import { TEMPLATES, type ScheduleDraft } from './templates';
 import { desktop } from '../../bridge';
 
 const fail = (e: unknown) => toast((e as Error).message, { kind: 'error' });
@@ -80,67 +82,132 @@ function Runs({ id }: { id: string }) {
   return <div className="divide-y divide-hx-border-subtle" data-runs={id}>{runs.map((r) => <RunRow key={r.id} run={r} />)}</div>;
 }
 
+/** "in 3 h", "in 12 min", "tomorrow 09:00", or the date. */
+export function relative(t: number, now = Date.now()): string {
+  const d = t - now;
+  const clock = new Date(t).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  if (d < 0) return 'now';
+  if (d < 60 * 60_000) return `in ${Math.max(1, Math.round(d / 60_000))} min`;
+  if (d < 12 * 3600_000) return `in ${Math.round(d / 3600_000)} h`;
+  const day = new Date(t).toDateString(), today = new Date(now).toDateString(), tomorrow = new Date(now + 86_400_000).toDateString();
+  if (day === today) return `today ${clock}`;
+  if (day === tomorrow) return `tomorrow ${clock}`;
+  return new Date(t).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+// The last result as an icon and a word (results start with how the run ended, in either case: "Stopped: ...").
+const LAST_ICON = (last: string) => /^completed: nothing/i.test(last) ? { icon: 'check', tone: 'text-hx-muted', label: 'Nothing to report' }
+  : /^completed/i.test(last) ? { icon: 'check-circle', tone: 'text-hx-success', label: 'Completed' }
+    : /^(started|running)/i.test(last) ? { icon: 'activity', tone: 'text-hx-accent-text', label: 'Running' }
+      : /^failed/i.test(last) ? { icon: 'x-circle', tone: 'text-hx-danger', label: 'Failed' }
+        : { icon: 'alert', tone: 'text-hx-warning', label: last.split(':')[0]!.replace(/^\w/, (c) => c.toUpperCase()) };
+
 function ScheduleItem({ s, onEdit, reload }: { s: Schedule; onEdit: () => void; reload: () => void }) {
   const [open, setOpen] = useState(false);
+  const [confirm, setConfirm] = useState(false);
   const last = s.lastResult;
-  const tone = !last ? undefined : /^completed/.test(last) ? 'success' : /^(started|running)/.test(last) ? 'accent' : /^(failed)/.test(last) ? 'danger' : 'warning';
+  const li = last ? LAST_ICON(last) : undefined;
+  const target = s.workflow ? `Workflow ${s.workflow.name}` : s.newSession ? 'A new conversation each time' : 'Into one conversation';
+  const asks = s.newSession ? ({ dontAsk: 'never asks', auto: 'a checker decides', acceptEdits: 'asks you for commands', default: 'asks you' } as Record<string, string>)[s.newSession.mode ?? 'dontAsk'] : undefined;
   return (
-    <div data-schedule={s.id} className="rounded-xl border border-hx-border-subtle bg-hx-elevated">
-      <div className="flex items-center gap-2 px-3 py-2.5 text-[13px]">
-        <IconButton size="xs" icon={open ? 'chevron-down' : 'chevron-right'} label={open ? 'Hide its runs' : 'Show its runs'} onClick={() => setOpen(!open)} data-schedule-toggle />
-        <Icon name={s.trigger ? 'link' : 'clock'} size={14} className="text-hx-muted" />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate font-medium">{s.title || s.prompt}</span>
-          <span className="block truncate text-[11.5px] text-hx-muted" data-schedule-when>
-            {timing(s)}{s.enabled && s.nextRun && !s.trigger && s.cron ? ` · next ${fmt(s.nextRun)}` : ''}{!s.enabled ? ' · off' : ''}{s.maxCostUsd ? ` · at most ${money(s.maxCostUsd)} a run` : ''}
+    <div data-schedule={s.id} className={cx('rounded-xl border bg-hx-elevated', s.enabled ? 'border-hx-border-subtle' : 'border-dashed border-hx-border-subtle opacity-75')}>
+      <div className="flex items-start gap-3 px-4 py-3">
+        <span className={cx('mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg', s.enabled ? 'bg-hx-accent-soft text-hx-accent-text' : 'bg-hx-hover text-hx-muted')}><Icon name={s.trigger ? 'link' : s.workflow ? 'workflow' : 'clock'} size={16} /></span>
+        <button type="button" className="min-w-0 flex-1 text-left" onClick={() => setOpen(!open)} aria-expanded={open} data-schedule-toggle>
+          <span className="block truncate text-[14px] font-medium">{s.title || s.prompt}</span>
+          <span className="block truncate text-[12.5px] text-hx-secondary" data-schedule-when>{!s.cron && !s.trigger && s.at ? `Once, ${fmt(s.at)}` : s.when ?? timing(s)}</span>
+          <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11.5px] text-hx-muted">
+            {s.enabled && s.nextRun && !s.trigger ? <span data-schedule-next><Icon name="calendar" size={11} className="mr-1 inline" />Next {relative(s.nextRun)}</span> : !s.enabled ? <span>Off</span> : null}
+            <span>{target}</span>
+            {asks && <span>{asks}</span>}
+            {s.maxCostUsd ? <span>at most {money(s.maxCostUsd)} a run</span> : null}
+            {li && <span className={cx('inline-flex items-center gap-1', li.tone)} data-schedule-last title={last}><Icon name={li.icon} size={11} />{li.label}{s.lastRun ? ` ${relative(s.lastRun) === 'now' ? new Date(s.lastRun).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : ''}` : ''}</span>}
           </span>
-        </span>
-        {last && <span className="hidden max-w-[34%] truncate md:inline" data-schedule-last title={last}><Badge tone={tone}>{last.length > 40 ? `${last.slice(0, 39)}…` : last}</Badge></span>}
-        <Switch checked={s.enabled} onChange={(v) => void client.schedules.setEnabled(s.id, v).then(reload).catch(fail)} label="Enabled" />
-        <IconButton size="xs" icon="play" label="Run now" onClick={() => void client.schedules.run(s.id).then(() => { setOpen(true); reload(); }).catch(fail)} />
-        <IconButton size="xs" icon="edit" label="Edit" onClick={onEdit} />
-        <IconButton size="xs" icon="trash" tone="danger" label="Delete" onClick={() => void client.schedules.remove(s.id).then(reload).catch(fail)} />
+        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          <Tooltip label={s.enabled ? 'On: runs at its times' : 'Off: does not run'}><span><Switch checked={s.enabled} onChange={(v) => void client.schedules.setEnabled(s.id, v).then(reload).catch(fail)} label="Enabled" /></span></Tooltip>
+          <Button size="sm" variant="ghost" icon="play" onClick={() => void client.schedules.run(s.id).then(() => { setOpen(true); reload(); }).catch(fail)} aria-label="Run now">Run now</Button>
+          <Menu placement="bottom-end" items={[
+            { id: 'edit', label: 'Edit', icon: 'edit', onSelect: onEdit },
+            { id: 'open', label: 'Show its runs', icon: 'history', onSelect: () => setOpen(true) },
+            { id: 'delete', label: 'Delete', icon: 'trash', danger: true, onSelect: () => setConfirm(true) },
+          ]} trigger={({ ref, toggle }) => <IconButton ref={ref} size="sm" icon="more" label="More" onClick={toggle} data-schedule-menu />} />
+        </div>
       </div>
+      {last && /^(failed|stopped|interrupted|skipped)/i.test(last) && <div className="mx-4 mb-3 rounded-lg bg-hx-hover px-3 py-1.5 text-[12px] text-hx-secondary" data-schedule-last-reason>{last}</div>}
       {open && <div className="border-t border-hx-border-subtle"><Runs id={s.id} /></div>}
+      <ConfirmDialog open={confirm} title={`Delete "${s.title}"?`} body="It stops running, and its run history goes with it. The conversations it made stay." confirmLabel="Delete" danger onAnswer={(yes) => { setConfirm(false); if (yes) void client.schedules.remove(s.id).then(reload).catch(fail); }} />
     </div>
   );
 }
+
+/** Opens the schedule dialog from anywhere (a command, an agent's proposal), on the Scheduled page. */
+export const useScheduleDialog = create<{ draft: ScheduleDraft | null; open: (d?: ScheduleDraft) => void; close: () => void }>((set) => ({
+  draft: null,
+  open: (d) => { set({ draft: d ?? {} }); navigate({ view: 'core.scheduled:scheduled' }); },
+  close: () => set({ draft: null }),
+}));
+
+const ASK_AGENT = 'Set up a schedule for me: ';
 
 /** Every schedule and trigger of the person's, with New, Edit and their runs. */
 export function ScheduleManager({ embedded }: { embedded?: boolean }): React.ReactElement {
   const { value: list, error, reload } = useScheduled(() => client.schedules.list());
   const keepInTray = useApp((x) => x.prefs.keepInTray);
   const startAtLogin = useApp((x) => x.prefs.startAtLogin);
-  const [editing, setEditing] = useState<Schedule | 'new' | null>(null);
+  const draft = useScheduleDialog((x) => x.draft);
+  const [editing, setEditing] = useState<Schedule | null>(null);
+  const openNew = (d?: ScheduleDraft) => useScheduleDialog.setState({ draft: d ?? {} });
   if (error) return <InfoNote>{error}</InfoNote>;
   if (!list) return <Spinner />;
+  const active = list.some((s) => s.enabled && !s.trigger);
   return (
     <div data-schedule-manager className="space-y-3">
-      {list.some((s) => s.enabled && !s.trigger) && !keepInTray && (
+      {active && !keepInTray && (
         <InfoNote>
           <span data-schedules-tray-note>Schedules run only while this app is open. Closing the window quits it unless it keeps running in the tray.</span>{' '}
           <Button size="sm" onClick={() => useApp.getState().setPrefs({ keepInTray: true })}>Keep running in the tray</Button>
         </InfoNote>
       )}
-      {list.some((s) => s.enabled && !s.trigger) && keepInTray && !startAtLogin && (
+      {active && keepInTray && !startAtLogin && (
         <p className="flex flex-wrap items-center gap-2 text-[12px] text-hx-muted" data-schedules-login-note>
           They also stop when this computer restarts, until the app is opened again.
           <Button size="sm" variant="ghost" onClick={() => { useApp.getState().setPrefs({ startAtLogin: true }); void desktop.setLoginItem(true).catch(() => {}); }}>Start the app at login</Button>
         </p>
       )}
-      {!list.length
-        ? (embedded ? <p className="text-[13px] text-hx-muted">Nothing scheduled.</p> : <PageState kind="empty" icon="clock" title="Nothing is scheduled" detail="Ask an agent to check on something later, or make a schedule: a prompt that runs at set times, in a new conversation each time or the same one." action={<Button variant="primary" icon="plus" onClick={() => setEditing('new')}>New schedule</Button>} />)
-        : <div className="space-y-2" data-schedule-list>{list.map((s) => <ScheduleItem key={s.id} s={s} onEdit={() => setEditing(s)} reload={reload} />)}</div>}
-      {(embedded || list.length > 0) && <div className="flex justify-end"><Button icon="plus" onClick={() => setEditing('new')} data-schedule-new>New schedule</Button></div>}
-      <Modal open={editing !== null} onClose={() => setEditing(null)} title={editing === 'new' ? 'New schedule' : 'Edit schedule'} size="lg">
-        {editing !== null && <ScheduleForm edit={editing === 'new' ? undefined : editing} onDone={() => { setEditing(null); reload(); }} />}
-      </Modal>
+      {!list.length ? (
+        embedded ? <p className="text-[13px] text-hx-muted">Nothing scheduled.</p> : (
+          <div className="rounded-2xl border border-hx-border-subtle p-6" data-schedules-empty>
+            <div className="mb-1 text-[15px] font-semibold">Let agents work while you are away</div>
+            <p className="mb-4 text-[13px] text-hx-secondary">A schedule runs a prompt or a workflow at set times, in a new conversation each time or the same one. What it finds comes to your Inbox; what needs your approval waits there.</p>
+            <div className="mb-4 grid gap-2 sm:grid-cols-2">
+              {TEMPLATES.map((t) => (
+                <button key={t.id} type="button" data-empty-template={t.id} onClick={() => openNew(t.draft)} className="flex items-start gap-2.5 rounded-xl border border-hx-border-subtle px-3 py-2.5 text-left hover:border-hx-border hover:bg-hx-hover">
+                  <Icon name={t.icon} size={16} className="mt-0.5 shrink-0 text-hx-accent-text" />
+                  <span><span className="block text-[13px] font-medium">{t.title}</span><span className="block text-[12px] text-hx-muted">{t.blurb}</span></span>
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="primary" icon="plus" onClick={() => openNew()} data-schedule-new>New schedule</Button>
+              <Button icon="sparkles" onClick={() => prefill(ASK_AGENT, true)} data-schedule-ask-agent>Ask an agent to set it up</Button>
+            </div>
+          </div>
+        )
+      ) : <div className="space-y-2" data-schedule-list>{list.map((s) => <ScheduleItem key={s.id} s={s} onEdit={() => setEditing(s)} reload={reload} />)}</div>}
+      {(embedded || list.length > 0) && (
+        <div className="flex justify-end gap-2">
+          {!embedded && <Button icon="sparkles" variant="ghost" onClick={() => prefill(ASK_AGENT, true)} data-schedule-ask-agent>Ask an agent to set it up</Button>}
+          <Button icon="plus" onClick={() => openNew()} data-schedule-new>New schedule</Button>
+        </div>
+      )}
+      <ScheduleDialog open={draft !== null || editing !== null} edit={editing ?? undefined} draft={draft ?? undefined} onClose={() => { setEditing(null); useScheduleDialog.getState().close(); }} onDone={() => reload()} />
     </div>
   );
 }
 
 export function ScheduledPage(): React.ReactElement {
-  return <Page data-scheduled title="Scheduled" subtitle="Prompts that run at set times or when called, and what each run came to."><ScheduleManager /></Page>;
+  return <Page data-scheduled title="Scheduled" subtitle="Prompts and workflows that run at set times or when called, and what each run came to."><ScheduleManager /></Page>;
 }
 
 /** The latest runs of every schedule (Activity). */

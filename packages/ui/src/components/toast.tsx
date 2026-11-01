@@ -6,7 +6,7 @@
 import React, { useSyncExternalStore } from 'react';
 import { Icon } from '../icons.tsx';
 import { cx } from './primitives.tsx';
-import { Portal } from './overlay.tsx';
+import { Portal, useDialogOpen } from './overlay.tsx';
 
 export type ToastKind = 'info' | 'success' | 'warning' | 'error';
 export interface Toast { id: number; text: string; kind: ToastKind; detail?: string; action?: { label: string; run: () => void }; source?: string }
@@ -32,9 +32,11 @@ const TONE: Record<ToastKind, string> = { info: 'text-hx-info', success: 'text-h
 
 export function Toaster(): React.ReactElement {
   const list = useToasts();
+  // Over a dialog, toasts sit at the top: at the bottom they would cover its buttons.
+  const dialog = useDialogOpen();
   return (
     <Portal>
-      <div aria-live="polite" className="pointer-events-none fixed bottom-10 right-4 z-[90] flex w-[min(380px,calc(100vw-32px))] flex-col gap-2">
+      <div aria-live="polite" data-toaster={dialog ? 'top' : 'bottom'} className={cx('pointer-events-none fixed right-4 z-[90] flex w-[min(380px,calc(100vw-32px))] flex-col gap-2', dialog ? 'top-14' : 'bottom-10')}>
         {list.map((t) => (
           <div key={t.id} role={t.kind === 'error' ? 'alert' : 'status'} data-toast={t.kind}
             className="hx-slide-up pointer-events-auto flex items-start gap-2.5 rounded-xl border border-hx-border bg-hx-elevated px-3.5 py-2.5 text-[13px] text-hx-primary shadow-[var(--hx-shadow)]">

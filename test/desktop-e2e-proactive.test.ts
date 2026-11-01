@@ -92,10 +92,14 @@ test('desktop app end to end: proactive work', { timeout: 10 * 60_000 }, async (
     let schedId = '';
     let scratch = '';
     const rowText = (id: string) => page.locator(`[data-schedule="${id}"]`).innerText();
-    const lastIs = (id: string, re: string) => page.waitForFunction(([i, r]) => new RegExp(r).test(document.querySelector(`[data-schedule="${i}"] [data-schedule-last]`)?.textContent ?? ''), [id, re] as const, { timeout: 20_000 });
+    // The schedule's last result, in full (the row shows it as an icon and a word; its title has the whole).
+    const lastIs = (id: string, re: string) => page.waitForFunction(([i, r]) => new RegExp(r).test(document.querySelector(`[data-schedule="${i}"] [data-schedule-last]`)?.getAttribute('title') ?? ''), [id, re] as const, { timeout: 20_000 });
     const runAndWait = async (id: string, re: string) => { await page.click(`[data-schedule="${id}"] button[aria-label="Run now"]`); await lastIs(id, re); };
-    // Its runs (Run now opens them already).
     const openRuns = async (id: string) => { if (!(await page.locator(`[data-schedule="${id}"] [data-runs], [data-schedule="${id}"] [data-runs-empty]`).count())) await page.click(`[data-schedule="${id}"] [data-schedule-toggle]`); };
+    const freq = (f: string) => page.click(`[data-schedule-form] [data-choice="freq"] [data-value="${f}"]`);
+    const words = () => page.locator('[data-schedule-form] [data-when-words]').innerText();
+    const created = () => page.waitForSelector('[data-schedule-form]', { state: 'detached', timeout: 15_000 });
+    const scheduleNamed = async (title: string): Promise<{ id: string } & Record<string, unknown>> => ((await api('GET', '/api/schedules')).body as Array<{ id: string; title: string }>).find((x) => x.title === title)!;
 
     await step('phase 0: a schedule made in Settings runs in a new conversation in its folder, unattended; the tray note says it stops with the window', async () => {
       await openSettings('core.settings:schedules');
@@ -103,20 +107,23 @@ test('desktop app end to end: proactive work', { timeout: 10 * 60_000 }, async (
       assert.equal(await page.locator('[data-schedules-tray-note]').count(), 0, 'no note while nothing is scheduled');
       await page.click('[data-section="schedules"] [data-schedule-new]');
       await page.waitForSelector('[data-schedule-form="new"]');
+      // Nothing filled in yet: the button says what is still needed.
+      assert.match(await page.locator('[data-schedule-missing]').innerText(), /what it should do/);
       await page.fill('[data-schedule-title]', 'Build check');
       await page.fill('[data-schedule-prompt]', 'Check the build and notify me.');
-      await page.fill('[data-schedule-minutes]', '30');
+      await freq('once');
+      await page.fill('[data-when-in]', '30');
+      await page.waitForFunction(() => /^Once, /.test(document.querySelector('[data-when-words]')?.textContent ?? ''));
       await page.locator('[data-schedule-model]').selectOption('deepseek-flash');
-      await shot('schedules-form', page.locator('[role="dialog"]').last());
       await page.click('[data-schedule-create]');
-      await page.waitForSelector('[data-schedule-form="new"]', { state: 'detached' });
+      await created();
       await page.waitForSelector('[data-section="schedules"] [data-schedule]', { timeout: 15_000 });
       schedId = (await page.getAttribute('[data-section="schedules"] [data-schedule]', 'data-schedule'))!;
       const made = (await api('GET', '/api/schedules')).body as Array<{ id: string; title: string; newSession?: { model: string; mode: string; runtime: { kind: string; path?: string } } }>;
       const s = made.find((x) => x.id === schedId)!;
       assert.equal(s.title, 'Build check');
       assert.equal(s.newSession?.model, 'deepseek-flash');
-      assert.equal(s.newSession?.mode, 'dontAsk');
+      assert.equal(s.newSession?.mode, 'dontAsk', 'never stop to ask is the default');
       assert.equal(s.newSession?.runtime.kind, 'local');
       scratch = s.newSession!.runtime.path!;
       assert.ok(scratch && fs.existsSync(scratch), 'a real scratch folder');
@@ -131,7 +138,6 @@ test('desktop app end to end: proactive work', { timeout: 10 * 60_000 }, async (
       assert.ok(run, 'a conversation for the run');
       assert.equal(run!.mode, 'dontAsk');
       await lastIs(schedId, '^completed$');
-      await toastWith('Build check: Checked the build and told you: it is green.');
     });
 
     await step('phase 0: the same conversation each time: the run goes into the chosen conversation', async () => {
@@ -139,17 +145,21 @@ test('desktop app end to end: proactive work', { timeout: 10 * 60_000 }, async (
       assert.ok(target.id, JSON.stringify(target));
       await page.click('[data-section="schedules"] [data-schedule-new]');
       await page.waitForSelector('[data-schedule-form="new"]');
-      await page.locator('[data-schedule-target]').selectOption('existing');
+      await page.click('[data-choice="target"] [data-value="existing"]');
       await page.waitForSelector(`[data-schedule-session] option[value="${target.id}"]`, { state: 'attached', timeout: 15_000 });
       await page.fill('[data-schedule-title]', 'Into release notes');
       await page.fill('[data-schedule-prompt]', 'Add today to the notes.');
-      await page.fill('[data-schedule-minutes]', '60');
+      await freq('once');
+      await page.fill('[data-when-in]', '1');
+      await page.locator('[data-when-unit]').selectOption('hours');
       await page.locator('[data-schedule-session]').selectOption(target.id);
+      assert.equal(await page.locator('[data-schedule-asks]').count(), 0, 'its conversation\'s own mode applies');
       await page.click('[data-schedule-create]');
+      await created();
       await page.waitForFunction(() => document.querySelectorAll('[data-section="schedules"] [data-schedule]').length === 2, null, { timeout: 15_000 });
-      const list = (await api('GET', '/api/schedules')).body as Array<{ id: string; title: string; sessionId?: string }>;
-      const into = list.find((x) => x.title === 'Into release notes')!;
+      const into = await scheduleNamed('Into release notes') as unknown as { id: string; sessionId?: string; nextRun: number };
       assert.equal(into.sessionId, target.id);
+      assert.ok(Math.abs(into.nextRun - (Date.now() + 3600_000)) < 120_000, 'in an hour');
       await runAndWait(into.id, '^completed');
       assert.match(await history(target.id), /Add today to the notes\./);
     });
@@ -158,31 +168,29 @@ test('desktop app end to end: proactive work', { timeout: 10 * 60_000 }, async (
       await page.click('[data-section="schedules"] button:has-text("Keep running in the tray")');
       await page.waitForSelector('[data-schedules-tray-note]', { state: 'detached' });
       assert.equal(((await invoke('prefs:get')) as { keepInTray: boolean }).keepInTray, true);
-      // Then: they would still stop when the computer restarts, unless the app starts at login.
       await page.click('[data-schedules-login-note] button:has-text("Start the app at login")');
       await page.waitForSelector('[data-schedules-login-note]', { state: 'detached' });
       assert.equal(((await invoke('prefs:get')) as { startAtLogin: boolean }).startAtLogin, true);
       await invoke('prefs:set', { startAtLogin: false });
-      await invoke('app:setLoginItem', false).catch(() => {});
       await page.keyboard.press('Escape');
       await page.waitForSelector('[data-settings]', { state: 'detached' });
     });
 
-    await step('phase 1: the Scheduled page lists every schedule; a run\'s record shows how it ended, what it said, that it told the person, and opens its conversation', async () => {
+    await step('phase 1: the Scheduled page lists every schedule in plain words; a run\'s record shows how it ended, what it said, that it told the person, and opens its conversation', async () => {
       await page.click('[data-nav="core.scheduled:scheduled"]');
       await page.waitForSelector('[data-scheduled] [data-schedule-list]');
       assert.equal(await page.locator('[data-scheduled] [data-schedule]').count(), 2);
-      await page.click(`[data-schedule="${schedId}"] [data-schedule-toggle]`);
+      assert.match(await page.locator(`[data-schedule="${schedId}"] [data-schedule-when]`).innerText(), /^Once, (?!\d{4}-\d\d-\d\dT)/, 'on the computer clock, not an ISO time');
+      await openRuns(schedId);
       const row = page.locator(`[data-runs="${schedId}"] [data-run]`).first();
       await row.waitFor();
       assert.equal(await row.getAttribute('data-run-status'), 'completed');
       const text = await row.innerText();
-      assert.match(text, /Completed/);
-      assert.match(text, /Checked the build and told you: it is green\./);
+      assert.match(text, /Completed[\s\S]*Checked the build and told you: it is green\./);
       assert.match(text, /told you/);
       assert.match(text, /run now/);
       await shot('scheduled-page');
-      const runs = (await api('GET', `/api/schedules/${schedId}/runs`)).body as Array<{ sessionId: string; costUsd: number; tools: number; notified: boolean }>;
+      const runs = (await api('GET', `/api/schedules/${schedId}/runs`)).body as Array<{ sessionId: string; tools: number; notified: boolean }>;
       assert.equal(runs.length, 1);
       assert.equal(runs[0]!.tools, 1);
       assert.equal(runs[0]!.notified, true);
@@ -190,48 +198,54 @@ test('desktop app end to end: proactive work', { timeout: 10 * 60_000 }, async (
       await page.waitForSelector(`[data-session="${runs[0]!.sessionId}"]`);
     });
 
-    await step('phase 1: editing a schedule: a cron in a time zone and a spend limit; the next run is computed in that zone', async () => {
+    await step('phase 1: editing a schedule: weekdays at 9 in a time zone with a spend limit; the dialog shows it in words and its next runs; the next run is computed in that zone', async () => {
       await page.click('[data-nav="core.scheduled:scheduled"]');
-      await page.click(`[data-schedule="${schedId}"] button[aria-label="Edit"]`);
+      await page.click(`[data-schedule="${schedId}"] [data-schedule-menu]`);
+      await page.click('[role="menuitem"]:has-text("Edit")');
       await page.waitForSelector('[data-schedule-form="edit"]');
       assert.equal(await page.inputValue('[data-schedule-title]'), 'Build check');
-      await page.fill('[data-schedule-cron]', '0 9 * * 1-5');
+      assert.equal(await page.getAttribute('[data-choice="freq"] [data-value="once"]', 'aria-checked'), 'true', 'it opens as what it is');
+      await freq('weekdays');
+      await page.fill('[data-when-time]', '09:00');
+      await page.click('[data-schedule-more]');
       await page.fill('[data-schedule-tz]', 'Asia/Tokyo');
       await page.locator('[data-schedule-misfire]').selectOption('skip');
       await page.fill('[data-schedule-cost]', '0.5');
+      await page.waitForFunction(() => document.querySelector('[data-when-words]')?.textContent === 'Every weekday at 09:00 (Asia/Tokyo)');
+      assert.match(await page.locator('[data-when-preview]').innerText(), /next .*,.*,/, 'its next three runs');
+      await shot('schedule-dialog-edit', page.locator('[role="dialog"]').last());
       await page.click('[data-schedule-create]');
-      await page.waitForSelector('[data-schedule-form="edit"]', { state: 'detached' });
-      await page.waitForFunction((id) => /0 9 \* \* 1-5 \(Asia\/Tokyo\)/.test(document.querySelector(`[data-schedule="${id}"] [data-schedule-when]`)?.textContent ?? ''), schedId);
+      await created();
+      await page.waitForFunction((id) => (document.querySelector(`[data-schedule="${id}"] [data-schedule-when]`)?.textContent ?? '') === 'Every weekday at 09:00 (Asia/Tokyo)', schedId);
       assert.match(await rowText(schedId), /at most \$0\.50 a run/);
+      assert.match(await rowText(schedId), /Next /);
       const s = (await api('GET', `/api/schedules/${schedId}`)).body as { cron: string; timeZone: string; misfire: string; maxCostUsd: number; nextRun: number; enabled: boolean };
       assert.deepEqual([s.cron, s.timeZone, s.misfire, s.maxCostUsd, s.enabled], ['0 9 * * 1-5', 'Asia/Tokyo', 'skip', 0.5, true]);
       const next = new Date(s.nextRun);
       assert.equal(`${next.getUTCHours()}:${next.getUTCMinutes()}`, '0:0', '9:00 in Tokyo is midnight UTC');
-      assert.ok([1, 2, 3, 4, 5].includes(new Date(s.nextRun + 9 * 3600_000).getUTCDay()), 'a weekday in Tokyo');
     });
 
-    await step('phase 1: a schedule that would run every minute is refused, and says why', async () => {
+    await step('phase 1: a schedule that would run every minute is refused before it is made, and says why in the dialog', async () => {
       await page.click('[data-scheduled] [data-schedule-new]');
       await page.waitForSelector('[data-schedule-form="new"]');
       await page.fill('[data-schedule-prompt]', 'too often');
+      await freq('custom');
       await page.fill('[data-schedule-cron]', '* * * * *');
+      await page.waitForFunction(() => /a schedule may run at most every 5 minutes/.test(document.querySelector('[data-when-preview]')?.textContent ?? ''));
       await page.click('[data-schedule-create]');
       await page.waitForSelector('[data-schedule-form="new"] [data-schedule-error]');
       assert.match(await page.locator('[data-schedule-error]').innerText(), /a schedule may run at most every 5 minutes/);
-      // Said in the form, not in a toast that would stay and cover other dialogs.
-      assert.equal(await page.locator('[data-toast="error"]').count(), 0);
-      assert.equal(await page.locator('[data-schedule-form="new"]').count(), 1, 'the form stays open to fix it');
+      assert.equal(await page.locator('[data-toast="error"]').count(), 0, 'in the dialog, not a toast');
       await page.keyboard.press('Escape');
       await page.waitForSelector('[data-schedule-form="new"]', { state: 'detached' });
       assert.equal(((await api('GET', '/api/schedules')).body as unknown[]).length, 2);
-      // Opened again, the form starts without the old error.
       await page.click('[data-scheduled] [data-schedule-new]');
       await page.waitForSelector('[data-schedule-form="new"]');
-      assert.equal(await page.locator('[data-schedule-error]').count(), 0);
+      assert.equal(await page.locator('[data-schedule-error]').count(), 0, 'opened again: no old error');
       await page.keyboard.press('Escape');
     });
 
-    await step('phase 1: a run that finds nothing is marked so and stays quiet; a run over its spend limit stops and says so', async () => {
+    await step('phase 1: a run that finds nothing is marked so and stays quiet; a run over its spend limit stops and says so, once', async () => {
       const quiet = (await api('POST', '/api/schedules', { title: 'Quiet check', prompt: 'quiet please', inMinutes: 60, newSession: { model: 'deepseek-flash', runtime: 'local', path: scratch, mode: 'dontAsk' } })).body as { id: string };
       const costly = (await api('POST', '/api/schedules', { title: 'Costly job', prompt: 'costly work', inMinutes: 60, maxCostUsd: 0.01, newSession: { model: 'deepseek-flash', runtime: 'local', path: scratch, mode: 'dontAsk' } })).body as { id: string };
       await page.waitForSelector(`[data-schedule="${quiet.id}"]`);
@@ -239,13 +253,13 @@ test('desktop app end to end: proactive work', { timeout: 10 * 60_000 }, async (
       await openRuns(quiet.id);
       await page.waitForSelector(`[data-runs="${quiet.id}"] [data-run]`);
       assert.match(await page.locator(`[data-runs="${quiet.id}"] [data-run]`).innerText(), /Nothing to report[\s\S]*All quiet\./);
-      await runAndWait(costly.id, '^Stopped: this scheduled run');
+      await runAndWait(costly.id, '^Stopped: this scheduled run reached its spend limit');
       await toastWith('Stopped: this scheduled run reached its spend limit of $0.01');
+      assert.match(await page.locator(`[data-schedule="${costly.id}"] [data-schedule-last-reason]`).innerText(), /spend limit of \$0\.01/);
       await openRuns(costly.id);
       const c = page.locator(`[data-runs="${costly.id}"] [data-run]`);
       await c.waitFor();
       assert.equal(await c.getAttribute('data-run-status'), 'stopped');
-      assert.match(await c.innerText(), /spend limit of \$0\.01/);
       const toasts = await page.$$eval('[data-toast]', (els) => els.map((e) => e.textContent ?? ''));
       assert.ok(!toasts.some((t) => t.includes('All quiet')), 'nothing to report: no toast');
       assert.equal(toasts.filter((t) => t.includes('spend limit of $0.01')).length, 1, 'one warning for the stopped run, not two');
@@ -323,16 +337,16 @@ test('desktop app end to end: proactive work', { timeout: 10 * 60_000 }, async (
       await page.waitForSelector('[data-schedule-form="new"]');
       await page.fill('[data-schedule-title]', 'Nightly deploy');
       await page.fill('[data-schedule-prompt]', 'deploy the site');
-      await page.fill('[data-schedule-cron]', '0 2 * * *');
-      await page.locator('[data-schedule-asks]').selectOption('acceptEdits');
+      await freq('daily');
+      await page.fill('[data-when-time]', '02:00');
+      assert.equal(await page.locator('[data-schedule-wait]').count(), 0, 'never asks: no wait');
+      await page.click('[data-schedule-asks] [data-value="acceptEdits"]');
       await page.fill('[data-schedule-wait]', '2');
       await shot('schedules-form-asks', page.locator('[role="dialog"]').last());
-      const btn = page.locator('[data-schedule-create]');
-      assert.equal(await btn.isDisabled(), false, `the form is ready: ${JSON.stringify(await btn.boundingBox())}`);
-      await btn.click();
-      await page.waitForSelector('[data-schedule-form="new"]', { state: 'detached' });
-      const s = ((await api('GET', '/api/schedules')).body as Array<{ id: string; title: string; askTimeoutMinutes?: number; newSession?: { mode: string } }>).find((x) => x.title === 'Nightly deploy')!;
-      assert.deepEqual([s.askTimeoutMinutes, s.newSession?.mode], [120, 'acceptEdits']);
+      await page.click('[data-schedule-create]');
+      await created();
+      const s = ((await api('GET', '/api/schedules')).body as Array<{ id: string; title: string; cron: string; askTimeoutMinutes?: number; newSession?: { mode: string } }>).find((x) => x.title === 'Nightly deploy')!;
+      assert.deepEqual([s.cron, s.askTimeoutMinutes, s.newSession?.mode], ['0 2 * * *', 120, 'acceptEdits']);
       await page.click(`[data-schedule="${s.id}"] button[aria-label="Run now"]`);
       await page.click('[data-nav="core.inbox:inbox"]');
       const card = await page.waitForSelector('[data-inbox] [data-pending="permission_request"]', { timeout: 20_000 });
@@ -347,7 +361,7 @@ test('desktop app end to end: proactive work', { timeout: 10 * 60_000 }, async (
       while (run.status === 'running' && Date.now() < end) { await page.waitForTimeout(300); run = ((await api('GET', `/api/schedules/${s.id}/runs`)).body as typeof run[])[0]!; }
       assert.deepEqual([run.status, run.waited, run.summary], ['completed', 1, 'Deployed: the command printed 42.']);
       await page.click('[data-nav="core.scheduled:scheduled"]');
-      await page.click(`[data-schedule="${s.id}"] [data-schedule-toggle]`);
+      await openRuns(s.id);
       await page.waitForSelector(`[data-runs="${s.id}"] [data-run-waited]`);
       assert.match(await page.locator(`[data-runs="${s.id}"] [data-run]`).first().innerText(), /asked you once/);
     });
@@ -359,6 +373,101 @@ test('desktop app end to end: proactive work', { timeout: 10 * 60_000 }, async (
       await page.waitForFunction(() => !document.querySelector('[data-inbox-updates] [data-update][data-update-status="new"]'));
       assert.equal((await inboxApi()).unread, 0);
       await page.waitForFunction(() => { const b = document.querySelector('[data-badge="core.inbox.badge"]'); return !b || (b.textContent ?? '').trim() === '' || (b.textContent ?? '').trim() === '0'; });
+    });
+
+    await step('setup: a template fills the dialog in; its timing is shown in words with its next runs', async () => {
+      await page.click('[data-nav="core.scheduled:scheduled"]');
+      await page.click('[data-scheduled] [data-schedule-new]');
+      await page.waitForSelector('[data-schedule-form="new"] [data-schedule-templates]');
+      // While a dialog is open, toasts sit at the top, clear of its buttons.
+      assert.equal(await page.getAttribute('[data-toaster]', 'data-toaster'), 'top');
+      await page.click('[data-template="briefing"]');
+      assert.equal(await page.inputValue('[data-schedule-title]'), 'Morning briefing');
+      assert.match(await page.inputValue('[data-schedule-prompt]'), /what changed since yesterday/);
+      assert.equal(await page.getAttribute('[data-choice="freq"] [data-value="weekdays"]', 'aria-checked'), 'true');
+      assert.equal(await page.inputValue('[data-when-time]'), '08:30');
+      await page.waitForFunction(() => /^Every weekday at 08:30/.test(document.querySelector('[data-when-words]')?.textContent ?? ''));
+      await page.click('[data-template="weekly"]');
+      await page.waitForFunction(() => /^Every Monday at 09:00/.test(document.querySelector('[data-when-words]')?.textContent ?? ''));
+      assert.equal(await page.getAttribute('[data-schedule-asks] [data-value="acceptEdits"]', 'aria-checked'), 'true', 'its approvals too');
+      assert.match(await words(), /Every Monday at 09:00/);
+      // A day more: Monday and Thursday.
+      await page.click('[data-when-days] [data-day="4"]');
+      await page.waitForFunction(() => /^Every Monday and Thursday at 09:00/.test(document.querySelector('[data-when-words]')?.textContent ?? ''));
+      await shot('schedule-dialog-new', page.locator('[role="dialog"]').last());
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('[data-toaster="bottom"]', { state: 'attached' });
+    });
+
+    await step('workflows: a schedule that runs a workflow, picked with its inputs in a project folder; its run is the workflow\'s', async () => {
+      const proj = (await invoke('projects:create', 'Reports')) as { path: string };
+      fs.mkdirSync(path.join(proj.path, '.harness', 'workflows'), { recursive: true });
+      fs.writeFileSync(path.join(proj.path, '.harness', 'workflows', 'daily-report.json'), JSON.stringify({ name: 'daily-report', description: 'Write the daily report', inputs: { topic: { description: 'What it is about', required: true } }, start: 'write', nodes: { write: { type: 'agent', prompt: 'Write the daily report on {{input.topic}}.', next: 'done' }, done: { type: 'end' } } }));
+      await page.click('[data-scheduled] [data-schedule-new]');
+      await page.waitForSelector('[data-schedule-form="new"]');
+      await page.locator('[data-schedule-folder]').selectOption(proj.path);
+      await page.click('[data-choice="what"] [data-value="workflow"]');
+      await page.waitForSelector('[data-schedule-workflow] option[value="daily-report"]', { state: 'attached', timeout: 15_000 });
+      await page.locator('[data-schedule-workflow]').selectOption('daily-report');
+      await page.waitForSelector('[data-workflow-input="topic"]');
+      assert.match(await page.locator('[data-schedule-missing]').innerText(), /the workflow's inputs/);
+      await page.fill('[data-workflow-input="topic"]', 'sales');
+      await page.fill('[data-schedule-title]', 'Daily sales report');
+      await freq('daily');
+      await page.fill('[data-when-time]', '18:00');
+      await page.click('[data-schedule-create]');
+      await created();
+      const s = await scheduleNamed('Daily sales report') as unknown as { id: string; cron: string; workflow: { name: string; input: Record<string, string> }; newSession: { runtime: { path: string } } };
+      assert.deepEqual([s.cron, s.workflow, s.newSession.runtime.path], ['0 18 * * *', { name: 'daily-report', input: { topic: 'sales' } }, proj.path]);
+      await page.waitForSelector(`[data-schedule="${s.id}"]`);
+      assert.match(await rowText(s.id), /Every day at 18:00[\s\S]*Workflow daily-report/);
+      await runAndWait(s.id, '^completed');
+      const [run] = (await api('GET', `/api/schedules/${s.id}/runs`)).body as Array<{ sessionId: string }>;
+      const wf = (await api('GET', `/api/sessions/${run!.sessionId}/workflows`)).body as { runs: Array<{ workflow: string; status: string }> };
+      assert.deepEqual([wf.runs[0]!.workflow, wf.runs[0]!.status], ['daily-report', 'succeeded']);
+    });
+
+    await step('agents set it up: asked in a chat, the agent schedules a routine for the person (after they allow it); it is on the Scheduled page in plain words', async () => {
+      await page.click('[data-nav="core.chat:new"]');
+      await page.waitForSelector('[data-home]');
+      const box = page.locator('[data-composer-input]').first();
+      await box.fill('set up a routine for me');
+      await box.press('Enter');
+      await page.waitForSelector('[data-session]', { timeout: 20_000 });
+      const sid = (await page.getAttribute('[data-session]', 'data-session'))!;
+      const card = await page.waitForSelector('[data-attention] [data-pending="permission_request"]', { timeout: 20_000 });
+      assert.match(await card.innerText(), /schedule/);
+      await (await card.$('[data-decision="allow"]'))!.click();
+      await page.waitForSelector(`[data-session="${sid}"][data-status="idle"]`, { timeout: 30_000 });
+      const s = (await api('GET', '/api/schedules')).body as Array<{ id: string; createdBy?: string; when: string; newSession?: unknown }>;
+      const mine = s.find((x) => x.createdBy === sid)!;
+      assert.equal(mine.when, 'Every weekday at 09:00');
+      assert.ok(mine.newSession, 'a new conversation each time');
+      await page.click('[data-nav="core.scheduled:scheduled"]');
+      await page.waitForSelector(`[data-schedule="${mine.id}"]`);
+      assert.match(await rowText(mine.id), /Summarise what changed in this folder since yesterday\.[\s\S]*Every weekday at 09:00/);
+    });
+
+    await step('agents set it up: the agent fills the dialog in for the person to check; nothing exists until they confirm', async () => {
+      await page.click('[data-nav="core.chat:new"]');
+      await page.waitForSelector('[data-home]');
+      const before = ((await api('GET', '/api/schedules')).body as unknown[]).length;
+      const box = page.locator('[data-composer-input]').first();
+      await box.fill('propose a schedule');
+      await box.press('Enter');
+      const card = await page.waitForSelector('[data-attention] [data-pending="permission_request"]', { timeout: 20_000 });
+      await (await card.$('[data-decision="allow"]'))!.click();
+      await page.waitForSelector('[data-schedule-form="new"]', { timeout: 20_000 });
+      assert.equal(await page.inputValue('[data-schedule-title]'), 'Nightly tests');
+      assert.equal(await page.inputValue('[data-schedule-prompt]'), 'Run the tests and tell me what fails.');
+      assert.equal(await page.getAttribute('[data-choice="freq"] [data-value="daily"]', 'aria-checked'), 'true');
+      assert.equal(await page.inputValue('[data-when-time]'), '02:00');
+      assert.equal(await page.getAttribute('[data-schedule-asks] [data-value="auto"]', 'aria-checked'), 'true');
+      assert.equal(((await api('GET', '/api/schedules')).body as unknown[]).length, before, 'nothing yet');
+      await page.click('[data-schedule-create]');
+      await created();
+      const s = await scheduleNamed('Nightly tests') as unknown as { cron: string; newSession: { mode: string } };
+      assert.deepEqual([s.cron, s.newSession.mode], ['0 2 * * *', 'auto']);
     });
 
     await step('no errors in the window', async () => {

@@ -22,7 +22,7 @@ import { SessionElsewhereError } from '../core/session.ts';
 import { CompanionHub } from '../runtime/companion.ts';
 import { Scheduler } from '../core/scheduler.ts';
 import { NOTHING_TO_REPORT } from '../core/schedule-runs.ts';
-import { followRun } from '../core/schedule-track.ts';
+import { followRun, followWorkflow } from '../core/schedule-track.ts';
 import { InboxStore } from '../core/inbox.ts';
 
 /** How long a scheduled run waits for the person when it asks (minutes) unless its schedule says. */
@@ -939,6 +939,17 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       session.capNextTurn(s.maxCostUsd);
       // Nobody is watching: what it asks waits in the person's inbox so long, then gets the safe answer.
       session.beginUnattended({ scheduleId: s.id, askTimeoutMs: (s.askTimeoutMinutes ?? DEFAULT_ASK_MINUTES) * 60_000 });
+      if (s.workflow) {
+        // A workflow: its graph runs (agent steps, gates, approvals in the inbox), followed to its end.
+        if (outside?.trim()) s = { ...s, workflow: { ...s.workflow, input: { ...s.workflow.input, trigger_payload: neutralizeTags(outside.trim()) } } };
+        let view;
+        try { view = await session.startWorkflow(s.workflow!.name, s.workflow!.input); } catch (e) {
+          session.capNextTurn(undefined); session.endUnattended();
+          return { sessionId: session.meta.id, result: `failed: ${(e as Error).message}` };
+        }
+        const finished = followWorkflow(session, from, view.id, costBefore).finally(() => { session.capNextTurn(undefined); session.endUnattended(); });
+        return { sessionId: session.meta.id, result: 'started', finished };
+      }
       try {
         await session.send(`(${s.triggerHash ? 'Triggered' : 'Scheduled'} task "${s.title}", run ${s.runs + 1}. Nobody is watching: if, when you finish, nothing needs the person's attention, end your reply with ${NOTHING_TO_REPORT}.)\n\n${s.prompt}${extra}`);
       } catch (e) {

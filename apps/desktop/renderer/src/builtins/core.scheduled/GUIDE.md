@@ -22,15 +22,22 @@ run's result when it found something (a failed or stopped run as a warning), wha
 suggestion they start or dismiss). Requests a run waits on are under "Waiting for you". A run that
 already told them, or offered work, has no separate result.
 
-## The tools behind it (in this session)
+## Setting one up for the person
 
-- `schedule`: make, list or cancel a schedule for this conversation (the prompt comes back here at
-  the time). Cron is five fields; schedules run at most every few minutes.
-- `notify_user`: tell the person something now; it reaches them outside the conversation (a toast and
-  a system notification). Use it for what they need to know from a scheduled run.
-
-When a scheduled run finds nothing that needs the person, end the reply with `[nothing to report]`:
-the run is marked as finding nothing and stays quiet.
+- When they ask for something regular ("every weekday at 9, summarise what changed here", "check the
+  tests every hour and tell me when they fail"), set it up with the `schedule` tool:
+  `{"action":"create","prompt":"<a complete instruction>","cron":"0 9 * * 1-5","new_conversation":true}`.
+  `new_conversation` runs it each time in a new conversation like this one (this model and folder);
+  without it the prompt comes back to this conversation. `time_zone` (IANA) if they name one;
+  `asks: "inbox"` when it will need approval for commands (it waits in their Inbox, else it is refused);
+  `workflow` and `input` to run a workflow instead of a prompt. Then `run_now` with its id to try it
+  once, and tell them what it found and when it runs next.
+- To let them check it before it exists, open the dialog filled in instead:
+  `desktop_command {"command":"core.scheduled:new","args":{"title":"…","prompt":"…","cron":"0 9 * * 1-5","asks":"dontAsk"}}`.
+- Write the prompt as a complete instruction for a run nobody watches: what to look at, what counts as
+  worth telling them (with `notify_user`), and to end with `[nothing to report]` otherwise.
+- `notify_user`: tell the person something now; it reaches them outside the conversation (a toast, a
+  system notification, an Inbox update).
 
 ## Pages and navigation
 

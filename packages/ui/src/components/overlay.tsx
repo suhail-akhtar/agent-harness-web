@@ -248,9 +248,18 @@ export interface ModalProps {
   className?: string;
 }
 
+/** How many dialogs are open: toasts move out of the way of a dialog's buttons while any is. */
+let openDialogs = 0;
+const dialogSubs = new Set<() => void>();
+const dialogsChanged = (d: number) => { openDialogs = Math.max(0, openDialogs + d); for (const f of dialogSubs) f(); };
+export function useDialogOpen(): boolean {
+  return React.useSyncExternalStore((f) => { dialogSubs.add(f); return () => dialogSubs.delete(f); }, () => openDialogs > 0, () => false);
+}
+
 /** A dialog: focus is trapped inside, Escape and the backdrop close it, focus returns where it was. */
 export function Modal({ open, onClose, title, children, footer, size = 'md', bare, label, className }: ModalProps): React.ReactElement | null {
   const box = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (!open) return; dialogsChanged(1); return () => dialogsChanged(-1); }, [open]);
   useEffect(() => {
     if (!open) return;
     const before = document.activeElement as HTMLElement | null;

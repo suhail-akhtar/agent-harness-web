@@ -64,3 +64,30 @@ export function followRun(s: Followed, from: number, costBefore: number, kindOf:
     });
   });
 }
+
+/**
+ * Settles when the workflow run `runId` (started after `from`) ends: succeeded is completed, failed or
+ * interrupted is failed, aborted is stopped. Its summary is its last step's; it waited for each approval
+ * or question it asked the person.
+ */
+export function followWorkflow(s: Followed, from: number, runId: string, costBefore: number): Promise<RunEnd> {
+  return new Promise((resolve) => {
+    let waited = 0, notified = false;
+    const off = s.subscribe(from, ({ event }) => {
+      if (event.kind === 'approval_request' || event.kind === 'permission_request' || event.kind === 'question') waited++;
+      else if (event.kind === 'tool_call' && event.name === 'notify_user') notified = true;
+      else if (event.kind === 'workflow' && event.phase === 'finished' && event.run.id === runId) {
+        queueMicrotask(off);
+        const r = event.run;
+        const done = [...r.history].reverse().find((h) => h.summary);
+        const status: RunEnd['status'] = r.status === 'succeeded' ? 'completed' : r.status === 'aborted' ? 'stopped' : 'failed';
+        const costUsd = Math.max(0, s.meta.cost - costBefore);
+        resolve({
+          status, ...(status !== 'completed' ? { reason: `${status}: the workflow ${r.workflow} ${r.status}${r.error ? `: ${r.error}` : ''}` } : {}),
+          costUsd: Math.round(costUsd * 1e6) / 1e6, summary: summaryOf(done?.summary ?? `The workflow ${r.workflow} ${r.status}.`),
+          tools: r.history.length, actions: r.history.filter((h) => h.type !== 'end').length, notified, noOp: (done?.summary ?? '').includes(NOTHING_TO_REPORT), ...(waited ? { waited } : {}),
+        });
+      }
+    });
+  });
+}

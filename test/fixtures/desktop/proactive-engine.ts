@@ -6,6 +6,8 @@
 //   "costly"   -> three expensive steps (a large usage each): a run with a spend limit stops
 //   "deploy"   -> a command asked about (node -e ...), then "Deployed."
 //   "offer"    -> offers work (start_session own_initiative: "Fix the flaky test"), then "Offered a fix."
+//   "routine"  -> sets up a schedule for the person (schedule tool: weekdays at 9, a new conversation each time), then says so
+//   "propose"  -> opens the New schedule dialog filled in (desktop_command core.scheduled:new), then says so
 //   anything else -> a short reply
 import path from 'node:path';
 import { createHarness } from '../../../src/kernel/harness.ts';
@@ -35,6 +37,14 @@ export const SCRIPTS: Record<string, Step[]> = {
   deploy: [
     { calls: [{ name: 'bash', input: { command: 'node -e "console.log(40 + 2)"' } }] },
     { text: 'Deployed: the command printed 42.' },
+  ],
+  routine: [
+    { calls: [{ name: 'schedule', input: { action: 'create', prompt: 'Summarise what changed in this folder since yesterday.', cron: '0 9 * * 1-5', new_conversation: true } }] },
+    { text: 'Done: every weekday at 09:00, in a new conversation each time.' },
+  ],
+  propose: [
+    { calls: [{ name: 'desktop_command', input: { command: 'core.scheduled:new', args: { title: 'Nightly tests', prompt: 'Run the tests and tell me what fails.', cron: '0 2 * * *', asks: 'auto' } } }] },
+    { text: 'I filled in a schedule for you to check.' },
   ],
   offer: [
     { calls: [{ name: 'start_session', input: { title: 'Fix the flaky test', prompt: 'Fix the flaky test in parser.test.ts.', context: 'fresh', initiation: 'own_initiative', share_workspace: true } }] },

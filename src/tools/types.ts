@@ -16,6 +16,17 @@ export type AskOutcome = { answered: string; note?: string } | { replied: string
 export interface FileStamp { mtimeMs: number; size: number }
 
 /** Harness services a tool may use; absent ones are turned off. */
+/** A schedule the agent sets up (the schedule tool). */
+export interface ScheduleSpec {
+  prompt: string; title?: string; cron?: string; inMinutes?: number; at?: number; timeZone?: string;
+  /** A new conversation each run (this one's model and folder) instead of this conversation. */
+  newConversation?: boolean;
+  /** In a new conversation: what needs approval is refused, or waits in the person's inbox. */
+  asks?: 'refuse' | 'inbox';
+  workflow?: { name: string; input: Record<string, string> };
+  maxCostUsd?: number;
+}
+
 export interface ToolServices {
   memory?: import('../memory/store.ts').MemoryStore;
   sources?: import('../research/sources.ts').SourceStore;
@@ -28,9 +39,11 @@ export interface ToolServices {
   charge?(what: string, cost: number): void;
   /** This session's scheduled prompts (the main agent only). */
   schedules?: {
-    create(spec: { prompt: string; cron?: string; inMinutes?: number; at?: number }): Promise<import('../core/scheduler.ts').Schedule>;
+    create(spec: ScheduleSpec): Promise<import('../core/scheduler.ts').Schedule>;
     list(): Promise<import('../core/scheduler.ts').Schedule[]>;
     remove(id: string): Promise<boolean>;
+    /** Runs one this conversation's agent set up in new conversations, now (undefined: not one of those). */
+    runNow?(id: string): Promise<import('../core/scheduler.ts').Schedule | undefined>;
   };
   /** Tells the user now: the session, and the Notification hooks. */
   notify?(message: string): Promise<void>;

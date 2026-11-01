@@ -335,9 +335,9 @@ export class HarnessClient {
     list: () => this.get<Schedule[]>('/api/schedules'),
     get: (id: string) => this.get<Schedule>(`/api/schedules/${id}`),
     /** Goes to `sessionId`, or makes a new session each run from `newSession` (one of the two). */
-    create: (b: { title?: string; prompt: string; cron?: string; at?: string; inMinutes?: number; sessionId?: string; newSession?: { model: string; runtime: 'local' | 'docker'; path?: string; network?: 'none' | 'allowlist' | 'full'; mode?: string }; trigger?: boolean; timeZone?: string; misfire?: 'once' | 'skip'; maxCostUsd?: number; askTimeoutMinutes?: number }) => this.post<Schedule & { token?: string; url?: string }>('/api/schedules', b),
+    create: (b: { title?: string; prompt: string; cron?: string; at?: string; inMinutes?: number; sessionId?: string; newSession?: { model: string; runtime: 'local' | 'docker'; path?: string; network?: 'none' | 'allowlist' | 'full'; mode?: string }; trigger?: boolean; timeZone?: string; misfire?: 'once' | 'skip'; maxCostUsd?: number; askTimeoutMinutes?: number; workflow?: { name: string; input: Record<string, string> } }) => this.post<Schedule & { token?: string; url?: string }>('/api/schedules', b),
     /** Its title, prompt, timing or limits; null (or '') clears the time zone or the cost limit. */
-    update: (id: string, b: { title?: string; prompt?: string; cron?: string; at?: string; inMinutes?: number; timeZone?: string | null; misfire?: 'once' | 'skip'; maxCostUsd?: number | null; askTimeoutMinutes?: number | null }) => this.patch<Schedule>(`/api/schedules/${id}`, b),
+    update: (id: string, b: { title?: string; prompt?: string; cron?: string; at?: string; inMinutes?: number; timeZone?: string | null; misfire?: 'once' | 'skip'; maxCostUsd?: number | null; askTimeoutMinutes?: number | null; workflow?: { name: string; input: Record<string, string> } }) => this.patch<Schedule>(`/api/schedules/${id}`, b),
     remove: (id: string) => this.del<{ ok: boolean }>(`/api/schedules/${id}`),
     run: (id: string) => this.post<Schedule>(`/api/schedules/${id}/run`),
     setEnabled: (id: string, on: boolean) => this.post<Schedule>(`/api/schedules/${id}/${on ? 'enable' : 'disable'}`),
@@ -345,6 +345,10 @@ export class HarnessClient {
     runs: (id: string, limit = 50) => this.get<ScheduleRun[]>(`/api/schedules/${id}/runs?limit=${limit}`),
     /** The runs of all of the person's schedules and triggers, newest first. */
     allRuns: (limit = 50) => this.get<ScheduleRun[]>(`/api/schedule-runs?limit=${limit}`),
+    /** What a timing means before a schedule is made: in words and its next runs, or why it is refused. */
+    preview: (b: { cron?: string; at?: string; inMinutes?: number; timeZone?: string }) => this.post<{ when?: string; next?: number[]; error?: string }>('/api/schedules/preview', b),
+    /** The workflows a new conversation in this folder can run (the plugins', the folder's own). */
+    workflows: (path?: string) => this.get<WorkflowInfo[]>(`/api/workflows${path ? `?path=${encodeURIComponent(path)}` : ''}`),
   };
 
   mcpb = {

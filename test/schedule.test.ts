@@ -88,7 +88,7 @@ test('the agent schedules work in its own session; the run arrives as a prompt; 
     let wait = turn();
     await s.send('deploy, then check back');
     await wait;
-    assert.match(results(s.history[2])[0]!.content, /^Scheduled [0-9a-f]+: next run/);
+    assert.match(results(s.history[2])[0]!.content, /^Scheduled [0-9a-f]+: once at \d{4}-\d\d-\d\dT[\d:.]+Z, here\./);
     const [sch] = h.scheduler!.list();
     assert.equal(sch!.sessionId, s.meta.id);
     wait = turn();

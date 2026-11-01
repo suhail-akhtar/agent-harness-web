@@ -44,6 +44,10 @@ export interface Schedule {
   runs: number;
   /** The plugin it was made for (by a session the plugin started): skipped while that plugin is switched off. */
   plugin?: string;
+  /** It runs this workflow (a graph of agent steps, gates and approvals) instead of sending its prompt. */
+  workflow?: { name: string; input: Record<string, string> };
+  /** The conversation whose agent set it up (the schedule tool), for that agent's list. */
+  createdBy?: string;
 }
 
 export class ScheduleError extends Error {}
@@ -57,6 +61,7 @@ const MISFIRE_GRACE_MS = 3 * 60_000;
 const MAX_RUN_USD = 1000;
 
 /** The timing and limits a schedule may be made or changed with, checked. */
+export function checkScheduleTiming(spec: Parameters<typeof checkTiming>[0], now = Date.now()): void { checkTiming(spec, now); }
 function checkTiming(spec: { cron?: string; timeZone?: string; misfire?: string; maxCostUsd?: number; askTimeoutMinutes?: number }, now: number): void {
   if (spec.askTimeoutMinutes !== undefined && !(Number.isInteger(spec.askTimeoutMinutes) && spec.askTimeoutMinutes >= 1 && spec.askTimeoutMinutes <= 7 * 1440)) throw new ScheduleError('askTimeoutMinutes is a whole number of minutes from 1 to 10080 (a week)');
   if (spec.timeZone !== undefined && !validTimeZone(spec.timeZone)) throw new ScheduleError(`"${spec.timeZone}" is not a time zone this server knows (e.g. Europe/Berlin, America/New_York, UTC)`);
@@ -153,6 +158,77 @@ export function nextCron(expr: string, after: number, tz?: string): number | und
     return t;
   }
   return undefined;
+}
+
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const ordinal = (n: number) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'}`;
+const pad2 = (n: number) => String(n).padStart(2, '0');
+const listOf = (xs: string[]) => (xs.length <= 2 ? xs.join(' and ') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`);
+
+/**
+ * A cron expression in plain words: "Every weekday at 09:00", "Every 15 minutes", "Every Monday and
+ * Thursday at 18:30", "On the 1st of every month at 08:00". Unusual ones are described as best it can
+ * ("At minute 5 and 35 of hours 9 to 17"); an invalid one throws.
+ */
+export function describeCron(expr: string): string {
+  const c = compileCron(expr);
+  const [mf, hf, domf, , dowf] = expr.trim().split(/\s+/) as [string, string, string, string, string];
+  const mins = [...c.min].sort((a, b) => a - b), hours = [...c.hour].sort((a, b) => a - b);
+  const allMin = mins.length === 60, allHour = hours.length === 24;
+  const step = (f: string) => /^\*\/(\d+)$/.exec(f)?.[1];
+  // The days part.
+  const dows = [...c.dow].sort((a, b) => a - b);
+  const weekdays = !c.dowAny && dows.join() === '1,2,3,4,5', weekend = !c.dowAny && dows.join() === '0,6';
+  const months = [...c.mon].sort((a, b) => a - b);
+  const monthPart = months.length === 12 ? '' : ` in ${listOf(months.map((m) => MONTH_NAMES[m - 1]!))}`;
+  let days: string;
+  if (c.domAny && c.dowAny) days = 'Every day';
+  else if (c.domAny) days = weekdays ? 'Every weekday' : weekend ? 'Every weekend day' : `Every ${listOf(dows.map((d) => DAY_NAMES[d]!))}`;
+  else if (c.dowAny && months.length === 1 && c.dom.size === 1) days = `Every ${MONTH_NAMES[months[0]! - 1]} ${ordinal([...c.dom][0]!)}`;
+  else if (c.dowAny) days = `On the ${listOf([...c.dom].sort((a, b) => a - b).map(ordinal))} of ${months.length === 12 ? 'every month' : 'the month'}`;
+  else days = `On the ${listOf([...c.dom].sort((a, b) => a - b).map(ordinal))}, and every ${listOf(dows.map((d) => DAY_NAMES[d]!))}`;
+  if (!(c.dowAny && months.length === 1 && c.dom.size === 1 && !c.domAny)) days += monthPart;
+  // The times part.
+  if (allMin && allHour) return days === 'Every day' ? 'Every minute' : `${days}, every minute`;
+  const ms = step(mf), hs = step(hf);
+  if (ms && allHour && days === 'Every day') return `Every ${ms} minutes`;
+  if (ms && allHour) return `${days}, every ${ms} minutes`;
+  if (mins.length === 1 && allHour) return days === 'Every day' ? (mins[0] === 0 ? 'Every hour' : `Every hour at minute ${mins[0]}`) : `${days}, every hour${mins[0] ? ` at minute ${mins[0]}` : ''}`;
+  if (mins.length === 1 && hs && hours[0] === 0) return `${days === 'Every day' ? 'Every' : `${days}, every`} ${hs} hours${mins[0] ? ` at minute ${mins[0]}` : ''}`;
+  if (mins.length * hours.length <= 6) {
+    const times = hours.flatMap((h) => mins.map((m) => `${pad2(h)}:${pad2(m)}`));
+    return `${days} at ${listOf(times)}`;
+  }
+  const range = (xs: number[]) => (xs.length > 2 && xs.at(-1)! - xs[0]! === xs.length - 1 ? `${xs[0]} to ${xs.at(-1)}` : listOf(xs.map(String)));
+  const minPart = ms ? `every ${ms} minutes` : `at minute ${range(mins)}`;
+  return `${days}, ${minPart}${allHour ? '' : ` of hour${hours.length === 1 ? '' : 's'} ${range(hours)}`}`;
+}
+
+/** When a schedule runs, in words (its time zone named when it has one). */
+export function describeSchedule(s: Pick<Schedule, 'cron' | 'at' | 'timeZone' | 'triggerHash'>): string {
+  if (s.triggerHash) return 'When its URL is called';
+  if (s.cron) { try { return `${describeCron(s.cron)}${s.timeZone ? ` (${s.timeZone})` : ''}`; } catch { return s.cron; } }
+  return s.at ? `Once, at ${new Date(s.at).toISOString()}` : 'Once';
+}
+
+/** The next `n` times a cron expression runs (in its time zone), from `from`. */
+export function nextRuns(expr: string, n: number, tz?: string, from = Date.now()): number[] {
+  const out: number[] = [];
+  let at = from;
+  for (let i = 0; i < n; i++) { const t = nextCron(expr, at, tz); if (t === undefined) break; out.push(t); at = t; }
+  return out;
+}
+
+/** A workflow target, checked: a name, and its inputs as strings. */
+function checkWorkflow(w: unknown): Schedule['workflow'] {
+  if (w === undefined || w === null) return undefined;
+  const o = w as { name?: unknown; input?: unknown };
+  const name = typeof o.name === 'string' ? o.name.trim() : '';
+  if (!name || !/^[\w.:-]{1,80}$/.test(name)) throw new ScheduleError('workflow.name is the name of a workflow (letters, digits, - _ . :)');
+  const input = o.input && typeof o.input === 'object' && !Array.isArray(o.input) ? Object.fromEntries(Object.entries(o.input as Record<string, unknown>).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)])) : {};
+  if (JSON.stringify(input).length > 20_000) throw new ScheduleError("the workflow's inputs are limited to 20,000 characters");
+  return { name, input };
 }
 
 /** The shortest time between two runs of a cron expression, in minutes (over its next runs). */
@@ -283,8 +359,9 @@ export class Scheduler {
 
   get(id: string): Schedule | undefined { return this.items.get(id); }
 
-  async create(spec: { owner?: string; title?: string; prompt: string; cron?: string; at?: number; inMinutes?: number; sessionId?: string; newSession?: Schedule['newSession']; plugin?: string; timeZone?: string; misfire?: 'once' | 'skip'; maxCostUsd?: number; askTimeoutMinutes?: number }, now = Date.now()): Promise<Schedule> {
-    const prompt = spec.prompt?.trim();
+  async create(spec: { owner?: string; title?: string; prompt: string; cron?: string; at?: number; inMinutes?: number; sessionId?: string; newSession?: Schedule['newSession']; plugin?: string; timeZone?: string; misfire?: 'once' | 'skip'; maxCostUsd?: number; askTimeoutMinutes?: number; workflow?: Schedule['workflow']; createdBy?: string }, now = Date.now()): Promise<Schedule> {
+    const workflow = checkWorkflow(spec.workflow);
+    const prompt = spec.prompt?.trim() || (workflow ? `Run the workflow ${workflow.name}` : '');
     if (!prompt) throw new ScheduleError('a schedule needs a prompt');
     if (prompt.length > 20_000) throw new ScheduleError('the prompt is limited to 20,000 characters');
     const at = spec.at ?? (spec.inMinutes !== undefined ? now + Math.max(1, spec.inMinutes) * 60_000 : undefined);
@@ -298,6 +375,7 @@ export class Scheduler {
       id: crypto.randomBytes(6).toString('hex'), owner: spec.owner, title: (spec.title?.trim() || prompt.split('\n')[0]!).slice(0, 80), prompt,
       ...(spec.cron ? { cron: spec.cron.trim() } : { at }), ...(spec.sessionId ? { sessionId: spec.sessionId } : { newSession: spec.newSession }),
       ...(spec.cron && spec.timeZone ? { timeZone: spec.timeZone } : {}), ...(spec.misfire ? { misfire: spec.misfire } : {}), ...(spec.maxCostUsd ? { maxCostUsd: spec.maxCostUsd } : {}), ...(spec.askTimeoutMinutes ? { askTimeoutMinutes: spec.askTimeoutMinutes } : {}),
+      ...(workflow ? { workflow } : {}), ...(spec.createdBy ? { createdBy: spec.createdBy } : {}),
       enabled: true, createdAt: now, nextRun, runs: 0, ...(spec.plugin ? { plugin: spec.plugin } : {}),
     };
     const made = await this.mutate(() => {
@@ -314,8 +392,9 @@ export class Scheduler {
    * URL (from Slack, a GitHub webhook, a phone shortcut). The token is returned once and
    * stored only as a hash.
    */
-  async createTrigger(spec: { owner?: string; title?: string; prompt: string; sessionId?: string; newSession?: Schedule['newSession']; maxCostUsd?: number; askTimeoutMinutes?: number }, now = Date.now()): Promise<{ schedule: Schedule; token: string }> {
-    const prompt = spec.prompt?.trim();
+  async createTrigger(spec: { owner?: string; title?: string; prompt: string; sessionId?: string; newSession?: Schedule['newSession']; maxCostUsd?: number; askTimeoutMinutes?: number; workflow?: Schedule['workflow'] }, now = Date.now()): Promise<{ schedule: Schedule; token: string }> {
+    const workflow = checkWorkflow(spec.workflow);
+    const prompt = spec.prompt?.trim() || (workflow ? `Run the workflow ${workflow.name}` : '');
     if (!prompt) throw new ScheduleError('a trigger needs a prompt');
     if (!spec.sessionId && !spec.newSession) throw new ScheduleError('a trigger goes to a session, or makes a new one');
     checkTiming({ maxCostUsd: spec.maxCostUsd, askTimeoutMinutes: spec.askTimeoutMinutes }, now);
@@ -323,7 +402,7 @@ export class Scheduler {
     const s: Schedule = {
       id: crypto.randomBytes(6).toString('hex'), owner: spec.owner, title: (spec.title?.trim() || prompt.split('\n')[0]!).slice(0, 80), prompt,
       ...(spec.sessionId ? { sessionId: spec.sessionId } : { newSession: spec.newSession }),
-      enabled: true, triggerHash: hashToken(token), createdAt: now, runs: 0, ...(spec.maxCostUsd ? { maxCostUsd: spec.maxCostUsd } : {}), ...(spec.askTimeoutMinutes ? { askTimeoutMinutes: spec.askTimeoutMinutes } : {}),
+      enabled: true, triggerHash: hashToken(token), createdAt: now, runs: 0, ...(spec.maxCostUsd ? { maxCostUsd: spec.maxCostUsd } : {}), ...(spec.askTimeoutMinutes ? { askTimeoutMinutes: spec.askTimeoutMinutes } : {}), ...(workflow ? { workflow } : {}),
     };
     const made = await this.mutate(() => {
       if (this.list(spec.owner).length >= MAX_PER_OWNER) throw new ScheduleError(`at most ${MAX_PER_OWNER} schedules and triggers per person`);
@@ -349,9 +428,10 @@ export class Scheduler {
    * Changes a schedule's title, prompt, timing or limits (not where it runs). A new time recomputes the
    * next run; `null` clears an optional field (the time zone, the cost limit).
    */
-  async update(id: string, patch: { title?: string; prompt?: string; cron?: string; at?: number; inMinutes?: number; timeZone?: string | null; misfire?: 'once' | 'skip'; maxCostUsd?: number | null; askTimeoutMinutes?: number | null }, now = Date.now()): Promise<Schedule | undefined> {
+  async update(id: string, patch: { title?: string; prompt?: string; cron?: string; at?: number; inMinutes?: number; timeZone?: string | null; misfire?: 'once' | 'skip'; maxCostUsd?: number | null; askTimeoutMinutes?: number | null; workflow?: Schedule['workflow'] }, now = Date.now()): Promise<Schedule | undefined> {
     const cur = this.items.get(id);
     if (!cur) return undefined;
+    const workflow = patch.workflow === undefined ? cur.workflow : checkWorkflow(patch.workflow);
     const at = patch.at ?? (patch.inMinutes !== undefined ? now + Math.max(1, patch.inMinutes) * 60_000 : undefined);
     if (cur.triggerHash && (patch.cron || at !== undefined || patch.timeZone)) throw new ScheduleError('a trigger runs when its URL is called; it has no time');
     const prompt = patch.prompt === undefined ? cur.prompt : patch.prompt.trim();
@@ -372,6 +452,7 @@ export class Scheduler {
       const s = this.items.get(id);
       if (!s) return undefined;
       s.prompt = prompt;
+      if (workflow) s.workflow = workflow;
       if (patch.title !== undefined) s.title = (patch.title.trim() || prompt.split('\n')[0]!).slice(0, 80);
       if (timing) {
         if (cron) { s.cron = cron; delete s.at; } else { s.at = at; delete s.cron; }

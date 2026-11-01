@@ -23,7 +23,7 @@ import type { ToolHost } from '../runtime/host.ts';
 import { LocalHost, run } from '../runtime/host.ts';
 import { clientSkills, makeSkillTool, type Skill, skillsIn, skillsListing, workspaceSkills } from '../skills/skills.ts';
 import { sortTools } from '../tools/index.ts';
-import type { AskOutcome, FileStamp, Tool, ToolServices } from '../tools/types.ts';
+import type { AskOutcome, FileStamp, ScheduleSpec, Tool, ToolServices } from '../tools/types.ts';
 import { loadedGroups, pluginGroups, sentSpecs, type ToolGroup } from '../tools/deferred.ts';
 import { SpillStore } from '../tools/spill.ts';
 import type { ToolSpec } from '../providers/types.ts';
@@ -1078,9 +1078,19 @@ export class Session {
         });
       } : undefined,
       ...(main && this.deps.scheduler ? { schedules: {
-        create: (spec: { prompt: string; cron?: string; inMinutes?: number; at?: number }) => this.deps.scheduler!.create({ ...spec, owner: this.meta.owner, sessionId: this.meta.id, ...(this.meta.startedBy ? { plugin: this.meta.startedBy } : {}) }),
-        list: async () => this.deps.scheduler!.list().filter((x) => x.sessionId === this.meta.id),
-        remove: async (id: string) => this.deps.scheduler!.get(id)?.sessionId === this.meta.id && this.deps.scheduler!.remove(id),
+        // Into this conversation, or (new_conversation) a new conversation each run like this one: same model and
+        // folder, never asking (refuse) or asking in the person's inbox. Either way the agent that set it up lists it.
+        create: (spec: ScheduleSpec) => {
+          const { newConversation, asks, ...rest } = spec;
+          const { worktree: _w, ...runtime } = this.meta.runtime;
+          return this.deps.scheduler!.create({
+            ...rest, owner: this.meta.owner, createdBy: this.meta.id, ...(this.meta.startedBy ? { plugin: this.meta.startedBy } : {}),
+            ...(newConversation ? { newSession: { model: this.meta.model, runtime, mode: asks === 'inbox' ? 'acceptEdits' : 'dontAsk' } } : { sessionId: this.meta.id }),
+          });
+        },
+        list: async () => this.deps.scheduler!.list().filter((x) => x.sessionId === this.meta.id || x.createdBy === this.meta.id),
+        remove: async (id: string) => { const x = this.deps.scheduler!.get(id); return !!x && (x.sessionId === this.meta.id || x.createdBy === this.meta.id) && this.deps.scheduler!.remove(id); },
+        runNow: async (id: string) => { const x = this.deps.scheduler!.get(id); if (!x || x.createdBy !== this.meta.id || x.sessionId === this.meta.id) return undefined; return this.deps.scheduler!.runNow(id); },
       } } : {}),
       ...(main ? { workflows: {
         list: async () => (await this.workflows()).map((w) => ({ name: w.name, description: w.description ?? '', inputs: Object.keys(w.inputs ?? {}) })),

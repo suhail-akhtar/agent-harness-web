@@ -1,9 +1,11 @@
 import type { Tool } from './types.ts';
 import { bool, num, str } from './types.ts';
 import { WORKFLOW_FORMAT } from '../graph/format.ts';
+import { describeSchedule } from '../core/scheduler.ts';
 
-// schedule: the agent sets up work for later in its own session ("check the
-// deploy in 20 minutes", "every morning, run the flaky test 50 times and report").
+// schedule: the agent sets up work for later, in its own session ("check the deploy in 20
+// minutes") or in a new conversation each run ("every weekday at 9, summarise what changed"),
+// a prompt or a workflow; it lists, deletes and tries what it set up.
 // notify_user: the agent tells the person something now, wherever they are
 // (the session, and any Notification hooks: chat, phone).
 
@@ -15,21 +17,26 @@ export const scheduleTool: Tool = {
   sendsOut: false,
   spec: {
     name: 'schedule',
-    description: 'Schedule a prompt to run later in this session, once (in_minutes, or at an ISO time) or repeatedly (cron, five fields: minute hour day-of-month month day-of-week, server time). Use it to check back on something slow (a deploy, a long job) or for recurring checks the user asked for. "list" shows this session\'s schedules; "delete" removes one by id.',
+    description: 'Run a prompt or workflow later: once (in_minutes or ISO at) or on a cron (five fields; time_zone, else the server\'s). It comes back here, or with new_conversation runs each time in a new one like this (routines the user asks for; results go to their Inbox; asks: refuse or inbox for approvals). list, delete, run_now.',
     input_schema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['create', 'list', 'delete'] },
-        prompt: { type: 'string', description: 'What to do when it runs: a complete instruction, as if the user typed it then.' },
+        action: { type: 'string', enum: ['create', 'list', 'delete', 'run_now'] },
+        prompt: { type: 'string', description: 'A complete instruction, as if the user typed it then' },
         in_minutes: { type: 'number' },
-        at: { type: 'string', description: 'ISO date-time' },
-        cron: { type: 'string', description: 'e.g. "0 9 * * 1-5" for 9:00 on weekdays' },
+        at: { type: 'string' },
+        cron: { type: 'string' },
+        time_zone: { type: 'string' },
+        new_conversation: { type: 'boolean' },
+        asks: { type: 'string', enum: ['refuse', 'inbox'] },
+        workflow: { type: 'string' },
+        input: { type: 'object', additionalProperties: { type: 'string' } },
         id: { type: 'string' },
       },
       required: ['action'],
     },
   },
-  summarize: (i) => str(i.action) === 'create' ? `schedule ${str(i.cron) || (i.in_minutes !== undefined ? `in ${str(i.in_minutes)} min` : str(i.at))}: ${str(i.prompt).slice(0, 80)}` : `schedule ${str(i.action)}`,
+  summarize: (i) => str(i.action) === 'create' ? `schedule ${str(i.cron) || (i.in_minutes !== undefined ? `in ${str(i.in_minutes)} min` : str(i.at))}${bool(i.new_conversation) ? ' [new conversation each time]' : ''}: ${str(i.workflow) ? `workflow ${str(i.workflow)}` : str(i.prompt).slice(0, 80)}` : `schedule ${str(i.action)}${str(i.id) ? ` ${str(i.id)}` : ''}`,
   async run(input, ctx) {
     const sch = ctx.services?.schedules;
     if (!sch) return { content: 'Scheduling is not available here (sub-agents and scripts cannot schedule).', is_error: true };
@@ -37,14 +44,23 @@ export const scheduleTool: Tool = {
     try {
       if (action === 'list') {
         const items = await sch.list();
-        return { content: items.length ? items.map((s) => `${s.id}: ${s.cron ? `cron "${s.cron}"` : 'once'}, next ${s.nextRun ? new Date(s.nextRun).toISOString() : '(done)'}${s.lastResult ? `, last: ${s.lastResult}` : ''} - ${s.title}`).join('\n') : 'No schedules in this session.' };
+        return { content: items.length ? items.map((s) => `${s.id}: ${describeSchedule(s)}${s.enabled && s.nextRun ? `, next ${new Date(s.nextRun).toISOString()}` : s.enabled ? '' : ' (off)'}${s.newSession ? ', a new conversation each time' : ''}${s.workflow ? `, workflow ${s.workflow.name}` : ''}${s.lastResult ? `, last: ${s.lastResult}` : ''} - ${s.title}`).join('\n') : 'No schedules from this conversation.' };
       }
-      if (action === 'delete') return { content: (await sch.remove(str(input.id))) ? `Deleted ${str(input.id)}.` : `No schedule ${str(input.id)} in this session.`, is_error: false };
-      if (action !== 'create') return { content: 'action must be create, list or delete', is_error: true };
+      if (action === 'delete') return { content: (await sch.remove(str(input.id))) ? `Deleted ${str(input.id)}.` : `No schedule ${str(input.id)} from this conversation.`, is_error: false };
+      if (action === 'run_now') {
+        const s = await sch.runNow?.(str(input.id));
+        return s ? { content: `Started ${s.id} now (${s.lastResult}). Its result reaches the user's Inbox; list shows its last result.` } : { content: `No schedule ${str(input.id)} this conversation set up in new conversations (one that comes back here runs at its time).`, is_error: true };
+      }
+      if (action !== 'create') return { content: 'action must be create, list, delete or run_now', is_error: true };
       const at = str(input.at) ? Date.parse(str(input.at)) : undefined;
       if (at !== undefined && Number.isNaN(at)) return { content: `"${str(input.at)}" is not a date-time`, is_error: true };
-      const s = await sch.create({ prompt: str(input.prompt), cron: str(input.cron) || undefined, inMinutes: num(input.in_minutes), at });
-      return { content: `Scheduled ${s.id}: next run ${new Date(s.nextRun!).toISOString()}${s.cron ? `, then on "${s.cron}"` : ''}.` };
+      const raw = input.input && typeof input.input === 'object' ? input.input as Record<string, unknown> : {};
+      const s = await sch.create({
+        prompt: str(input.prompt), cron: str(input.cron) || undefined, inMinutes: num(input.in_minutes), at,
+        timeZone: str(input.time_zone) || undefined, newConversation: bool(input.new_conversation), asks: str(input.asks) === 'inbox' ? 'inbox' : 'refuse',
+        ...(str(input.workflow) ? { workflow: { name: str(input.workflow), input: Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)])) } } : {}),
+      });
+      return { content: `Scheduled ${s.id}: ${s.cron ? `${describeSchedule(s)}, next run ${new Date(s.nextRun!).toISOString()}` : `once at ${new Date(s.nextRun!).toISOString()}`}${s.newSession ? ', each time in a new conversation' : ', here'}. The user sees it on the Scheduled page${s.newSession ? ' and its results in their Inbox; run_now tries it' : ''}.` };
     } catch (e) {
       return { content: (e as Error).message, is_error: true };
     }

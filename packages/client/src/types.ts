@@ -244,6 +244,13 @@ export interface Schedule {
   maxCostUsd?: number;
   /** How long a run waits for the person when it asks (in their inbox), in minutes; then the safe answer. */
   askTimeoutMinutes?: number;
+  /** It runs this workflow instead of sending its prompt. */
+  workflow?: { name: string; input: Record<string, string> };
+  /** When it runs, in words ("Every weekday at 09:00"), and (repeating ones) its next runs. */
+  when?: string;
+  upcoming?: number[];
+  /** The conversation whose agent set it up. */
+  createdBy?: string;
 }
 /** What unattended work left for the person (GET /api/inbox). */
 export interface InboxItem {

@@ -12,7 +12,17 @@ export const ui = {
       { id: 'scheduled', title: 'Scheduled', icon: 'clock', description: 'Every schedule and trigger: when it runs next, its last result, each run (status, time, cost, summary, conversation); New, Edit, Run now, on/off, Delete.', kind: 'native', component: 'ScheduledPage' },
     ],
     commands: [
-      { id: 'open', title: 'Show scheduled work', category: 'Scheduled', icon: 'clock', action: { type: 'open-view', view: 'scheduled' }, agent: { description: 'Open the Scheduled page: the person\'s schedules and triggers and what each run came to.' } },
+      { id: 'open', title: 'Show scheduled work', category: 'Scheduled', icon: 'clock', action: { type: 'open-view', view: 'scheduled' } },
+      {
+        id: 'new', title: 'New schedule…', category: 'Scheduled', icon: 'plus', handler: 'newSchedule',
+        agent: {
+          description: 'Open the New schedule dialog filled in for the person to confirm.',
+          inputSchema: { type: 'object', properties: {
+            title: { type: 'string', maxLength: 80 }, prompt: { type: 'string', maxLength: 4000 }, cron: { type: 'string', maxLength: 60 },
+            timeZone: { type: 'string', maxLength: 60 }, asks: { type: 'string', enum: ['dontAsk', 'auto', 'acceptEdits', 'default'] }, workflow: { type: 'string', maxLength: 80 },
+          } },
+        },
+      },
     ],
   },
 };

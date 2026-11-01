@@ -34,6 +34,25 @@
   linked sessions, so work an agent offers there reaches the Inbox.
 - Settings and the Scheduled page say what the server refused inside the form, not in a toast that stays and covers
   other dialogs.
+- **Setting proactive work up, made easy** (for the person, and by agents):
+  - A new schedule dialog: start from a template (Morning briefing, Watch the tests, Weekly report, Check back later);
+    say what it runs (a prompt, or a workflow with its inputs), when in plain choices (once, every few minutes, hourly,
+    daily, weekdays, weekly on chosen days, monthly, or a cron), shown in words with its next three runs before it is
+    made; where (a new conversation each time in a folder, or the same one); and what happens when it needs approval
+    (never stop to ask, a checker decides, edits are fine, ask me for everything; how long to wait). Limits under
+    More options; what is still needed is said next to the button, which is always in view.
+  - The Scheduled page: each schedule in plain words ("Every weekday at 09:00 (Asia/Tokyo)"), when it runs next
+    ("in 3 h"), what it runs and how it asks, its last result as an icon and a word (why a run failed or stopped
+    under it), Run now, on/off, and a menu (Edit, Show its runs, Delete after a confirmation). An empty page offers
+    the templates and "Ask an agent to set it up".
+  - Agents set it up: the `schedule` tool makes a routine in a new conversation each time (`new_conversation`, like
+    the agent's own conversation; `asks: inbox`), in a time zone, or one that runs a workflow, then tries it with
+    `run_now`; the desktop's `core.scheduled:new` command opens the dialog filled in with what an agent proposes, for
+    the person to confirm.
+  - Schedules and triggers can run a workflow (`workflow: {name, input}`): its run is followed to its end, its approval
+    steps wait in the Inbox. `GET /api/workflows?path=` lists the workflows a folder offers; `POST /api/schedules/preview`
+    says what a timing means; schedules carry `when` (in words) and `upcoming` (their next runs).
+- Toasts move to the top while a dialog is open, so they never cover its buttons.
 
 - **run_script works in the desktop app**: it started its helper with the app's own executable, which opened a
   second app (refused by the single-instance lock, exit 0) instead of running Node, so every call failed with
