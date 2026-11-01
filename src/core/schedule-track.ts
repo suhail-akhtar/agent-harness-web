@@ -32,7 +32,7 @@ export function summaryOf(text: string): string {
  */
 export function followRun(s: Followed, from: number, costBefore: number, kindOf: KindOf): Promise<RunEnd> {
   return new Promise((resolve) => {
-    let tools = 0, actions = 0, notified = false, last = '', warning = '';
+    let tools = 0, actions = 0, waited = 0, proposed = 0, notified = false, last = '', warning = '';
     const off = s.subscribe(from, ({ event }) => {
       if ('agent' in event && event.agent && event.agent !== 'main') return;
       if (event.kind === 'tool_call') {
@@ -42,12 +42,16 @@ export function followRun(s: Followed, from: number, costBefore: number, kindOf:
       } else if (event.kind === 'assistant_message') {
         const t = textOf(event.message);
         if (t) last = t;
+      } else if (event.kind === 'session_proposal') {
+        proposed++;
+      } else if (event.kind === 'permission_request' || event.kind === 'question' || event.kind === 'plan_proposed') {
+        waited++;
       } else if (event.kind === 'notice' && event.level !== 'info') {
         warning = event.text;
       } else if (event.kind === 'turn_end') {
         queueMicrotask(off);
         const costUsd = Math.max(0, s.meta.cost - costBefore);
-        const noOp = last.includes(NOTHING_TO_REPORT) || (!last && actions === 0 && !notified);
+        const noOp = last.includes(NOTHING_TO_REPORT) || (!last && actions === 0 && !notified && !proposed);
         const status: RunEnd['status'] = event.reason === 'done' ? 'completed' : event.reason === 'aborted' ? 'stopped' : event.reason === 'error' || event.reason === 'refusal' ? 'failed' : 'stopped';
         const why = event.reason === 'done' ? undefined
           : event.reason === 'aborted' ? 'stopped by the person'
@@ -55,7 +59,7 @@ export function followRun(s: Followed, from: number, costBefore: number, kindOf:
               : event.reason === 'time' ? warning || 'it reached its time limit'
                 : event.reason === 'max_steps' ? warning || 'it reached its step limit'
                   : warning || event.reason;
-        resolve({ status, ...(why ? { reason: why } : {}), costUsd: Math.round(costUsd * 1e6) / 1e6, summary: summaryOf(last), tools, actions, notified, noOp });
+        resolve({ status, ...(why ? { reason: why } : {}), costUsd: Math.round(costUsd * 1e6) / 1e6, summary: summaryOf(last), tools, actions, notified, noOp, ...(waited ? { waited } : {}), ...(proposed ? { proposed } : {}) });
       }
     });
   });

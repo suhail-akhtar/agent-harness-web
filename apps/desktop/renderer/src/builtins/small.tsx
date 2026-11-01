@@ -15,6 +15,7 @@ import { useData, client } from '../state/data';
 import { useApp, navigate, openSession, setCrumb, NARROW_PX } from '../state/app';
 import { desktop } from '../bridge';
 import { RecentRuns } from './core.scheduled/Scheduled';
+import { InboxUpdates } from './core.inbox/Updates';
 import { PendingCard, respondFor } from '../components/Pending';
 import { fmtCost } from './core.chat/Transcript';
 import { PluginHome } from './plugin-home';
@@ -217,13 +218,15 @@ function Inbox() {
     return [...by.entries()];
   }, [approvals]);
   return (
-    <Page data-inbox title="Waiting for you" actions={<IconButton icon="refresh" label="Refresh" onClick={() => void useData.getState().refreshApprovals()} />}>
-        {!groups.length ? <PageState kind="empty" icon="inbox" title="Nothing is waiting for you" detail="Permission requests, questions, plans and workflow approvals from every conversation land here." /> : groups.map(([sid, list]) => (
+    <Page data-inbox title="Inbox" actions={<IconButton icon="refresh" label="Refresh" onClick={() => { void useData.getState().refreshApprovals(); void useData.getState().refreshInbox(); }} />}>
+        <h2 className="mb-2 text-[12px] font-medium uppercase tracking-wide text-hx-muted" data-inbox-waiting>Waiting for you</h2>
+        {!groups.length ? <p className="mb-8 text-[13px] text-hx-muted" data-inbox-nothing-waiting>Nothing is waiting for you. Permission requests, questions, plans and workflow approvals from every conversation, scheduled runs included, land here.</p> : groups.map(([sid, list]) => (
           <section key={sid} className="mb-6" data-inbox-session={sid}>
             <button type="button" onClick={() => openSession(sid)} className="mb-2 flex items-center gap-2 text-[13px] font-medium text-hx-secondary hover:text-hx-primary"><Icon name="chat" size={14} />{list[0]!.title ?? sessions.find((s) => s.id === sid)?.title ?? sid}<Icon name="arrow-right" size={13} /></button>
             <div className="space-y-2">{list.map((a) => <InboxItem key={a.requestId} a={a} />)}</div>
           </section>
         ))}
+        <InboxUpdates />
     </Page>
   );
 }
@@ -259,8 +262,8 @@ export const coreInbox: BuiltinPlugin = {
   ui: {
     apiVersion: 1, displayName: 'Inbox', icon: 'inbox', trust: 'native', capabilities: [],
     contributes: {
-      navItems: [{ id: 'inbox', title: 'Inbox', icon: 'inbox', view: 'inbox', order: 10, badge: 'core.inbox.pending' }],
-      views: [{ id: 'inbox', title: 'Waiting for you', kind: 'native', component: 'Inbox' }],
+      navItems: [{ id: 'inbox', title: 'Inbox', icon: 'inbox', view: 'inbox', order: 10, badge: 'core.inbox.badge' }],
+      views: [{ id: 'inbox', title: 'Inbox', kind: 'native', component: 'Inbox' }],
       homeCards: [{ id: 'attention', title: 'Waiting for you', kind: 'native', component: 'AttentionCard', order: 10 }],
       statusItems: [{ id: 'pending', text: '{core.inbox.pending} waiting', tooltip: 'Requests waiting for you', command: 'open', order: 10 }],
       commands: [{ id: 'open', title: 'Open the inbox', category: 'Inbox', icon: 'inbox', keybinding: 'Mod+Shift+I', action: { type: 'open-view', view: 'inbox' } }],
@@ -268,9 +271,12 @@ export const coreInbox: BuiltinPlugin = {
   },
   components: { Inbox, AttentionCard },
   activate: () => {
-    const set = () => useApp.getState().setBadge('core.inbox.pending', useData.getState().approvals.length);
+    // The sidebar: what is waiting and updates not seen yet; the status bar: what is waiting.
+    const set = () => { const d = useData.getState(); useApp.getState().setBadge('core.inbox.pending', d.approvals.length); useApp.getState().setBadge('core.inbox.badge', d.approvals.length + (d.inbox ?? []).filter((i) => i.status === 'new').length); };
     set();
-    useData.subscribe((s, p) => { if (s.approvals !== p.approvals) set(); });
+    useData.subscribe((s, p) => { if (s.approvals !== p.approvals || s.inbox !== p.inbox) set(); });
+    // Snoozed updates come back at their time.
+    setInterval(() => { if ((useData.getState().inbox ?? []).length || document.visibilityState === 'visible') void useData.getState().refreshInbox(); }, 60_000);
   },
 };
 

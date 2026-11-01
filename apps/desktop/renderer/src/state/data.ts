@@ -6,7 +6,7 @@
 
 import { create } from 'zustand';
 import { guideIndex } from '../registry/modules';
-import { HarnessClient, toApproval, type ClientDescriptor, type ClientPluginDecl, type Approval, type GlobalEvent, type Me, type ModelInfo, type PluginInfo, type ProviderInfo, type SessionMeta, type GlobalEvents, type Config } from '@harness/client';
+import { HarnessClient, toApproval, type ClientDescriptor, type ClientPluginDecl, type Approval, type InboxItem, type GlobalEvent, type Me, type ModelInfo, type PluginInfo, type ProviderInfo, type SessionMeta, type GlobalEvents, type Config } from '@harness/client';
 import { validateUiManifest } from '@harness/plugin-ui';
 import { toast, DECLARED_FENCES } from '@harness/ui';
 import { buildRegistry, type PluginEntry, type Registry } from '../registry/registry';
@@ -41,6 +41,8 @@ export interface DataState {
   approvals: Approval[];
   /** Bumped when a schedule changed or one of its runs started or ended: schedule views read again. */
   scheduleTick: number;
+  /** The agent inbox's open items (results, messages, suggestions), newest first; null before the first read or on a server without one. */
+  inbox: InboxItem[] | null;
   serverPlugins: PluginInfo[];
   devPlugins: DevPluginInfo[];
   /** Bumped when a plugin folder loaded in the app changes on disk: its frames load again. */
@@ -51,13 +53,14 @@ export interface DataState {
   refreshModels(): Promise<void>;
   refreshSessions(): Promise<void>;
   refreshApprovals(): Promise<void>;
+  refreshInbox(): Promise<void>;
   refreshPlugins(): Promise<void>;
   rebuild(): void;
   upsertSession(m: SessionMeta): void;
 }
 
 export const useData = create<DataState>((set, get) => ({
-  me: null, config: null, models: [], providers: null, sessions: [], sessionsLoaded: false, approvals: [], scheduleTick: 0, serverPlugins: [], devPlugins: [], pluginEpochs: {}, grants: {},
+  me: null, config: null, models: [], providers: null, sessions: [], sessionsLoaded: false, approvals: [], scheduleTick: 0, inbox: null, serverPlugins: [], devPlugins: [], pluginEpochs: {}, grants: {},
   registry: buildRegistry([]),
   eventsMode: 'stopped',
   async refreshModels() {
@@ -73,6 +76,7 @@ export const useData = create<DataState>((set, get) => ({
     } catch { /* engine down: the gate says so */ }
   },
   async refreshApprovals() { try { set({ approvals: await client.approvals() }); } catch { /* engine down */ } },
+  async refreshInbox() { try { set({ inbox: (await client.inbox.list()).items }); } catch { /* engine down, or a server without an inbox */ } },
   async refreshPlugins() {
     const [serverPlugins, devPlugins, grants] = await Promise.all([client.plugins.list().catch(() => get().serverPlugins), desktop.devPlugins(), desktop.grants()]);
     set({ serverPlugins, devPlugins, grants });
@@ -220,6 +224,15 @@ export function applyGlobal(e: GlobalEvent): void {
         return;
       }
       if (p.level === 'error' || p.level === 'warn') toast(String(p.text ?? ''), { kind: p.level === 'error' ? 'error' : 'warning' });
+      return;
+    }
+    case 'inbox': {
+      // An item added or changed (read, snoozed, dismissed, done): the open list follows.
+      const item = p.item as InboxItem | undefined;
+      if (!item || !d.inbox) { void d.refreshInbox(); return; }
+      const open = (item.status === 'new' || item.status === 'read') && !(item.snoozedUntil && item.snoozedUntil > Date.now());
+      const rest = d.inbox.filter((x) => x.id !== item.id);
+      useData.setState({ inbox: open ? [item, ...rest].sort((a, b) => b.at - a.at) : rest });
       return;
     }
     case 'schedules': {

@@ -24,6 +24,11 @@ export interface Schedule {
   misfire?: 'once' | 'skip';
   /** The most one run may cost (USD): the run is stopped there. */
   maxCostUsd?: number;
+  /**
+   * How long a run waits for the person when it asks for approval or asks a question (it waits in their
+   * inbox), in minutes; then the safe answer (no). Default 480 (8 hours). A Don't ask session never asks.
+   */
+  askTimeoutMinutes?: number;
   /** Run once at this time (ms). */
   at?: number;
   /** The session the prompt goes to; absent: a new session each run, made from `newSession`. */
@@ -52,7 +57,8 @@ const MISFIRE_GRACE_MS = 3 * 60_000;
 const MAX_RUN_USD = 1000;
 
 /** The timing and limits a schedule may be made or changed with, checked. */
-function checkTiming(spec: { cron?: string; timeZone?: string; misfire?: string; maxCostUsd?: number }, now: number): void {
+function checkTiming(spec: { cron?: string; timeZone?: string; misfire?: string; maxCostUsd?: number; askTimeoutMinutes?: number }, now: number): void {
+  if (spec.askTimeoutMinutes !== undefined && !(Number.isInteger(spec.askTimeoutMinutes) && spec.askTimeoutMinutes >= 1 && spec.askTimeoutMinutes <= 7 * 1440)) throw new ScheduleError('askTimeoutMinutes is a whole number of minutes from 1 to 10080 (a week)');
   if (spec.timeZone !== undefined && !validTimeZone(spec.timeZone)) throw new ScheduleError(`"${spec.timeZone}" is not a time zone this server knows (e.g. Europe/Berlin, America/New_York, UTC)`);
   if (spec.misfire !== undefined && spec.misfire !== 'once' && spec.misfire !== 'skip') throw new ScheduleError('misfire is once or skip');
   if (spec.maxCostUsd !== undefined && !(Number.isFinite(spec.maxCostUsd) && spec.maxCostUsd > 0 && spec.maxCostUsd <= MAX_RUN_USD)) throw new ScheduleError(`maxCostUsd is a number of dollars above 0 and at most ${MAX_RUN_USD}`);
@@ -277,7 +283,7 @@ export class Scheduler {
 
   get(id: string): Schedule | undefined { return this.items.get(id); }
 
-  async create(spec: { owner?: string; title?: string; prompt: string; cron?: string; at?: number; inMinutes?: number; sessionId?: string; newSession?: Schedule['newSession']; plugin?: string; timeZone?: string; misfire?: 'once' | 'skip'; maxCostUsd?: number }, now = Date.now()): Promise<Schedule> {
+  async create(spec: { owner?: string; title?: string; prompt: string; cron?: string; at?: number; inMinutes?: number; sessionId?: string; newSession?: Schedule['newSession']; plugin?: string; timeZone?: string; misfire?: 'once' | 'skip'; maxCostUsd?: number; askTimeoutMinutes?: number }, now = Date.now()): Promise<Schedule> {
     const prompt = spec.prompt?.trim();
     if (!prompt) throw new ScheduleError('a schedule needs a prompt');
     if (prompt.length > 20_000) throw new ScheduleError('the prompt is limited to 20,000 characters');
@@ -291,7 +297,7 @@ export class Scheduler {
     const s: Schedule = {
       id: crypto.randomBytes(6).toString('hex'), owner: spec.owner, title: (spec.title?.trim() || prompt.split('\n')[0]!).slice(0, 80), prompt,
       ...(spec.cron ? { cron: spec.cron.trim() } : { at }), ...(spec.sessionId ? { sessionId: spec.sessionId } : { newSession: spec.newSession }),
-      ...(spec.cron && spec.timeZone ? { timeZone: spec.timeZone } : {}), ...(spec.misfire ? { misfire: spec.misfire } : {}), ...(spec.maxCostUsd ? { maxCostUsd: spec.maxCostUsd } : {}),
+      ...(spec.cron && spec.timeZone ? { timeZone: spec.timeZone } : {}), ...(spec.misfire ? { misfire: spec.misfire } : {}), ...(spec.maxCostUsd ? { maxCostUsd: spec.maxCostUsd } : {}), ...(spec.askTimeoutMinutes ? { askTimeoutMinutes: spec.askTimeoutMinutes } : {}),
       enabled: true, createdAt: now, nextRun, runs: 0, ...(spec.plugin ? { plugin: spec.plugin } : {}),
     };
     const made = await this.mutate(() => {
@@ -308,16 +314,16 @@ export class Scheduler {
    * URL (from Slack, a GitHub webhook, a phone shortcut). The token is returned once and
    * stored only as a hash.
    */
-  async createTrigger(spec: { owner?: string; title?: string; prompt: string; sessionId?: string; newSession?: Schedule['newSession']; maxCostUsd?: number }, now = Date.now()): Promise<{ schedule: Schedule; token: string }> {
+  async createTrigger(spec: { owner?: string; title?: string; prompt: string; sessionId?: string; newSession?: Schedule['newSession']; maxCostUsd?: number; askTimeoutMinutes?: number }, now = Date.now()): Promise<{ schedule: Schedule; token: string }> {
     const prompt = spec.prompt?.trim();
     if (!prompt) throw new ScheduleError('a trigger needs a prompt');
     if (!spec.sessionId && !spec.newSession) throw new ScheduleError('a trigger goes to a session, or makes a new one');
-    checkTiming({ maxCostUsd: spec.maxCostUsd }, now);
+    checkTiming({ maxCostUsd: spec.maxCostUsd, askTimeoutMinutes: spec.askTimeoutMinutes }, now);
     const token = `hwt_${crypto.randomBytes(24).toString('base64url')}`;
     const s: Schedule = {
       id: crypto.randomBytes(6).toString('hex'), owner: spec.owner, title: (spec.title?.trim() || prompt.split('\n')[0]!).slice(0, 80), prompt,
       ...(spec.sessionId ? { sessionId: spec.sessionId } : { newSession: spec.newSession }),
-      enabled: true, triggerHash: hashToken(token), createdAt: now, runs: 0, ...(spec.maxCostUsd ? { maxCostUsd: spec.maxCostUsd } : {}),
+      enabled: true, triggerHash: hashToken(token), createdAt: now, runs: 0, ...(spec.maxCostUsd ? { maxCostUsd: spec.maxCostUsd } : {}), ...(spec.askTimeoutMinutes ? { askTimeoutMinutes: spec.askTimeoutMinutes } : {}),
     };
     const made = await this.mutate(() => {
       if (this.list(spec.owner).length >= MAX_PER_OWNER) throw new ScheduleError(`at most ${MAX_PER_OWNER} schedules and triggers per person`);
@@ -343,7 +349,7 @@ export class Scheduler {
    * Changes a schedule's title, prompt, timing or limits (not where it runs). A new time recomputes the
    * next run; `null` clears an optional field (the time zone, the cost limit).
    */
-  async update(id: string, patch: { title?: string; prompt?: string; cron?: string; at?: number; inMinutes?: number; timeZone?: string | null; misfire?: 'once' | 'skip'; maxCostUsd?: number | null }, now = Date.now()): Promise<Schedule | undefined> {
+  async update(id: string, patch: { title?: string; prompt?: string; cron?: string; at?: number; inMinutes?: number; timeZone?: string | null; misfire?: 'once' | 'skip'; maxCostUsd?: number | null; askTimeoutMinutes?: number | null }, now = Date.now()): Promise<Schedule | undefined> {
     const cur = this.items.get(id);
     if (!cur) return undefined;
     const at = patch.at ?? (patch.inMinutes !== undefined ? now + Math.max(1, patch.inMinutes) * 60_000 : undefined);
@@ -357,7 +363,8 @@ export class Scheduler {
     const timeZone = patch.timeZone === null ? undefined : patch.timeZone ?? cur.timeZone;
     const maxCostUsd = patch.maxCostUsd === null ? undefined : patch.maxCostUsd ?? cur.maxCostUsd;
     const misfire = patch.misfire ?? cur.misfire;
-    checkTiming({ cron, timeZone, misfire, maxCostUsd }, now);
+    const askTimeoutMinutes = patch.askTimeoutMinutes === null ? undefined : patch.askTimeoutMinutes ?? cur.askTimeoutMinutes;
+    checkTiming({ cron, timeZone, misfire, maxCostUsd, askTimeoutMinutes }, now);
     const timing = !cur.triggerHash && (!!patch.cron || at !== undefined || patch.timeZone !== undefined);
     const nextRun = !timing ? cur.nextRun : cron ? nextCron(cron, now, timeZone) : at;
     if (timing && nextRun === undefined) throw new ScheduleError('that cron expression never matches');
@@ -375,6 +382,7 @@ export class Scheduler {
       }
       if (misfire) s.misfire = misfire; else delete s.misfire;
       if (maxCostUsd) s.maxCostUsd = maxCostUsd; else delete s.maxCostUsd;
+      if (askTimeoutMinutes) s.askTimeoutMinutes = askTimeoutMinutes; else delete s.askTimeoutMinutes;
       return s;
     });
     this.tell('changed', done);

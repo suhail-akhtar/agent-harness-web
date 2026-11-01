@@ -21,6 +21,19 @@
     cut off by a shutdown is interrupted, not "stopped by the person". A trigger's hash no longer leaves the server.
   - The app says schedules stop when the window closes (unless it keeps running in the tray) and when the computer
     restarts (unless it starts at login), with a button for each.
+- **The agent inbox** (proactive work, phase 2): the Inbox has Updates under "Waiting for you": a scheduled run's
+  result when it found something (failed or stopped ones as warnings), what an agent told the person (`notify_user`,
+  from any conversation), and work an agent offered during a scheduled run (a suggestion: Start or Dismiss). Each is
+  opened, marked read or unread, snoozed (an hour, until tomorrow) or dismissed with a reason (not useful, wrong, bad
+  timing, other); every response goes to `inbox-feedback.jsonl`. `GET /api/inbox`, `POST /api/inbox/:id`,
+  `POST /api/inbox/read-all`, an `inbox` event topic; the sidebar badge counts what waits and what is new. A run that
+  already told the person or offered work has no second update.
+- **Unattended runs wait instead of refusing**: a schedule can ask in the Inbox (edits allowed, or nothing allowed
+  without asking); a request then waits there for the hours it says (`askTimeoutMinutes`, default 8 hours), then gets
+  the safe answer (no) and the run goes on. Its record counts what it asked. A schedule's own conversations have
+  linked sessions, so work an agent offers there reaches the Inbox.
+- Settings and the Scheduled page say what the server refused inside the form, not in a toast that stays and covers
+  other dialogs.
 
 - **run_script works in the desktop app**: it started its helper with the app's own executable, which opened a
   second app (refused by the single-instance lock, exit 0) instead of running Node, so every call failed with

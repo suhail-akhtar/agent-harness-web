@@ -161,7 +161,7 @@ export interface HistoryPage { total?: number; after?: number; messages: Message
 export interface Approval { sessionId: string; requestId: string; kind: PendingRequest['kind']; /** The session's title. */ title?: string; summary?: string; tool?: string; at: number; request?: PendingRequest }
 
 /** The global stream (GET /api/events): `data:{seq,topic,payload}`. */
-export type EventTopic = 'sessions' | 'session' | 'approvals' | 'schedules' | 'plugins' | 'notices' | 'proposals' | 'linked' | 'artifacts' | 'chapters' | 'client';
+export type EventTopic = 'sessions' | 'session' | 'approvals' | 'schedules' | 'inbox' | 'plugins' | 'notices' | 'proposals' | 'linked' | 'artifacts' | 'chapters' | 'client';
 export interface GlobalEvent { seq: number; topic: EventTopic | string; payload: unknown }
 
 export interface Capabilities {
@@ -242,6 +242,14 @@ export interface Schedule {
   misfire?: 'once' | 'skip';
   /** The most one run may cost, in USD. */
   maxCostUsd?: number;
+  /** How long a run waits for the person when it asks (in their inbox), in minutes; then the safe answer. */
+  askTimeoutMinutes?: number;
+}
+/** What unattended work left for the person (GET /api/inbox). */
+export interface InboxItem {
+  id: string; kind: 'result' | 'message' | 'suggestion'; title: string; body: string; at: number; level: 'info' | 'warn' | 'error';
+  status: 'new' | 'read' | 'dismissed' | 'done'; sessionId?: string; scheduleId?: string; runId?: string; proposalId?: string;
+  readAt?: number; snoozedUntil?: number; resolvedAt?: number; reason?: 'not_useful' | 'wrong' | 'bad_timing' | 'other'; note?: string;
 }
 /** One run of a schedule or trigger (GET /api/schedules/:id/runs, /api/schedule-runs). */
 export interface ScheduleRun {
@@ -249,7 +257,7 @@ export interface ScheduleRun {
   startedAt: number; endedAt?: number;
   status: 'running' | 'completed' | 'failed' | 'stopped' | 'skipped' | 'interrupted';
   reason?: string; sessionId?: string; costUsd?: number; summary?: string;
-  tools?: number; actions?: number; notified?: boolean; noOp?: boolean;
+  tools?: number; actions?: number; notified?: boolean; noOp?: boolean; waited?: number;
 }
 export interface McpBundle { name: string; version: string; description?: string; installedAt?: number }
 export interface EffectiveSetting { key: string; value: unknown; source: 'default' | 'operator' | 'account' | 'project' | string; scope?: string; locked?: boolean; max?: number; layers?: Array<{ source: string; value: unknown }> }

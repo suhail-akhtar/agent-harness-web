@@ -32,12 +32,16 @@ export interface ScheduleRun {
   actions?: number;
   /** It told the person something (notify_user). */
   notified?: boolean;
+  /** Times it asked the person (approval, a question, a plan) and waited for them. */
+  waited?: number;
+  /** Work it offered the person (proposals: suggestions in their inbox). */
+  proposed?: number;
   /** The agent said nothing needs the person ([nothing to report]). */
   noOp?: boolean;
 }
 
 /** What the end of a run adds to its record. */
-export type RunEnd = Pick<ScheduleRun, 'status' | 'reason' | 'costUsd' | 'summary' | 'tools' | 'actions' | 'notified' | 'noOp'> & { endedAt?: number };
+export type RunEnd = Pick<ScheduleRun, 'status' | 'reason' | 'costUsd' | 'summary' | 'tools' | 'actions' | 'notified' | 'noOp' | 'waited' | 'proposed'> & { endedAt?: number };
 
 /** The words a scheduled agent ends its reply with when nothing needs the person. */
 export const NOTHING_TO_REPORT = '[nothing to report]';

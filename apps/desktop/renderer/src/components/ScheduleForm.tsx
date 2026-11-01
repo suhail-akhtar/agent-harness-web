@@ -2,7 +2,8 @@
  * A new schedule, or changes to one: what to do, when (a cron in a time zone, or once), where it runs - a
  * new conversation each time (its model and folder) or always the same conversation - and its limits (the
  * most one run may cost, and whether a run missed while the app was closed runs when it is back).
- * Scheduled conversations run without anyone watching, so they never wait on a question (Don't ask).
+ * Nobody watches a scheduled run: what needs approval is refused (Don't ask), or waits for the person in their
+ * inbox for a while and then gets the safe answer (no).
  */
 
 import React, { useMemo, useState } from 'react';
@@ -26,38 +27,45 @@ export function ScheduleForm({ edit, onDone }: { edit?: Schedule; onDone?: (s: S
     title: edit?.title ?? '', prompt: edit?.prompt ?? '', cron: edit?.cron ?? '', inMinutes: '',
     timeZone: edit?.timeZone ?? '', misfire: edit?.misfire ?? 'once', maxCostUsd: edit?.maxCostUsd ? String(edit.maxCostUsd) : '',
     target: 'new', sessionId: '', model: '', folder: SCRATCH,
+    asks: 'dontAsk', waitHours: edit?.askTimeoutMinutes ? String(edit.askTimeoutMinutes / 60) : '8',
   });
   const [busy, setBusy] = useState(false);
+  // What the server refused, shown in the form next to its button (a toast would outlive the form and cover other dialogs).
+  const [error, setError] = useState('');
   const zones = useMemo(() => ZONES.map((z) => <option key={z} value={z} />), []);
   const model = form.model || (models.some((m) => m.id === defaultModel) ? defaultModel : recommendedModel(models)?.id ?? models[0]?.id ?? '');
   const trigger = !!edit?.trigger;
   const when = form.cron.trim() ? { cron: form.cron.trim() } : form.inMinutes ? { inMinutes: Number(form.inMinutes) } : undefined;
   const cost = form.maxCostUsd.trim() ? Number(form.maxCostUsd) : undefined;
   const costOk = cost === undefined || (Number.isFinite(cost) && cost > 0);
-  const ready = !!form.prompt.trim() && costOk && (edit ? true : !!when && (form.target === 'new' ? !!model : !!form.sessionId));
+  const waitMin = Math.round(Number(form.waitHours) * 60);
+  const waitOk = Number.isFinite(waitMin) && waitMin >= 1 && waitMin <= 7 * 1440;
+  const waits = edit ? !!edit.sessionId || (edit.newSession?.mode ?? 'dontAsk') !== 'dontAsk' : form.target === 'existing' || form.asks !== 'dontAsk';
+  const ready = !!form.prompt.trim() && costOk && (!waits || waitOk) && (edit ? true : !!when && (form.target === 'new' ? !!model : !!form.sessionId));
   const limits = { ...(form.cron.trim() && form.timeZone.trim() ? { timeZone: form.timeZone.trim() } : {}), misfire: form.misfire as 'once' | 'skip' };
   const save = async () => {
     setBusy(true);
+    setError('');
     try {
       let s: Schedule;
       if (edit) {
         s = await client.schedules.update(edit.id, {
           title: form.title, prompt: form.prompt, ...(trigger ? {} : when ?? {}),
           ...(trigger ? {} : { timeZone: form.cron.trim() && form.timeZone.trim() ? form.timeZone.trim() : null, misfire: limits.misfire }),
-          maxCostUsd: cost ?? null,
+          maxCostUsd: cost ?? null, ...(waits ? { askTimeoutMinutes: waitMin } : {}),
         });
         toast('Saved', { kind: 'success' });
       } else {
         if (!when) return;
         const where = form.target === 'new'
-          ? { newSession: { model, runtime: 'local' as const, ...(form.folder === SCRATCH ? { path: await scratchFolder() } : { path: form.folder }), mode: 'dontAsk' as const } }
+          ? { newSession: { model, runtime: 'local' as const, ...(form.folder === SCRATCH ? { path: await scratchFolder() } : { path: form.folder }), mode: form.asks } }
           : { sessionId: form.sessionId };
-        s = await client.schedules.create({ title: form.title.trim() || undefined, prompt: form.prompt, ...when, ...where, ...limits, ...(cost ? { maxCostUsd: cost } : {}) });
+        s = await client.schedules.create({ title: form.title.trim() || undefined, prompt: form.prompt, ...when, ...where, ...limits, ...(cost ? { maxCostUsd: cost } : {}), ...(waits ? { askTimeoutMinutes: waitMin } : {}) });
         setForm({ ...form, title: '', prompt: '', cron: '', inMinutes: '', maxCostUsd: '' });
         toast('Scheduled', { kind: 'success' });
       }
       onDone?.(s);
-    } catch (e) { toast((e as Error).message, { kind: 'error' }); } finally { setBusy(false); }
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   };
   return (
     <div data-schedule-form={edit ? 'edit' : 'new'}>
@@ -97,7 +105,21 @@ export function ScheduleForm({ edit, onDone }: { edit?: Schedule; onDone?: (s: S
       <Field label="Spend limit per run (USD)" help="Empty: no limit of its own (the conversation's and the daily limits still apply)">
         <Input type="number" min={0.01} step={0.01} value={form.maxCostUsd} onChange={(e) => setForm({ ...form, maxCostUsd: e.target.value })} placeholder="e.g. 0.50" data-schedule-cost />
       </Field>
-      {!edit && <p className="mb-2 text-[12px] text-hx-muted">It runs without anyone watching: it never stops to ask (Don't ask), so anything that would need your approval is refused.</p>}
+      {!edit && form.target === 'new' && (
+        <Field label="When it needs your approval">
+          <Select value={form.asks} onChange={(v) => setForm({ ...form, asks: v })} options={[
+            { value: 'dontAsk', label: "Refuse it: never stop to ask (Don't ask)" },
+            { value: 'acceptEdits', label: 'Ask me in the Inbox; edits in its folder need no approval' },
+            { value: 'default', label: 'Ask me in the Inbox for edits and commands' },
+          ]} data-schedule-asks />
+        </Field>
+      )}
+      {waits && (
+        <Field label="Wait for my answer (hours)" help="Then it gets the safe answer (no) and goes on">
+          <Input type="number" min={0.1} step={0.5} value={form.waitHours} onChange={(e) => setForm({ ...form, waitHours: e.target.value })} data-schedule-wait />
+        </Field>
+      )}
+      {error && <p role="alert" className="mb-2 rounded-lg bg-hx-danger/10 px-3 py-2 text-[12.5px] text-hx-danger" data-schedule-error>{error}</p>}
       <div className="flex justify-end"><Button variant="primary" disabled={!ready || busy} onClick={() => void save()} data-schedule-create>{edit ? 'Save' : 'Schedule'}</Button></div>
     </div>
   );

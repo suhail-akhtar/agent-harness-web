@@ -54,7 +54,7 @@ function replanBadges() {
 globalBus.on((e) => { const p = (e.payload ?? {}) as { type?: string; plugin?: string }; if (e.topic === 'plugins' && p.type === 'signal' && typeof p.plugin === 'string') badges?.signal(p.plugin); });
 async function onReady() {
   const d = useData.getState();
-  await Promise.all([d.refreshModels(), d.refreshSessions(), d.refreshPlugins(), d.refreshApprovals()]);
+  await Promise.all([d.refreshModels(), d.refreshSessions(), d.refreshPlugins(), d.refreshApprovals(), d.refreshInbox()]);
   events?.stop();
   events = client.globalEvents(3000);
   events.on(applyGlobal);

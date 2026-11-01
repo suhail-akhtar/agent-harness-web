@@ -129,6 +129,8 @@ export interface SessionMeta {
   vaultNames?: string[];
   /** Started by a plugin (api.sessions.start): its name. */
   startedBy?: string;
+  /** Made by a schedule or trigger for its runs (each run a new conversation): its id. */
+  scheduleId?: string;
   /** Put away by its owner (hidden from the default list; nothing else changes). */
   archived?: boolean;
   /** Kept at the top of the owner's list. */
@@ -164,6 +166,14 @@ export interface SessionMeta {
 }
 
 export interface StoredEvent { seq: number; at: number; event: HarnessEvent }
+
+/** "8 hours", "30 minutes", "45 seconds". */
+export function waitText(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s % 3600 === 0 && s >= 3600) return `${s / 3600} hour${s === 3600 ? '' : 's'}`;
+  if (s % 60 === 0 && s >= 60) return `${s / 60} minute${s === 60 ? '' : 's'}`;
+  return `${s} second${s === 1 ? '' : 's'}`;
+}
 
 interface PendingRequest {
   kind: 'permission' | 'question' | 'plan' | 'approval';
@@ -430,7 +440,7 @@ export class Session {
     return r.kind === 'local' && r.path ? r.path : path.join(this.deps.dataDir, 'workspaces', this.meta.id);
   }
 
-  static async create(deps: SessionDeps, opts: { title?: string; model: string; effort?: Effort; mode?: PermissionMode; runtime: SessionMeta['runtime']; gitUrl?: string; owner?: string; allowHosts?: string[]; /** local with a path: work in a new git worktree of it. */ worktree?: boolean; /** A new worktree of this repository (from `base`, a commit), for any runtime but a companion: a linked session's own. */ worktreeOf?: { repo: string; base?: string }; /** default, concise, explanatory, or a workspace's or plugin's style by name. */ outputStyle?: string; /** The app the person uses (validated by cleanClient). */ client?: ClientDecl }): Promise<Session> {
+  static async create(deps: SessionDeps, opts: { title?: string; model: string; effort?: Effort; mode?: PermissionMode; runtime: SessionMeta['runtime']; gitUrl?: string; owner?: string; allowHosts?: string[]; /** local with a path: work in a new git worktree of it. */ worktree?: boolean; /** A new worktree of this repository (from `base`, a commit), for any runtime but a companion: a linked session's own. */ worktreeOf?: { repo: string; base?: string }; /** default, concise, explanatory, or a workspace's or plugin's style by name. */ outputStyle?: string; /** The app the person uses (validated by cleanClient). */ client?: ClientDecl; /** Made by this schedule for one of its runs. */ scheduleId?: string }): Promise<Session> {
     const model = deps.registry.model(opts.model);
     const id = crypto.randomBytes(8).toString('hex');
     if (opts.worktree) {
@@ -446,6 +456,7 @@ export class Session {
       mode: opts.mode ?? 'default', runtime: opts.runtime, createdAt: now, updatedAt: now,
       usage: emptyUsage(), cost: 0, byModel: {}, todos: [], contextStart: 0, compactions: 0, lastPromptTokens: 0, sessionRules: [], turns: 0,
       ...(opts.owner ? { owner: opts.owner } : {}),
+      ...(opts.scheduleId ? { scheduleId: opts.scheduleId } : {}),
       ...(opts.gitUrl ? { gitUrl: opts.gitUrl } : {}),
       // Rendered now and stored: the system prompt never changes under the session.
       ...(opts.client ? { client: opts.client, clientPrompt: clientPrompt(opts.client, { artifacts: true, purpose: serverPurpose(deps) }) } : {}),
@@ -631,6 +642,16 @@ export class Session {
   /** A limit on what the next turn may cost (a scheduled run's maxCostUsd): set before it starts, cleared after. */
   private runCap?: { usd: number; from: number };
   capNextTurn(usd: number | undefined): void { this.runCap = usd ? { usd, from: this.meta.cost } : undefined; }
+
+  /**
+   * The turn a schedule or trigger runs, with nobody watching: what it asks the person waits for them
+   * (in the inbox) for `askTimeoutMs`, then gets the safe answer (no); proposals it makes go to the inbox.
+   */
+  private unattended?: { scheduleId: string; askTimeoutMs?: number };
+  beginUnattended(o: { scheduleId: string; askTimeoutMs?: number }): void { this.unattended = o; }
+  endUnattended(): void { this.unattended = undefined; }
+  /** The schedule whose run this turn is, while it is one. */
+  get unattendedSchedule(): string | undefined { return this.unattended?.scheduleId; }
 
   /** Outside content is about to enter (a trigger's payload): the session counts as having read untrusted content. */
   markUntrusted(): void {
@@ -1452,7 +1473,8 @@ export class Session {
     const env = process.env.HARNESS_LINKED_SESSIONS;
     if (!this.deps.linked || env === 'off' || this.meta.runtime.kind === 'companion') return false;
     const mine = settings.linkedSessions?.enabled;
-    return env === 'on' || mine === true || (mine !== false && (this.meta.client?.kind === 'desktop' || this.meta.client?.kind === 'web'));
+    // A schedule's own conversations too: work it offers while nobody is watching goes to the person's inbox.
+    return env === 'on' || mine === true || (mine !== false && (this.meta.client?.kind === 'desktop' || this.meta.client?.kind === 'web' || !!this.meta.scheduleId));
   }
 
   /**
@@ -2469,10 +2491,20 @@ export class Session {
     fireHooks(this.settings, this.host, 'Notification', { type: kind, session: this.meta.id, title: this.meta.title, message: e.summary ?? e.question ?? e.message ?? e.title ?? kind, ...(e.tool ? { tool: e.tool } : {}) }, this.deps.registry.hooks, (m) => this.emit({ kind: 'notice', level: 'warn', text: m }));
     const bound = signal ?? this.abortCtl?.signal;
     const background = !!signal && signal !== this.abortCtl?.signal;
+    const waitMs = this.unattended?.askTimeoutMs;
     return new Promise((resolve) => {
       this.pending.set(event.requestId, { kind, resolve, event, background });
       this.setStatus('waiting');
       this.emit(event);
+      // A scheduled run waits for the person only so long; then the safe answer.
+      if (waitMs) {
+        const t = setTimeout(() => {
+          if (!this.pending.has(event.requestId)) return;
+          this.emit({ kind: 'notice', level: 'warn', text: `Nobody answered within ${waitText(waitMs)}: the request was refused.` });
+          this.respond(event.requestId, { decision: 'deny', feedback: `Nobody answered within ${waitText(waitMs)}: this runs on a schedule with nobody watching. Carry on without it if you can, and say in your reply what is left for the person.` });
+        }, waitMs);
+        t.unref?.();
+      }
       bound?.addEventListener('abort', () => {
         if (!this.pending.has(event.requestId)) return;
         if (background) this.respond(event.requestId, { decision: 'deny', feedback: 'The user interrupted.' });

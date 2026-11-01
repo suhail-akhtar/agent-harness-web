@@ -6,6 +6,7 @@ import path from 'node:path';
 import type { Effort } from '../core/models.ts';
 import { type Session, SessionElsewhereError, type SessionMeta } from '../core/session.ts';
 import type { Schedule } from '../core/scheduler.ts';
+import { InboxError } from '../core/inbox.ts';
 import { type LeaseRecord, leaseUrlSig } from '../util/lease.ts';
 import type { PermissionMode } from '../core/types.ts';
 import type { Harness } from '../kernel/harness.ts';
@@ -1267,7 +1268,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
           if (real && !o.localRoots.some((r) => real === r || real.startsWith(r + path.sep))) throw new HttpError(400, 'That folder is not under HARNESS_LOCAL_ROOTS.');
           if (real) ns.path = real;
         }
-        const timing = { ...(typeof b.timeZone === 'string' && b.timeZone ? { timeZone: b.timeZone } : {}), ...(b.misfire === 'once' || b.misfire === 'skip' ? { misfire: b.misfire as 'once' | 'skip' } : {}), ...(b.maxCostUsd !== undefined && b.maxCostUsd !== null && b.maxCostUsd !== '' ? { maxCostUsd: Number(b.maxCostUsd) } : {}) };
+        const timing = { ...(typeof b.timeZone === 'string' && b.timeZone ? { timeZone: b.timeZone } : {}), ...(b.misfire === 'once' || b.misfire === 'skip' ? { misfire: b.misfire as 'once' | 'skip' } : {}), ...(b.maxCostUsd !== undefined && b.maxCostUsd !== null && b.maxCostUsd !== '' ? { maxCostUsd: Number(b.maxCostUsd) } : {}), ...(b.askTimeoutMinutes !== undefined && b.askTimeoutMinutes !== null && b.askTimeoutMinutes !== '' ? { askTimeoutMinutes: Number(b.askTimeoutMinutes) } : {}) };
         const newSession = ns ? {
           model: String(ns.model ?? registry.listModels().find((m) => m.available)?.id ?? ''),
           runtime: { kind: (ns.runtime === 'local' ? 'local' : 'docker') as SessionMeta['runtime']['kind'], network: (ns.network === 'full' ? 'full' : ns.network === 'allowlist' ? 'allowlist' : 'none') as SessionMeta['runtime']['network'], ...(typeof ns.path === 'string' && ns.path ? { path: ns.path } : {}) },
@@ -1276,7 +1277,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         try {
           if (b.trigger === true) {
             // The URL is shown once: only its hash is kept.
-            const t = await scheduler.createTrigger({ owner: me.id, title: typeof b.title === 'string' ? b.title : undefined, prompt: String(b.prompt ?? ''), sessionId, newSession, ...(timing.maxCostUsd !== undefined ? { maxCostUsd: timing.maxCostUsd } : {}) });
+            const t = await scheduler.createTrigger({ owner: me.id, title: typeof b.title === 'string' ? b.title : undefined, prompt: String(b.prompt ?? ''), sessionId, newSession, ...(timing.maxCostUsd !== undefined ? { maxCostUsd: timing.maxCostUsd } : {}), ...(timing.askTimeoutMinutes !== undefined ? { askTimeoutMinutes: timing.askTimeoutMinutes } : {}) });
             const base = process.env.HARNESS_PUBLIC_URL?.replace(/\/+$/, '') || `http://${req.headers.host ?? '127.0.0.1'}`;
             return send(res, 201, { ...view(t.schedule), token: t.token, url: `${base}/api/triggers/${t.token}` });
           }
@@ -1300,6 +1301,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
             ...(nul('timeZone') ? { timeZone: null } : typeof b.timeZone === 'string' ? { timeZone: b.timeZone } : {}),
             ...(b.misfire === 'once' || b.misfire === 'skip' ? { misfire: b.misfire } : {}),
             ...(nul('maxCostUsd') ? { maxCostUsd: null } : b.maxCostUsd !== undefined ? { maxCostUsd: Number(b.maxCostUsd) } : {}),
+            ...(nul('askTimeoutMinutes') ? { askTimeoutMinutes: null } : b.askTimeoutMinutes !== undefined ? { askTimeoutMinutes: Number(b.askTimeoutMinutes) } : {}),
           })));
         } catch (e) { throw new HttpError(400, (e as Error).message); }
       }
@@ -1433,6 +1435,38 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         }
       }
       return send(res, 200, out.sort((x, y) => Number(y.updatedAt) - Number(x.updatedAt)).slice(0, limit));
+    }
+
+    // ---- the agent inbox: results of unattended runs, what agents told the person, suggestions ----
+    if (p === '/api/inbox' && method === 'GET') {
+      await harness.inbox.sync();
+      const view = url.searchParams.get('view') === 'all' ? 'all' : 'open';
+      return send(res, 200, { items: harness.inbox.list(me.id, { view }).slice(0, 300), unread: harness.inbox.unread(me.id) });
+    }
+    if (p === '/api/inbox/read-all' && method === 'POST') {
+      await harness.inbox.sync(true);
+      return send(res, 200, { read: await harness.inbox.readAll(me.id) });
+    }
+    const ib = /^\/api\/inbox\/(in_[a-f0-9]{12})$/.exec(p);
+    if (ib && method === 'POST') {
+      await harness.inbox.sync(true);
+      const item = harness.inbox.get(ib[1]!);
+      // Only its owner's (an administrator does not read someone's inbox for them).
+      if (!item || !ownsIt(me, item.owner)) throw new HttpError(404, 'No such inbox item.');
+      const b = await readJson(req);
+      const action = String(b.action ?? '');
+      if (!['read', 'unread', 'open', 'snooze', 'dismiss'].includes(action)) throw new HttpError(400, 'action is read, unread, open, snooze or dismiss');
+      let done;
+      try {
+        done = await harness.inbox.act(item.id, action as 'read', { ...(typeof b.reason === 'string' ? { reason: b.reason } : {}), ...(typeof b.note === 'string' ? { note: b.note } : {}), ...(typeof b.until === 'number' ? { until: b.until } : {}) });
+      } catch (e) { if (e instanceof InboxError) throw new HttpError(400, e.message); throw e; }
+      // Dismissing a suggestion declines its proposal too (after the item, so its reason is the one kept).
+      // Starting one is POST /api/proposals/:id/start.
+      if (action === 'dismiss' && item.proposalId) {
+        const prop = await sessions.linked.proposal(item.proposalId);
+        if (prop?.status === 'open') await sessions.linked.dismiss(prop.id).catch(() => {});
+      }
+      return send(res, 200, done);
     }
 
     // ---- proposals: sessions an agent offered to start; the owner starts or dismisses them ----

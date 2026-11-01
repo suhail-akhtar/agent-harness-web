@@ -216,11 +216,19 @@ test('desktop app end to end: proactive work', { timeout: 10 * 60_000 }, async (
       await page.fill('[data-schedule-prompt]', 'too often');
       await page.fill('[data-schedule-cron]', '* * * * *');
       await page.click('[data-schedule-create]');
-      await toastWith('a schedule may run at most every 5 minutes');
+      await page.waitForSelector('[data-schedule-form="new"] [data-schedule-error]');
+      assert.match(await page.locator('[data-schedule-error]').innerText(), /a schedule may run at most every 5 minutes/);
+      // Said in the form, not in a toast that would stay and cover other dialogs.
+      assert.equal(await page.locator('[data-toast="error"]').count(), 0);
       assert.equal(await page.locator('[data-schedule-form="new"]').count(), 1, 'the form stays open to fix it');
       await page.keyboard.press('Escape');
       await page.waitForSelector('[data-schedule-form="new"]', { state: 'detached' });
       assert.equal(((await api('GET', '/api/schedules')).body as unknown[]).length, 2);
+      // Opened again, the form starts without the old error.
+      await page.click('[data-scheduled] [data-schedule-new]');
+      await page.waitForSelector('[data-schedule-form="new"]');
+      assert.equal(await page.locator('[data-schedule-error]').count(), 0);
+      await page.keyboard.press('Escape');
     });
 
     await step('phase 1: a run that finds nothing is marked so and stays quiet; a run over its spend limit stops and says so', async () => {
@@ -247,10 +255,110 @@ test('desktop app end to end: proactive work', { timeout: 10 * 60_000 }, async (
     await step('phase 1: Activity lists the latest scheduled runs across schedules', async () => {
       await page.click('[data-nav="core.activity:activity"]');
       await page.waitForSelector('[data-activity] [data-recent-runs] [data-run]');
-      const rows = await page.$$eval('[data-recent-runs] [data-run]', (els) => els.map((e) => [e.getAttribute('data-run-status'), e.textContent ?? '']));
+      const rows = await page.$$eval('[data-recent-runs] [data-run]', (els) => els.map((e) => [e.getAttribute('data-run-status') ?? '', e.textContent ?? ''] as const));
       assert.equal(rows.length, 4);
       assert.match(rows[0]![1], /Costly job/, 'newest first');
       assert.deepEqual(rows.map((r) => r[0]), ['stopped', 'completed', 'completed', 'completed']);
+    });
+
+    const update = (sel: string) => page.locator(`[data-inbox-updates] [data-update]${sel}`);
+    const updateWith = (text: string) => page.locator('[data-inbox-updates] [data-update]', { hasText: text });
+    const inboxApi = async (view = 'open') => ((await api('GET', `/api/inbox?view=${view}`)).body as { items: Array<{ id: string; kind: string; title: string; body: string; level: string; status: string; reason?: string; snoozedUntil?: number }>; unread: number });
+
+    await step('phase 2: the Inbox has the updates unattended work left: what the agent told you, each run that found something (a stopped one as a warning), not the one that found nothing; the sidebar counts the new ones', async () => {
+      await page.click('[data-nav="core.inbox:inbox"]');
+      await page.waitForSelector('[data-inbox] [data-inbox-updates] [data-update]');
+      const box = await inboxApi();
+      const titles = box.items.map((i) => `${i.kind}:${i.title}`);
+      assert.ok(titles.includes('message:Scheduled: Build check'), titles.join(', '));
+      assert.ok(titles.includes('result:Into release notes') && titles.includes('result:Costly job'), titles.join(', '));
+      assert.ok(!titles.includes('result:Build check'), 'that run told the person already: its result is not a second update');
+      assert.ok(!titles.some((t) => t.includes('Quiet check')), 'nothing to report: no update');
+      assert.equal(box.items.find((i) => i.title === 'Costly job')!.level, 'warn');
+      assert.equal(await updateWith('The build is green.').count(), 1);
+      assert.equal(await page.locator('[data-inbox-updates] [data-update][data-update-status="new"]').count(), box.unread);
+      assert.equal(await page.locator('[data-badge="core.inbox.badge"]').first().innerText(), String(box.unread), 'the sidebar counts the new updates');
+      assert.equal(await page.locator('[data-inbox-nothing-waiting]').count(), 1, 'nothing waiting for an answer');
+      await shot('inbox-updates');
+    });
+
+    await step('phase 2: an update is read and unread again, snoozed out of sight, dismissed with a reason; the reason is kept', async () => {
+      const msg = updateWith('The build is green.');
+      await msg.locator('[data-update-read]').click();
+      await page.waitForFunction(() => document.querySelector('[data-inbox-updates] [data-update][data-update-kind="message"]')?.getAttribute('data-update-status') === 'read');
+      await msg.locator('[data-update-unread]').click();
+      await page.waitForFunction(() => document.querySelector('[data-inbox-updates] [data-update][data-update-kind="message"]')?.getAttribute('data-update-status') === 'new');
+      const release = updateWith('Into release notes');
+      await release.locator('[data-update-snooze]').click();
+      await page.click('[role="menuitem"]:has-text("For an hour")');
+      await updateWith('Into release notes').waitFor({ state: 'detached' });
+      const snoozed = (await inboxApi('all')).items.find((i) => i.title === 'Into release notes')!;
+      assert.ok(snoozed.snoozedUntil! > Date.now() + 50 * 60_000, 'about an hour');
+      await updateWith('Costly job').locator('[data-update-dismiss]').click();
+      await page.click('[role="menuitem"]:has-text("Not useful")');
+      await updateWith('Costly job').waitFor({ state: 'detached' });
+      const gone = (await inboxApi('all')).items.find((i) => i.title === 'Costly job')!;
+      assert.deepEqual([gone.status, gone.reason], ['dismissed', 'not_useful']);
+    });
+
+    await step('phase 2: work an agent offered during a scheduled run is a suggestion in the Inbox; Start opens it as a conversation and the suggestion is done', async () => {
+      const made = (await api('POST', '/api/schedules', { title: 'Repo triage', prompt: 'offer what to fix', inMinutes: 60, newSession: { model: 'deepseek-flash', runtime: 'local', path: scratch, mode: 'bypass' } })).body as { id: string };
+      assert.equal((await api('POST', `/api/schedules/${made.id}/run`)).status, 200);
+      const sug = update('[data-update-kind="suggestion"]');
+      await sug.waitFor({ timeout: 20_000 });
+      assert.match(await sug.innerText(), /Fix the flaky test[\s\S]*Fix the flaky test in parser\.test\.ts\./);
+      await shot('inbox-suggestion', sug);
+      await sug.locator('[data-update-start]').click();
+      await page.waitForSelector('[data-session]');
+      const child = (await page.getAttribute('[data-session]', 'data-session'))!;
+      const sessions = (await api('GET', '/api/sessions')).body as Array<{ id: string; title: string; parent?: string }>;
+      assert.equal(sessions.find((x) => x.id === child)!.title, 'Fix the flaky test');
+      const done = (await inboxApi('all')).items.find((i) => i.kind === 'suggestion')!;
+      assert.equal(done.status, 'done');
+    });
+
+    await step('phase 2: a schedule that asks in the Inbox: its run waits for approval there (not refused), goes on when approved, and its record says it asked', async () => {
+      await page.click('[data-nav="core.scheduled:scheduled"]');
+      await page.click('[data-scheduled] [data-schedule-new]');
+      await page.waitForSelector('[data-schedule-form="new"]');
+      await page.fill('[data-schedule-title]', 'Nightly deploy');
+      await page.fill('[data-schedule-prompt]', 'deploy the site');
+      await page.fill('[data-schedule-cron]', '0 2 * * *');
+      await page.locator('[data-schedule-asks]').selectOption('acceptEdits');
+      await page.fill('[data-schedule-wait]', '2');
+      await shot('schedules-form-asks', page.locator('[role="dialog"]').last());
+      const btn = page.locator('[data-schedule-create]');
+      assert.equal(await btn.isDisabled(), false, `the form is ready: ${JSON.stringify(await btn.boundingBox())}`);
+      await btn.click();
+      await page.waitForSelector('[data-schedule-form="new"]', { state: 'detached' });
+      const s = ((await api('GET', '/api/schedules')).body as Array<{ id: string; title: string; askTimeoutMinutes?: number; newSession?: { mode: string } }>).find((x) => x.title === 'Nightly deploy')!;
+      assert.deepEqual([s.askTimeoutMinutes, s.newSession?.mode], [120, 'acceptEdits']);
+      await page.click(`[data-schedule="${s.id}"] button[aria-label="Run now"]`);
+      await page.click('[data-nav="core.inbox:inbox"]');
+      const card = await page.waitForSelector('[data-inbox] [data-pending="permission_request"]', { timeout: 20_000 });
+      assert.match(await card.innerText(), /node -e/);
+      await shot('inbox-scheduled-approval');
+      const running = ((await api('GET', `/api/schedules/${s.id}/runs`)).body as Array<{ status: string }>)[0]!;
+      assert.equal(running.status, 'running', 'it waits, it is not refused');
+      await (await card.$('[data-decision="allow"]'))!.click();
+      await page.waitForSelector('[data-inbox] [data-pending]', { state: 'detached', timeout: 15_000 });
+      const end = Date.now() + 20_000;
+      let run: { status: string; waited?: number; summary?: string } = running;
+      while (run.status === 'running' && Date.now() < end) { await page.waitForTimeout(300); run = ((await api('GET', `/api/schedules/${s.id}/runs`)).body as typeof run[])[0]!; }
+      assert.deepEqual([run.status, run.waited, run.summary], ['completed', 1, 'Deployed: the command printed 42.']);
+      await page.click('[data-nav="core.scheduled:scheduled"]');
+      await page.click(`[data-schedule="${s.id}"] [data-schedule-toggle]`);
+      await page.waitForSelector(`[data-runs="${s.id}"] [data-run-waited]`);
+      assert.match(await page.locator(`[data-runs="${s.id}"] [data-run]`).first().innerText(), /asked you once/);
+    });
+
+    await step('phase 2: Mark all read clears the new count; the sidebar badge follows', async () => {
+      await page.click('[data-nav="core.inbox:inbox"]');
+      await page.waitForSelector('[data-inbox-updates] [data-updates-read-all]');
+      await page.click('[data-inbox-updates] [data-updates-read-all]');
+      await page.waitForFunction(() => !document.querySelector('[data-inbox-updates] [data-update][data-update-status="new"]'));
+      assert.equal((await inboxApi()).unread, 0);
+      await page.waitForFunction(() => { const b = document.querySelector('[data-badge="core.inbox.badge"]'); return !b || (b.textContent ?? '').trim() === '' || (b.textContent ?? '').trim() === '0'; });
     });
 
     await step('no errors in the window', async () => {

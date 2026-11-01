@@ -4,6 +4,8 @@
 //   "notify"   -> notify_user ("The build is green."), then a short report
 //   "quiet"    -> "All quiet." and [nothing to report]
 //   "costly"   -> three expensive steps (a large usage each): a run with a spend limit stops
+//   "deploy"   -> a command asked about (node -e ...), then "Deployed."
+//   "offer"    -> offers work (start_session own_initiative: "Fix the flaky test"), then "Offered a fix."
 //   anything else -> a short reply
 import path from 'node:path';
 import { createHarness } from '../../../src/kernel/harness.ts';
@@ -30,6 +32,14 @@ export const SCRIPTS: Record<string, Step[]> = {
     { text: 'Checked the build and told you: it is green.' },
   ],
   quiet: [{ text: 'All quiet. [nothing to report]' }],
+  deploy: [
+    { calls: [{ name: 'bash', input: { command: 'node -e "console.log(40 + 2)"' } }] },
+    { text: 'Deployed: the command printed 42.' },
+  ],
+  offer: [
+    { calls: [{ name: 'start_session', input: { title: 'Fix the flaky test', prompt: 'Fix the flaky test in parser.test.ts.', context: 'fresh', initiation: 'own_initiative', share_workspace: true } }] },
+    { text: 'Offered a fix for the flaky test.' },
+  ],
   costly: [
     { calls: [{ name: 'glob', input: { pattern: '*' } }], costly: true },
     { calls: [{ name: 'glob', input: { pattern: '*' } }], costly: true },

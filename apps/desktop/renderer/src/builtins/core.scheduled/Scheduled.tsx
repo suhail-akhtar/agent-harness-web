@@ -63,6 +63,7 @@ export function RunRow({ run, showTitle }: { run: ScheduleRun; showTitle?: boole
           {run.costUsd !== undefined && run.costUsd > 0 && <span>· {money(run.costUsd)}</span>}
           {run.by !== 'schedule' && <span>· {run.by === 'manual' ? 'run now' : 'trigger'}</span>}
           {run.notified && <span className="inline-flex items-center gap-0.5">· <Icon name="bell" size={11} /> told you</span>}
+          {!!run.waited && <span data-run-waited>· asked you {run.waited === 1 ? 'once' : `${run.waited} times`}</span>}
         </div>
         {text && <div className="mt-0.5 line-clamp-2 text-hx-secondary" data-run-summary>{text}</div>}
       </div>

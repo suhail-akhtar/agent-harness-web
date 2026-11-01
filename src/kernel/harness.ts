@@ -23,12 +23,18 @@ import { CompanionHub } from '../runtime/companion.ts';
 import { Scheduler } from '../core/scheduler.ts';
 import { NOTHING_TO_REPORT } from '../core/schedule-runs.ts';
 import { followRun } from '../core/schedule-track.ts';
+import { InboxStore } from '../core/inbox.ts';
+
+/** How long a scheduled run waits for the person when it asks (minutes) unless its schedule says. */
+const DEFAULT_ASK_MINUTES = Number(process.env.HARNESS_SCHEDULE_ASK_MINUTES ?? 480);
 import { type InstalledMcpb, installedMcpb, installMcpb, McpbError, saveInstalled } from '../mcp/mcpb.ts';
 import { sandboxCredentials as sandboxCredentials_ } from '../runtime/credentials.ts';
 import { BUILTIN_TOOLS } from '../tools/index.ts';
 import { BUILTIN_SEARCH, makeSearchService, setKimiTools, type SearchService } from '../research/search.ts';
 import { Registry, type LoadedPlugin, type PluginParts } from './registry.ts';
 import type { Tool } from '../tools/types.ts';
+import type { Session } from '../core/session.ts';
+import type { HarnessEvent } from '../core/types.ts';
 import { VaultStore } from '../vault/store.ts';
 import { createBridge, type PluginBridge } from '../plugins/host.ts';
 import { type PluginUi, readPluginUi } from '../plugins/ui.ts';
@@ -163,6 +169,8 @@ export interface Harness {
   mcp: McpManager;
   /** Scheduled prompts (absent when turned off). */
   scheduler?: Scheduler;
+  /** The agent inbox: results of unattended runs, what agents told the person, suggestions; their responses. */
+  inbox: InboxStore;
   /** The key vault (absent when turned off). */
   vault?: VaultStore;
   /** Several servers on one data folder (absent: a single server). */
@@ -920,7 +928,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       }
       let session = s.sessionId ? mgr.get(s.sessionId) : undefined;
       if (s.sessionId && !session) return { result: 'not run: its session no longer exists' };
-      if (!session && s.newSession) session = await mgr.create({ title: `Scheduled: ${s.title}`, model: s.newSession.model, runtime: s.newSession.runtime, mode: s.newSession.mode ?? 'dontAsk', owner: s.owner });
+      if (!session && s.newSession) session = await mgr.create({ title: `Scheduled: ${s.title}`, model: s.newSession.model, runtime: s.newSession.runtime, mode: s.newSession.mode ?? 'dontAsk', owner: s.owner, scheduleId: s.id });
       if (!session) return { result: 'not run: no session' };
       if (session.status !== 'idle') return { sessionId: session.meta.id, result: 'skipped: the session was busy' };
       // What a trigger brought from outside is data, fenced, and the session now counts as having read untrusted content.
@@ -929,15 +937,18 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
       // The run is followed to the end of its turn: how it ended, its cost, what it said and did.
       const from = session.lastSeq, costBefore = session.meta.cost;
       session.capNextTurn(s.maxCostUsd);
+      // Nobody is watching: what it asks waits in the person's inbox so long, then gets the safe answer.
+      session.beginUnattended({ scheduleId: s.id, askTimeoutMs: (s.askTimeoutMinutes ?? DEFAULT_ASK_MINUTES) * 60_000 });
       try {
         await session.send(`(${s.triggerHash ? 'Triggered' : 'Scheduled'} task "${s.title}", run ${s.runs + 1}. Nobody is watching: if, when you finish, nothing needs the person's attention, end your reply with ${NOTHING_TO_REPORT}.)\n\n${s.prompt}${extra}`);
       } catch (e) {
         session.capNextTurn(undefined);
+        session.endUnattended();
         if (e instanceof SessionElsewhereError) return { sessionId: session.meta.id, result: `skipped: the session was busy (on server ${e.holder.owner})` };
         throw e;
       }
       const kindOf = (name: string) => BUILTIN_TOOLS.find((t) => t.spec.name === name)?.kind ?? registry.tools.get(name)?.kind;
-      const finished = followRun(session, from, costBefore, kindOf).finally(() => session.capNextTurn(undefined));
+      const finished = followRun(session, from, costBefore, kindOf).finally(() => { session.capNextTurn(undefined); session.endUnattended(); });
       return { sessionId: session.meta.id, result: 'started', finished };
     },
   }, log);
@@ -946,7 +957,18 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   await scheduler?.load();
   late.leases = leases;
   late.vault = vault;
-  if (scheduler) scheduler.onEvent = (type, s, run) => events.scheduleEvent(type, s, run);
+  // The agent inbox: what work done without the person watching left for them.
+  const inbox = await new InboxStore(opts.dataDir).load();
+  inbox.onChange = (type, item) => events.inboxEvent(type, item);
+  if (scheduler) scheduler.onEvent = (type, s, run) => {
+    events.scheduleEvent(type, s, run);
+    // A run that ended with something for the person is a result in their inbox: not one that found nothing,
+    // and not a completed one that already reached them (what it told them, or work it offered, is there).
+    const r = run?.record;
+    if (type === 'ended' && r && !(r.status === 'completed' && (r.noOp || r.notified || r.proposed))) {
+      void inbox.add({ kind: 'result', owner: s.owner, title: s.title, body: r.status === 'completed' ? r.summary || 'Done.' : r.reason ?? r.status, level: r.status === 'completed' ? 'info' : r.status === 'failed' ? 'error' : 'warn', scheduleId: s.id, runId: r.id, ...(r.sessionId ? { sessionId: r.sessionId } : {}) }).catch((e: Error) => log(`inbox: ${e.message}`));
+    }
+  };
   // A schedule made for a plugin (by a session the plugin started) is skipped while the plugin is off.
   if (scheduler) scheduler.pluginOff = (s) => {
     const p = s.plugin ?? (s.sessionId ? sessionsRef?.get(s.sessionId)?.meta.startedBy : undefined);
@@ -975,9 +997,21 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   });
   registry.keySource = (id) => providerKeys.get(id);
   registry.baseUrlFor = (id) => providerKeys.baseUrl(id);
+  /** What a session leaves in its owner's inbox: what the agent told them, and work it offered while nobody was watching. */
+  function inboxFromSession(s: Session, e: HarnessEvent): void {
+    const add = (spec: Parameters<InboxStore['add']>[0]) => { void inbox.add(spec).catch((err: Error) => log(`inbox: ${err.message}`)); };
+    const scheduleId = s.unattendedSchedule;
+    if (e.kind === 'notice' && e.notify) add({ kind: 'message', owner: s.meta.owner, title: s.meta.title, body: e.text.replace(/^The agent says: /, ''), sessionId: s.meta.id, ...(scheduleId ? { scheduleId } : {}) });
+    else if (e.kind === 'session_proposal' && scheduleId) add({ kind: 'suggestion', owner: s.meta.owner, title: e.title, body: e.brief, sessionId: s.meta.id, scheduleId, proposalId: e.id });
+    else if (e.kind === 'proposal_resolved') {
+      // Started or dismissed from its card (or it expired): its inbox item follows.
+      const it = inbox.byProposal(e.id);
+      if (it && (it.status === 'new' || it.status === 'read')) void inbox.act(it.id, e.status === 'started' ? 'done' : 'dismiss').catch(() => {});
+    }
+  }
   const sessions = new SessionManager({
     dataDir: opts.dataDir, companions, registry, mcp, onSpan: otel ? (sid, span) => otel.record(sid, span) : undefined,
-    onEvent: (s, e) => { bridge.dispatch(s, e); events.fromSession(s, e); }, onLifecycle: (type, s) => events.sessionChanged(type, s), changes: bridge.changes,
+    onEvent: (s, e) => { bridge.dispatch(s, e); events.fromSession(s, e); inboxFromSession(s, e); }, onLifecycle: (type, s) => events.sessionChanged(type, s), changes: bridge.changes,
     memory: { root: path.resolve(opts.memoryDir ?? path.join(opts.dataDir, 'memory')), mode: memoryMode }, search, ...(opts.denyUrls?.length ? { denyUrls: opts.denyUrls } : {}), spend: opts.spend,
     publish: opts.publish === null ? undefined : opts.publish ?? publishFromEnv(),
     sandboxCredentials, scheduler, vault, leases,
@@ -1029,7 +1063,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   }
 
   return {
-    registry, sessions, companions, mcp, scheduler, vault, dataDir: opts.dataDir, search: search?.backend, bridge, plugins, events, providerKeys, clients, data,
+    registry, sessions, companions, mcp, scheduler, inbox, vault, dataDir: opts.dataDir, search: search?.backend, bridge, plugins, events, providerKeys, clients, data,
     ...(leases ? { cluster: { id: leases.owner, url: leases.url, leases, ...(clusterCfg?.secret ? { secret: clusterCfg.secret } : {}), ...(clusterCfg?.peers ? { peers: clusterCfg.peers } : {}) } } : {}),
     mcpb: {
       list: () => installedMcpb(mcpbRoot),

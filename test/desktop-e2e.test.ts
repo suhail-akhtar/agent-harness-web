@@ -166,8 +166,8 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       assert.equal(await page.evaluate(() => localStorage.getItem('draft:home')), null, 'the new-chat draft is cleared once sent');
       const card = await page.waitForSelector('[data-attention] [data-pending="permission_request"]', { timeout: 30_000 });
       assert.match(await card.innerText(), /write/);
-      await page.waitForSelector('[data-badge="core.inbox.pending"]', { timeout: 15_000 });
-      assert.equal(await page.locator('[data-badge="core.inbox.pending"]').first().innerText(), '1');
+      await page.waitForSelector('[data-badge="core.inbox.badge"]', { timeout: 15_000 });
+      assert.equal(await page.locator('[data-badge="core.inbox.badge"]').first().innerText(), '1');
       await shot('chat-pending-approval');
       await page.click('[data-nav="core.inbox:inbox"]');
       const item = await page.waitForSelector('[data-inbox] [data-pending="permission_request"]', { timeout: 15_000 });

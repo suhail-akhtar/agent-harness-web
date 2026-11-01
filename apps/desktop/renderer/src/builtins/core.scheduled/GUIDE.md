@@ -9,9 +9,18 @@ description: Schedules and triggers - prompts that run later, at set times or wh
 
 Work that runs without the person typing it: "every weekday at 9, summarise the overnight build",
 "in 20 minutes, see whether the deploy finished", or a trigger URL another system calls. Each run
-goes to a new conversation (its model and folder) or always the same one, runs with nobody watching
-(Don't ask: anything that needs approval is refused), and is written down: how it ended, how long it
-took, what it cost, a line of what it said, and its conversation.
+goes to a new conversation (its model and folder) or always the same one, runs with nobody watching,
+and is written down: how it ended, how long it took, what it cost, a line of what it said, and its
+conversation. What needs approval is refused (Don't ask), or waits for the person in their Inbox
+(for the hours the schedule says, then the safe answer, no).
+
+## The Inbox
+
+What unattended work leaves for the person is in the Inbox (`core.inbox:inbox`), under "Updates": a
+run's result when it found something (a failed or stopped run as a warning), what an agent told them
+(`notify_user`), and work an agent offered during a run (`start_session` with own_initiative: a
+suggestion they start or dismiss). Requests a run waits on are under "Waiting for you". A run that
+already told them, or offered work, has no separate result.
 
 ## The tools behind it (in this session)
 
