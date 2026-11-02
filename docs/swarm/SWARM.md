@@ -75,6 +75,37 @@ consistent with a true miss rate up to about 28% at 95% confidence; "under 1%" n
 - **Calibration on the person's own work**: the same scorecard on their past delegations (with the outcomes the person
   confirmed), so thresholds fit their tasks.
 
+### Phase 1c: the swarm governor (controllable replication)
+
+Agents that start agents that start agents, for work too big for one: powerful only if the person keeps control, so
+the agents never decide their own limits. Every spawn, at any depth, is a request to the harness's governor, granted
+under a **charter** the person (or the root lead, within the person's settings) sets for the run:
+- **The charter**: at most N agents in all and M at once, a depth, a spend and a time for the whole tree, the machines
+  it may use (phase 7), the kinds of work (read-only, writing, network) and the stakes. A child's share never exceeds
+  its parent's remainder; constraints only tighten down the tree (as done criteria already do).
+- **Leases, not lives**: each agent holds a lease from the governor, renewed while its parent's run lives; no renewal,
+  it stops. Nothing in a swarm outlives its run or persists itself: swarm agents cannot schedule themselves, create
+  companions or tokens, change settings, permissions or hooks, or install anything to start later (tool policy, not
+  instructions).
+- **One stop for everything**: a kill switch stops the whole tree on every machine at once (abort cascades, leases are
+  revoked); the person sees it in the Agents panel as a live tree (who started whom and why, budget used, status, each
+  agent's acceptance).
+- **Reporting back**: every agent reports to its parent with its acceptance (checks, verdicts, stakes); the root's
+  report rolls the tree up; the run recorder keeps who did what (phase 6's recorder, started here).
+- **Initiative with care**: what goes past the charter (more agents, more money, another machine, an external or
+  irreversible action) is a proposal to the person, never taken; the governor watches the tree's replication rate
+  (spawns a minute), loops (a child sent the same brief as an ancestor is refused), stalls (no progress anywhere in N
+  minutes) and the effort rules the evidence gives (one agent for a simple question, 2-4 for a comparison, more only
+  for wide research), and stops or asks.
+- **Self-improvement only through the gate**: agents may propose better instructions, skills or checks from what the
+  run's outcomes show; a proposal becomes real only when it beats the current one on the eval and the person approves
+  it (docs/harnessing/HARNESSING.md); the controls themselves (the charter, the governor, the kill switch, tool policy)
+  are never on the list of what agents may change.
+
+What a swarm never does, by construction: copy itself to a machine the person did not connect and allow, persist or
+hide, acquire credentials, accounts or money, raise its own limits, or reach past the kill switch. (The same controls
+the evidence on runaway and self-replicating agents asks for; research in research/control.md.)
+
 ### Phase 2: answers over the person's own data
 
 The data-answer swarm, the best ratio of measured gain to effort (a written semantics file added 17-23 points on every
@@ -151,5 +182,6 @@ scheduling and failure recovery.
 - Phase 1: built (2026-11-02): stakes (high: a verifier of another provider; critical: replicas on two providers in
   worktrees and a comparator), exit / expect_not checks, per-requirement verdicts, visible budgets; 51 deterministic
   scenarios in test/acceptance.test.ts; live: EVAL-ACCEPTANCE.md.
-- Next, in this order: 1b (the verifier measured at scale), 3 (the deep web research swarm), 7 (across the person's
-  computers), 2 (data answers), 4 (security review of one's own code), 5 (forecasting), 6 (investigations).
+- Phase 1b: the foundation built (mutants, scorecards, verifiers chosen by record); the calibration at scale next.
+- Next, in this order: 1b (the calibration at scale), 1c (the swarm governor), 3 (the deep web research swarm), 7
+  (across the person's computers), 2 (data answers), 4 (security review of one's own code), 5 (forecasting), 6 (investigations).
