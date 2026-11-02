@@ -19,3 +19,7 @@ apps/desktop/release/
 apps/desktop/release-*/
 __pycache__/
 *.pyc
+
+# The research skill's working folders (reports are copied into docs/)
+research_notes/
+reports/
