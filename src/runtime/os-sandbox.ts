@@ -30,8 +30,12 @@ import { nodeEnv } from './host.ts';
 export type OsSandboxKind = 'bwrap' | 'seatbelt';
 export type LocalSandbox = OsSandboxKind | 'docker' | 'off';
 
-/** Folders in a home directory that hold credentials: never readable from a sandboxed command. */
-export const SECRET_DIRS = ['.ssh', '.aws', '.gnupg', '.azure', '.kube', '.docker', '.config/gcloud', '.config/gh', '.password-store', '.local/share/keyrings'];
+/**
+ * Folders in a home directory that hold credentials: never readable from a sandboxed command. The harness's own are
+ * among them: the companion's token (whoever reads it can act as this machine) and the harness's home (its sessions,
+ * key vault and server key).
+ */
+export const SECRET_DIRS = ['.ssh', '.aws', '.gnupg', '.azure', '.kube', '.docker', '.config/gcloud', '.config/gh', '.password-store', '.local/share/keyrings', '.harness-companion', '.harness'];
 export const SECRET_FILES = ['.netrc', '.npmrc', '.pypirc', '.git-credentials', '.env'];
 /**
  * Local ways out that are not files: the sockets of the container daemons and the

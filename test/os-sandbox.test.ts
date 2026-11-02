@@ -32,6 +32,9 @@ test('bubblewrap: read-only system, credentials hidden, the workspace writable l
   assert.match(s, /--unshare-net/);
   assert.match(s, /--ro-bind \/ \//);
   assert.match(s, /--tmpfs \/home\/u\/\.ssh/);
+  // The harness's own: the companion's token (whoever reads it acts as this machine) and the harness's home.
+  assert.match(s, /--tmpfs \/home\/u\/\.harness-companion /);
+  assert.match(s, /--tmpfs \/home\/u\/\.harness /);
   assert.doesNotMatch(s, /\.azure/, 'only folders that exist are masked');
   assert.match(s, /--ro-bind \/dev\/null \/home\/u\/\.netrc/);
   assert.ok(a.indexOf('--bind') > a.lastIndexOf('--tmpfs'), 'the workspace is bound after the masks');
