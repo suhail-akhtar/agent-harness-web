@@ -16,11 +16,14 @@ a question whose answer lives on the web or in documents, wants sources, or asks
 
 - **deep-research** (workflow): a research lead plans the questions, researchers search and read
   in parallel, a writer drafts the report with numbered citations, `check_citations` verifies every
-  cited URL was fetched and every quotation appears, and a fact-checker reviews the claims.
+  cited URL was fetched and every quotation appears, the claim ledger (the `claims` gate) has each
+  cited sentence judged against its passage by a model of another family, and a fact-checker reviews
+  the claims.
 - **Tools**: `web_search` and `web_fetch` (the session's), `sources` (the pages read so far: list,
-  or read one again without fetching), `check_citations` (run it before you hand over a report).
+  or read one again without fetching), `check_citations` (run it before you hand over a report),
+  `verify_claims` (the claim ledger, written to research/claims.md; it calls models, so once a report is done).
 - **Agents**: research-lead, researcher, research-writer, fact-checker.
-- **Skills**: research-method, cite-sources. **Gate**: `citations`.
+- **Skills**: research-method, cite-sources. **Gates**: `citations`, `claims` (only where a workflow names it).
 
 ## Pages and navigation
 

@@ -191,11 +191,31 @@ scheduling and failure recovery.
   spend and a time when set; past the number, one question to the person, never taken where nobody can be asked;
   loops and bursts refused; three levels at most), the kill switch (POST /api/sessions/:id/stop_agents, the Agents
   panel's Stop all), tool policy (no schedule, vault or publish_branch for a swarm agent, memory read only; no writes to the
-  project's .harness or .claude files), the fan-out (the agent tool's items and fields: one brief over up to 100
+  project's definitions under .harness (agents, workflows, skills, styles, plugins, commands, hooks, settings, the setup
+  script) or to .claude; a workflow's own state under .harness stays writable), the fan-out (the agent tool's items and fields: one brief over up to 100
   items, a table back, each item governed and accepted on its own), the swarm as a tree in the Agents panel; 13
   deterministic scenarios (test/swarm.test.ts), the desktop e2e; live: EVAL-SWARM.md. Left from the research
   (research/control.md): a cap on agents at once below the first level, a cap of children per agent, kinds of work
   compiled to tools, paths and network policy, leases with heartbeats (for companions, phase 7), and writes to the
   control plane through a shell (contained only by a sandbox).
-- Next, in this order: 3 (the deep web research swarm), 7 (across the person's computers), 2 (data answers), 4
-  (security review of one's own code), 5 (forecasting), 6 (investigations).
+- Phase 3, the claim ledger: built (2026-11-02). src/research/claims.ts:
+  - **Claims**: each cited sentence of a report, with its sources and its count of independent sites.
+  - **The judge**: a model of another family with no tools, which sees only the sentence and the best three passages
+    of each page it cites. A "supported" must quote the page word for word, and the harness checks the quote.
+  - **Where it runs**: the research plugin's `verify_claims` tool (it writes research/claims.md) and the `claims`
+    gate, which runs only where a workflow names it.
+  - **deep-research** runs the gate after the citation check, with a fix round. The fact-checker reads the ledger.
+    Unsupported or contradicted claims are BLOCKING; a settled claim backed by one site is MAJOR.
+
+  Tests: test/claims.test.ts. Live (EVAL-CLAIMS.md): 20 claims on real pages, 14 of them false of 13 kinds, judged by
+  nine models (Sonnet, Haiku, DeepSeek Flash and V4 Pro, GPT-6 Luna, Kimi K3.1 Pro, GLM 5.3 Flash, Grok 4.3 and 4.7).
+  On the final code, 180 of 180 judgements were right and a planted "reply supported" was refused by all nine (the
+  earlier runs, and the harness bugs they found, are in the report). The final run cost $0.60.
+
+  Left of phase 3:
+  - a crawl frontier and archiving with hashes;
+  - two origins required for key claims at high stakes (the ledger counts sites; the gate does not yet require two);
+  - a counter-evidence searcher;
+  - the reader/actor split for page readers.
+- Next, in this order: the rest of 3, 7 (across the person's computers), 2 (data answers), 4 (security review of
+  one's own code), 5 (forecasting), 6 (investigations).

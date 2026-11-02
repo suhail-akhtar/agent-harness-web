@@ -22,13 +22,23 @@ export interface CitationReport {
 
 interface Ref { id: string; url: string }
 
+/** A URL, with balanced parentheses inside it (https://en.wikipedia.org/wiki/Python_(programming_language)). */
+const URL_PART = String.raw`https?:\/\/(?:[^\s()<>\]]|\([^\s()<>\]]*\))+`;
+/** An inline Markdown link's URL: ](url). */
+export const INLINE_LINK = new RegExp(String.raw`\]\((${URL_PART})\)`, 'g');
+
+/** A stored page's text without the link targets kept after link words ("Gustave Eiffel (https://...)"): what a reader sees. */
+export function plainText(s: string): string {
+  return s.replace(new RegExp(String.raw`\s?\(${URL_PART}\)`, 'g'), '');
+}
+
 /** Reference definitions: "[1]: url", "[1] Title - url", "1. Title. url", footnotes "[^1]: ... url". */
 export function parseReferences(text: string): Map<string, string> {
   const refs = new Map<string, string>();
   for (const line of text.split('\n')) {
     const m = /^\s*(?:\[\^?([\w-]+)\]:?|(\d+)[.)])\s+(.*)$/.exec(line);
     if (!m) continue;
-    const url = /(https?:\/\/[^\s)>\]]+)/.exec(m[3]!)?.[1]?.replace(/[.,;]+$/, '');
+    const url = new RegExp(`(${URL_PART})`).exec(m[3]!)?.[1]?.replace(/[.,;]+$/, '');
     if (url) refs.set(m[1] ?? m[2]!, url);
   }
   return refs;
@@ -75,7 +85,7 @@ export async function checkCitations(report: string, sources: SourceStore): Prom
     const k = normalizeUrl(url);
     if (!textOf.has(k)) {
       const e = await sources.find(url);
-      textOf.set(k, e ? canon(await sources.text(e)) : null);
+      textOf.set(k, e ? canon(plainText(await sources.text(e))) : null);
     }
     return textOf.get(k)!;
   };
@@ -91,7 +101,7 @@ export async function checkCitations(report: string, sources: SourceStore): Prom
   let uncited = 0;
   for (const s of sentences(report)) {
     const markers = [...s.text.matchAll(/\[\^?([\w-]+)\](?!\()/g)].map((m) => m[1]!).filter((id) => /^\d+$|^\^|^[\w-]+$/.test(id));
-    const inline = [...s.text.matchAll(/\]\((https?:\/\/[^)\s]+)\)/g)].map((m) => m[1]!);
+    const inline = [...s.text.matchAll(INLINE_LINK)].map((m) => m[1]!);
     const urls: Ref[] = [];
     for (const id of markers) {
       const url = refs.get(id);

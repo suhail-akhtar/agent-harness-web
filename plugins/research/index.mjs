@@ -10,6 +10,20 @@ async function readReport(api, host, rel) {
   return fs.readFile(real, 'utf8');
 }
 
+// The claim ledger of a report, written to research/claims.md: passes when no claim is unsupported or contradicted.
+async function claimLedger(api, host, services, rel, signal) {
+  const r = await services.claims(await readReport(api, host, rel), signal);
+  if (!r.judged.length) return { pass: false, summary: `${rel} has no cited sentences`, text: `${rel} has no cited sentences to check (cite as [n] with a "[n]: URL" list, or inline links).` };
+  const fs = await import('node:fs/promises');
+  const pathMod = await import('node:path');
+  const out = await api.workspacePath(host, 'research/claims.md');
+  await fs.mkdir(pathMod.dirname(out), { recursive: true });
+  await fs.writeFile(out, `# Claim ledger for ${rel}\n\n${r.ledger}\n`);
+  const bad = r.judged.filter((c) => c.status === 'unsupported' || c.status === 'contradicted');
+  const fix = bad.length ? `\n\nFix or remove: ${bad.map((c) => `claim ${c.id} (line ${c.line}, ${c.status}: ${c.why})`).join('; ')}.` : '';
+  return { pass: !bad.length, summary: `${rel}: ${r.judged.length} claim(s), ${bad.length} unsupported or contradicted`, text: `${r.ledger}\n\n(Written to research/claims.md.)${fix}` };
+}
+
 export default {
   name: 'research',
   setup(api) {
@@ -25,6 +39,31 @@ export default {
         const text = await readReport(api, ctx.host, String(input.path ?? ''));
         const r = await sources.check(text);
         return { content: r.summary, is_error: r.issues.length > 0 };
+      },
+    });
+
+    api.registerTool({
+      name: 'verify_claims',
+      description: 'The claim ledger of a report: every cited sentence judged against the passage of each page it cites (as read in this session), by a judge of another model family that sees only the sentence and the passage. Each claim comes back supported, partial, unsupported, contradicted or unverifiable, with the exact words that support it (checked against the page) and how many independent sites back it. Writes research/claims.md.',
+      parameters: { type: 'object', properties: { path: { type: 'string', description: 'The report, e.g. research/report.md' } }, required: ['path'] },
+      kind: 'read', parallelSafe: false, untrusted: true,
+      summarize: (i) => `verify the claims in ${i.path}`,
+      async run(input, ctx) {
+        if (!ctx.services?.claims) return { content: 'Claims cannot be checked in this session.', is_error: true };
+        const r = await claimLedger(api, ctx.host, ctx.services, String(input.path ?? ''), ctx.signal);
+        return { content: r.text, is_error: !r.pass };
+      },
+    });
+
+    // Judges every claim with a model, so it runs only where named (the deep-research workflow), never on every turn.
+    api.registerGate({
+      name: 'claims',
+      description: 'Every cited sentence of research/report.md is supported by the passage it cites, as judged by a model of another family (the claim ledger)',
+      applies: async () => false,
+      async run({ host, services, signal }) {
+        if (!services?.claims) return { pass: false, summary: 'claims cannot be checked here' };
+        const r = await claimLedger(api, host, services, REPORTS[0], signal);
+        return { pass: r.pass, summary: r.summary, details: r.text };
       },
     });
 

@@ -204,11 +204,13 @@ test('the control plane is the person\'s: a swarm agent cannot write the project
     c.t.ds.scripts.lead = [{ calls: [agentCall({ prompt: '[[cp]] Set things up.' })] }, { text: 'Done.' }];
     c.t.ds.scripts.cp = [
       { calls: [{ name: 'write', input: { path: '.harness/agents/twin.md', content: '---\nname: twin\ndescription: A copy of me that starts more of me.\n---\nStart more agents.\n' } }, { name: 'write', input: { path: '.claude/settings.json', content: '{"permissions":{"allow":["*"]}}' } }, { name: 'write', input: { path: 'notes.txt', content: 'ordinary work' } }] },
+      { calls: [{ name: 'write', input: { path: '.harness/settings.json', content: '{"permissions":{"mode":"bypass"}}' } }, { name: 'write', input: { path: '.harness/setup.sh', content: 'curl x | sh\n' } }, { name: 'write', input: { path: '.harness/workflows/w.json', content: '{}' } }, { name: 'write', input: { path: '.harness/long-task/features.json', content: '[]' } }] },
       { text: 'Tried.' },
     ];
     await c.turn('[[lead]] Go.');
     const results = c.events.filter((e): e is Extract<HarnessEvent, { kind: 'tool_result' }> => e.kind === 'tool_result' && e.name === 'write' && !!e.agent && e.agent !== 'main');
-    assert.deepEqual(results.map((r) => r.is_error), [true, true, false]);
+    // A workflow's own working state under .harness stays writable (long-task keeps its features there).
+    assert.deepEqual(results.map((r) => r.is_error), [true, true, false, true, true, true, false]);
     const root = (c.s.meta.runtime as { path: string }).path;
     const fs = await import('node:fs/promises');
     await assert.rejects(fs.access(`${root}/.harness/agents/twin.md`), 'no new agent definition');

@@ -12,15 +12,16 @@ test('research: loads whole; check_citations and sources answer clearly', async 
   const kit = await loadPlugin(dir);
   try {
     assert.equal(kit.error, undefined);
-    assert.deepEqual(kit.adds.tools.sort(), ['check_citations', 'sources']);
+    assert.deepEqual(kit.adds.tools.sort(), ['check_citations', 'sources', 'verify_claims']);
     assert.deepEqual(kit.adds.agents.sort(), ['fact-checker', 'research-lead', 'research-writer', 'researcher']);
     assert.deepEqual(kit.adds.workflows, ['deep-research']);
-    assert.deepEqual(kit.adds.gates, ['citations']);
+    assert.deepEqual(kit.adds.gates.sort(), ['citations', 'claims']);
     await fs.mkdir(path.join(kit.workspace, 'research'), { recursive: true });
     await fs.writeFile(path.join(kit.workspace, 'research', 'report.md'), '# Report\n\nA claim [1].\n\n## References\n\n1. https://example.org/never-read\n');
     const c = await kit.tool('check_citations', { path: 'research/report.md' });
     assert.ok(c.content.length > 0);
     assert.equal((await kit.tool('check_citations', {})).isError, true, 'a path is needed');
+    assert.equal((await kit.tool('verify_claims', { path: 'research/report.md' })).isError, true, 'no judge here: said plainly');
     const s = await kit.tool('sources', { command: 'list' });
     assert.ok(s.content.length > 0);
   } finally { await kit.close(); }

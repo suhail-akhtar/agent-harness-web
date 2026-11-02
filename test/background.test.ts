@@ -180,6 +180,9 @@ test('send_message continues a sub-agent with its context; finished ones are kep
   } finally { await t.close(); }
 
   const call = (n: number) => ({ name: 'agent', input: { description: `job ${n}`, prompt: `job ${n}`, type: 'general' } });
+  // 22 agents in one run: past the default swarm charter (16), so the operator's charter is raised for this.
+  const was = process.env.HARNESS_SWARM_AGENTS;
+  process.env.HARNESS_SWARM_AGENTS = '40';
   const many = await setup({
     main: [
       { calls: Array.from({ length: 22 }, (_, i) => call(i + 1)) },
@@ -192,7 +195,10 @@ test('send_message continues a sub-agent with its context; finished ones are kep
     const replies = results(many.s.history[4]);
     assert.equal(replies.length, 22);
     assert.equal(replies.filter((r) => r.is_error && /No sub-agent general-\d+ of yours/.test(r.content)).length, 2, 'the two least recently used are gone');
-  } finally { await many.close(); }
+  } finally {
+    await many.close();
+    if (was === undefined) delete process.env.HARNESS_SWARM_AGENTS; else process.env.HARNESS_SWARM_AGENTS = was;
+  }
 });
 
 test('the user\'s Stop stops background agents; a background agent\'s question outlives the turn', async () => {

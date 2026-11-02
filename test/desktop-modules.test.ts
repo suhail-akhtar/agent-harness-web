@@ -274,7 +274,7 @@ test('guides on the server: the plugin\'s authored text plus its tools, workflow
   const research = await entry('research', ['tool:check_citations', 'tool:sources']);
   const rt = await serverGuide(research, reg);
   assert.match(rt, /### Tools[\s\S]*`check_citations`: Check a report's citations/);
-  assert.match(rt, /### Quality gates \(quality_gates tool\)\n- `citations`/);
+  assert.match(rt, /### Quality gates \(quality_gates tool\)\n- `claims`, `citations`/);
   const devops = await entry('devops', ['tool:iac']);
   assert.match(devops.guide!.purpose, /^DevOps: Terraform/, 'a guide kept as the plugin\'s <name>-guide skill');
   assert.match(await serverGuide(devops, reg), /`iac`: Terraform/);

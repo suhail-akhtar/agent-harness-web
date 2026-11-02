@@ -3,7 +3,7 @@ import { constants as fsc } from 'node:fs';
 import fs from 'node:fs/promises';
 import { resolveIn } from '../tools/paths.ts';
 import path from 'node:path';
-import { type Acceptance, BUILTIN_AGENTS, COMPARATOR_AGENT, CONTROL_PLANE_DENY, PERSISTENT_TOOLS, VERIFIER_MODELS, INTERACTIVE_TOOLS, loadAgentDir, makeAgentTool, mcpServerOf, NESTING_TOOLS, stricterMode, teamBrief, toolMatches, VERIFIER_AGENT } from '../agents/agents.ts';
+import { type Acceptance, BUILTIN_AGENTS, COMPARATOR_AGENT, CONTROL_PLANE_DENY, JUDGE_AGENT, PERSISTENT_TOOLS, VERIFIER_MODELS, INTERACTIVE_TOOLS, loadAgentDir, makeAgentTool, mcpServerOf, NESTING_TOOLS, stricterMode, teamBrief, toolMatches, VERIFIER_AGENT } from '../agents/agents.ts';
 import { stopShellScript } from '../tools/exec.ts';
 import { describeWatch, TASK_TOOLS, type TaskEntry, TaskRegistry, type TaskService, watchTask } from '../tools/tasks.ts';
 import { formatGates, makeGatesTool, runGates } from '../gates/gates.ts';
@@ -51,8 +51,9 @@ import { seal, serverKey, unseal } from '../util/sealed.ts';
 import type { ChangeService } from '../ops/changes.ts';
 import { decide, ruleMatches } from './permissions.ts';
 import { bashTool } from '../tools/exec.ts';
-import { acceptanceNote, type Baseline, blockedReason, changeSet, comparatorBrief, parseComparison, type Replica, type CheckResult, finalVerdict, type Finding, parseVerdict, runChecks, summarizeChecks, summarizeFindings, summarizeVerdict, takeBaseline, tamperFindings, type Verdict, VERDICT_AGAIN, VERDICT_ASK, verifierBrief, withProtection } from '../agents/acceptance.ts';
+import { acceptanceNote, type Baseline, blockedReason, changeSet, comparatorBrief, trailingJson, parseComparison, type Replica, type CheckResult, finalVerdict, type Finding, parseVerdict, runChecks, summarizeChecks, summarizeFindings, summarizeVerdict, takeBaseline, tamperFindings, type Verdict, VERDICT_AGAIN, VERDICT_ASK, verifierBrief, withProtection } from '../agents/acceptance.ts';
 import { byRecord, readScorecards } from '../agents/scorecard.ts';
+import { verifyClaims } from '../research/claims.ts';
 import { ArtifactError, type ArtifactMeta, type ArtifactService, ArtifactStore, artifactTool } from './artifacts.ts';
 import { DATA_TOOLS, dataServiceFor, dataToolsFor } from '../data/tools.ts';
 import { type ClientDecl, clientPrompt, clientSkillDirs, cleanClientPlugins, type ClientPresence, type DesktopTool } from './client.ts';
@@ -1099,6 +1100,20 @@ export class Session {
       memory: main ? memory : memory?.reader(),
       sources: this.sources,
       search: this.deps.search,
+      // A judge with a clean context and no tools, of another family than the conversation's model where one is allowed.
+      judge: async (brief, signal) => {
+        const settings = await this.getSettings(await this.getHost());
+        const cross = await this.crossModel(this.deps.registry.model(this.meta.model).provider, settings);
+        const r = await this.runAgent({ agent: JUDGE_AGENT.name, def: JUDGE_AGENT, label: `judge-${++this.subagents}`, description: 'judge a claim', prompt: brief, signal, depth: 2, keep: false, verifier: true, ...(cross ? { model: cross, delegated: true } : {}) });
+        return { text: this.lastText(r.agent!), by: `${r.id} on ${r.agent?.cfg.model.id ?? '?'}` };
+      },
+      claims: async (report, signal) => {
+        const svc = await this.services(main, caller);
+        return verifyClaims(report, {
+          text: async (url) => { const e = await this.sources?.find(url); return e ? this.sources!.text(e) : undefined; },
+          judge: (brief) => svc.judge!(brief, signal), parse: trailingJson,
+        });
+      },
       ...(this.deps.denyUrls?.length ? { denyUrls: this.deps.denyUrls } : {}),
       publish: this.canPublish() && cfg ? async (input, signal) => {
         const host = await this.getHost();

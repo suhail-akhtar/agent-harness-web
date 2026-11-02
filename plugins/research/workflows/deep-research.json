@@ -1,6 +1,6 @@
 {
   "name": "deep-research",
-  "description": "From a question to a cited report: a plan of sub-questions, three researchers reading sources in parallel, a report with numbered citations, a citation check against the pages actually read, an independent fact-check and up to three revision rounds.",
+  "description": "From a question to a cited report: a plan of sub-questions, three researchers reading sources in parallel, a report with numbered citations, a citation check against the pages actually read, a claim ledger (each cited sentence judged against its passage by a model of another family), an independent fact-check and up to three revision rounds.",
   "inputs": {
     "question": {
       "description": "What to find out, with any scope (period, place, purpose).",
@@ -16,7 +16,7 @@
     }
   },
   "start": "plan",
-  "maxAgentRuns": 18,
+  "maxAgentRuns": 21,
   "nodes": {
     "plan": {
       "type": "agent",
@@ -69,7 +69,7 @@
       "maxFailures": 3,
       "next": {
         "on": {
-          "pass": "fact-check",
+          "pass": "ledger",
           "fail": "fix-citations",
           "exhausted": "failed"
         }
@@ -80,6 +80,28 @@
       "title": "Fix citations",
       "agent": "research-writer",
       "prompt": "The citation check failed on research/report.md. Fix each problem: cite only pages that were read (the sources tool lists them), copy quotes and figures exactly, put computed figures in their own sentence ending \"(derived: ...)\", or cut the claim.\n\n{{feedback}}",
+      "next": "cite-check"
+    },
+    "ledger": {
+      "type": "gate",
+      "title": "Claim ledger",
+      "gates": [
+        "claims"
+      ],
+      "maxFailures": 2,
+      "next": {
+        "on": {
+          "pass": "fact-check",
+          "fail": "fix-claims",
+          "exhausted": "fact-check"
+        }
+      }
+    },
+    "fix-claims": {
+      "type": "agent",
+      "title": "Fix unsupported claims",
+      "agent": "research-writer",
+      "prompt": "The claim ledger (research/claims.md) found claims in research/report.md that the pages they cite do not support, or contradict. For each one: cite a page you read that says it, narrow the sentence to exactly what its page says, or cut it. Report what the sources disagree on rather than picking one.\n\n{{feedback}}",
       "next": "cite-check"
     },
     "fact-check": {

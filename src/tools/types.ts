@@ -33,6 +33,13 @@ export interface ToolServices {
   memory?: import('../memory/store.ts').MemoryStore;
   sources?: import('../research/sources.ts').SourceStore;
   search?: import('../research/search.ts').SearchService;
+  /**
+   * A clean-context judgement (docs/swarm/SWARM.md, phase 3): the brief to a model of another provider than the
+   * conversation's (where one is allowed), with no tools; its reply and who gave it.
+   */
+  judge?: (brief: string, signal: AbortSignal) => Promise<{ text: string; by: string }>;
+  /** The claim ledger of a report: each cited sentence judged against the passages of the pages it cites (phase 3). */
+  claims?: (report: string, signal: AbortSignal) => Promise<{ judged: import('../research/claims.ts').Judged[]; ledger: string }>;
   /** URLs the web tools refuse (hosts, or host/path prefixes): an eval run's own hidden checks. */
   denyUrls?: readonly string[];
   /** Publishes the workspace as a branch and pull request (absent: not possible for this session). */

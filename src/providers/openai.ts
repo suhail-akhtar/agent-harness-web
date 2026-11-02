@@ -121,9 +121,8 @@ export function responsesBody(req: Pick<ProviderRequest, 'model' | 'system' | 't
     model: req.model.id,
     instructions: req.system,
     input,
-    tools: top.map((t) => fn(t, flavor.strict)),
-    tool_choice: req.toolChoice ?? 'auto',
-    parallel_tool_calls: true,
+    // An agent with no tools (a judge) sends none: xAI refuses a tool_choice without tools (seen live).
+    ...(req.tools.length ? { tools: top.map((t) => fn(t, flavor.strict)), tool_choice: req.toolChoice ?? 'auto', parallel_tool_calls: true } : {}),
     reasoning: { effort: flavor.effort(req.effort), ...(flavor.summaries ? { summary: 'auto' } : {}) },
     max_output_tokens: req.model.maxOutput,
     store: false,

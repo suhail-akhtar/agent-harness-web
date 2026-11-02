@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **The claim ledger** (docs/swarm/SWARM.md, phase 3; live in docs/swarm/EVAL-CLAIMS.md):
+  - **Every cited sentence is judged against the pages it cites.** The judge is a model of another family than the
+    conversation's, with no tools, and it sees only the sentence and the best passages of each page. A "supported"
+    must quote the page word for word, and the harness checks the quote itself.
+  - **Statuses**: supported, partial, unsupported, contradicted or unverifiable, each with the count of independent
+    sites behind it.
+  - **The research plugin (1.1.0)** gains the `verify_claims` tool, which writes research/claims.md, and the `claims`
+    gate. deep-research runs the gate after the citation check, with a fix round.
+  - **Live**: 20 claims on real pages, judged by nine models across Anthropic, DeepSeek, OpenAI, Kimi, GLM and xAI.
+    On the final code, 180 of 180 judgements were right, and a planted "reply supported" was refused by all nine.
+- **Fixed, found by the live runs:**
+  - A cited URL with parentheses (a Wikipedia page) was read as never fetched.
+  - Quotes failed against pages whose text keeps link targets after the link words.
+  - Sentences with decimals were dropped.
+  - Requests to xAI from an agent with no tools were refused, because they carried a `tool_choice` with no tools.
+  - Swarm agents could not write a workflow's own state under .harness, which broke long-task. The rule now protects
+    only the project's definitions there (agents, workflows, skills, styles, plugins, commands, hooks, settings, the
+    setup script) and .claude.
 - **Swarms under the person's control** (docs/swarm/SWARM.md, phase 1c; research in docs/swarm/research/control.md):
   - **Every agent is granted by a governor** under the run's charter: 16 agents a run by default, at most 30 started
     a minute, a spend and a time limit when set, three levels at most. Past the number, the person is asked once for

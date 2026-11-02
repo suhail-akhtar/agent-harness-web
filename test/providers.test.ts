@@ -4,7 +4,8 @@ import { costOf, deepseekPeak, getModel } from '../src/core/models.ts';
 import type { Message } from '../src/core/types.ts';
 import { anthropicBody } from '../src/providers/anthropic.ts';
 import { toChat } from '../src/providers/deepseek.ts';
-import { toInputItems } from '../src/providers/openai.ts';
+import { responsesBody, toInputItems } from '../src/providers/openai.ts';
+import { XAI_FLAVOR } from '../src/providers/xai.ts';
 
 const toolUse: Message = { role: 'assistant', content: [{ type: 'text', text: 'checking' }, { type: 'tool_use', id: 't1', name: 'read', input: { path: 'a' } }] };
 const toolResult: Message = { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'data' }, { type: 'text', text: '<system-reminder>note</system-reminder>' }] };
@@ -153,4 +154,12 @@ test('anthropic: a turn is replayed verbatim (thinking and all) only to the mode
   const sonnet = getModel('claude-sonnet-5-5');
   assert.equal(sonnet.effort, 'medium');
   assert.equal(sonnet.provider, 'anthropic');
+});
+
+test('responses body: an agent with no tools (a judge) sends no tools and no tool_choice (xAI refuses one without tools, seen live)', () => {
+  const model = getModel('grok-4.3')!;
+  const none = responsesBody({ model, system: 's', tools: [], messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }], effort: 'medium', cacheKey: 'k' }, XAI_FLAVOR);
+  assert.equal('tools' in none || 'tool_choice' in none || 'parallel_tool_calls' in none, false);
+  const some = responsesBody({ model, system: 's', tools: [{ name: 'read', description: 'r', input_schema: { type: 'object', properties: {} } }], messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }], effort: 'medium', cacheKey: 'k' }, XAI_FLAVOR);
+  assert.deepEqual(Object.keys(some).slice(0, 6), ['model', 'instructions', 'input', 'tools', 'tool_choice', 'parallel_tool_calls'], 'the cached shape is unchanged');
 });
