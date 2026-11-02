@@ -274,7 +274,7 @@ export const COMPARATOR_AGENT: AgentDef = {
  * Which model checks work at high stakes: the first of these the person allows (strongest first) whose provider is
  * not the worker's. Another family's verifier passes fewer of the worker's mistakes (docs/swarm/research/REPORT.md).
  */
-export const VERIFIER_MODELS = ['claude-sonnet-5-5', 'gpt-6-luna', 'kimi-k3.1-pro', 'glm-5.3', 'deepseek-v4-pro', 'claude-haiku-5-5', 'kimi-k3', 'deepseek-flash', 'glm-5.3-flash'];
+export const VERIFIER_MODELS = ['claude-sonnet-5-5', 'gpt-6-luna', 'grok-4.7', 'kimi-k3.1-pro', 'glm-5.3', 'deepseek-v4-pro', 'claude-haiku-5-5', 'grok-4.3', 'kimi-k3', 'deepseek-flash', 'glm-5.3-flash'];
 
 /**
  * A team lead's procedure, after its own instructions: its members as the catalogue lists them, how it sizes, splits
@@ -365,7 +365,7 @@ const FAN_OUT_AT_ONCE = 8;
  * charter), checked and verified on its own; back comes one table (each item's outcome and its fields) and each
  * item's report, cut.
  */
-async function fanOut(args: SubagentArgs, items: string[], fields: string[], run: (a: SubagentArgs) => Promise<string>, signal: AbortSignal): Promise<string> {
+async function fanOut(args: SubagentArgs, items: string[], fields: string[], run: (a: SubagentArgs) => Promise<string>, signal: AbortSignal, models: string[] = []): Promise<string> {
   const ask = fields.length ? `\n\nEnd your report with one line of JSON and nothing after it, with these fields: ${JSON.stringify(Object.fromEntries(fields.map((f) => [f, '...'])))}` : '';
   const brief = (item: string) => `${args.prompt.includes('{{item}}') ? args.prompt.split('{{item}}').join(item) : `${args.prompt}\n\nThe item: ${item}`}${ask}`;
   const reports: string[] = new Array(items.length).fill('');
@@ -373,7 +373,9 @@ async function fanOut(args: SubagentArgs, items: string[], fields: string[], run
   await Promise.all(Array.from({ length: Math.min(FAN_OUT_AT_ONCE, items.length) }, async () => {
     while (next < items.length && !signal.aborted) {
       const i = next++;
-      try { reports[i] = await run({ ...args, prompt: brief(items[i]!), description: `${args.description}: ${items[i]!.slice(0, 40)}`, batch: items.length - i }); } catch (e) {
+      // Spread across models in turn when asked (each still one the person allows, checked as it starts).
+      const model = models.length ? models[i % models.length] : args.model;
+      try { reports[i] = await run({ ...args, ...(model ? { model } : {}), prompt: brief(items[i]!), description: `${args.description}: ${items[i]!.slice(0, 40)}`, batch: items.length - i }); } catch (e) {
         // Refused by the governor, stopped, or failed: said as such, never taken for a report.
         const m = (e as Error).message;
         reports[i] = /^Not started: /.test(m) ? m : /stopped by|abort/i.test(m) ? `Stopped: ${m}` : `Failed: ${m}`;
@@ -385,15 +387,15 @@ async function fanOut(args: SubagentArgs, items: string[], fields: string[], run
     const r = reports[i] || 'Not started: the fan-out was stopped.';
     const words = r.split('\n\n---\n')[0]!.replace(/\n\n\(agent id: [^)]*\)\s*$/, '');
     const got = fields.length ? trailingJson(words) as Record<string, unknown> | undefined : undefined;
-    return { item, outcome: outcomeOf(r), id: /\(agent ids?: ([^)]+)\)/.exec(r)?.[1] ?? '', values: fields.map((f) => (got && f in got ? cell(got[f]) : '?')), words };
+    return { item, model: models.length ? models[i % models.length]! : '', outcome: outcomeOf(r), id: /\(agent ids?: ([^)]+)\)/.exec(r)?.[1] ?? '', values: fields.map((f) => (got && f in got ? cell(got[f]) : '?')), words };
   });
   const count = (o: string) => rows.filter((r) => r.outcome === o).length;
   const outcomes = [...new Set(rows.map((r) => r.outcome))];
   const missing = fields.length ? rows.filter((r) => r.values.every((v) => v === '?') && r.outcome !== 'not started').length : 0;
   return [
     `Fan-out of ${items.length}: ${outcomes.map((o) => `${count(o)} ${o}`).join(', ')}.${missing ? ` ${missing} gave no fields (shown as ?).` : ''}`,
-    '', `| # | item | outcome |${fields.map((f) => ` ${cell(f)} |`).join('')}`, `|---|---|---|${fields.map(() => '---|').join('')}`,
-    ...rows.map((r, i) => `| ${i + 1} | ${cell(r.item)} | ${r.outcome} |${r.values.map((v) => ` ${v} |`).join('')}`),
+    '', `| # | item |${models.length ? ' model |' : ''} outcome |${fields.map((f) => ` ${cell(f)} |`).join('')}`, `|---|---|${models.length ? '---|' : ''}---|${fields.map(() => '---|').join('')}`,
+    ...rows.map((r, i) => `| ${i + 1} | ${cell(r.item)} |${models.length ? ` ${r.model} |` : ''} ${r.outcome} |${r.values.map((v) => ` ${v} |`).join('')}`),
     '', ...rows.map((r, i) => `### ${i + 1}. ${cell(r.item)} (${r.outcome}${r.id ? `, ${r.id}` : ''})\n${r.words.trim().slice(0, Math.max(300, Math.floor(12_000 / items.length)))}`),
   ].join('\n');
 }
@@ -430,6 +432,7 @@ export function makeAgentTool(agents: AgentDef[], opts: { catalogue?: string; is
   extra.stakes = { type: 'string', enum: ['normal', 'high', 'critical'], description: 'high: verified on another provider. critical: also two replicas on two providers, compared.' };
   extra.items = { type: 'array', items: { type: 'string' }, maxItems: 100, description: 'The same brief for each item ({{item}} in the prompt), one agent each, a table back.' };
   extra.fields = { type: 'array', items: { type: 'string' }, description: 'What each item reports (a column each).' };
+  if (opts.catalogue) extra.models = { type: 'array', items: { type: 'string' }, description: 'Spread the items across these allowed models, in turn.' };
   extra.max_fix_rounds = { type: 'number', description: 'Fix rounds, 0 to 3 (default 2).' };
   return {
     kind: 'meta', parallelSafe: true, remoteable: false,
@@ -479,7 +482,8 @@ export function makeAgentTool(agents: AgentDef[], opts: { catalogue?: string; is
       const start = ctx.services?.tasks?.startAgent;
       // A fan-out: the same brief for each item, each its own agent (granted, checked and verified on its own), one table back.
       const items = (Array.isArray(input.items) ? input.items : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 100);
-      if (items.length) return { content: await fanOut(args, items, (Array.isArray(input.fields) ? input.fields : []).map(String).filter(Boolean).slice(0, 12), ctx.runSubagent, ctx.signal) };
+      const models = (Array.isArray(input.models) ? input.models : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 8);
+      if (items.length) return { content: await fanOut(args, items, (Array.isArray(input.fields) ? input.fields : []).map(String).filter(Boolean).slice(0, 12), ctx.runSubagent, ctx.signal, models) };
       try {
         if (background && start) {
           const id = await start(args);

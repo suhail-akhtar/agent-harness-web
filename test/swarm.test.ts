@@ -216,3 +216,18 @@ test('the control plane is the person\'s: a swarm agent cannot write the project
     assert.equal(await fs.readFile(`${root}/notes.txt`, 'utf8'), 'ordinary work');
   } finally { await c.t.close(); }
 });
+
+test('a fan-out across models the person allows: the items in turn on each (here DeepSeek and Claude), the model in the table', async () => {
+  const c = await conv({ settings: { delegation: { allowedModels: ['claude-sonnet-5-5'] } } });
+  try {
+    c.t.ds.scripts.lead = [{ calls: [agentCall({ prompt: 'Answer {{item}}.', items: ['[[m1]] one', '[[m2]] two', '[[m3]] three'], models: ['deepseek-flash', 'claude-sonnet-5-5'] })] }, { text: 'Done.' }];
+    c.t.ds.scripts.m1 = [{ text: 'one on DeepSeek' }];
+    c.t.an.scripts.m2 = [{ text: 'two on Claude' }];
+    c.t.ds.scripts.m3 = [{ text: 'three on DeepSeek' }];
+    await c.turn('[[lead]] Go.');
+    const r = c.results()[0]!;
+    assert.match(r, /\| 1 \| \[\[m1\]\] one \| deepseek-flash \| done \|\n\| 2 \| \[\[m2\]\] two \| claude-sonnet-5-5 \| done \|\n\| 3 \| \[\[m3\]\] three \| deepseek-flash \| done \|/);
+    assert.equal(c.t.an.byKey.m2!.length, 1);
+    assert.equal(c.t.ds.byKey.m2, undefined);
+  } finally { await c.t.close(); }
+});

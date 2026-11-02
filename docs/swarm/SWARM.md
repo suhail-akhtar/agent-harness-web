@@ -167,7 +167,7 @@ in its folder and posts the results back, with permission checks on the server. 
   desktop) and whether the person allows it for agents' work; a delegation can name a machine, or the harness places
   shards on allowed machines (the reader/actor split and the mandate hold there too).
 - **Consent per machine and per kind of work**, revocable at once; a machine runs only in its sandbox and folder;
-  nothing leaves a machine except the results and their evidence.
+  what leaves a machine is what its tools read and produce: the results, their evidence, and what the agent read along the way (that goes to the harness and to the model provider), so a machine's policy says which folders and kinds of work it offers.
 - **Durable across machines**: a worker on a machine that drops is resumed or re-placed from its checkpoint; results
   carry their proofs (checks run where the work ran, hashed evidence), so a machine is trusted no more than its proofs.
 - Uses: compute spread across the person's machines, work where the data lives (a laptop's files, an office server),
