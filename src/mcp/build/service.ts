@@ -187,8 +187,11 @@ export async function introspect(kind: 'sqlite' | 'duckdb', file: string): Promi
     } finally { db.close(); }
   }
   const { DuckDBInstance } = await import('@duckdb/node-api');
-  const conn = await (await DuckDBInstance.create(file, { access_mode: 'READ_ONLY' })).connect();
-  const rows = (await conn.runAndReadAll("SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema NOT IN ('information_schema','pg_catalog') ORDER BY table_name, ordinal_position")).getRowObjectsJson() as Array<{ table_name: string; column_name: string; data_type: string }>;
+  const inst = await DuckDBInstance.create(file, { access_mode: 'READ_ONLY' });
+  const conn = await inst.connect();
+  let rows: Array<{ table_name: string; column_name: string; data_type: string }>;
+  // Closed after: the server it becomes opens the same file.
+  try { rows = (await conn.runAndReadAll("SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema NOT IN ('information_schema','pg_catalog') ORDER BY table_name, ordinal_position")).getRowObjectsJson() as typeof rows; } finally { conn.closeSync(); inst.closeSync(); }
   const by = new Map<string, DbTable>();
   for (const r of rows) { const t = by.get(r.table_name) ?? { name: r.table_name, columns: [] }; t.columns.push({ name: r.column_name, type: r.data_type }); by.set(r.table_name, t); }
   return [...by.values()];

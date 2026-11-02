@@ -94,6 +94,10 @@ test('desktop app end to end: your MCP servers', { timeout: 10 * 60_000 }, async
   // The browser is not opened in a test: the address it would open is kept.
   await app.evaluate(({ shell }) => { (globalThis as { opened?: string[] }).opened = []; shell.openExternal = async (u: string) => { (globalThis as unknown as { opened: string[] }).opened.push(u); }; });
   const opened = () => app.evaluate(() => (globalThis as unknown as { opened: string[] }).opened);
+  // Nor the system clipboard (it is the person's, shared with whatever they do meanwhile): what the app copies is kept.
+  await app.evaluate(({ clipboard }) => { (globalThis as { copied?: string }).copied = ''; clipboard.writeText = ((t: string) => { (globalThis as unknown as { copied: string }).copied = t; }) as never; });
+  const copiedText = () => app.evaluate(() => (globalThis as unknown as { copied: string }).copied);
+  const clearCopied = () => app.evaluate(() => { (globalThis as unknown as { copied: string }).copied = ''; });
 
   try {
     await step('the app starts; Settings > MCP servers is empty and says what it is for', async () => {
@@ -245,15 +249,33 @@ test('desktop app end to end: your MCP servers', { timeout: 10 * 60_000 }, async
       for (let i = 0; i < 100 && !fs.existsSync(target); i++) await page.waitForTimeout(200);
       assert.ok(fs.statSync(target).size > 10_000, 'the .mcpb was saved');
       assert.equal(fs.readFileSync(target).subarray(0, 2).toString(), 'PK');
-      await app.evaluate(({ clipboard }) => clipboard.writeText(''));
+      await clearCopied();
       await page.getByRole('button', { name: 'Claude Code (.mcp.json)' }).click();
       let copied = '';
-      for (let i = 0; i < 50 && !copied; i++) { await page.waitForTimeout(100); copied = await app.evaluate(({ clipboard }) => clipboard.readText()); }
+      for (let i = 0; i < 50 && !copied; i++) { await page.waitForTimeout(100); copied = await copiedText(); }
       assert.equal(JSON.parse(copied).mcpServers['unit-converter'].type, 'stdio');
       await page.click('[data-build-done]');
       await page.locator('[data-builds] [data-build="unit-converter"]').waitFor();
       assert.match(await page.locator('[data-build="unit-converter"]').innerText(), /Unit converter[\s\S]*In your servers[\s\S]*2 tools/);
       await shot('mcp-servers-built', page.locator('[data-section="mcp-servers"]'));
+    });
+
+    await step('a .mcpb bundle installed as my own server from the Import dialog (the bundle the builder saved)', async () => {
+      const bundle = path.join(data, 'unit-converter.mcpb');
+      await page.click('[data-mcp-import]');
+      await page.click('[data-mcp-bundle]');
+      await page.waitForSelector('[data-bundle-dialog]');
+      const chooser = page.waitForEvent('filechooser');
+      await page.click('[data-bundle-pick]');
+      await (await chooser).setFiles(bundle);
+      await page.waitForFunction(() => /unit-converter/.test(document.querySelector('[data-bundle-dialog]')?.textContent ?? ''), undefined, { timeout: 15_000 });
+      await page.click('[data-bundle-install]');
+      await detail('unit-converter').waitFor({ timeout: 30_000 });
+      await page.waitForFunction(() => /Connected/.test(document.querySelector('[data-detail="unit-converter"]')?.textContent ?? ''), undefined, { timeout: 30_000 });
+      const s = (await api('GET', '/api/me/mcp/unit-converter')).body as { type: string; cwd?: string };
+      assert.equal(s.type, 'stdio');
+      assert.match(s.cwd ?? '', /bundles/);
+      await page.click('[data-mcp-done]');
     });
 
     await step('your agents in another app: turned on in Settings, its Claude Code config copied, and that app (the bridge, started as its config says) hands work to an agent', async () => {
@@ -263,10 +285,10 @@ test('desktop app end to end: your MCP servers', { timeout: 10 * 60_000 }, async
       await page.locator('[data-section="mcp-access"] [role="switch"]').click();
       await page.waitForSelector('[data-mcp-token]', { timeout: 60_000 });
       await page.waitForSelector('[data-engine-status="ready"]', { timeout: 90_000 });
-      await app.evaluate(({ clipboard }) => clipboard.writeText(''));
+      await clearCopied();
       await page.click('[data-mcp-config="claude-code"]');
       let copied = '';
-      for (let i = 0; i < 50 && !copied; i++) { await page.waitForTimeout(100); copied = await app.evaluate(({ clipboard }) => clipboard.readText()); }
+      for (let i = 0; i < 50 && !copied; i++) { await page.waitForTimeout(100); copied = await copiedText(); }
       const cfg = JSON.parse(copied).mcpServers['agent-harness'] as { type: string; command: string; args: string[]; env: Record<string, string> };
       assert.equal(cfg.type, 'stdio');
       assert.equal(cfg.env.ELECTRON_RUN_AS_NODE, '1');

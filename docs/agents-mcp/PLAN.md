@@ -168,3 +168,26 @@ Each phase is tested on its own (engine, API, the desktop app end to end) and li
   DeepSeek V4.1 Flash ($0.004); the two summarisers started in one turn, the checker after their work. Found by the
   first live run: members ran in the background (the default for agents), so the lead briefed its reviewer before
   the work had come back; a lead's members now run in the foreground unless it asks otherwise.
+
+### Gaps closed after the five phases
+
+- **A delegated team leads.** Sub-agents may not start sub-agents by default (`maxSubagentDepth` 1), so a team the
+  orchestrator handed work to had no agent tool. A team lead now hands work to its members wherever it runs (at
+  most three levels down). Tested: an orchestrator delegates to a team whose two members run at once.
+- **Generate drafts teams**: from the agents listed (built-in, plugins', the person's own); invented members are
+  dropped and said; one member is no team.
+- **DuckDB and command servers** are built and checked in tests (a command's arguments reach it without a shell).
+- **A `.mcpb` as the person's own server** (administrators: it runs a program): its settings shown first, a secret only
+  as a `${vault:}` reference; Import > Install a .mcpb bundle in the app.
+- **Approval from another app**: `/mcp` runs take mode `ask`: what needs approval waits for the person in the app
+  (their approvals), and the run goes on when they allow it.
+- **A member's run from another app** goes to a Docker sandbox, as in the app, and makes no container until it runs
+  a command (tested: none made or left).
+- **The installed app builds and packs servers**: esbuild is a runtime dependency (packed into the app with its
+  platform binary); a server was built, checked (9 of 9) and packed by the installed `Harness.exe` as Node, and its
+  bridge started from the installed engine.
+- **Real servers** (`scripts/live-mcp-real.mjs`): DeepWiki connected for a member on MCP 2025-11-25 and answered; a
+  public name that resolves to this computer was refused; Linear's server said it needs sign-in and its OAuth
+  metadata (PKCE S256, dynamic registration) is what the harness's sign-in uses.
+- **Left to the person**: signing in to a real service (their own account, in their browser), and publishing a built
+  server to the MCP registry (their npm and GitHub accounts; each build has its `server.json` and README).

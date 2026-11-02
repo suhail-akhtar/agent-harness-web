@@ -7,7 +7,7 @@ import { checkServer, packServer, writeServer } from '../src/mcp/build/builder.t
 import { McpBuilder } from '../src/mcp/build/service.ts';
 import { BuildSpecError, checkBuildSpec, fromDatabase, fromOpenApi } from '../src/mcp/build/spec.ts';
 import { readZip } from '../src/mcp/mcpb.ts';
-import { UserMcp } from '../src/mcp/servers.ts';
+import { McpServerError, UserMcp } from '../src/mcp/servers.ts';
 import { createHarness } from '../src/kernel/harness.ts';
 import { tempDir } from './helpers.ts';
 
@@ -192,4 +192,77 @@ test('a setting can have a default (a public address, never a secret): the serve
     const manifest = JSON.parse(await fs.readFile(path.join(dir, 'manifest.json'), 'utf8'));
     assert.deepEqual(Object.keys(manifest.user_config), ['api_key']);
   } finally { api.stop(); }
+});
+
+test('a DuckDB database server: tables found, built, checked, its find and query tools answer from the file', async () => {
+  const dir = await tempDir();
+  const file = path.join(dir, 'sales.duckdb');
+  const { DuckDBInstance } = await import('@duckdb/node-api');
+  const inst = await DuckDBInstance.create(file);
+  const conn = await inst.connect();
+  await conn.run("CREATE TABLE sales (region VARCHAR, amount DOUBLE); INSERT INTO sales VALUES ('north', 10.5), ('south', 4), ('north', 2)");
+  conn.closeSync(); inst.closeSync();
+  const um = new UserMcp({ dataDir: dir, isAdmin: () => true });
+  const b = new McpBuilder(dir, um);
+  const draft = await b.draft(undefined, { source: 'database', kind: 'duckdb', path: file });
+  assert.deepEqual(draft.tables, [{ name: 'sales', columns: [{ name: 'region', type: 'VARCHAR' }, { name: 'amount', type: 'DOUBLE' }] }]);
+  const rec = await b.build(undefined, draft.spec, { DATABASE_PATH: file }, 'database');
+  assert.equal(rec.report!.ok, true, JSON.stringify(rec.report!.checks.filter((c) => !c.ok)));
+  await b.register(undefined, rec.name);
+  const entries = (await um.entries(undefined)).entries;
+  const find = entries.find((e) => e.tool.name === 'find_sales')!;
+  assert.equal(((await find.client.callTool('find_sales', { region: 'north' })).structuredContent as { rows: unknown[] }).rows.length, 2);
+  const q = entries.find((e) => e.tool.name === 'query')!;
+  assert.match((await q.client.callTool('query', { sql: 'SELECT sum(amount) AS total FROM sales' })).content![0]!.text!, /"total": 16\.5/);
+  await um.closeAll();
+});
+
+test('a command server: the program\'s --help read, a draft (from a model) of command tools, built and checked; arguments reach it without a shell', async () => {
+  const dir = await tempDir();
+  const um = new UserMcp({ dataDir: dir, isAdmin: () => true });
+  const b = new McpBuilder(dir, um);
+  // The model: it sees the program's help, and answers with a spec of command tools.
+  const seen: string[] = [];
+  const spec = { name: 'node-tools', description: 'Runs small JavaScript expressions with Node.js.', tools: [
+    { name: 'evaluate', description: 'Evaluate a JavaScript expression and print its value.', inputSchema: { type: 'object', properties: { expr: { type: 'string', description: 'The expression.' } }, required: ['expr'] }, annotations: { readOnlyHint: true }, run: { kind: 'command', command: process.execPath, args: ['-p', '{expr}'] }, example: { expr: '6 * 7' } },
+    { name: 'version', description: 'The version of Node.js that runs the tools.', inputSchema: { type: 'object', properties: {} }, annotations: { readOnlyHint: true }, run: { kind: 'command', command: process.execPath, args: ['--version'] }, example: {} },
+  ] };
+  const provider = { send: async (req: { messages: Array<{ content: Array<{ text?: string }> }> }) => { seen.push(req.messages[0]!.content[0]!.text ?? ''); return { message: { role: 'assistant', content: [{ type: 'text', text: JSON.stringify(spec) }] }, stop: 'end', usage: { input: 1000, cacheRead: 0, cacheWrite: 0, output: 300, reasoning: 0 } }; } };
+  const model = { id: 'fake', provider: 'fake', label: 'Fake', efforts: ['medium'], effort: 'medium', rate: () => ({ input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1.25 }) };
+  const draft = await b.draft(undefined, { source: 'command', command: process.execPath, description: 'Evaluate expressions.' }, { model: model as never, provider: provider as never });
+  assert.match(seen[0]!, /Its --help output:[\s\S]*Usage: node/i);
+  assert.deepEqual(draft.spec.tools.map((t) => t.name), ['evaluate', 'version']);
+  const rec = await b.build(undefined, draft.spec, {}, 'command');
+  assert.equal(rec.report!.ok, true, JSON.stringify(rec.report!.checks.filter((c) => !c.ok)));
+  assert.match(rec.report!.checks.find((c) => c.name.startsWith('evaluate works'))!.detail!, /^42/);
+  // Shell characters in an argument are only text to the program (no shell between).
+  await b.register(undefined, rec.name);
+  const ev = (await um.entries(undefined)).entries.find((e) => e.tool.name === 'evaluate')!;
+  assert.match((await ev.client.callTool('evaluate', { expr: '"a & echo pwned"' })).content![0]!.text!, /^a & echo pwned/);
+  await um.closeAll();
+});
+
+test('a .mcpb installed as the person\'s own server: its settings shown first; a secret only as a vault reference; members may not; it runs', async () => {
+  const data = await tempDir();
+  const vault = { reveal: async (_a: unknown, name: string) => { if (name === 'tz-key') return 'k-777'; throw new Error('no entry'); } };
+  const um = new UserMcp({ dataDir: data, vault, isAdmin: (o) => o === undefined });
+  const b = new McpBuilder(data, um);
+  const spec = { name: 'tz', description: 'Tells the time in a zone.', env: [{ name: 'TZ_KEY', description: 'A key.', secret: true, required: true }], tools: [{ name: 'now', description: 'The current time in UTC, as an ISO string.', inputSchema: { type: 'object', properties: {} }, annotations: { readOnlyHint: true }, run: { kind: 'code', code: "return `${new Date().toISOString()} (key ${ctx.env('TZ_KEY').length})`;" }, example: {} }] };
+  await b.build(undefined, spec, { TZ_KEY: '${vault:tz-key}' });
+  await b.pack(undefined, 'tz');
+  const bundle = await b.bundle(undefined, 'tz');
+  await b.remove(undefined, 'tz');
+  const info = um.inspectBundle(bundle);
+  assert.equal(info.name, 'tz');
+  assert.deepEqual(info.settings.map((s) => `${s.key}:${s.sensitive ? 'secret' : ''}`), ['tz_key:secret']);
+  await assert.rejects(um.installBundle(undefined, bundle, { tz_key: 'k-777' }), /is a secret/);
+  await assert.rejects(um.installBundle('member', bundle, {}), (e: McpServerError) => e.status === 403);
+  const v = await um.installBundle(undefined, bundle, { tz_key: '${vault:tz-key}' });
+  assert.deepEqual([v.name, v.type, v.source, v.vault], ['tz', 'stdio', 'mcpb', ['tz-key']]);
+  const t = await um.test(undefined, 'tz');
+  assert.equal(t.ok, true, t.error ?? '');
+  const now = (await um.entries(undefined)).entries.find((e) => e.tool.name === 'now')!;
+  assert.match((await now.client.callTool('now', {})).content![0]!.text!, /^\d{4}-\d\d-\d\dT.*\(key 5\)$/);
+  assert.ok(!(await fs.readFile(path.join(um.dir, '_local.json'), 'utf8')).includes('k-777'), 'the secret is not in the config');
+  await um.closeAll();
 });

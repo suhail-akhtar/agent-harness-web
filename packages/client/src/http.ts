@@ -374,6 +374,10 @@ export class HarnessClient {
     signOut: (name: string) => this.post<{ ok: boolean }>(`/api/me/mcp/${encodeURIComponent(name)}/signout`, {}),
     /** A Claude Desktop, Claude Code, Cursor or VS Code config: what it holds, or (apply) added. */
     import: (text: string, o: { apply?: boolean; names?: string[] } = {}) => this.post<McpImportResult>('/api/me/mcp/import', { text, ...o }),
+    /** What an MCP bundle (.mcpb, base64) is and the settings it asks for. */
+    inspectBundle: (base64: string) => this.post<{ name: string; version?: string; description?: string; settings: Array<{ key: string; title?: string; description?: string; required?: boolean; sensitive?: boolean; default?: unknown }> }>('/api/me/mcp/bundle', { base64, inspect: true }),
+    /** Installs it as one of the person's servers (administrators); secrets as ${vault:name}. */
+    installBundle: (base64: string, userConfig: Record<string, string>) => this.post<McpServerView>('/api/me/mcp/bundle', { base64, userConfig }),
   };
   /** The MCP server builder: a draft from an OpenAPI document, a database, a command or a description; built and checked; packed; added. */
   mcpBuilds = {

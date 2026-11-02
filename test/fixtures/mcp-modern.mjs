@@ -42,6 +42,9 @@ function build() {
       if (!mutated) { mutated = true; change(); server.sendToolListChanged(); }
       return { content: [{ type: 'text', text: 'mutated' }] };
     });
+  // For recovery tests (MCP_CRASH_TOOL=1): answers, then the process dies (as a crashed server would).
+  if (process.env.MCP_CRASH_TOOL) server.registerTool('crash', { description: 'Stop the notes service (for tests): it answers, then exits.', inputSchema: z.object({}) },
+    async () => { setTimeout(() => process.exit(1), 200); return { content: [{ type: 'text', text: 'stopping' }] }; });
   server.registerResource('welcome', 'note://welcome', { title: 'Welcome note', description: 'The first note.', mimeType: 'text/plain' },
     async (uri) => ({ contents: [{ uri: uri.href, mimeType: 'text/plain', text: 'Welcome to the notes server.' }] }));
   server.registerPrompt('review', { description: 'Review a file.', argsSchema: z.object({ file: z.string() }) },

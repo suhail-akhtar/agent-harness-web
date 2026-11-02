@@ -6,7 +6,8 @@ import type { HarnessEvent } from '../core/types.ts';
 // Cursor, VS Code, another agent) gets from POST /mcp with a person's token: their agents, as tools. A call starts a
 // conversation that runs as the agent, reports its progress, and returns the agent's answer; a long one goes on
 // after the call returns and its result is fetched later. Runs never wait for a person: what would be asked is
-// refused (dontAsk), unless the caller chooses a mode that approves edits or has a checking model approve.
+// refused (dontAsk), unless the caller chooses a mode that approves edits, has a checking model approve, or asks the
+// person (ask: the run waits for their approval in the app, where the request shows in their inbox).
 
 export interface ExposedAgent { name: string; description: string; source: 'builtin' | 'plugin' | 'user'; model?: string }
 export interface ExposeDeps {
@@ -20,7 +21,7 @@ export interface ExposeDeps {
   models(): string[];
 }
 
-const MODES = ['dontAsk', 'plan', 'acceptEdits', 'auto'] as const;
+const MODES = ['dontAsk', 'plan', 'acceptEdits', 'auto', 'ask'] as const;
 const DEFAULT_WAIT_S = Number(process.env.HARNESS_MCP_WAIT_S ?? 600);
 const toolOf = (agent: string) => `agent_${agent.replace(/[^A-Za-z0-9_-]/g, '_')}`.slice(0, 64);
 
@@ -61,7 +62,9 @@ export function harnessMcpServer(deps: ExposeDeps, agents: ExposedAgent[]): McpS
   const run = async (agent: string, args: Record<string, unknown>, ctx: { mcpReq: { signal: AbortSignal; _meta?: { progressToken?: string | number }; notify(n: unknown): Promise<void> } }) => {
     const task = String(args.task ?? '').trim();
     if (!task) return { isError: true, content: [{ type: 'text' as const, text: 'task: what the agent should do' }] };
-    const mode = MODES.includes(args.mode as typeof MODES[number]) ? String(args.mode) : 'dontAsk';
+    // ask: the conversation's own default mode, whose approvals wait for the person in the app.
+    const picked = MODES.includes(args.mode as typeof MODES[number]) ? String(args.mode) : 'dontAsk';
+    const mode = picked === 'ask' ? 'default' : picked;
     let s: Session;
     try {
       s = await deps.start({ agent, title: task.slice(0, 80), mode, ...(typeof args.folder === 'string' && args.folder ? { folder: args.folder } : {}), ...(typeof args.model === 'string' && args.model ? { model: args.model } : {}) });
@@ -77,7 +80,7 @@ export function harnessMcpServer(deps: ExposeDeps, agents: ExposedAgent[]): McpS
   const common = {
     task: { type: 'string', description: 'What the agent should do: the goal, the context it needs, and what to return.' },
     folder: { type: 'string', description: 'A folder on the harness server to work in (administrators). Without it: a workspace of its own.' },
-    mode: { type: 'string', enum: [...MODES], description: 'dontAsk (default): what would need approval is refused. plan: reads only. acceptEdits: edits files without asking. auto: a checking model approves.' },
+    mode: { type: 'string', enum: [...MODES], description: 'dontAsk (default): what would need approval is refused. plan: reads only. acceptEdits: edits files without asking. auto: a checking model approves. ask: what needs approval waits for the person to approve it in the harness app (the run waits; past waitSeconds it goes on, and get_result has its answer).' },
     waitSeconds: { type: 'number', description: `How long to wait for the answer (default ${DEFAULT_WAIT_S}). Past it, the run goes on: use get_result.` },
   };
   const models = deps.models();

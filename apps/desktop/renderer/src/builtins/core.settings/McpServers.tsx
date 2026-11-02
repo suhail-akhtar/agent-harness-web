@@ -49,6 +49,7 @@ export function McpServers(): React.ReactElement {
   const [open, setOpen] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [building, setBuilding] = useState<McpBuildRecord | 'new' | null>(null);
+  const [bundling, setBundling] = useState(false);
   const load = () => client.mcp.list().then((d) => { setData(d); setErr(''); }).catch((e: Error) => setErr(isMissing(e) ? 'This server does not offer your own MCP servers yet.' : e.message));
   useEffect(() => { void load(); }, [tick]);
 
@@ -91,7 +92,8 @@ export function McpServers(): React.ReactElement {
       {building && <BuildServerDialog open={building === 'new' ? undefined : building} onClose={() => setBuilding(null)} onDone={() => void load()} />}
       {editing && <ServerEditor admin={data.admin} editing={editing === 'new' ? null : editing} onClose={() => setEditing(null)} onSaved={(name) => { setEditing(null); void load(); setOpen(name); }} />}
       {open && <ServerDetail name={open} onClose={() => { setOpen(null); void load(); }} onEdit={(s) => { setOpen(null); setEditing(s); }} />}
-      {importing && <ImportDialog admin={data.admin} onClose={() => setImporting(false)} onDone={() => { setImporting(false); void load(); }} />}
+      {importing && <ImportDialog admin={data.admin} onClose={() => setImporting(false)} onDone={() => { setImporting(false); void load(); }} onBundle={() => { setImporting(false); setBundling(true); }} />}
+      {bundling && <BundleDialog onClose={() => setBundling(false)} onDone={(name) => { setBundling(false); void load(); setOpen(name); }} />}
     </div>
   );
 }
@@ -238,7 +240,7 @@ function ServerDetail({ name, onClose, onEdit }: { name: string; onClose: () => 
   );
 }
 
-function ImportDialog({ admin, onClose, onDone }: { admin: boolean; onClose: () => void; onDone: () => void }): React.ReactElement {
+function ImportDialog({ admin, onClose, onDone, onBundle }: { admin: boolean; onClose: () => void; onDone: () => void; onBundle: () => void }): React.ReactElement {
   const [text, setText] = useState('');
   const [preview, setPreview] = useState<McpImportResult | null>(null);
   const [chosen, setChosen] = useState<string[]>([]);
@@ -265,6 +267,7 @@ function ImportDialog({ admin, onClose, onDone }: { admin: boolean; onClose: () 
     <Modal open onClose={onClose} size="lg" title="Import MCP servers"
       footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button>{preview ? <Button variant="primary" data-mcp-import-add loading={busy} disabled={!chosen.length} onClick={() => void add()}>Add {chosen.length || ''}</Button> : <Button variant="primary" data-mcp-import-read loading={busy} disabled={!text.trim()} onClick={() => void look()}>Read it</Button>}</>}>
       <div className="flex flex-col gap-4">
+        {admin && <div><Button variant="ghost" icon="box" data-mcp-bundle onClick={onBundle}>Install a .mcpb bundle instead…</Button></div>}
         <Field label="A config file's contents" help="From Claude Desktop (claude_desktop_config.json), Claude Code (.mcp.json), Cursor (mcp.json) or VS Code (.vscode/mcp.json). Keys written in it are moved to Vault references; nothing is added until you choose.">
           <Textarea data-mcp-import-text rows={8} value={text} onChange={(e) => { setText(e.target.value); setPreview(null); }} className="font-mono text-small" placeholder='{ "mcpServers": { "linear": { "url": "https://mcp.linear.app/mcp" } } }' />
         </Field>
@@ -279,6 +282,63 @@ function ImportDialog({ admin, onClose, onDone }: { admin: boolean; onClose: () 
           </>
         )}
         {error && <Callout tone="danger"><span className="whitespace-pre-line">{error}</span></Callout>}
+      </div>
+    </Modal>
+  );
+}
+
+/** A .mcpb bundle (a Claude Desktop extension) as one of the person's servers: picked, its settings filled in, installed. */
+function BundleDialog({ onClose, onDone }: { onClose: () => void; onDone: (name: string) => void }): React.ReactElement {
+  const [file, setFile] = useState<{ name: string; base64: string } | null>(null);
+  const [info, setInfo] = useState<Awaited<ReturnType<typeof client.mcp.inspectBundle>> | null>(null);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const pick = () => {
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = '.mcpb';
+    input.onchange = () => {
+      const f = input.files?.[0];
+      if (!f) return;
+      const r = new FileReader();
+      r.onload = () => {
+        const base64 = String(r.result).split(',')[1] ?? '';
+        setFile({ name: f.name, base64 }); setError('');
+        client.mcp.inspectBundle(base64).then((i) => {
+          setInfo(i);
+          setValues(Object.fromEntries(i.settings.map((x) => [x.key, x.sensitive ? `\${vault:${i.name}-${x.key}}` : x.default !== undefined ? String(x.default) : ''])));
+        }).catch((e: Error) => setError(e.message));
+      };
+      r.readAsDataURL(f);
+    };
+    input.click();
+  };
+  const install = async () => {
+    setBusy(true); setError('');
+    try { const v = await client.mcp.installBundle(file!.base64, values); toast(`Installed ${v.name}`, { kind: 'success' }); onDone(v.name); } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <Modal open onClose={onClose} size="lg" title="Install an MCP bundle"
+      footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" data-bundle-install loading={busy} disabled={!info} onClick={() => void install()}>Install</Button></>}>
+      <div className="flex flex-col gap-4" data-bundle-dialog>
+        <div className="flex items-center gap-3"><Button icon="upload" data-bundle-pick onClick={pick}>Choose a .mcpb file…</Button>{file && <span className="text-small text-hx-muted">{file.name}</span>}</div>
+        {info && (
+          <>
+            <Meta items={[info.name, info.version ? `version ${info.version}` : null, info.description]} />
+            {info.settings.length > 0 && (
+              <Section dense title="Its settings" description="A secret is a Vault reference, ${vault:name}: put the value in Settings > Vault first.">
+                <div className="flex flex-col gap-3">
+                  {info.settings.map((x) => (
+                    <Field key={x.key} label={<span className="font-mono">{x.title ?? x.key}{x.sensitive ? ' (secret)' : ''}{x.required ? ' *' : ''}</span>} help={x.description}>
+                      <Input data-bundle-setting={x.key} value={values[x.key] ?? ''} onChange={(e) => setValues({ ...values, [x.key]: e.target.value })} className="font-mono" />
+                    </Field>
+                  ))}
+                </div>
+              </Section>
+            )}
+          </>
+        )}
+        {error && <Callout tone="danger">{error}</Callout>}
       </div>
     </Modal>
   );

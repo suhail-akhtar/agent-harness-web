@@ -103,3 +103,56 @@ test('the desktop app\'s token for other apps works on /mcp only, never on the r
     assert.equal((await t.call('mcp-only-token-for-tests-0123456789', 'GET', '/api/sessions')).status, 401);
   } finally { delete process.env.HARNESS_MCP_TOKEN; await t.close(); }
 });
+
+test('a member\'s run from another app goes to a sandbox (Docker), as in the app; it starts no container until it runs a command', async () => {
+  const { execFileSync } = await import('node:child_process');
+  // Its own conversation's container only (other tests may run sandboxes meanwhile).
+  const containerOf = (id: string) => { try { return execFileSync('docker', ['ps', '-a', '-q', '--filter', `name=harness-${id}`], { encoding: 'utf8', timeout: 15_000 }).trim(); } catch { return ''; } };
+  const t = await setupServer();
+  let id: string | undefined;
+  try {
+    const al = await t.member('al');
+    const m = new McpClient(new HttpTransport(`${t.base}/mcp`, { authorization: `Bearer ${al.token}` }));
+    await m.initialize();
+    for (const p of [t.ds, t.an]) p.scripts.mem = Array.from({ length: 4 }, () => ({ text: 'Answered in the sandbox.' }));
+    const r = await m.callTool('agent_general', { task: '[[mem]] Answer briefly.' });
+    const out = text(r);
+    if (r.isError) {
+      // No Docker (or no sandbox image) here: it says so, and nothing ran on the server instead.
+      assert.match(out, /could not start: .*(Docker is not available|Sandbox image)/, out);
+    } else {
+      assert.match(out, /^Answered in the sandbox\./);
+      id = (r.structuredContent as { conversation: string }).conversation;
+      const meta = (await t.call(al.token, 'GET', `/api/sessions/${id}`)).body.meta;
+      assert.equal(meta.runtime.kind, 'docker');
+      assert.equal(meta.owner, al.id);
+      assert.equal(containerOf(id), '', 'no container while it ran no command');
+    }
+    await m.close();
+  } finally { await t.close(); }
+  if (id) assert.equal(containerOf(id), '', 'none left behind');
+});
+
+test('mode "ask": a run from another app waits for the person\'s approval in the app (it shows as a waiting request), then finishes', async () => {
+  const t = await setupServer();
+  try {
+    const c = new McpClient(new HttpTransport(`${t.base}/mcp`, { authorization: `Bearer ${OPERATOR}` }));
+    await c.initialize();
+    for (const p of [t.ds, t.an]) p.scripts.ask = [
+      { calls: [{ name: 'write', input: { path: 'note.txt', content: 'written after approval' } }] },
+      { text: 'Wrote the note.' },
+    ];
+    const call = c.callTool('run_agent', { agent: 'general', task: '[[ask]] Write the note.', mode: 'ask' });
+    // The request waits in the person's approvals; they allow it in the app.
+    let pending: Array<{ sessionId: string; requestId: string; kind: string }> = [];
+    for (let i = 0; i < 100 && !pending.length; i++) { await new Promise((r) => setTimeout(r, 100)); pending = (await t.call(OPERATOR, 'GET', '/api/approvals')).body; }
+    assert.equal(pending[0]?.kind, 'permission_request', JSON.stringify(pending));
+    const res = await t.call(OPERATOR, 'POST', `/api/sessions/${pending[0]!.sessionId}/respond`, { requestId: pending[0]!.requestId, decision: 'allow' });
+    assert.ok(res.status < 300, res.text);
+    const r = await call;
+    assert.match(text(r), /^Wrote the note\./);
+    const meta = (await t.call(OPERATOR, 'GET', `/api/sessions/${pending[0]!.sessionId}`)).body.meta;
+    assert.equal(meta.mode, 'default');
+    await c.close();
+  } finally { await t.close(); }
+});

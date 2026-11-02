@@ -9,6 +9,7 @@ import { readJson, withFileLock, writeFileAtomic } from '../util/shared-file.ts'
 import { seal, serverKey, unseal } from '../util/sealed.ts';
 import { HttpTransport, McpClient, type McpCallResult, type McpTool, StdioTransport } from './client.ts';
 import { spawnPlan, type McpStatus } from './manager.ts';
+import { installMcpb, type McpbManifest, readZip } from './mcpb.ts';
 import { type McpEntry, qualifiedName } from './tools.ts';
 
 // A person's own MCP servers: services they connect in the app (Settings > MCP servers), by URL or, for an
@@ -445,6 +446,38 @@ export class UserMcp {
       cur.updatedAt = Date.now();
     });
     return this.test(owner, name);
+  }
+
+  // ---- an MCP bundle (.mcpb, a Claude Desktop extension) as one of the person's servers ----
+
+  /** What a bundle is and the settings it asks for (nothing is installed). */
+  inspectBundle(bundle: Buffer): { name: string; version?: string; description?: string; settings: Array<{ key: string; title?: string; description?: string; required?: boolean; sensitive?: boolean; default?: unknown }> } {
+    const mf = readZip(bundle).find((f) => f.name === 'manifest.json');
+    if (!mf) throw new McpServerError('not an MCP bundle: it has no manifest.json');
+    let m: McpbManifest;
+    try { m = JSON.parse(mf.data.toString('utf8')) as McpbManifest; } catch { throw new McpServerError('its manifest.json is not valid JSON'); }
+    return { name: String(m.name ?? ''), ...(m.version ? { version: m.version } : {}), ...(m.description ? { description: String(m.description).slice(0, 500) } : {}), settings: Object.entries(m.user_config ?? {}).map(([key, v]) => ({ key, ...v })) };
+  }
+
+  /**
+   * Installs a bundle as the person's own server (a command: administrators only). Its sensitive settings are
+   * ${vault:name} references, read from the person's vault when it starts; the rest are plain values.
+   */
+  async installBundle(owner: string | undefined, bundle: Buffer, userConfig: Record<string, string> = {}): Promise<ServerView> {
+    if (!this.isAdmin(owner)) throw new McpServerError('A bundle runs its program on the server\'s computer: only administrators can install one.', 403);
+    const info = this.inspectBundle(bundle);
+    for (const s of info.settings) {
+      const v = userConfig[s.key];
+      if (s.sensitive && v && !HAS_VAULT_REF.test(v)) throw new McpServerError(`${s.key} is a secret: put it in the Vault and give \${vault:name} here`);
+    }
+    const name = info.name.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+    if (!SERVER_NAME.test(name)) throw new McpServerError(`the bundle's name "${info.name}" cannot be a server name`);
+    const root = path.join(this.dir, 'bundles', this.id(owner));
+    let b: Awaited<ReturnType<typeof installMcpb>>;
+    try { b = await installMcpb(bundle, root, userConfig); } catch (e) { throw new McpServerError((e as Error).message); }
+    const c = b.config as { command?: string; args?: string[]; env?: Record<string, string> };
+    const cfg = { name, type: 'stdio', command: c.command, ...(c.args ? { args: c.args } : {}), ...(c.env && Object.keys(c.env).length ? { env: c.env } : {}), cwd: b.dir, ...(b.description ? { description: b.description } : {}) };
+    return (await this.get(owner, name)) ? this.update(owner, name, cfg) : this.create(owner, cfg, { source: 'mcpb' });
   }
 
   // ---- connecting ----

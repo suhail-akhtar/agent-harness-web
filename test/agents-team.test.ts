@@ -88,3 +88,50 @@ test('a team\'s spend limit covers its members: the run stops when the whole tea
     assert.equal(t.ds.byKey.hp2, undefined, 'no member started after the limit');
   } finally { await t.close(); }
 });
+
+test('a team the orchestrator delegates to still leads (one level deeper than other agents): its members run at once and report to it, and it reports up', async () => {
+  const t = await setupServer();
+  try {
+    const mk = (b: Record<string, unknown>) => t.call(OPERATOR, 'POST', '/api/me/agents', { model: 'deepseek-flash', tools: ['read'], ...b });
+    for (const name of ['part-one', 'part-two']) assert.equal((await mk({ name, description: `Does ${name} of a job and reports it.`, prompt: 'Do your part.' })).status, 201);
+    assert.equal((await mk({ name: 'crew', description: 'Does a two-part job with its team and reports the result.', prompt: 'Lead.', team: { members: ['part-one', 'part-two'] } })).status, 201);
+    const g1 = gate(); const g2 = gate();
+    t.ds.scripts.orch = [{ calls: [{ name: 'agent', input: { description: 'the job', type: 'crew', prompt: '[[crewlead]] Do the two-part job.' } }] }, { text: 'The crew reported: both parts done.' }];
+    t.ds.scripts.crewlead = [
+      { calls: [{ name: 'agent', input: { description: 'one', type: 'part-one', prompt: '[[p1]] Part one.' } }, { name: 'agent', input: { description: 'two', type: 'part-two', prompt: '[[p2]] Part two.' } }] },
+      { text: 'Both parts are done.' },
+    ];
+    t.ds.scripts.p1 = [{ text: 'Part one done.', wait: g1.p }];
+    t.ds.scripts.p2 = [{ text: 'Part two done.', wait: g2.p }];
+    const made = await t.call(OPERATOR, 'POST', '/api/sessions', { model: 'deepseek-flash', runtime: 'local', mode: 'bypass' });
+    const s = t.harness.sessions.get(made.body.id)!;
+    const events: HarnessEvent[] = [];
+    s.subscribe(0, ({ event }) => events.push(event));
+    await s.send('[[orch]] Get the two-part job done.');
+    await waitFor(() => (t.ds.byKey.p1?.length ?? 0) === 1 && (t.ds.byKey.p2?.length ?? 0) === 1, 'both members started under the delegated lead');
+    g1.open(); g2.open();
+    await waitFor(() => events.some((e) => e.kind === 'turn_end' && !e.agent), 'the conversation finished');
+    // The lead (a sub-agent) had the agent tool, offering its members only.
+    const leadTools = t.ds.byKey.crewlead![0]!.tools.find((x) => x.name === 'agent')!;
+    assert.match(leadTools.description, /part-one[\s\S]*part-two/);
+    assert.ok(!/\bgeneral\b/.test(leadTools.description));
+    // Its report reached the orchestrator.
+    const res = s.history.flatMap((m) => m.content).filter((b) => b.type === 'tool_result').map((b) => String((b as { content: unknown }).content));
+    assert.ok(res.some((r) => /Both parts are done/.test(r)), res.join('\n---\n'));
+    assert.match(s.history.at(-1)!.content.map((b) => (b as { text?: string }).text ?? '').join(''), /The crew reported/);
+  } finally { await t.close(); }
+});
+
+test('Generate can draft a team: members only from the agents listed (others dropped and said), the reviewer one of them; one member is no team', async () => {
+  const { generateAgent } = await import('../src/agents/generate.ts');
+  const model = { id: 'fake', provider: 'fake', label: 'Fake', efforts: ['medium'], effort: 'medium', rate: () => ({ input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1.25 }) };
+  const answer = (draft: unknown) => ({ send: async () => ({ message: { role: 'assistant', content: [{ type: 'text', text: JSON.stringify(draft) }] }, stop: 'end', usage: { input: 900, cacheRead: 0, cacheWrite: 0, output: 200, reasoning: 0 } }) });
+  const base = { name: 'release-lead', description: 'Gets a release ready with a team.', prompt: 'Split the release work.', tools: ['read'] };
+  const agents = [{ name: 'test-writer', description: 'Writes tests.' }, { name: 'security-reviewer', description: 'Reviews security.' }];
+  const common = { description: 'An agent that gets releases ready: tests and a security pass.', model: model as never, tools: [{ name: 'read', description: 'Read a file.' }], mcpServers: [], skills: [], agents, taken: [] };
+  const r = await generateAgent({ ...common, provider: answer({ ...base, team: { members: ['test-writer', 'security-reviewer', 'made-up'], reviewer: 'security-reviewer' } }) as never });
+  assert.deepEqual(r.draft.team, { members: ['test-writer', 'security-reviewer'], reviewer: 'security-reviewer' });
+  assert.deepEqual(r.dropped, ['team: made-up']);
+  const one = await generateAgent({ ...common, provider: answer({ ...base, team: { members: ['test-writer'] } }) as never });
+  assert.equal(one.draft.team, undefined);
+});

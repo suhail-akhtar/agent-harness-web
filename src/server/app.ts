@@ -1677,6 +1677,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
           // The tools a delegated agent can use (not the ones that talk to the person or start sessions).
           tools: delegableTools().map((t) => ({ name: t.spec.name, description: t.spec.description })),
           mcpServers: [...new Set([...registry.mcpServers.keys(), ...(await harness.userMcp.list(me.id)).filter((x) => x.enabled).map((x) => x.name)])], skills: await serverSkills(), taken,
+          agents: [...BUILTIN_AGENTS, ...registry.agents.values(), ...(await harness.agentStore.list(me.id)).filter((x) => x.enabled)].map((x) => ({ name: x.name, description: x.description })),
         });
         o.spend?.add(me.id, r.costUsd);
         return send(res, 200, r);
@@ -1758,6 +1759,15 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       try {
         if (p === '/api/me/mcp' && method === 'GET') return send(res, 200, { servers: await um.list(me.id), admin: um.isAdmin(me.id) });
         if (p === '/api/me/mcp' && method === 'POST') { const b = await readJson(req); return send(res, 201, await um.create(me.id, b.server ?? b, { source: 'app', ...(typeof b.enabled === 'boolean' ? { enabled: b.enabled } : {}) })); }
+        // An MCP bundle (.mcpb, base64): what it asks for (inspect), or installed as the person's own server.
+        if (p === '/api/me/mcp/bundle' && method === 'POST') {
+          const b = await readJson(req, 64 * 1024 * 1024);
+          if (typeof b.base64 !== 'string' || !b.base64) throw new HttpError(400, 'base64 is the bundle');
+          const buf = Buffer.from(b.base64, 'base64');
+          if (b.inspect) return send(res, 200, um.inspectBundle(buf));
+          const cfg = b.userConfig && typeof b.userConfig === 'object' ? Object.fromEntries(Object.entries(b.userConfig as Record<string, unknown>).map(([k, v]) => [k, String(v ?? '')]).filter(([, v]) => v !== '')) : {};
+          return send(res, 201, await um.installBundle(me.id, buf, cfg));
+        }
         // A config from Claude Desktop, Claude Code, Cursor or VS Code: what it holds (preview), or added (apply).
         if (p === '/api/me/mcp/import' && method === 'POST') {
           const b = await readJson(req);

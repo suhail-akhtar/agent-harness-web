@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Agents and MCP, gaps closed: a team the orchestrator delegates to now leads its members (it had no agent tool
+  past the default nesting depth); Generate drafts teams from your agents; a `.mcpb` can be one of your own servers
+  (administrators; secrets as vault references); runs from other apps can wait for your approval in the app
+  (mode `ask`); the installed app can pack `.mcpb` bundles (esbuild ships with it). DuckDB and command servers,
+  a member's sandboxed run, and real public servers (DeepWiki, Linear's OAuth discovery) are tested.
 - **Teams** (docs/agents-mcp/PLAN.md, phase 5): an agent can lead a team (the builder's Team part: its members and
   a reviewer). It hands work only to its members, starts independent parts at once so they run in parallel, gives
   each a complete brief, keeps writers off each other's files, has its reviewer check the result, and its spend

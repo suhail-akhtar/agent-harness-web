@@ -2146,7 +2146,7 @@ export class Session {
     // Another model gets this session's data: only one the person allowed (asked first when they want that).
     if (a.model && a.delegated && !a.approved) await this.checkDelegation(a.model, { ask: true, signal: a.signal });
     // Deeper sub-agents only as far as the operator allows; at most maxParallelSubagents at once.
-    const nests = depth < settings.maxSubagentDepth;
+    let nests = depth < settings.maxSubagentDepth;
     const release = depth > 1 || a.noHooks ? () => {} : await this.slot(settings.maxParallelSubagents, a.signal);
     let entry: SubEntry | undefined;
     let name = '';
@@ -2156,6 +2156,8 @@ export class Session {
     // A switched-off plugin's agent type is still listed (the cached prefix is unchanged) but does not run.
     const defOff = switchedOff(def, `the ${def.name} agent`);
     if (defOff) throw new Error(defOff);
+    // A team lead hands work to its members wherever it runs, down to the hard limit of three levels.
+    if (def.team && depth < 3) nests = true;
     const n = ++this.subagents;
     name = a.label ?? `${def.name}-${n}`;
     // A model the agent named is used as named (it was allowed); a definition's or the operator's falls back to the session's when missing.
