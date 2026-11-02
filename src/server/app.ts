@@ -29,6 +29,8 @@ import { UI_API_VERSION } from '../../packages/plugin-ui/src/manifest.ts';
 import { approvalItem, type HubEvent } from '../kernel/events.ts';
 import { PluginStateError } from '../kernel/harness.ts';
 import { cleanBaseUrl, providerBaseUrl, testProvider } from '../kernel/provider-keys.ts';
+import type { ModelSpec } from '../core/models.ts';
+import type { Provider } from '../providers/types.ts';
 import { resolveUiFile, UI_CSP, UI_CSP_DOCUMENT } from '../plugins/ui.ts';
 import { SessionBusyError } from '../core/session.ts';
 import type { ImageBlock, Message } from '../core/types.ts';
@@ -48,6 +50,9 @@ import { generateAgent } from '../agents/generate.ts';
 import { AgentStoreError, defOf } from '../agents/store.ts';
 import { parseMcpImport } from '../mcp/import.ts';
 import { McpServerError } from '../mcp/servers.ts';
+import { BuildError } from '../mcp/build/service.ts';
+import { type ExposedAgent, harnessMcpServer } from '../mcp/expose.ts';
+import { createMcpHandler } from '@modelcontextprotocol/server';
 import type { AgentDef } from '../plugins/api.ts';
 import { skillsIn } from '../skills/skills.ts';
 
@@ -340,6 +345,111 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     if (bySession) return { p: bySession, viaSession: true };
     const byCookie = principalFor(cookie(req, 'hw_token'));
     return byCookie && { p: byCookie, viaSession: false };
+  }
+
+  /**
+   * A new conversation for `me` from a request's fields (POST /api/sessions, and the harness's own MCP server): its
+   * agent, model, runtime (a sandbox, a server folder for an administrator, a companion), mode and the rest.
+   */
+  async function newSession(me: Principal, b: Record<string, unknown>): Promise<Session> {
+    const admin = me.role === 'admin';
+    const { sessions, companions, registry } = harness;
+    let client: ReturnType<typeof cleanClient> | undefined;
+    try { client = b.client === undefined || b.client === null ? undefined : cleanClient(b.client); } catch (e) { if (e instanceof ClientDeclError) throw new HttpError(400, e.message); throw e; }
+    // A conversation that runs as an agent: one the person may start (built-in, a plugin's, or their own and on);
+    // its model when none is named and it has one that is available.
+    let agent: AgentDef | undefined;
+    if (typeof b.agent === 'string' && b.agent) {
+      const own = await harness.agentStore.get(me.id, b.agent);
+      agent = own?.enabled ? defOf(own) : BUILTIN_AGENTS.find((a) => a.name === b.agent) ?? registry.agents.get(b.agent);
+      if (!agent) throw new HttpError(400, `no agent named "${b.agent}" (or it is switched off)`);
+      if (agent.userInvocable === false) throw new HttpError(400, `the ${agent.name} agent is for the orchestrator only (userInvocable is off)`);
+    }
+    const agentModel = agent?.model && registry.listModels().some((m) => m.id === agent!.model && m.available) ? agent.model : undefined;
+    const model = String(b.model ?? agentModel ?? registry.listModels().find((m) => m.available)?.id ?? '');
+    const kind = b.runtime === 'local' || b.runtime === 'companion' ? b.runtime : 'docker';
+    const sandbox = kind === 'local' && ['auto', 'bwrap', 'seatbelt', 'docker', 'off'].includes(String(b.sandbox)) ? b.sandbox as SessionMeta['runtime']['sandbox'] : undefined;
+    // An allowlist needs the egress proxy: a Docker sandbox (including a server folder mounted into one), or a
+    // server folder in an OS sandbox (bubblewrap, Seatbelt), where the proxy runs as a local process.
+    const proxied = kind === 'docker' || sandbox === 'docker';
+    const fenced = proxied || (kind === 'local' && (sandbox ?? process.env.HARNESS_LOCAL_SANDBOX ?? 'off') !== 'off');
+    const runtime: SessionMeta['runtime'] = { kind, network: b.network === 'full' ? 'full' : b.network === 'allowlist' && fenced ? 'allowlist' : 'none', ...(sandbox ? { sandbox } : {}) };
+    if (proxied) capped('sandboxes', me.id);
+    if (typeof b.setup === 'string' && b.setup.trim()) {
+      if (!proxied) throw new HttpError(400, 'A setup script runs in a Docker sandbox: choose the Docker runtime (or the Docker sandbox for a server folder).');
+      if (b.setup.length > 20_000) throw new HttpError(400, 'The setup script is limited to 20,000 characters.');
+      runtime.setup = b.setup;
+    }
+    if (kind === 'docker') {
+      if (!await dockerAvailable()) throw new HttpError(400, 'Docker is not available on the server. Choose a companion or local workspace.');
+      let image: string;
+      try { image = sessionImage(typeof b.image === 'string' && b.image ? b.image : undefined); } catch (e) { throw new HttpError(400, (e as Error).message); }
+      if (!await imageExists(image)) throw new HttpError(400, `Sandbox image ${image} is missing. Build it with: npm run ${/desktop/.test(image) ? 'sandbox:image:desktop' : /3d.*export/.test(image) ? 'sandbox:image:3d-export' : /3d/.test(image) ? 'sandbox:image:3d' : 'sandbox:image'}`);
+      if (image !== dockerDefaults().image) runtime.image = image;
+    }
+    if (kind === 'local') {
+      // Commands in a server folder run on the server itself, unsandboxed.
+      if (!admin) throw new HttpError(403, 'Server folders are for administrators: commands there run on the server itself. Use a sandbox or your own computer (companion).');
+      if (!o.localRoots.length) throw new HttpError(400, 'Local workspaces are disabled. Set HARNESS_LOCAL_ROOTS on the server.');
+      if (typeof b.path === 'string' && b.path) {
+        const real = path.resolve(b.path);
+        if (!o.localRoots.some((r) => real === r || real.startsWith(r + path.sep))) throw new HttpError(400, 'That folder is not under HARNESS_LOCAL_ROOTS.');
+        runtime.path = real;
+      }
+    }
+    if (kind === 'companion') {
+      const id = String(b.companionId ?? '');
+      if (!companions.list().some((c) => c.id === id && mayUse(me, c.owner))) throw new HttpError(400, 'Unknown companion.');
+      runtime.companionId = id;
+    }
+    const s = await sessions.create({
+      title: typeof b.title === 'string' ? b.title : undefined,
+      model,
+      effort: EFFORTS.includes(b.effort as Effort) ? b.effort as Effort : agent?.effort,
+      mode: MODES.includes(b.mode as PermissionMode) ? b.mode as PermissionMode : undefined,
+      ...(agent ? { agent: agent.name, ...(!b.title ? { title: agent.name } : {}) } : {}),
+      runtime,
+      gitUrl: typeof b.gitUrl === 'string' && b.gitUrl ? b.gitUrl : undefined,
+      owner: me.id,
+      allowHosts: Array.isArray(b.allowHosts) ? b.allowHosts.map(String) : undefined,
+      // A server folder that is a git repository can get its own worktree and branch (parallel sessions on one repository).
+      worktree: kind === 'local' && !!runtime.path && b.worktree === true,
+      outputStyle: typeof b.outputStyle === 'string' && b.outputStyle ? b.outputStyle : undefined,
+      ...(client ? { client } : {}),
+    }).catch((e: Error) => { throw e.name === 'WorktreeError' || e.constructor.name === 'WorktreeError' || /output style/.test(e.message) ? new HttpError(400, e.message) : e; });
+    return s;
+  }
+
+  /** The agents a person may hand work to over MCP: built-in, plugins', and their own that are on (never orchestrator-only ones). */
+  async function exposedAgents(me: Principal): Promise<ExposedAgent[]> {
+    const out: ExposedAgent[] = [];
+    for (const a of BUILTIN_AGENTS) if (a.userInvocable !== false) out.push({ name: a.name, description: a.description, source: 'builtin' });
+    for (const a of harness.registry.agents.values()) if (a.userInvocable !== false) out.push({ name: a.name, description: a.description, source: 'plugin', ...(a.model ? { model: a.model } : {}) });
+    for (const a of await harness.agentStore.list(me.id)) if (a.enabled && a.userInvocable !== false) out.push({ name: a.name, description: a.description, source: 'user', ...(a.model ? { model: a.model } : {}) });
+    const seen = new Set<string>();
+    return out.reverse().filter((a) => !seen.has(a.name) && seen.add(a.name)).reverse();
+  }
+
+  /** POST /mcp: one streamable HTTP request to the harness's MCP server, as `me`. */
+  async function mcpEndpoint(req: http.IncomingMessage, res: http.ServerResponse, me: Principal): Promise<void> {
+    const admin = me.role === 'admin';
+    const agents = await exposedAgents(me);
+    const deps = {
+      agents: () => exposedAgents(me),
+      // An administrator's run works on the server (a folder of theirs, or a workspace of its own); a member's in a sandbox.
+      start: (x: { agent: string; title: string; folder?: string; model?: string; mode: string }) => newSession(me, { agent: x.agent, title: x.title, mode: x.mode, ...(x.model ? { model: x.model } : {}), runtime: admin || x.folder ? 'local' : 'docker', ...(x.folder ? { path: x.folder } : {}) }),
+      get: (id: string) => { const s = harness.sessions.get(id); return s && mayUse(me, s.meta.owner) ? s : undefined; },
+      models: () => harness.registry.listModels().filter((m) => m.available).map((m) => m.id),
+    };
+    const handler = createMcpHandler(() => harnessMcpServer(deps, agents));
+    const body = req.method === 'POST' ? Buffer.from(await readRaw(req, 4 * 1024 * 1024)) : Buffer.alloc(0);
+    const headers = Object.fromEntries(Object.entries(req.headers).filter((e): e is [string, string] => typeof e[1] === 'string'));
+    const ctl = new AbortController();
+    res.on('close', () => { if (!res.writableFinished) ctl.abort(); });
+    const response = await handler.fetch(new Request(`http://${req.headers.host ?? '127.0.0.1'}/mcp`, { method: req.method, headers, signal: ctl.signal, ...(body.length ? { body } : {}) }));
+    res.writeHead(response.status, Object.fromEntries(response.headers.entries()));
+    if (response.body) for await (const c of response.body) res.write(c);
+    res.end();
   }
 
   /** Text for the browser when a sign-in fails: the person reads it, not the UI. */
@@ -762,6 +872,21 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       return send(res, 202, { ok: r.result === 'started', result: r.result, ...(r.sessionId ? { session: r.sessionId } : {}) });
     }
 
+    // ---- the harness as an MCP server: the person's agents as tools (src/mcp/expose.ts). A bearer token only: no
+    // cookie or browser session reaches it, so no page can drive it.
+    if (p === '/mcp') {
+      const bearer = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1];
+      // HARNESS_MCP_TOKEN: the desktop app's token for other apps, good on /mcp only (as the app's person).
+      const mcpOnly = process.env.HARNESS_MCP_TOKEN && bearer && safeEqual(bearer, process.env.HARNESS_MCP_TOKEN) ? { name: 'operator', role: 'admin' } as Principal : undefined;
+      const pm = o.authOff ? { name: 'operator', role: 'admin' } as Principal : mcpOnly ?? (bearer?.startsWith(DESKTOP_TOKEN_PREFIX) ? desktopPrincipal(bearer) : principalFor(bearer));
+      if (!pm) {
+        res.writeHead(401, { 'content-type': 'application/json', 'www-authenticate': 'Bearer realm="agent-harness"' });
+        return void res.end(JSON.stringify({ error: 'Send your access token as Authorization: Bearer <token>.' }));
+      }
+      limited(limiter, pm);
+      return mcpEndpoint(req, res, pm);
+    }
+
     // ---- an MCP server's sign-in comes back here, in the person's browser (no harness sign-in: the single-use state is the proof) ----
     if (p === '/api/mcp/oauth/callback' && method === 'GET') {
       const esc = (t: string) => t.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -1130,73 +1255,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       const last = page.at(-1);
       return send(res, 200, { sessions: page.map((m) => ({ ...m, status: sessions.statusOf(m.id) })), ...(hits.length > limit && last ? { next: `${last.updatedAt}:${last.id}` } : {}) });
     }
-    if (p === '/api/sessions' && method === 'POST') {
-      const b = await readJson(req);
-      let client: ReturnType<typeof cleanClient> | undefined;
-      try { client = b.client === undefined || b.client === null ? undefined : cleanClient(b.client); } catch (e) { if (e instanceof ClientDeclError) throw new HttpError(400, e.message); throw e; }
-      // A conversation that runs as an agent: one the person may start (built-in, a plugin's, or their own and on);
-      // its model when none is named and it has one that is available.
-      let agent: AgentDef | undefined;
-      if (typeof b.agent === 'string' && b.agent) {
-        const own = await harness.agentStore.get(me.id, b.agent);
-        agent = own?.enabled ? defOf(own) : BUILTIN_AGENTS.find((a) => a.name === b.agent) ?? registry.agents.get(b.agent);
-        if (!agent) throw new HttpError(400, `no agent named "${b.agent}" (or it is switched off)`);
-        if (agent.userInvocable === false) throw new HttpError(400, `the ${agent.name} agent is for the orchestrator only (userInvocable is off)`);
-      }
-      const agentModel = agent?.model && registry.listModels().some((m) => m.id === agent!.model && m.available) ? agent.model : undefined;
-      const model = String(b.model ?? agentModel ?? registry.listModels().find((m) => m.available)?.id ?? '');
-      const kind = b.runtime === 'local' || b.runtime === 'companion' ? b.runtime : 'docker';
-      const sandbox = kind === 'local' && ['auto', 'bwrap', 'seatbelt', 'docker', 'off'].includes(String(b.sandbox)) ? b.sandbox as SessionMeta['runtime']['sandbox'] : undefined;
-      // An allowlist needs the egress proxy: a Docker sandbox (including a server folder mounted into one), or a
-      // server folder in an OS sandbox (bubblewrap, Seatbelt), where the proxy runs as a local process.
-      const proxied = kind === 'docker' || sandbox === 'docker';
-      const fenced = proxied || (kind === 'local' && (sandbox ?? process.env.HARNESS_LOCAL_SANDBOX ?? 'off') !== 'off');
-      const runtime: SessionMeta['runtime'] = { kind, network: b.network === 'full' ? 'full' : b.network === 'allowlist' && fenced ? 'allowlist' : 'none', ...(sandbox ? { sandbox } : {}) };
-      if (proxied) capped('sandboxes', me.id);
-      if (typeof b.setup === 'string' && b.setup.trim()) {
-        if (!proxied) throw new HttpError(400, 'A setup script runs in a Docker sandbox: choose the Docker runtime (or the Docker sandbox for a server folder).');
-        if (b.setup.length > 20_000) throw new HttpError(400, 'The setup script is limited to 20,000 characters.');
-        runtime.setup = b.setup;
-      }
-      if (kind === 'docker') {
-        if (!await dockerAvailable()) throw new HttpError(400, 'Docker is not available on the server. Choose a companion or local workspace.');
-        let image: string;
-        try { image = sessionImage(typeof b.image === 'string' && b.image ? b.image : undefined); } catch (e) { throw new HttpError(400, (e as Error).message); }
-        if (!await imageExists(image)) throw new HttpError(400, `Sandbox image ${image} is missing. Build it with: npm run ${/desktop/.test(image) ? 'sandbox:image:desktop' : /3d.*export/.test(image) ? 'sandbox:image:3d-export' : /3d/.test(image) ? 'sandbox:image:3d' : 'sandbox:image'}`);
-        if (image !== dockerDefaults().image) runtime.image = image;
-      }
-      if (kind === 'local') {
-        // Commands in a server folder run on the server itself, unsandboxed.
-        if (!admin) throw new HttpError(403, 'Server folders are for administrators: commands there run on the server itself. Use a sandbox or your own computer (companion).');
-        if (!o.localRoots.length) throw new HttpError(400, 'Local workspaces are disabled. Set HARNESS_LOCAL_ROOTS on the server.');
-        if (typeof b.path === 'string' && b.path) {
-          const real = path.resolve(b.path);
-          if (!o.localRoots.some((r) => real === r || real.startsWith(r + path.sep))) throw new HttpError(400, 'That folder is not under HARNESS_LOCAL_ROOTS.');
-          runtime.path = real;
-        }
-      }
-      if (kind === 'companion') {
-        const id = String(b.companionId ?? '');
-        if (!companions.list().some((c) => c.id === id && mayUse(me, c.owner))) throw new HttpError(400, 'Unknown companion.');
-        runtime.companionId = id;
-      }
-      const s = await sessions.create({
-        title: typeof b.title === 'string' ? b.title : undefined,
-        model,
-        effort: EFFORTS.includes(b.effort as Effort) ? b.effort as Effort : agent?.effort,
-        mode: MODES.includes(b.mode as PermissionMode) ? b.mode as PermissionMode : undefined,
-        ...(agent ? { agent: agent.name, ...(!b.title ? { title: agent.name } : {}) } : {}),
-        runtime,
-        gitUrl: typeof b.gitUrl === 'string' && b.gitUrl ? b.gitUrl : undefined,
-        owner: me.id,
-        allowHosts: Array.isArray(b.allowHosts) ? b.allowHosts.map(String) : undefined,
-        // A server folder that is a git repository can get its own worktree and branch (parallel sessions on one repository).
-        worktree: kind === 'local' && !!runtime.path && b.worktree === true,
-        outputStyle: typeof b.outputStyle === 'string' && b.outputStyle ? b.outputStyle : undefined,
-        ...(client ? { client } : {}),
-      }).catch((e: Error) => { throw e.name === 'WorktreeError' || e.constructor.name === 'WorktreeError' || /output style/.test(e.message) ? new HttpError(400, e.message) : e; });
-      return send(res, 201, s.meta);
-    }
+    if (p === '/api/sessions' && method === 'POST') return send(res, 201, (await newSession(me, await readJson(req))).meta);
 
     // ---- the key vault: names and metadata out, values only in (never returned) ----
     if (p === '/api/vault/audit' || p.startsWith('/api/vault/entries')) {
@@ -1645,6 +1704,53 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       throw new HttpError(405, 'method not allowed');
     }
 
+    // ---- the MCP server builder (src/mcp/build/service.ts): drafts, builds with their checks, bundles, registering ----
+    if (p.startsWith('/api/me/mcp-builds')) {
+      const b = harness.mcpBuilder;
+      try {
+        if (p === '/api/me/mcp-builds' && method === 'GET') return send(res, 200, await b.list(me.id));
+        if (p === '/api/me/mcp-builds/draft' && method === 'POST') {
+          const body = await readJson(req);
+          limited(messageLimiter, me);
+          const src = String(body.source ?? '');
+          let ai: { model: ModelSpec; provider: Provider } | undefined;
+          if (src === 'description' || src === 'command') {
+            const over = o.spend?.over(me.id);
+            if (over) throw new HttpError(429, over);
+            const id = typeof body.model === 'string' && body.model ? body.model : registry.listModels().find((m) => m.available)?.id;
+            const model = id ? registry.listModels().find((m) => m.id === id && m.available) : undefined;
+            if (!model) throw new HttpError(400, 'no model is available to draft the server');
+            ai = { model, provider: registry.provider(model) };
+          }
+          if (typeof body.text === 'string' && body.text.length > 10_000_000) throw new HttpError(413, 'the document is too large');
+          const d = await b.draft(me.id, body as never, ai);
+          if (d.costUsd) o.spend?.add(me.id, d.costUsd);
+          return send(res, 200, d);
+        }
+        if (p === '/api/me/mcp-builds' && method === 'POST') {
+          const body = await readJson(req);
+          const settings = body.settings && typeof body.settings === 'object' ? Object.fromEntries(Object.entries(body.settings as Record<string, unknown>).map(([k, v]) => [k, String(v ?? '')])) : {};
+          return send(res, 200, await b.build(me.id, body.spec, settings, typeof body.source === 'string' ? body.source : 'spec'));
+        }
+        const m = /^\/api\/me\/mcp-builds\/([a-z0-9][a-z0-9-]{0,39})(?:\/(pack|bundle|file|register))?$/.exec(p);
+        if (m) {
+          const name = m[1]!;
+          if (!m[2] && method === 'GET') { const r = await b.get(me.id, name); if (!r) throw new HttpError(404, `no server "${name}" was built`); return send(res, 200, r); }
+          if (!m[2] && method === 'DELETE') { await b.remove(me.id, name); return send(res, 200, { ok: true }); }
+          if (m[2] === 'pack' && method === 'POST') return send(res, 200, await b.pack(me.id, name));
+          if (m[2] === 'bundle' && method === 'GET') {
+            const buf = await b.bundle(me.id, name);
+            // As JSON for an app that saves it itself (the desktop's save dialog).
+            if (url.searchParams.get('as') === 'base64') return send(res, 200, { name: `${name}.mcpb`, base64: buf.toString('base64') });
+            res.writeHead(200, { 'content-type': 'application/zip', 'content-disposition': `attachment; filename="${name}.mcpb"`, 'cache-control': 'no-store', 'content-length': String(buf.length) });
+            return void res.end(buf);
+          }
+          if (m[2] === 'file' && method === 'GET') return send(res, 200, { path: url.searchParams.get('path'), text: await b.file(me.id, name, url.searchParams.get('path') ?? '') });
+          if (m[2] === 'register' && method === 'POST') return send(res, 200, { ...(await b.register(me.id, name)), server: await harness.userMcp.viewOf(me.id, name) });
+          throw new HttpError(405, 'method not allowed');
+        }
+      } catch (e) { if (e instanceof BuildError || e instanceof McpServerError) throw new HttpError(e.status, e.message); throw e; }
+    }
 
     // ---- the person's own MCP servers (src/mcp/servers.ts) ----
     if (p.startsWith('/api/me/mcp')) {

@@ -38,7 +38,8 @@ function unzip(buf: Buffer): Map<string, Buffer> {
   return out;
 }
 
-function zip(files: Array<{ name: string; data: Buffer }>): Buffer {
+/** A zip of files (deflated, with CRCs): workbooks, MCP bundles. */
+export function zip(files: Array<{ name: string; data: Buffer }>): Buffer {
   const parts: Buffer[] = []; const dir: Buffer[] = [];
   let off = 0;
   for (const f of files) {

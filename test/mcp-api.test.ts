@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import path from 'node:path';
 import { startModernHttp } from './mcp-fixtures.ts';
+import { tempDir } from './helpers.ts';
 import { OPERATOR, setupServer } from './multi-helpers.ts';
 
 // /api/me/mcp: a person's own MCP servers over HTTP, the browser's return from a sign-in, imports, and who may do what.
@@ -93,4 +95,42 @@ test('the API: add, test, sign in through the browser, approve, policies, import
     assert.equal((await c(OPERATOR, 'DELETE', '/api/me/mcp/notes')).status, 200);
     assert.equal((await c(OPERATOR, 'GET', '/api/me/mcp/notes')).status, 404);
   } finally { srv.stop(); await t.close(); }
+});
+
+test('the builder API: a member may not build; an administrator drafts from a database, builds and checks, registers, packs and downloads, reads a config, removes', async () => {
+  const t = await setupServer();
+  try {
+    const al = await t.member('al');
+    const c = (tok: string, m: string, p: string, b?: unknown) => t.call(tok, m, p, b);
+    const dir = await tempDir();
+    const file = path.join(dir, 'notes.db');
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(file);
+    db.exec("CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT); INSERT INTO notes (title) VALUES ('first'), ('second');");
+    db.close();
+    assert.equal((await c(al.token, 'POST', '/api/me/mcp-builds/draft', { source: 'database', kind: 'sqlite', path: file })).status, 403);
+    const draft = (await c(OPERATOR, 'POST', '/api/me/mcp-builds/draft', { source: 'database', kind: 'sqlite', path: file })).body;
+    assert.deepEqual(draft.tables.map((x: { name: string }) => x.name), ['notes']);
+    assert.equal((await c(OPERATOR, 'POST', '/api/me/mcp-builds', { spec: { ...draft.spec, tools: [] } })).status, 422);
+    const built = await c(OPERATOR, 'POST', '/api/me/mcp-builds', { spec: draft.spec, settings: { DATABASE_PATH: file }, source: 'database' });
+    assert.equal(built.status, 200, built.text);
+    assert.equal(built.body.report.ok, true, JSON.stringify(built.body.report.checks));
+    const name = built.body.name as string;
+    assert.deepEqual((await c(OPERATOR, 'GET', '/api/me/mcp-builds')).body.map((r: { name: string }) => r.name), [name]);
+    const reg = (await c(OPERATOR, 'POST', `/api/me/mcp-builds/${name}/register`)).body;
+    assert.equal(reg.created, true);
+    assert.equal(reg.server.type, 'stdio');
+    assert.equal((await c(OPERATOR, 'POST', `/api/me/mcp/${name}/test`)).body.ok, true);
+    const packed = (await c(OPERATOR, 'POST', `/api/me/mcp-builds/${name}/pack`)).body;
+    assert.ok(packed.bundle.bytes > 10_000);
+    const b64 = (await c(OPERATOR, 'GET', `/api/me/mcp-builds/${name}/bundle?as=base64`)).body;
+    assert.equal(b64.name, `${name}.mcpb`);
+    const raw = await c(OPERATOR, 'GET', `/api/me/mcp-builds/${name}/bundle`);
+    assert.equal(raw.headers.get('content-type'), 'application/zip');
+    const cfg = (await c(OPERATOR, 'GET', `/api/me/mcp-builds/${name}/file?path=configs/mcp.json`)).body;
+    assert.equal(JSON.parse(cfg.text).mcpServers[name].type, 'stdio');
+    assert.equal((await c(OPERATOR, 'GET', `/api/me/mcp-builds/${name}/file?path=../../secret`)).status, 404);
+    assert.equal((await c(OPERATOR, 'DELETE', `/api/me/mcp-builds/${name}`)).status, 200);
+    assert.equal((await c(OPERATOR, 'GET', `/api/me/mcp-builds/${name}`)).status, 404);
+  } finally { await t.close(); }
 });

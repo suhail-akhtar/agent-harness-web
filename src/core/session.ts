@@ -3,7 +3,7 @@ import { constants as fsc } from 'node:fs';
 import fs from 'node:fs/promises';
 import { resolveIn } from '../tools/paths.ts';
 import path from 'node:path';
-import { BUILTIN_AGENTS, INTERACTIVE_TOOLS, loadAgentDir, makeAgentTool, mcpServerOf, NESTING_TOOLS, stricterMode, toolMatches } from '../agents/agents.ts';
+import { BUILTIN_AGENTS, INTERACTIVE_TOOLS, loadAgentDir, makeAgentTool, mcpServerOf, NESTING_TOOLS, stricterMode, teamBrief, toolMatches } from '../agents/agents.ts';
 import { stopShellScript } from '../tools/exec.ts';
 import { describeWatch, TASK_TOOLS, type TaskEntry, TaskRegistry, type TaskService, watchTask } from '../tools/tasks.ts';
 import { formatGates, makeGatesTool, runGates } from '../gates/gates.ts';
@@ -308,6 +308,8 @@ interface Toolbox {
   workflows: WorkflowDef[];
   /** Plugin tool groups whose schemas wait behind load_tools (efficiency.deferPluginTools; empty when off). */
   groups: ToolGroup[];
+  /** How the agent tool is made here (a team lead's offers only its members). */
+  agentOpts: { catalogue?: string; isolation?: boolean };
   closeProject(): Promise<void>;
 }
 
@@ -1485,7 +1487,7 @@ export class Session {
     const groups = settings.efficiency.deferPluginTools ? pluginGroups(tools, (t) => reg.ownerOf(t), (p) => reg.plugins.find((x) => x.name === p)?.description) : [];
     // Loading one of a plugin's skills (its procedure for those tools) loads its tools too.
     for (const g of groups) { const own = skills.filter((s) => reg.ownerOf(s) === g.id).map((s) => s.name); if (own.length) g.skills = own; }
-    return { tools: sortTools(tools), agents: [...agents.values()], mcpEntries: entries, skills, mcp, workflows: [...workflows.values()], groups, closeProject: project.close };
+    return { tools: sortTools(tools), agents: [...agents.values()], mcpEntries: entries, skills, mcp, workflows: [...workflows.values()], groups, agentOpts: { catalogue, isolation }, closeProject: project.close };
   }
 
   /** The tool schemas this session's main agent sends now, all of them, and its groups (scripts/tool-schema-size.ts). */
@@ -1617,7 +1619,7 @@ export class Session {
         this.scheduleSave();
       },
       // 0 is "no limit" (the desktop's No limit, or HARNESS_MAX_COST_USD=0 on a server).
-      overBudget: () => (this.runCap && this.meta.cost - this.runCap.from >= this.runCap.usd ? `Stopped: this scheduled run reached its spend limit of $${this.runCap.usd.toFixed(2)} ($${(this.meta.cost - this.runCap.from).toFixed(4)} spent).` : undefined) ?? ((this.settings?.maxCostUsd ?? 0) > 0 && this.meta.cost >= this.settings!.maxCostUsd ? `Stopped: this conversation reached its spend limit of $${this.settings!.maxCostUsd.toFixed(2)}. Raise it in Settings (Application > Spend limit per conversation, or HARNESS_MAX_COST_USD on a server), then say "continue".` : undefined) ?? this.deps.spend?.over(this.meta.owner),
+      overBudget: () => (this.runCap && this.meta.cost - this.runCap.from >= this.runCap.usd ? `Stopped: this scheduled run reached its spend limit of $${this.runCap.usd.toFixed(2)} ($${(this.meta.cost - this.runCap.from).toFixed(4)} spent).` : undefined) ?? ((this.settings?.maxCostUsd ?? 0) > 0 && this.meta.cost >= this.settings!.maxCostUsd ? `Stopped: this conversation reached its spend limit of $${this.settings!.maxCostUsd.toFixed(2)}. Raise it in Settings (Application > Spend limit per conversation, or HARNESS_MAX_COST_USD on a server), then say "continue".` : undefined) ?? this.agentCap() ?? this.deps.spend?.over(this.meta.owner),
       getMode: () => this.meta.mode,
       rules: () => this.rules(),
       requestPermission: (tool, input, summary, suggestion, agent) => this.askPermission(tool, input, summary, suggestion, agent),
@@ -1788,6 +1790,12 @@ export class Session {
 
   private agentView?: { tb: Toolbox; def: AgentDef; tools: Tool[]; system: string };
   /** What a conversation that runs as an agent (meta.agent) uses, worked out once per toolbox (the same tools each turn: the cache holds). */
+  /** A conversation that runs as an agent with a spend limit (a team's covers its members too): reached, why. */
+  private agentCap(): string | undefined {
+    const d = this.agentView?.def;
+    return d?.maxCostUsd && this.meta.cost >= d.maxCostUsd ? `Stopped: the ${d.name} ${d.team ? 'team' : 'agent'} reached its spend limit of $${d.maxCostUsd} in this conversation ($${this.meta.cost.toFixed(4)} spent).` : undefined;
+  }
+
   private async asAgent(tb: Toolbox): Promise<{ def: AgentDef; tools: Tool[]; system: string } | undefined> {
     if (!this.meta.agent) return undefined;
     if (this.agentView?.tb === tb) return this.agentView;
@@ -1797,7 +1805,7 @@ export class Session {
       return undefined;
     }
     const tools = this.toolsFor(def, tb, () => true);
-    const system = `\n\n<agent name="${def.name}">\nIn this conversation you are the ${def.name} agent: ${def.description}${def.prompt ? `\n\n${def.prompt}` : ''}${await this.skillBriefs(def, tb)}\n</agent>`;
+    const system = `\n\n<agent name="${def.name}">\nIn this conversation you are the ${def.name} agent: ${def.description}${def.prompt ? `\n\n${def.prompt}` : ''}${await this.skillBriefs(def, tb)}${teamBrief(def, tb.agents)}\n</agent>`;
     this.agentView = { tb, def, tools, system };
     return this.agentView;
   }
@@ -1830,6 +1838,16 @@ export class Session {
     if (def.skills) {
       const mine = tb.skills.filter((s) => def.skills!.includes(s.name));
       if (mine.length && !denied('skill')) tools.push(makeSkillTool(mine));
+    }
+    // A team lead hands work to its members only (whatever its tool list says about the agent tool).
+    if (def.team) {
+      const members = def.team.members.map((m) => tb.agents.find((a) => a.name === m)).filter((a): a is AgentDef => !!a);
+      const at = tools.findIndex((t) => t.spec.name === 'agent');
+      if (at >= 0) tools.splice(at, 1);
+      // In the foreground unless the lead asks otherwise: it needs their reports for its next step (several calls in
+      // one turn still run at the same time). Found live: in the background the lead briefed its reviewer before
+      // the work it was to check had come back.
+      if (members.length && !denied('agent')) tools.push(makeAgentTool(members.map((m) => ({ ...m, background: false })), tb.agentOpts));
     }
     return sortTools(tools);
   }
@@ -2207,7 +2225,7 @@ export class Session {
     for (const e of start.errors) this.emit({ kind: 'notice', level: 'warn', text: e, agent: name });
     const extra = start.feedback ? `\n\n<subagent_start_context>\n${start.feedback}\n</subagent_start_context>` : '';
     const where = isolated ? `\n\n<system-reminder>You work in your own git worktree (${isolated.w.dir}) on branch ${isolated.w.branch}. Commit your changes there when they are done.</system-reminder>` : '';
-    sub.append({ role: 'user', content: [{ type: 'text', text: `${env}${def.prompt ? `\n\n<role>\n${def.prompt}\n</role>` : ''}${await this.skillBriefs(def, tb)}${extra}${where}\n\n<brief>\n${a.prompt}\n</brief>` }] });
+    sub.append({ role: 'user', content: [{ type: 'text', text: `${env}${def.prompt ? `\n\n<role>\n${def.prompt}\n</role>` : ''}${await this.skillBriefs(def, tb)}${teamBrief(def, tb.agents)}${extra}${where}\n\n<brief>\n${a.prompt}\n</brief>` }] });
     this.emit({ kind: 'notice', level: 'info', text: `Started ${name} (${def.name}, ${model.id})${isolated ? ` in worktree ${isolated.w.branch}` : ''}${a.description ? `: ${a.description}` : ''}`, agent: name });
     const r = await this.drive(entry, name, a.signal);
     if (isolated) r.report += await this.closeSubWorktree(isolated);

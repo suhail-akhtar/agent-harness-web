@@ -16,6 +16,8 @@ export interface DesktopPaths { dataDir: string; /** The engine's data (in the h
 
 export interface DesktopContext {
   window(): BrowserWindow | null;
+  /** Your agents from other apps: the engine's MCP server's token and the bridge (mcp-access.ts). */
+  mcpAccess: import('./mcp-access').McpAccess;
   prefs: PrefsStore;
   engine(): Engine;
   product: ProductProfile;

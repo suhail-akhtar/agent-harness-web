@@ -12,9 +12,11 @@
 //   "away"     -> a step of work, then the model service fails (the turn ends on an error)
 //   "makeagent"-> opens the agent builder filled in (desktop_command core.agents:new), then says so
 //   "delegate" -> hands a review to the person's security-reviewer agent (agent tool), then reports what it said
+//   "teamwork" -> (a team lead) hands two parts to test-writer and security-reviewer at once, then reports
 //   "usemcp"   -> adds with the person's own MCP server "notes" (mcp__notes__add), has it change its tools
 //                 (mcp__notes__mutate), then tries the changed echo (refused), then says so
-// The agent builder's Generate (its system prompt) gets a drafted security reviewer as JSON.
+// The agent builder's Generate (its system prompt) gets a drafted security reviewer as JSON; the MCP server
+// builder's description (its system prompt) gets a unit converter (code tools, nothing reaches the network).
 //   anything else -> a short reply
 import path from 'node:path';
 import { createHarness } from '../../../src/kernel/harness.ts';
@@ -71,6 +73,10 @@ export const SCRIPTS: Record<string, Step[]> = {
     { calls: [{ name: 'agent', input: { description: 'security review', type: 'security-reviewer', prompt: 'Review the login change for security problems.' } }] },
     { text: 'The security reviewer looked at the login change.' },
   ],
+  teamwork: [
+    { calls: [{ name: 'agent', input: { description: 'tests', type: 'test-writer', prompt: 'Write the tests for the release.' } }, { name: 'agent', input: { description: 'security pass', type: 'security-reviewer', prompt: 'Look over the release for security problems.' } }] },
+    { text: 'The crew finished: tests written, and the security review found nothing.' },
+  ],
   usemcp: [
     { calls: [{ name: 'mcp__notes__add', input: { a: 20, b: 22 } }] },
     { calls: [{ name: 'mcp__notes__mutate', input: {} }] },
@@ -91,9 +97,20 @@ export const SCRIPTS: Record<string, Step[]> = {
 
 const DRAFT = { name: 'security-reviewer', description: 'Reviews code changes for security problems and returns each finding with a fix.', prompt: ['Role: a careful security reviewer.', 'Procedure: 1. Read the change. 2. Check auth, input handling and secrets.', 'Checks: re-read each finding against the code.', 'Never: change files.', 'Report: findings, each with a fix.'].join('\n'), tools: ['read', 'grep', 'glob', 'teleport'], effort: 'high', permissionMode: 'plan', maxTurns: 30 };
 
+const SERVER_DRAFT = {
+  name: 'unit-converter', title: 'Unit converter', description: 'Converts temperatures and lengths between units.',
+  tools: [
+    { name: 'convert_temperature', description: 'Convert a temperature between celsius and fahrenheit.', inputSchema: { type: 'object', properties: { value: { type: 'number', description: 'The temperature.' }, to: { type: 'string', enum: ['celsius', 'fahrenheit'], description: 'The unit to convert to.' } }, required: ['value', 'to'] }, annotations: { readOnlyHint: true, idempotentHint: true }, run: { kind: 'code', code: "const v = Number(args.value);\nreturn args.to === 'fahrenheit' ? `${v} C is ${(v * 9) / 5 + 32} F` : `${v} F is ${((v - 32) * 5) / 9} C`;" }, example: { value: 100, to: 'fahrenheit' } },
+    { name: 'convert_length', description: 'Convert a length between metres and feet.', inputSchema: { type: 'object', properties: { value: { type: 'number' }, to: { type: 'string', enum: ['metres', 'feet'] } }, required: ['value', 'to'] }, annotations: { readOnlyHint: true }, run: { kind: 'code', code: "const v = Number(args.value);\nreturn args.to === 'feet' ? `${(v * 3.28084).toFixed(2)} ft` : `${(v / 3.28084).toFixed(2)} m`;" }, example: { value: 10, to: 'feet' } },
+  ],
+};
+
 class ScriptedProvider implements Provider {
   private n = 0;
   async send(req: ProviderRequest): Promise<ProviderResponse> {
+    if (req.system.startsWith('You design MCP servers')) {
+      return { message: { role: 'assistant', content: [{ type: 'text', text: JSON.stringify(SERVER_DRAFT) }], raw: { provider: 'deepseek', model: req.model.id, payload: { role: 'assistant', content: JSON.stringify(SERVER_DRAFT) } } } as never, stop: 'end', usage: { input: 1200, cacheRead: 0, cacheWrite: 0, output: 400, reasoning: 0 } };
+    }
     if (req.system.startsWith('You design specialist AI agents')) {
       return { message: { role: 'assistant', content: [{ type: 'text', text: JSON.stringify(DRAFT) }], raw: { provider: 'deepseek', model: req.model.id, payload: { role: 'assistant', content: JSON.stringify(DRAFT) } } } as never, stop: 'end', usage: { input: 900, cacheRead: 0, cacheWrite: 0, output: 120, reasoning: 0 } };
     }

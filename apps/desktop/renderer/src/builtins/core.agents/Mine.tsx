@@ -159,6 +159,7 @@ type Form = {
   toolsMode: 'all' | 'some'; tools: string[]; disallowed: string; serversMode: 'all' | 'some'; servers: string[]; skills: string[];
   mode: '' | NonNullable<AgentDef['permissionMode']>; maxTurns: string; maxCostUsd: string; worktree: boolean; background: boolean;
   modelInvocable: boolean; userInvocable: boolean; color: string;
+  members: string[]; reviewer: string;
 };
 const toForm = (d: Partial<AgentDef> = {}): Form => ({
   name: d.name ?? '', description: d.description ?? '', prompt: d.prompt ?? '', model: d.model ?? '', effort: d.effort ?? '',
@@ -166,6 +167,7 @@ const toForm = (d: Partial<AgentDef> = {}): Form => ({
   serversMode: d.mcpServers ? 'some' : 'all', servers: d.mcpServers ?? [], skills: d.skills ?? [],
   mode: d.permissionMode ?? '', maxTurns: d.maxTurns ? String(d.maxTurns) : '', maxCostUsd: d.maxCostUsd ? String(d.maxCostUsd) : '',
   worktree: d.isolation === 'worktree', background: !!d.background, modelInvocable: d.modelInvocable !== false, userInvocable: d.userInvocable !== false, color: d.color ?? '',
+  members: d.team?.members ?? [], reviewer: d.team?.reviewer ?? '',
 });
 const fromForm = (f: Form): AgentDef => ({
   name: f.name.trim(), description: f.description.trim(), prompt: f.prompt,
@@ -177,6 +179,7 @@ const fromForm = (f: Form): AgentDef => ({
   ...(f.maxTurns ? { maxTurns: Number(f.maxTurns) } : {}), ...(f.maxCostUsd ? { maxCostUsd: Number(f.maxCostUsd) } : {}),
   ...(f.worktree ? { isolation: 'worktree' as const } : {}), ...(f.background ? { background: true } : {}),
   ...(!f.modelInvocable ? { modelInvocable: false } : {}), ...(!f.userInvocable ? { userInvocable: false } : {}), ...(f.color ? { color: f.color } : {}),
+  ...(f.members.length ? { team: { members: f.members, ...(f.reviewer ? { reviewer: f.reviewer } : {}) } } : {}),
 });
 
 /** A section of the builder: the kit's Section (dense), its help as its description. */
@@ -187,6 +190,7 @@ function Part({ title, children, help }: { title: string; children: React.ReactN
 export function AgentEditor({ open, edit, draft, onClose, onSaved }: { open: boolean; edit?: AgentRecord; draft?: Partial<AgentDef>; onClose: () => void; onSaved?: (a: AgentRecord) => void }): React.ReactElement {
   const [f, setF] = useState<Form>(() => toForm(edit ?? draft));
   const [opts, setOpts] = useState<AgentOptions | null>(null);
+  const [others, setOthers] = useState<Array<{ name: string; description: string }>>([]);
   const [describe, setDescribe] = useState('');
   const [busy, setBusy] = useState<'' | 'generate' | 'save'>('');
   const [error, setError] = useState('');
@@ -196,6 +200,8 @@ export function AgentEditor({ open, edit, draft, onClose, onSaved }: { open: boo
     if (!open) return;
     setF(toForm(edit ?? draft)); setError(''); setNote(''); setDescribe('');
     client.agents.options().then(setOpts).catch((e: Error) => setError(e.message));
+    // The agents a team can be made of (not itself).
+    client.agents.list().then((l) => setOthers(l.filter((a) => a.name !== edit?.name && (a.source !== 'user' || a.enabled !== false)).map((a) => ({ name: a.name, description: a.description })))).catch(() => setOthers([]));
     if (edit) client.agents.versions(edit.name).then((v) => setVersions(v.map((x) => ({ version: x.version, at: x.at })))).catch(() => setVersions([]));
     else setVersions([]);
   }, [open, edit?.name, edit?.version, draft]);
@@ -284,6 +290,21 @@ export function AgentEditor({ open, edit, draft, onClose, onSaved }: { open: boo
             <CheckboxGroup mono name="skills" items={opts!.skills.map((s) => ({ id: s.name, label: s.name, hint: s.description }))} value={f.skills} onChange={(skills) => set({ skills })} />
           </Part>
         )}
+
+        <Part title="Team" help="Optional: make it the lead of a team. It hands work only to these agents, in parallel where the work splits (each a complete brief, writers each in their own worktree), and has its reviewer check the result. Its spend limit covers the whole team.">
+          {others.length ? (
+            <div data-agent-team>
+              <CheckboxGroup mono name="team" items={others.map((a) => ({ id: a.name, label: a.name, hint: a.description }))} value={f.members} onChange={(members) => set({ members, ...(f.reviewer && !members.includes(f.reviewer) ? { reviewer: '' } : {}) })} />
+              {f.members.length > 0 && (
+                <div className="mt-3 max-w-sm">
+                  <Field label="Reviewer" help="Checks the members' work before the lead reports (optional).">
+                    <Select data-agent-reviewer value={f.reviewer} onChange={(reviewer) => set({ reviewer })} options={[{ value: '', label: 'No reviewer' }, ...f.members.map((m) => ({ value: m, label: m }))]} />
+                  </Field>
+                </div>
+              )}
+            </div>
+          ) : <p className="text-small text-hx-muted">No other agents yet.</p>}
+        </Part>
 
         <Part title="Autonomy" help="Never more than the conversation it works in allows.">
           <OptionCards name="agent-mode" label="Autonomy" value={f.mode} options={MODES.map((m) => ({ id: m.id, title: m.label, detail: m.help }))} onChange={(mode) => set({ mode })} />

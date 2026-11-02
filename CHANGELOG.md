@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- **Teams** (docs/agents-mcp/PLAN.md, phase 5): an agent can lead a team (the builder's Team part: its members and
+  a reviewer). It hands work only to its members, starts independent parts at once so they run in parallel, gives
+  each a complete brief, keeps writers off each other's files, has its reviewer check the result, and its spend
+  limit covers the whole team. Teams run as conversations, as delegated agents, and from other apps over MCP.
+- **Your agents in other apps** (docs/agents-mcp/PLAN.md, phase 4): the harness is an MCP server.
+  - `POST /mcp` (streamable HTTP, a bearer token only): each of your agents is a tool (`agent_<name>`), with
+    `run_agent`, `list_agents` and `get_result`. A run is a conversation as that agent that never waits for you;
+    a long one goes on after the call and its answer is fetched later.
+  - `src/mcp/bridge.ts`: the same over stdio, for apps that start a command.
+  - Desktop: Settings > Use your agents elsewhere (off until you turn it on): a token of its own, kept encrypted,
+    and the configs to copy for Claude Desktop, Claude Code, Cursor and VS Code (they find the app's engine
+    themselves, and need no Node.js).
+- **Build an MCP server** (docs/agents-mcp/PLAN.md, phase 3): Settings > MCP servers > Build a server.
+  - From a description (a model drafts a few workflow tools), an OpenAPI document (a tool per operation, its key as
+    a secret setting), a SQLite or DuckDB database (its tables, a find tool each, read-only SQL), or a command (its
+    `--help` read). You review the tools and settings.
+  - Built on the official SDK (both protocol eras, stdio and streamable HTTP) from a spec the harness checks, then
+    checked by the harness's own client: each read-only tool is called with an example, a bad call must come back
+    as an error, both eras and both transports must answer.
+  - Then add it to your servers, download it as a `.mcpb` for Claude Desktop, or copy its config for Claude Code,
+    Cursor or VS Code. It also carries a registry `server.json`, a README and a `package.json`.
+  - Building runs code on the server's computer: administrators only.
+  - `/api/me/mcp-builds` (draft, build, pack, bundle, file, register, remove).
 - **Your own MCP servers** (docs/agents-mcp/PLAN.md, phase 2): Settings > MCP servers.
   - Connect a service by its address (or, for an administrator, a command), sign in through the browser (OAuth 2.1,
     PKCE, dynamic registration, refresh; tokens sealed), or import the servers from a Claude Desktop, Claude Code,

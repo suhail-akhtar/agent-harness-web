@@ -49,6 +49,11 @@ export interface AgentDef {
   userInvocable?: boolean;
   /** A colour for it in the app ("#d97757" or a name). */
   color?: string;
+  /**
+   * A team: this agent leads it. It hands work only to its members (in parallel where the work splits) and has its
+   * reviewer check the result; its maxCostUsd covers the whole team.
+   */
+  team?: { members: string[]; reviewer?: string };
   /** A person's own agent: whose, which version, when it last changed. */
   owner?: string;
   version?: number;

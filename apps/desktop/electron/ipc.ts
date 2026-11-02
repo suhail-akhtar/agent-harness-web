@@ -68,6 +68,14 @@ export function registerIpc(ctx: DesktopContext): { grants: JsonFile<Grants> } {
   h('app:relaunch', () => { app.relaunch(); ctx.quit(); });
 
   h('engine:status', () => ctx.engine().state);
+  // Your agents from other apps: what to put in their configs, and turning it on or off (the engine restarts to take it).
+  h('mcp:access', () => ctx.mcpAccess.info());
+  h('mcp:setAccess', async (on: boolean, renew?: boolean) => {
+    ctx.mcpAccess.set(!!on, !!renew);
+    // The local engine reads its token at start (a remote server has its own people's tokens).
+    if (ctx.prefs.get().servers.active === 'local') await ctx.engine().restart();
+    return ctx.mcpAccess.info();
+  });
   h('engine:logs', () => ctx.engine().recentLog());
   h('engine:restart', async () => { await ctx.engine().restart(); return ctx.engine().state; });
 
@@ -253,6 +261,17 @@ export function registerIpc(ctx: DesktopContext): { grants: JsonFile<Grants> } {
     if (path.dirname(from) === path.join(imported(), '.staging')) fs.rmSync(from, { recursive: true, force: true });
   });
   // Saves a plugin bundle the window fetched from the server (Plugins > Export).
+  // A file the app made (an MCP server's .mcpb bundle): the save dialog; the path saved to, or null.
+  h('dialog:saveFile', async (fileName: string, base64: string, ext: string, label: string) => {
+    const w = ctx.window();
+    const e = /^[a-z0-9]{1,8}$/i.test(String(ext)) ? String(ext) : 'bin';
+    const name = path.basename(String(fileName)).replace(/[^\w .@()-]/g, '_') || `file.${e}`;
+    const opts = { title: 'Save', defaultPath: path.join(app.getPath('downloads'), name), filters: [{ name: String(label || e).slice(0, 60), extensions: [e] }] };
+    const r = w ? await dialog.showSaveDialog(w, opts) : await dialog.showSaveDialog(opts);
+    if (r.canceled || !r.filePath) return null;
+    fs.writeFileSync(r.filePath, Buffer.from(String(base64), 'base64'));
+    return r.filePath;
+  });
   h('plugins:saveBundle', async (fileName: string, base64: string) => {
     const w = ctx.window();
     const name = path.basename(String(fileName)).replace(/[^\w.@-]/g, '_') || 'plugin.tgz';

@@ -113,6 +113,9 @@ export function parseAgentFile(text: string, fallbackName: string, source: strin
   if (turns) def.maxTurns = Math.round(turns);
   const cost = num(data.maxCostUsd, 0.001, 1000);
   if (cost) def.maxCostUsd = cost;
+  // A team (our own keys: other tools ignore them).
+  const members = listOf(data.team);
+  if (members?.length) def.team = { members, ...(typeof data.reviewer === 'string' && data.reviewer ? { reviewer: data.reviewer } : {}) };
   if (data.isolation === 'worktree') def.isolation = 'worktree';
   const bg = yes(data.background) ?? yes(data.is_background);
   if (bg !== undefined) def.background = bg;
@@ -138,6 +141,7 @@ export function agentToMarkdown(def: AgentDef): string {
   if (def.maxCostUsd) lines.push(`maxCostUsd: ${def.maxCostUsd}`);
   if (def.mcpServers?.length) lines.push(`mcpServers: ${def.mcpServers.join(', ')}`);
   if (def.skills?.length) lines.push(`skills: ${def.skills.join(', ')}`);
+  if (def.team) { lines.push(`team: ${def.team.members.join(', ')}`); if (def.team.reviewer) lines.push(`reviewer: ${def.team.reviewer}`); }
   if (def.isolation) lines.push(`isolation: ${def.isolation}`);
   if (def.background !== undefined) lines.push(`background: ${def.background}`);
   if (def.modelInvocable === false) lines.push('disable-model-invocation: true');
@@ -214,7 +218,41 @@ export function checkAgentDef(x: unknown): AgentDef {
   }
   const color = s('color', 20);
   if (color) { if (!/^#?[\w-]{1,20}$/.test(color)) throw new AgentDefError('color is a name or #rrggbb'); def.color = color; }
+  if (o.team !== undefined && o.team !== null) {
+    const t = o.team as { members?: unknown; reviewer?: unknown };
+    if (!Array.isArray(t.members) || !t.members.length || t.members.length > 12 || t.members.some((m) => typeof m !== 'string' || !AGENT_NAME.test(m))) throw new AgentDefError('team.members is a list of 1 to 12 agent names');
+    const members = [...new Set(t.members as string[])];
+    if (members.includes(def.name)) throw new AgentDefError('a team does not include its lead');
+    const reviewer = typeof t.reviewer === 'string' && t.reviewer ? t.reviewer : undefined;
+    if (reviewer && !members.includes(reviewer)) throw new AgentDefError('team.reviewer is one of its members');
+    def.team = { members, ...(reviewer ? { reviewer } : {}) };
+  }
   return def;
+}
+
+/**
+ * A team lead's procedure, after its own instructions: its members as the catalogue lists them, how it sizes, splits
+ * and briefs the work (parallel where parts are independent, writers never on the same files), and its reviewer.
+ */
+export function teamBrief(def: AgentDef, agents: AgentDef[]): string {
+  if (!def.team) return '';
+  const t = def.team;
+  const roster = t.members.map((m) => {
+    const a = agents.find((x) => x.name === m);
+    return `- ${m}${m === t.reviewer ? ' (the reviewer)' : ''}: ${a ? a.description.split('\n')[0]!.slice(0, 300) : '(not available here)'}`;
+  });
+  return [
+    '', '', `<team lead="${def.name}">`,
+    'You lead a team. The agent tool offers only your members:', ...roster, '',
+    'How you work:',
+    '1. Size the effort to the task: a small one goes to one member (or you do it yourself); a broad one is split among 2 to 5 members. Never more agents than the work needs.',
+    '2. Split it into parts that do not depend on each other. Each member gets a complete brief: the goal, the context it needs (files, decisions so far, constraints), what done looks like, and the exact shape of its report. Members do not see this conversation.',
+    '3. Start independent parts in the same turn (several agent calls at once run in parallel). Never give two members the same files to change; where the folder is a git repository, a member that writes works in its own worktree (isolation: "worktree").',
+    '4. Check each report against its brief. For a gap, continue that member (send_message) instead of redoing its work.',
+    ...(t.reviewer ? [`5. Before you report, give the combined result to ${t.reviewer} with what to check (correctness, the brief, risks), and have what it finds fixed by the member who did that part.`] : []),
+    `${t.reviewer ? 6 : 5}. Report what was done and by whom${t.reviewer ? ', what the reviewer found and what was fixed' : ''}, and what is left.`,
+    '</team>',
+  ].join('\n');
 }
 
 /** A tool name matched against an agent's list: exact, or a glob with `*` (`mcp__github__*`). */

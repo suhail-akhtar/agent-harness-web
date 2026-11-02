@@ -11,6 +11,8 @@ import { Badge, Button, Callout, Card, CheckboxGroup, ChoiceGroup, EmptyState, F
 import { client, useData } from '../../state/data';
 import { useApp } from '../../state/app';
 import { desktop } from '../../bridge';
+import { BuildServerDialog, BuiltServers } from './BuildServer';
+import type { McpBuildRecord } from '@harness/client';
 
 const fail = (e: Error) => toast(e.message, { kind: 'error' });
 
@@ -46,6 +48,7 @@ export function McpServers(): React.ReactElement {
   const [editing, setEditing] = useState<McpServerView | 'new' | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
+  const [building, setBuilding] = useState<McpBuildRecord | 'new' | null>(null);
   const load = () => client.mcp.list().then((d) => { setData(d); setErr(''); }).catch((e: Error) => setErr(isMissing(e) ? 'This server does not offer your own MCP servers yet.' : e.message));
   useEffect(() => { void load(); }, [tick]);
 
@@ -58,11 +61,11 @@ export function McpServers(): React.ReactElement {
         title="Your MCP servers"
         description={<>Services your conversations and agents can use: tools, documents and prompts over the Model Context Protocol. Only you get them. Each tool is approved before it is used, and a server that later changes a tool needs your approval again.</>}
         count={data.servers.length}
-        actions={<><Button icon="upload" data-mcp-import onClick={() => setImporting(true)}>Import…</Button><Button variant="primary" icon="plus" data-mcp-add onClick={() => setEditing('new')}>Add server</Button></>}
+        actions={<>{data.admin && <Button icon="sparkles" data-mcp-build onClick={() => setBuilding('new')}>Build a server…</Button>}<Button icon="upload" data-mcp-import onClick={() => setImporting(true)}>Import…</Button><Button variant="primary" icon="plus" data-mcp-add onClick={() => setEditing('new')}>Add server</Button></>}
       >
         {!data.servers.length ? (
           <EmptyState variant="section" icon="plug" title="No servers yet" action={<Button variant="primary" icon="plus" onClick={() => setEditing('new')}>Add server</Button>}>
-            Connect one by its address (most services offer an MCP address, and sign-in), or import the servers you use in Claude Desktop, Claude Code, Cursor or VS Code.
+            Connect one by its address (most services offer an MCP address, and sign-in), import the servers you use in Claude Desktop, Claude Code, Cursor or VS Code, or build one{data.admin ? ' from a description, an API, a database or a command' : ''}.
           </EmptyState>
         ) : (
           <div className="flex flex-col gap-2">
@@ -84,6 +87,8 @@ export function McpServers(): React.ReactElement {
           </div>
         )}
       </Section>
+      {data.admin && <BuiltServers onOpen={(r) => setBuilding(r)} />}
+      {building && <BuildServerDialog open={building === 'new' ? undefined : building} onClose={() => setBuilding(null)} onDone={() => void load()} />}
       {editing && <ServerEditor admin={data.admin} editing={editing === 'new' ? null : editing} onClose={() => setEditing(null)} onSaved={(name) => { setEditing(null); void load(); setOpen(name); }} />}
       {open && <ServerDetail name={open} onClose={() => { setOpen(null); void load(); }} onEdit={(s) => { setOpen(null); setEditing(s); }} />}
       {importing && <ImportDialog admin={data.admin} onClose={() => setImporting(false)} onDone={() => { setImporting(false); void load(); }} />}

@@ -13,7 +13,7 @@ import { GlobalEvents, sessionEvents, type Fetch } from './events.ts';
 import {
   isPending, PENDING_KINDS, type Approval, type FileTree, type SearchHit, type Attachment, type CatalogueEntry, type PluginReview, type PluginUpdateInfo, type PluginRevisionInfo, type Config, type Capabilities, type ContextBreakdown, type LiveProviderModels, type EffectiveSetting, type Effort, type FileContent, type FileEntry,
   type GitLogEntry, type GitStatus, type Health, type HarnessEvent, type HistoryPage, type McpBundle, type Me, type Mode, type ModelInfo, type PendingRequest, type PluginInfo, type SolutionImportInfo,
-  type ProviderInfo, type ProviderTest, type InboxItem, type Interruptions, type NoticingOverview, type NoticeDetector, type AgentDef, type AgentInfo, type AgentOptions, type AgentRecord, type McpImportResult, type McpServerConfig, type McpServerView, type McpTestResult, type McpToolPolicy, type Schedule, type ScheduleRun, type ScheduleStats, type WatchSpec, type SessionDetail, type SessionMeta, type SessionsPage, type TaskView, type VaultEntry, type VersionInfo, type WorkflowInfo, type WorkflowRunView,
+  type ProviderInfo, type ProviderTest, type InboxItem, type Interruptions, type NoticingOverview, type NoticeDetector, type AgentDef, type AgentInfo, type AgentOptions, type AgentRecord, type McpBuildDraft, type McpBuildRecord, type McpBuildSource, type McpBuildSpec, type McpImportResult, type McpServerConfig, type McpServerView, type McpTestResult, type McpToolPolicy, type Schedule, type ScheduleRun, type ScheduleStats, type WatchSpec, type SessionDetail, type SessionMeta, type SessionsPage, type TaskView, type VaultEntry, type VersionInfo, type WorkflowInfo, type WorkflowRunView,
   type ArtifactContent, type ArtifactMeta, type Proposal, type TraceSpan,
 } from './types.ts';
 
@@ -374,6 +374,21 @@ export class HarnessClient {
     signOut: (name: string) => this.post<{ ok: boolean }>(`/api/me/mcp/${encodeURIComponent(name)}/signout`, {}),
     /** A Claude Desktop, Claude Code, Cursor or VS Code config: what it holds, or (apply) added. */
     import: (text: string, o: { apply?: boolean; names?: string[] } = {}) => this.post<McpImportResult>('/api/me/mcp/import', { text, ...o }),
+  };
+  /** The MCP server builder: a draft from an OpenAPI document, a database, a command or a description; built and checked; packed; added. */
+  mcpBuilds = {
+    list: () => this.get<McpBuildRecord[]>('/api/me/mcp-builds'),
+    get: (name: string) => this.get<McpBuildRecord>(`/api/me/mcp-builds/${encodeURIComponent(name)}`),
+    draft: (from: McpBuildSource) => this.post<McpBuildDraft>('/api/me/mcp-builds/draft', from),
+    /** Writes and checks the server; `settings` are its environment values (secrets as ${vault:name}). */
+    build: (spec: McpBuildSpec, settings: Record<string, string> = {}, source?: string) => this.post<McpBuildRecord>('/api/me/mcp-builds', { spec, settings, ...(source ? { source } : {}) }),
+    pack: (name: string) => this.post<McpBuildRecord>(`/api/me/mcp-builds/${encodeURIComponent(name)}/pack`, {}),
+    /** The address of its .mcpb (a download). */
+    bundleUrl: (name: string) => `/api/me/mcp-builds/${encodeURIComponent(name)}/bundle`,
+    bundle: (name: string) => this.get<{ name: string; base64: string }>(`/api/me/mcp-builds/${encodeURIComponent(name)}/bundle?as=base64`),
+    file: (name: string, path: string) => this.get<{ path: string; text: string }>(`/api/me/mcp-builds/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}`),
+    register: (name: string) => this.post<{ created: boolean; server: McpServerView }>(`/api/me/mcp-builds/${encodeURIComponent(name)}/register`, {}),
+    remove: (name: string) => this.del<{ ok: boolean }>(`/api/me/mcp-builds/${encodeURIComponent(name)}`),
   };
   /** What the harness notices by itself: its mode, detectors, what it would have said in practice, what it observed. */
   noticing = {

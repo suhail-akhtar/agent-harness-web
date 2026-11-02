@@ -287,6 +287,8 @@ export interface AgentDef {
   permissionMode?: 'default' | 'acceptEdits' | 'auto' | 'dontAsk' | 'plan';
   maxTurns?: number; maxCostUsd?: number; isolation?: 'worktree'; background?: boolean;
   modelInvocable?: boolean; userInvocable?: boolean; color?: string;
+  /** A team: it leads these agents (in parallel where the work splits), and its reviewer checks their work. */
+  team?: { members: string[]; reviewer?: string };
 }
 /** One of the person's own agents (GET /api/me/agents). */
 export interface AgentRecord extends AgentDef { prompt: string; owner?: string; version: number; createdAt: number; updatedAt: number; enabled: boolean }
@@ -328,6 +330,33 @@ export interface McpTestResult {
 }
 /** What a pasted config holds (POST /api/me/mcp/import). */
 export interface McpImportResult { format: string; servers: Array<{ config: McpServerConfig; warnings: string[]; disabled?: boolean }>; vault: string[]; errors: string[]; added?: string[] }
+
+/** A tool of a server the builder makes: what it does, and how (an HTTP call, a command, SQL, code). */
+export interface McpBuildTool {
+  name: string; title?: string; description: string; inputSchema: Record<string, unknown>; outputSchema?: Record<string, unknown>;
+  annotations: { readOnlyHint?: boolean; destructiveHint?: boolean; idempotentHint?: boolean; openWorldHint?: boolean };
+  run: { kind: 'http'; method: string; url: string; query?: string[]; body?: 'args' | string[]; headers?: Record<string, string> } | { kind: 'command'; command: string; args: string[] } | { kind: 'sql'; sql: string; params?: string[] } | { kind: 'code'; code: string };
+  example?: Record<string, unknown>;
+}
+/** What a built server offers (its spec.json). */
+export interface McpBuildSpec {
+  name: string; title?: string; version: string; description: string; instructions?: string;
+  env: Array<{ name: string; description: string; required?: boolean; secret?: boolean; default?: string }>;
+  database?: { kind: 'sqlite' | 'duckdb'; path: string; write?: boolean };
+  tools: McpBuildTool[];
+}
+/** Where a draft comes from. */
+export type McpBuildSource =
+  | { source: 'openapi'; text?: string; url?: string; only?: string[]; name?: string }
+  | { source: 'database'; kind: 'sqlite' | 'duckdb'; path: string; tables?: string[]; write?: boolean; name?: string }
+  | { source: 'description'; description: string; model?: string }
+  | { source: 'command'; command: string; description?: string; model?: string };
+export interface McpBuildDraft { spec: McpBuildSpec; operations?: Array<{ name: string; method: string; path: string; summary: string; readOnly: boolean }>; skipped?: string[]; tables?: Array<{ name: string; columns: Array<{ name: string; type: string }> }>; costUsd?: number }
+/** A server the builder made: its spec, its check, its bundle. */
+export interface McpBuildRecord {
+  name: string; spec: McpBuildSpec; source: string; builtAt: number; registered?: boolean; bundle?: { bytes: number; at: number };
+  report?: { ok: boolean; protocol?: string; tools: number; checks: Array<{ name: string; ok: boolean; detail?: string }> };
+}
 
 /** A schedule a finding offers: the person's own words, at the time they usually asked. */
 export interface NoticedDraft { title: string; prompt: string; cron?: string; timeZone?: string; folder?: string; model?: string }

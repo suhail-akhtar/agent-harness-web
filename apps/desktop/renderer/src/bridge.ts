@@ -63,6 +63,11 @@ export const desktop = {
   openExternal: (url: string) => invoke<boolean>('shell:openExternal', url),
   showItem: (p: string) => invoke<void>('shell:showItem', p),
   clipboard: (text: string) => invoke<boolean>('clipboard:write', text),
+  /** Your agents from other apps: the token and bridge command (when on), and turning it on or off. */
+  mcpAccess: () => invoke<{ enabled: boolean; token?: string; url?: string; bridge?: { command: string; args: string[]; env: Record<string, string> }; encryption: boolean }>('mcp:access'),
+  setMcpAccess: (on: boolean, renew?: boolean) => invoke<{ enabled: boolean; token?: string; url?: string; bridge?: { command: string; args: string[]; env: Record<string, string> }; encryption: boolean }>('mcp:setAccess', on, renew),
+  /** Saves a file the app made (base64) where the person picks: the path, or null when cancelled. */
+  saveFile: (fileName: string, base64: string, ext: string, label: string) => invoke<string | null>('dialog:saveFile', fileName, base64, ext, label),
   /** force: shown even while the window is in front (an agent's desktop_notify). */
   notify: (n: { title: string; body?: string; route?: string; force?: boolean }) => invoke<boolean>('notify:show', n).catch(() => false),
   /** Editing in the focused window, for the right-click menu (electron/edit.ts). */

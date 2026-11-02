@@ -26,6 +26,7 @@ import { followRun, followWorkflow } from '../core/schedule-track.ts';
 import { InboxStore } from '../core/inbox.ts';
 import { Noticer } from '../core/noticing.ts';
 import { UserMcp } from '../mcp/servers.ts';
+import { McpBuilder } from '../mcp/build/service.ts';
 import { AgentStore } from '../agents/store.ts';
 import { decideAlert, digestBody, digestDue, inQuietHours, type NotifyPolicy } from '../core/initiative.ts';
 import { describeWatch, probeWatch, TRIAGE_SYSTEM } from '../core/watch.ts';
@@ -184,6 +185,8 @@ export interface Harness {
   agentStore: AgentStore;
   /** People's own MCP servers (src/mcp/servers.ts). */
   userMcp: UserMcp;
+  /** The MCP server builder (src/mcp/build/service.ts). */
+  mcpBuilder: McpBuilder;
   /** Makes the digests that are due (a timer does, every minute; tests pass the time). */
   makeDigests(now?: number): Promise<void>;
   /** The key vault (absent when turned off). */
@@ -1179,7 +1182,7 @@ ${neutralizeTags(change).slice(0, 20_000)}
   }
 
   return {
-    registry, sessions, companions, mcp, scheduler, inbox, noticer, agentStore, userMcp, vault, dataDir: opts.dataDir, search: search?.backend, bridge, plugins, events, providerKeys, clients, data,
+    registry, sessions, companions, mcp, scheduler, inbox, noticer, agentStore, userMcp, mcpBuilder: new McpBuilder(opts.dataDir, userMcp), vault, dataDir: opts.dataDir, search: search?.backend, bridge, plugins, events, providerKeys, clients, data,
     ...(leases ? { cluster: { id: leases.owner, url: leases.url, leases, ...(clusterCfg?.secret ? { secret: clusterCfg.secret } : {}), ...(clusterCfg?.peers ? { peers: clusterCfg.peers } : {}) } } : {}),
     mcpb: {
       list: () => installedMcpb(mcpbRoot),

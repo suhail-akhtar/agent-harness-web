@@ -215,8 +215,85 @@ test('desktop app end to end: your MCP servers', { timeout: 10 * 60_000 }, async
       assert.deepEqual((await servers()).map((s) => s.name), ['cloud-notes', 'notes']);
     });
 
+    await step('Build a server from a description: drafted, its tools reviewed, built and checked by the harness, added to my servers', async () => {
+      await page.click('[data-mcp-build]');
+      await page.click('[data-choice="build-source"] [data-value="description"]');
+      await page.fill('[data-build-description]', 'A unit converter: temperatures and lengths, for my cooking and travel notes.');
+      await page.click('[data-build-draft]');
+      await page.waitForSelector('[data-build-step="review"]', { timeout: 20_000 });
+      assert.equal(await page.inputValue('[data-build-name]'), 'unit-converter');
+      assert.deepEqual(await page.$$eval('[data-checks="build-tools"] input:checked', (els) => els.map((e) => e.getAttribute('data-check'))), ['convert_temperature', 'convert_length']);
+      await shot('mcp-build-review', page.locator('[role="dialog"]').last());
+      await page.click('[data-build-go]');
+      await page.waitForSelector('[data-build-ok]', { timeout: 90_000 });
+      const checks = await page.locator('[data-build-checks]').innerText();
+      assert.match(checks, /speaks MCP 2026-07-28[\s\S]*convert_temperature works[\s\S]*100 C is 212 F[\s\S]*answers the 2025 handshake too[\s\S]*serves streamable HTTP/);
+      assert.equal(await page.locator('[data-check-row="failed"]').count(), 0);
+      await shot('mcp-build-checked', page.locator('[role="dialog"]').last());
+      await page.click('[data-build-register]');
+      await page.waitForFunction(async () => true);
+      for (let i = 0; i < 50 && !(await servers()).some((s) => s.name === 'unit-converter'); i++) await page.waitForTimeout(100);
+      const t2 = (await api('POST', '/api/me/mcp/unit-converter/test')).body as { ok: boolean; tools: Array<{ name: string; state: string }> };
+      assert.equal(t2.ok, true);
+      assert.deepEqual(t2.tools.map((x) => `${x.name}:${x.state}`).sort(), ['convert_length:approved', 'convert_temperature:approved']);
+    });
+
+    await step('its bundle is saved for Claude Desktop and its config copied for Claude Code; it is listed under the servers I built', async () => {
+      const target = path.join(data, 'unit-converter.mcpb');
+      await app.evaluate(({ dialog }, f) => { dialog.showSaveDialog = (async () => ({ canceled: false, filePath: f })) as never; }, target);
+      await page.click('[data-build-pack]');
+      for (let i = 0; i < 100 && !fs.existsSync(target); i++) await page.waitForTimeout(200);
+      assert.ok(fs.statSync(target).size > 10_000, 'the .mcpb was saved');
+      assert.equal(fs.readFileSync(target).subarray(0, 2).toString(), 'PK');
+      await app.evaluate(({ clipboard }) => clipboard.writeText(''));
+      await page.getByRole('button', { name: 'Claude Code (.mcp.json)' }).click();
+      let copied = '';
+      for (let i = 0; i < 50 && !copied; i++) { await page.waitForTimeout(100); copied = await app.evaluate(({ clipboard }) => clipboard.readText()); }
+      assert.equal(JSON.parse(copied).mcpServers['unit-converter'].type, 'stdio');
+      await page.click('[data-build-done]');
+      await page.locator('[data-builds] [data-build="unit-converter"]').waitFor();
+      assert.match(await page.locator('[data-build="unit-converter"]').innerText(), /Unit converter[\s\S]*In your servers[\s\S]*2 tools/);
+      await shot('mcp-servers-built', page.locator('[data-section="mcp-servers"]'));
+    });
+
+    await step('your agents in another app: turned on in Settings, its Claude Code config copied, and that app (the bridge, started as its config says) hands work to an agent', async () => {
+      await page.click('[data-settings-section="core.settings:mcp-access"]');
+      await page.waitForSelector('[data-section="mcp-access"]');
+      assert.equal(await page.locator('[data-mcp-token]').count(), 0, 'off until turned on');
+      await page.locator('[data-section="mcp-access"] [role="switch"]').click();
+      await page.waitForSelector('[data-mcp-token]', { timeout: 60_000 });
+      await page.waitForSelector('[data-engine-status="ready"]', { timeout: 90_000 });
+      await app.evaluate(({ clipboard }) => clipboard.writeText(''));
+      await page.click('[data-mcp-config="claude-code"]');
+      let copied = '';
+      for (let i = 0; i < 50 && !copied; i++) { await page.waitForTimeout(100); copied = await app.evaluate(({ clipboard }) => clipboard.readText()); }
+      const cfg = JSON.parse(copied).mcpServers['agent-harness'] as { type: string; command: string; args: string[]; env: Record<string, string> };
+      assert.equal(cfg.type, 'stdio');
+      assert.equal(cfg.env.ELECTRON_RUN_AS_NODE, '1');
+      assert.ok((cfg.env.HARNESS_TOKEN ?? "").length > 30);
+      await shot('mcp-access', page.locator('[data-section="mcp-access"]'));
+      // Started as Claude Code would start it.
+      const { spawn } = await import('node:child_process');
+      const { McpClient, StdioTransport } = await import('../src/mcp/client.ts');
+      const c = new McpClient(new StdioTransport(spawn(cfg.command, cfg.args, { env: { ...process.env, ...cfg.env } })), { callTimeoutMs: 120_000 });
+      try {
+        await c.initialize();
+        const tools = (await c.listTools()).map((x) => x.name);
+        assert.ok(tools.includes('run_agent') && tools.includes('agent_general'), tools.join(', '));
+        const r = await c.callTool('run_agent', { agent: 'general', task: 'Say hello from the other app.' });
+        assert.equal(r.isError, undefined, JSON.stringify(r));
+        assert.match(r.content?.map((x) => x.text).join('') ?? '', /conversation: \S+ \(finished\) · agent: general/);
+      } finally { await c.close(); }
+      // Off: the bridge cannot find it any more.
+      await page.locator('[data-section="mcp-access"] [role="switch"]').click();
+      await page.waitForSelector('[data-mcp-token]', { state: 'detached', timeout: 60_000 });
+      await page.waitForSelector('[data-engine-status="ready"]', { timeout: 90_000 });
+      assert.ok(!fs.existsSync(cfg.args[cfg.args.indexOf('--endpoint-file') + 1]!), 'the address file is gone');
+    });
+
     await step('no errors in the window', async () => {
-      assert.deepEqual(errors, []);
+      // Turning it on and off restarts the engine: the event streams drop meanwhile (and reconnect).
+      assert.deepEqual(errors.filter((e) => !(e.phase.startsWith('your agents in another app') && /ERR_FAILED \(harness:\/\/app\/api\/(sessions\/\w+\/)?events/.test(e.text))), []);
     });
   } finally {
     await app.close().catch(() => {});

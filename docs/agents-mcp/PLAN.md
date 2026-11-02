@@ -39,9 +39,9 @@ where it helps.
 |---|---|---|
 | 1 | **Custom agents.** Per-person agents (versioned): role, description, instructions, model and effort, tools (allow and deny, with globs), MCP servers, skills, autonomy (permission mode), turn and spend limits, worktree isolation, whether the person or the orchestrator may use it. Claude Code's file format in and out (also `.github/agents`, `.cursor/agents`). Enforced where an agent runs; its model checked against the allowed models (the gap). A whole conversation can run as an agent. `GET /api/agents`, `/api/me/agents` (create, edit, versions, delete, import, export), generate from a description, a test run. The desktop's Agents page: Your agents, a builder with Generate, Test and versions. | Done |
 | 2 | **MCP connections.** Per-person MCP servers (HTTP with headers or OAuth sign-in, secrets from the key vault; stdio where it may run), status and a Test, each tool's definition pinned (a change asks again) and set to allow, ask or block; the client on the official SDK (both spec eras, `list_changed`, resources and prompts as tools, OAuth). Settings' MCP servers: add by URL, command, pasted JSON (Claude Desktop, Claude Code, Cursor, VS Code formats) or a `.mcpb`. | Done (a `.mcpb` stays an operator's install, MCP bundles) |
-| 3 | **The MCP server builder.** "Make me an MCP server for …": from a description, an OpenAPI document, a command or a database. A builder agent and skill write a TypeScript server on the official SDK (stdio and HTTP), curated workflow tools with annotations, tests; the harness checks it with its own client (every tool called) and a conformance check, packs a `.mcpb` and a `server.json`, writes the config for Claude Desktop, Claude Code, Cursor and VS Code, and adds it to the person's servers. A wizard in the desktop app. | |
-| 4 | **The harness as an MCP server.** A streamable HTTP endpoint (`/mcp`, the person's token) that offers their agents as tools (and a stdio bridge for apps that start a command), so Claude Desktop, Claude Code or Cursor can hand work to them. | |
-| 5 | **Orchestration.** Teams: an agent that fans work out to named agents in parallel (isolated writers, a reviewer), with the brief template and effort scaling in its instructions, a spend limit for the whole team, and the Agents panel showing it live. | |
+| 3 | **The MCP server builder.** "Make me an MCP server for …": from a description, an OpenAPI document, a command or a database. A builder agent and skill write a TypeScript server on the official SDK (stdio and HTTP), curated workflow tools with annotations, tests; the harness checks it with its own client (every tool called) and a conformance check, packs a `.mcpb` and a `server.json`, writes the config for Claude Desktop, Claude Code, Cursor and VS Code, and adds it to the person's servers. A wizard in the desktop app. | Done |
+| 4 | **The harness as an MCP server.** A streamable HTTP endpoint (`/mcp`, the person's token) that offers their agents as tools (and a stdio bridge for apps that start a command), so Claude Desktop, Claude Code or Cursor can hand work to them. | Done |
+| 5 | **Orchestration.** Teams: an agent that fans work out to named agents in parallel (isolated writers, a reviewer), with the brief template and effort scaling in its instructions, a spend limit for the whole team, and the Agents panel showing it live. | Done |
 
 Each phase is tested on its own (engine, API, the desktop app end to end) and live on a real model before the next.
 
@@ -86,3 +86,85 @@ Each phase is tested on its own (engine, API, the desktop app end to end) and li
   server, imports and conversations (`test/mcp-user.test.ts`); the API (`test/mcp-api.test.ts`); the desktop app
   end to end (`test/desktop-e2e-mcp.test.ts`); live (`scripts/live-mcp.mjs`): 10 of 10 checks on Claude Sonnet 5.5
   ($0.018) and DeepSeek V4.1 Flash ($0.001).
+
+### Phase 3 as built
+
+- **A server is a spec and one runtime.** `src/mcp/build/template/server.ts` is a server on the official SDK
+  (`@modelcontextprotocol/server` 2.4: `serveStdio` for both eras on stdio, `createMcpHandler` for streamable HTTP,
+  JSON Schema through `fromJsonSchema`) that runs whatever its `spec.json` says. Each tool is an HTTP call (`{arg}` in
+  the path, query and JSON body arguments, headers from settings), a command (no shell), SQL against SQLite
+  (`node:sqlite`) or DuckDB, or a code body (`ctx.env`, `ctx.fetch`, `ctx.query`). Settings come from the environment
+  (`${NAME}`), never the spec; a header that carries a key must read one. A model writes data the harness checks
+  (`checkBuildSpec`), never free-form files; one tested runtime runs them all.
+- **Drafts** (`src/mcp/build/spec.ts`, `generate.ts`): from an OpenAPI 3 document (an operation each, `$ref`s
+  resolved, path, query and JSON body arguments, its API key or bearer token as a secret setting, hints from the
+  method, what cannot be a tool said); from a database (its tables, a find tool each with its columns as filters,
+  read-only SQL, an execute tool only when asked, opened read-only otherwise); from a command (its `--help` read, a
+  model drafts tools of kind "command"); from a description (a model drafts a few workflow tools with hints and
+  examples, real endpoints, keys as settings).
+- **Built and checked** (`builder.ts`): written to `<data>/mcp-builds/<owner>/<name>/` with `package.json`, a README,
+  an MCPB 0.3 `manifest.json` (secrets as sensitive user config), a registry `server.json`, and the configs for
+  Claude Desktop, Claude Code, Cursor and VS Code (secrets as `${input:}` there). The harness's own client checks it:
+  the 2026-07-28 protocol, the 2025 handshake, stdio and streamable HTTP, every tool listed as specified with a
+  description, an object schema and a read-only hint, each read-only tool called with its example, a call without
+  its required arguments answered as an error, an unknown tool refused. It runs from its folder without
+  `npm install` (`sdk-loader.mjs` resolves the SDK from the harness).
+- **Packed** as a `.mcpb` (esbuild bundles the server and the SDK into one file) that Claude Desktop installs, and
+  that the harness's own MCPB install runs. **Registered** to the person's servers (a command server: its settings as
+  given at build time, secrets only as `${vault:}` references).
+- Building runs code on the server's computer: administrators only (the desktop app's person is one).
+- **API**: `POST /api/me/mcp-builds/draft`, `POST /api/me/mcp-builds` (build and check), `GET .../:name`,
+  `POST .../pack`, `GET .../bundle`, `GET .../file?path=`, `POST .../register`, `DELETE .../:name`.
+- **Desktop**: Settings > MCP servers > Build a server: from a description, an OpenAPI document, a database or a
+  command; the draft's tools to keep and its settings; the check, each line; add it, download the `.mcpb`, copy the
+  config for another app. The servers built are listed there.
+- **Tested**: specs, OpenAPI and database drafts, an OpenAPI server checked against a real REST API with a key, a
+  SQLite server registered and used, a code server with a vault secret packed as a `.mcpb` that installs
+  (`test/mcp-build.test.ts`); the API (`test/mcp-api.test.ts`); the desktop app end to end
+  (`test/desktop-e2e-mcp.test.ts`); live (`scripts/live-mcp-build.mjs`): Claude Sonnet 5.5 drafted a weather server
+  from a plain description of the Open-Meteo APIs; the harness built it and its check called the real API (11 of 11
+  checks); a conversation then answered with its tools; 9 of 9 checks, $0.053. Found by the first live run: the
+  model made a public API's address a setting with no value, so a setting can now have a default (never a secret).
+
+### Phase 4 as built
+
+- **`POST /mcp`** (`src/mcp/expose.ts`): streamable HTTP on the official SDK, both protocol eras, made per request.
+  A bearer token only (an account's, the operator's, or the desktop app's MCP token): no cookie or browser session
+  reaches it, so no web page can drive it. The tools: `agent_<name>` for each agent the person may start (built-in,
+  plugins', their own that are on; never an orchestrator-only one), `run_agent` (by name, optionally another
+  model), `list_agents`, `get_result`.
+- **A run** is a conversation that runs as the agent (the same rules as `POST /api/sessions`: an administrator's on
+  the server, in a folder of theirs or a workspace of its own; a member's in a sandbox; a folder is for
+  administrators). It never waits for a person: dontAsk by default (what would need approval is refused), or plan,
+  acceptEdits, auto. Each tool call it makes is a progress notification. Past the wait (`waitSeconds`, default
+  600), the call returns the conversation's id and the run goes on; `get_result` fetches the answer. A call the
+  client cancels while waiting stops the run.
+- **The stdio bridge** (`src/mcp/bridge.ts`): for apps that start a command. It presents the same tools on stdio and
+  hands each call to `/mcp`; the token from the environment, never the command line.
+- **The desktop app** (Settings > Use your agents elsewhere, off until turned on): a token of its own for `/mcp`
+  (kept encrypted with the OS keychain; renewable), the engine's current address in a file the bridge reads (the
+  address changes with each start), the bridge run on the app's own runtime (no Node.js install), and the configs to
+  copy for Claude Desktop, Claude Code, Cursor and VS Code.
+- **Tested**: `test/mcp-expose.test.ts` (tokens and cookies, the tools, a run and its answer, a long run fetched
+  later, each person's own, the bridge) and the desktop app end to end (turned on, the Claude Code config copied,
+  the bridge started as that app would start it, an agent run through it, turned off).
+
+### Phase 5 as built
+
+- **A team is an agent with members** (`team: { members, reviewer? }` on an agent definition; `team:` and
+  `reviewer:` in its file). It leads them: its agent tool offers only its members (wherever it runs: a
+  conversation as the team, a delegated run, a run from another app over `/mcp`), and its instructions get the
+  lead's procedure (`teamBrief`): size the effort to the task, split it into independent parts, a complete brief
+  for each member, independent parts started in one turn so they run in parallel, writers never on the same files
+  (each in its own worktree where the folder is a repository), gaps sent back to the member who did the part, the
+  reviewer's check before the report.
+- **One spend limit for the team**: a conversation that runs as an agent stops at its `maxCostUsd`, and what its
+  members spend counts.
+- **Desktop**: the agent builder's Team part (members, a reviewer); the Agents panel and the transcript show each
+  member's run as it works.
+- **Tested**: `test/agents-team.test.ts` (definitions, a team whose two members are shown to run at the same time,
+  the reviewer, a non-member refused, the team-wide spend limit); the desktop app end to end (a team made in the
+  builder and run); live (`scripts/live-team.mjs`, through `/mcp`): 6 of 6 checks on Claude Sonnet 5.5 ($0.029) and
+  DeepSeek V4.1 Flash ($0.004); the two summarisers started in one turn, the checker after their work. Found by the
+  first live run: members ran in the background (the default for agents), so the lead briefed its reviewer before
+  the work had come back; a lead's members now run in the foreground unless it asks otherwise.

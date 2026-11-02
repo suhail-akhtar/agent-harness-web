@@ -199,13 +199,39 @@ test('desktop app end to end: custom agents', { timeout: 10 * 60_000 }, async (t
       assert.deepEqual(tw.tools?.sort(), ['bash', 'read', 'write']);
     });
 
+    await step('a team made in the builder (members, a reviewer) runs as a conversation: its two members work at once, and it reports', async () => {
+      await openMine();
+      await page.click('[data-agents-new]');
+      await page.waitForSelector('[data-agent-form="new"]');
+      await page.fill('[data-agent-name]', 'release-crew');
+      await page.fill('[data-agent-description]', 'Gets a release ready: tests and a security pass, in parallel.');
+      await page.fill('[data-agent-prompt]', 'Lead the release work.');
+      await page.click('[data-agent-team] [data-check="test-writer"]');
+      await page.click('[data-agent-team] [data-check="security-reviewer"]');
+      await page.selectOption('[data-agent-reviewer]', 'security-reviewer');
+      await shot('agent-team', page.locator('[data-agent-team]'));
+      await page.click('[data-agent-save]');
+      await card('release-crew').waitFor({ timeout: 15_000 });
+      const crew = (await mine()).find((a) => a.name === 'release-crew') as unknown as { team?: { members: string[]; reviewer?: string } };
+      assert.deepEqual(crew.team, { members: ['test-writer', 'security-reviewer'], reviewer: 'security-reviewer' });
+      const made = await api('POST', '/api/sessions', { agent: 'release-crew', model: 'deepseek-flash', runtime: 'local', mode: 'bypass' });
+      assert.equal(made.status, 201);
+      const id = (made.body as { id: string }).id;
+      await api('POST', `/api/sessions/${id}/messages`, { text: 'teamwork: get the release ready' });
+      const d = await idleSession(id);
+      const calls = (d.history as unknown as Array<{ content: Array<{ type: string; name?: string; input?: { type?: string } }> }>).flatMap((m) => m.content).filter((b) => b.type === 'tool_use' && b.name === 'agent').map((b) => b.input?.type);
+      assert.deepEqual(calls.sort(), ['security-reviewer', 'test-writer']);
+      const last = (d.history.at(-1) as unknown as { content: Array<{ type: string; text?: string }> }).content.map((b) => b.text ?? '').join('');
+      assert.match(last, /The crew finished/);
+    });
+
     await step('deleted from its menu; gone from the catalogue', async () => {
       await openMine();
       await card('doc-writer').locator('[data-agent-more]').click();
       await page.getByRole('menuitem', { name: 'Delete' }).click();
       await page.getByRole('dialog').getByRole('button', { name: 'Delete' }).click();
       await card('doc-writer').waitFor({ state: 'detached', timeout: 15_000 });
-      assert.deepEqual((await mine()).map((a) => a.name).sort(), ['security-reviewer', 'test-writer']);
+      assert.deepEqual((await mine()).map((a) => a.name).sort(), ['release-crew', 'security-reviewer', 'test-writer']);
     });
 
     await step('no errors in the window', async () => {

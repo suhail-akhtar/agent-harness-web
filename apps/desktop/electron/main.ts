@@ -22,6 +22,7 @@ import { DevWatch } from './dev-watch';
 import { normaliseProduct, solutionProduct, type ProductProfile } from '../shared/product';
 import { projectName } from '../shared/prefs';
 import { desktopRoots, engineLogFile, migrateEngineData, registerHomeIpc, resolveDesktopHome } from './home';
+import { engineRootOf, McpAccess } from './mcp-access';
 
 const distDir = __dirname;
 const desktopDir = path.resolve(distDir, '..');
@@ -84,6 +85,8 @@ function engineEntry(): string {
   return path.join(repoRoot ?? repoGuess, 'src', 'server', 'main.ts');
 }
 
+// Your agents from other apps (Settings > Use your agents elsewhere): off until the person turns it on.
+const mcpAccess = new McpAccess(dataDir, engineRootOf(repoRoot));
 const local = new EngineHost({
   entry: engineEntry(),
   env: () => {
@@ -95,7 +98,7 @@ const local = new EngineHost({
     // The product's edition: the solutions a new engine starts with (an existing one keeps what is installed).
     const solutions: Record<string, string> = !process.env.HARNESS_SOLUTIONS && product.server.solutions?.length ? { HARNESS_SOLUTIONS: product.server.solutions.join(',') } : {};
     const publishers: Record<string, string> = !process.env.HARNESS_PUBLISHER_KEYS && publisherKeys.length ? { HARNESS_PUBLISHER_KEYS: publisherKeys.join(path.delimiter) } : {};
-    return { ...solutions, ...publishers, ...(plugins ? { HARNESS_PLUGINS: plugins } : {}), HARNESS_HOME: home.layout.home, HARNESS_DATA: home.dataDir, HARNESS_LOCAL_ROOTS: localRoots().join(path.delimiter), HARNESS_DESKTOP: '1', ...(typeof limit === 'number' && limit >= 0 ? { HARNESS_MAX_COST_USD: String(limit) } : {}) };
+    return { ...solutions, ...publishers, ...(plugins ? { HARNESS_PLUGINS: plugins } : {}), HARNESS_HOME: home.layout.home, HARNESS_DATA: home.dataDir, HARNESS_LOCAL_ROOTS: localRoots().join(path.delimiter), HARNESS_DESKTOP: '1', ...mcpAccess.env(), ...(typeof limit === 'number' && limit >= 0 ? { HARNESS_MAX_COST_USD: String(limit) } : {}) };
   },
 });
 let engine: Engine = local;
@@ -140,9 +143,13 @@ const ctx: DesktopContext = {
   openPluginWindow: (name) => openPluginWindow(name),
   pluginShortcut: (name, title) => pluginShortcut(name, title),
   quit() { quitting = true; app.quit(); },
+  mcpAccess,
 };
 
-local.on('state', (s) => ctx.emit('engine:state', s));
+local.on('state', (s) => {
+  ctx.emit('engine:state', s);
+  if (s.status === 'ready') void local.ready().then((e) => mcpAccess.engineAt(e.origin), () => {}); else mcpAccess.engineAt(null);
+});
 local.on('log', (line) => { ctx.emit('engine:log', line); logToFile(line); });
 
 // A project opened outside the engine's roots: restart it with the new roots (the server reads them at start).
