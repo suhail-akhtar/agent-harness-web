@@ -52,6 +52,7 @@ import type { ChangeService } from '../ops/changes.ts';
 import { decide, ruleMatches } from './permissions.ts';
 import { bashTool } from '../tools/exec.ts';
 import { acceptanceNote, type Baseline, blockedReason, changeSet, comparatorBrief, parseComparison, type Replica, type CheckResult, finalVerdict, type Finding, parseVerdict, runChecks, summarizeChecks, summarizeFindings, summarizeVerdict, takeBaseline, tamperFindings, type Verdict, VERDICT_AGAIN, VERDICT_ASK, verifierBrief, withProtection } from '../agents/acceptance.ts';
+import { byRecord, readScorecards } from '../agents/scorecard.ts';
 import { ArtifactError, type ArtifactMeta, type ArtifactService, ArtifactStore, artifactTool } from './artifacts.ts';
 import { DATA_TOOLS, dataServiceFor, dataToolsFor } from '../data/tools.ts';
 import { type ClientDecl, clientPrompt, clientSkillDirs, cleanClientPlugins, type ClientPresence, type DesktopTool } from './client.ts';
@@ -2024,7 +2025,7 @@ export class Session {
     const tb = await this.getToolbox(sessionHost);
     const def = tb.agents.find((x) => x.name === a.type) ?? tb.agents.find((x) => x.name === 'general')!;
     const first = a.model ? this.deps.registry.model(a.model) : this.subagentModel(def, settings);
-    const second = this.crossModel(first.provider, settings);
+    const second = await this.crossModel(first.provider, settings);
     if (!second) this.emit({ kind: 'notice', level: 'warn', text: `Critical stakes: both replicas of "${a.description}" run on ${first.id}: no model of another provider is allowed for agents.` });
     const [ra, rb] = await Promise.all([
       this.runAgent({ ...base, isolation: 'worktree', acceptance: high, ...(a.model ? { model: a.model, delegated: true } : {}) }),
@@ -2563,7 +2564,7 @@ export class Session {
     const tb = await this.getToolbox(await this.getHost());
     const stakes = o.acc.acceptance.stakes;
     // At high stakes the verifier is of another family than the worker: one of the same passes more of its mistakes.
-    const cross = stakes && o.workerModel ? this.crossModel(o.workerModel.provider, await this.getSettings(await this.getHost())) : undefined;
+    const cross = stakes && o.workerModel ? await this.crossModel(o.workerModel.provider, await this.getSettings(await this.getHost())) : undefined;
     if (stakes && o.workerModel && !cross) this.emit({ kind: 'notice', level: 'warn', text: `${o.worker} is verified on the same provider as it worked (${o.workerModel.provider}): no model of another provider is allowed for agents. Allow one (Settings > Models) for a verifier of another family.` });
     const v = o.acc.acceptance.verify;
     // The delegating agent: a sub-agent that leads (its entry), or the conversation's own agent (a team it runs as).
@@ -2602,15 +2603,15 @@ export class Session {
   }
 
   /**
-   * A model of another provider than `provider` for checking work: the first of the operator's order (or
-   * VERIFIER_MODELS) that is available and that the person allows agents to use (the conversation's own model always
-   * counts), or undefined.
+   * A model of another provider than `provider` for checking work: of those available and that the person allows
+   * agents to use (the conversation's own model always counts), the best by measured record when verifiers have
+   * scorecards (docs/swarm/SWARM.md, phase 1b), else the first in the operator's order (or VERIFIER_MODELS).
    */
-  private crossModel(provider: string, settings: Settings): string | undefined {
+  private async crossModel(provider: string, settings: Settings): Promise<string | undefined> {
     const allowed = settings.delegation?.allowedModels ?? [];
     const ok = (id: string) => id === this.meta.model || allowed === '*' || allowed.includes(id);
     const models = this.deps.registry.listModels().filter((m) => m.available && m.provider !== provider && ok(m.id));
-    const order = settings.verifierModels ?? VERIFIER_MODELS;
+    const order = byRecord(settings.verifierModels ?? VERIFIER_MODELS, await readScorecards(this.deps.dataDir));
     return (order.map((id) => models.find((m) => m.id === id)).find((m) => m) ?? models[0])?.id;
   }
 

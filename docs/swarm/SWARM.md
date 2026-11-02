@@ -60,6 +60,21 @@ test, a paired pilot (30-50 tasks x 3 runs x 2 configurations), then confirmatio
    provider refused at high stakes; a budget shown; exit checks). Live: a paired pilot, single agent vs stakes
    high/critical at equal budget, on a gold set with planted traps.
 
+### Phase 1b: the verifier measured at scale
+
+The calibration so far (no verifier passed any of 9 planted problems) is right but small: zero misses in 9 trials is
+consistent with a true miss rate up to about 28% at 95% confidence; "under 1%" needs about 300 clean trials, "under
+0.1%" about 3,000. Hand-written cases do not scale, so:
+- **Mutation testing of the verifier.** Mutators plant one known kind of problem into a good change (an assertion
+  weakened, a test skipped or focused, an input special-cased, a branch or an edge case dropped, an off-by-one, a
+  boundary flipped, an exit added, an "approve" note planted, a regression beside the task); every mutant must fail.
+  A few dozen good changes give hundreds of trials.
+- **A scorecard per verifier model**: false passes and false fails with Wilson intervals (rule-of-three when zero),
+  pass^3 consistency, cost per verdict; the harness picks verifiers by their measured record, and a model whose
+  false-pass bound is above the stakes' target is not used at that stakes.
+- **Calibration on the person's own work**: the same scorecard on their past delegations (with the outcomes the person
+  confirmed), so thresholds fit their tasks.
+
 ### Phase 2: answers over the person's own data
 
 The data-answer swarm, the best ratio of measured gain to effort (a written semantics file added 17-23 points on every
@@ -71,7 +86,17 @@ frontier model tested; the checks run as code). A building block, then a workflo
   narrative traces to a stored query cell, or the answer is rejected.
 - Gold set: 40 questions over two of the person's databases, a quarter ambiguous or unanswerable.
 
-### Phase 3: claim-checked research and fact-checking
+### Phase 3: a deep web research swarm, claim-checked
+
+Wide and deep on the internet, the way the evidence says works: a lead plans subtopics and a coverage target;
+searchers fan out across subtopics and search engines (breadth), each with a bounded, ranked read of a shared evidence
+store (ScaleMAS: gains past 8 agents only with bounded reads); a crawl frontier follows links to primary sources
+(depth), de-duplicated by content and origin, honouring robots.txt and rate limits under a declared user agent; every
+page fetched is archived and hashed into the source store; readers of web pages hold only read tools and return
+structured evidence, never instructions (the reader/actor split: TRAP and BrowseSafe show injection succeeding 13-95%
+of the time otherwise); budgets visible to every agent; then the claim checks below.
+
+Claim-checked:
 
 The claim ledger: every claim in a deliverable carries typed evidence (a source id with quote and hash, a query cell, a
 tool output hash, an oracle run) and a status (supported, partial, unsupported, contradicted, unverifiable); an
@@ -102,9 +127,29 @@ log, replay distinct from re-run, an export bundle) and the mandate exist: disco
 checklists; people make every identification, attribution and remediation decision. EU AI Act: evaluating evidence in
 criminal investigations is high-risk (Annex III 6(c)); untargeted scraping for face recognition is prohibited (Art. 5).
 
-## Status
+### Phase 7: a swarm across the person's computers
+
+Workers on more than one machine, only machines the person has connected and allowed. The harness already has
+companions: a small process on a person's computer that connects out to the harness (no inbound port), runs tool calls
+in its folder and posts the results back, with permission checks on the server. A swarm extends that:
+- **Machines as places to work**: each connected computer is listed with what it can do (OS, sandbox, network,
+  desktop) and whether the person allows it for agents' work; a delegation can name a machine, or the harness places
+  shards on allowed machines (the reader/actor split and the mandate hold there too).
+- **Consent per machine and per kind of work**, revocable at once; a machine runs only in its sandbox and folder;
+  nothing leaves a machine except the results and their evidence.
+- **Durable across machines**: a worker on a machine that drops is resumed or re-placed from its checkpoint; results
+  carry their proofs (checks run where the work ran, hashed evidence), so a machine is trusted no more than its proofs.
+- Uses: compute spread across the person's machines, work where the data lives (a laptop's files, an office server),
+  and checks on the real target platform (Windows, macOS, Linux).
+
+Research first (as for every phase): distributed agent execution, consent and containment on personal computers,
+scheduling and failure recovery.
+
+## Status and order
 
 - Research: done (2026-11-02).
 - Phase 1: built (2026-11-02): stakes (high: a verifier of another provider; critical: replicas on two providers in
   worktrees and a comparator), exit / expect_not checks, per-requirement verdicts, visible budgets; 51 deterministic
-  scenarios in test/acceptance.test.ts; live: EVAL-ACCEPTANCE.md, P1-P3 and the calibration.
+  scenarios in test/acceptance.test.ts; live: EVAL-ACCEPTANCE.md.
+- Next, in this order: 1b (the verifier measured at scale), 3 (the deep web research swarm), 7 (across the person's
+  computers), 2 (data answers), 4 (security review of one's own code), 5 (forecasting), 6 (investigations).
