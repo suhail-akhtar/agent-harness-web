@@ -330,6 +330,20 @@ test('desktop app end to end: the agent platform', { timeout: 15 * 60_000 }, asy
       await page.click('[data-side-panel] button[aria-label="Close the panel"]');
     });
 
+    await step('the swarm: a fan-out\'s agents in the Agents panel as a tree, and "Stop all" stops every one of them at once; the conversation goes on', async () => {
+      const id = await startChat('swarm the tickets');
+      await openPanel('core.agents:agents');
+      await page.waitForSelector('[data-agents-panel] [data-subagent-status="running"]');
+      await page.waitForFunction(() => document.querySelectorAll('[data-agents-panel] [data-subagent-status="running"]').length === 3, null, { timeout: 20_000 });
+      assert.equal(await page.locator('[data-agents-panel] [data-subagent-depth="1"]').count(), 3);
+      await shot('swarm-running', page.locator('[data-side-panel]'));
+      await page.click('[data-agents-panel] [data-stop-agents]');
+      await idle(id);
+      await page.waitForFunction(() => document.querySelectorAll('[data-agents-panel] [data-subagent-status="running"]').length === 0, null, { timeout: 20_000 });
+      await page.waitForSelector('[data-assistant-message]:has-text("Fan-out of 3: 3 stopped")');
+      await page.click('[data-side-panel] button[aria-label="Close the panel"]');
+    });
+
     await step('a workflow added after the session started is offered and runs, drawn as a graph; a node opens its output', async () => {
       await page.click(`[data-session-row="${agentsSession}"] button`);
       await page.waitForSelector(`[data-session="${agentsSession}"]`);

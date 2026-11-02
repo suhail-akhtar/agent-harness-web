@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- **Swarms under the person's control** (docs/swarm/SWARM.md, phase 1c; research in docs/swarm/research/control.md):
+  - **Every agent is granted by a governor** under the run's charter: 16 agents a run by default, at most 30 started
+    a minute, a spend and a time limit when set, three levels at most. Past the number, the person is asked once for
+    the rest of a fan-out; where nobody can be asked, it is refused. A swarm never goes past its charter by itself.
+  - **Loops and bursts are refused**: an agent that hands its own brief down unchanged is told to do the work or split
+    it.
+  - **One kill switch**: Stop all in the Agents panel, or POST /api/sessions/:id/stop_agents. Every agent of the run
+    stops at once and no more start in that run; the conversation goes on.
+  - **Nothing that outlives the run**: swarm agents never get `schedule`, `vault` or `publish_branch`, whatever
+    their definition lists, and only read memory. They cannot write the project's `.harness` or `.claude` files (new agents,
+    workflows, skills or settings), even in bypass mode.
+  - **The fan-out**: the agent tool takes `items` and `fields`. One brief runs over up to 100 items, one agent each,
+    and comes back as one table. Each item is governed, checked and verified on its own.
+  - **The swarm as a tree** in the Agents panel, each agent under the one that started it.
+  - **Fixed**: an agent whose run ended in an error never ended for the app, which showed it at work forever.
+- **The verifier measured at scale** (scripts/verifier-calibration.mjs, docs/swarm/CALIBRATION.md): mutants of known-good
+  changes plant one kind of problem each, kept only when the visible tests pass and a hidden truth check fails. On 52
+  such problems and 18 checks of good changes, neither DeepSeek Flash, Claude Haiku 5.5 nor Claude Sonnet 5.5 passed a
+  planted problem. Scorecards with honest bounds; at stakes the harness picks the verifier with the best record.
 - **Proof-carrying swarms, phase 1** (docs/swarm/SWARM.md; research in docs/swarm/research/):
   - **Stakes on a delegation.** `stakes: "high"` always verifies the work, with a verifier from another provider
     than the worker's (the first allowed in the order Sonnet, gpt-6-luna, Kimi K3.1 Pro, GLM 5.3, ...). Another

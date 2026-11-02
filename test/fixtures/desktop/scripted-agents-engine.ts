@@ -9,6 +9,7 @@
 //   "form"       -> ask_user with a JSON-Schema form, then thanks the person by the name they gave
 //   "delegate"   -> a review sub-agent on claude-sonnet-5-5 (allowed by the delegation setting)
 //   "accept"     -> two delegations with done criteria: one whose checks fail, one whose verifier finds an issue
+//   "swarm"      -> a fan-out of three slow agents (they wait until stopped), for the swarm's kill switch
 //   'studio "<folder>"' -> desktop_describe of Studio, model_info (a model card), desktop_command
 //                   games3d:open-model and games3d:open-playtest, then Studio's cards as fences
 //   anything else -> a short reply
@@ -94,6 +95,11 @@ const SCRIPTS: Record<string, Script> = {
     { calls: [{ name: 'agent', input: { description: 'Review the change', prompt: 'Review the change for bugs.', type: 'explore', model: 'claude-sonnet-5-5' } }] },
     (r) => ({ text: `The review on Claude says: ${(r.at(-1) ?? '').split('\n')[0]}` }),
   ],
+  // The swarm (docs/swarm/SWARM.md, phase 1c): a fan-out of three slow agents, for the kill switch.
+  swarm: [
+    { calls: [{ name: 'agent', input: { description: 'Look at the tickets', prompt: 'Look at the ticket {{item}} slowly.', type: 'general', items: ['one', 'two', 'three'], fields: ['category'] } }] },
+    (r) => ({ text: `The fan-out came back: ${(r.at(-1) ?? '').split('\n')[0]}` }),
+  ],
   // Acceptance (docs/agents-mcp/COORDINATION.md, steps 1 and 5): a delegation whose done criteria fail (a file it
   // never writes), then one whose checks pass and whose verifier finds an issue; each gets one fix round.
   accept: [
@@ -117,8 +123,9 @@ class ScriptedProvider implements Provider {
     const say = async (text: string) => { if (req.onText) for (let i = 0; i < text.length; i += 24) { req.onText(text.slice(i, i + 24)); await wait(5); } content.push({ type: 'text', text }); };
     const brief = /<brief>\n?([\s\S]*?)\n?<\/brief>/.exec(first)?.[1];
     if (brief !== undefined && last.role === 'user' && !last.content.some((b) => b.type === 'tool_result')) {
-      // A sub-agent or a workflow agent node: one answer.
-      await wait(400);
+      // A sub-agent or a workflow agent node: one answer (a slow one waits until it is stopped, at most a minute).
+      await Promise.race([wait(/slowly/.test(brief) ? 60_000 : 400), new Promise((r) => req.signal.addEventListener('abort', r, { once: true }))]);
+      if (req.signal.aborted) throw new Error('aborted');
       // A verifier (its brief is the harness's) finds an issue; anything else answers its brief.
       await say(/^Check this finished work/.test(brief) ? 'The notes miss the date.\n{"verdict": "fail", "issues": [{"file": "notes.txt", "line": 1, "problem": "the notes do not give the release date"}]}' : /review/i.test(brief) ? `No bugs found (reviewed on ${req.model.id}).` : /modules/i.test(brief) ? 'Three modules: core, server, ui.' : `Done: ${brief.slice(0, 60)}`);
     } else if (/CHILD:/.test(first) && !msgs.slice(1).some((m) => m.role === 'assistant')) {

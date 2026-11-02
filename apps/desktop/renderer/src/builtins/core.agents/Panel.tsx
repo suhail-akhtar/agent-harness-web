@@ -8,10 +8,10 @@ import React, { useEffect, useMemo, useState } from 'react';
 import type { Item, TaskView, Todo } from '@harness/client';
 import { duration } from '@harness/client';
 import { Badge, Button, EmptyState, Icon, IconButton, Spinner, Tooltip, cx } from '@harness/ui';
-import { useData } from '../../state/data';
+import { client, useData } from '../../state/data';
 import { openSession, openSplit } from '../../state/app';
 import { useSessionLive } from '../core.chat/live';
-import { agentMs, type SubAgent } from '../../state/agents';
+import { agentMs, asTree, type SubAgent } from '../../state/agents';
 import { CostByModel, money } from '../../components/CostByModel';
 import type { NativeProps } from '../../registry/PluginView';
 import { dismissProposal, startProposal, useOpenProposals } from './proposals';
@@ -113,7 +113,9 @@ export function AgentsPanel({ params }: NativeProps): React.ReactElement {
   const [s] = useSessionLive(id);
   const parent = useData((st) => st.sessions.find((x) => x.id === s.meta?.parent));
   const openProps = useOpenProposals(id, Object.keys(s.resolved).length + s.live.items.filter((i) => i.kind === 'proposal').length);
-  const agents = useMemo(() => Object.values(s.agents).sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0)), [s.agents]);
+  // As the swarm's tree: each agent after the one that started it.
+  const agents = useMemo(() => asTree(Object.values(s.agents)), [s.agents]);
+  const running = agents.filter((a) => a.status === 'running').length;
   const tasks = useMemo(() => s.tasks.filter((t) => t.kind !== 'agent'), [s.tasks]);
   const reasons = useMemo(() => { const r: Record<string, { reason?: string; title: string }> = {}; for (const i of s.live.items as Item[]) if (i.kind === 'link') r[i.id] = { reason: i.phase === 'report' ? i.reason : r[i.id]?.reason, title: i.title }; return r; }, [s.live.items]);
   const linked = useMemo(() => [...new Set([...(s.meta?.linked ?? []), ...Object.keys(reasons)])], [s.meta?.linked, reasons]);
@@ -131,7 +133,13 @@ export function AgentsPanel({ params }: NativeProps): React.ReactElement {
       {parent && <button type="button" onClick={() => openSession(parent.id)} className="mb-3 flex w-full items-center gap-2 rounded-lg border border-hx-border-subtle px-2.5 py-1.5 text-left text-small text-hx-secondary hover:bg-hx-hover"><Icon name="arrow-up" size={13} />Started by <b className="truncate font-medium">{parent.title}</b></button>}
       {nothing && <EmptyState icon="bot" title="Only the main agent so far">Sub-agents, background tasks, linked sessions and proposals show here as they start.</EmptyState>}
       {todos.length > 0 && <PanelGroup title="Tasks" icon="list" count={todos.filter((t) => t.status !== 'completed').length}><Todos todos={todos} /></PanelGroup>}
-      {agents.length > 0 && <PanelGroup title="Sub-agents" icon="bot" count={agents.length}>{agents.map((a) => <AgentRow key={a.name} a={a} />)}</PanelGroup>}
+      {agents.length > 0 && (
+        <PanelGroup title="Sub-agents" icon="bot" count={agents.length}>
+          {/* The swarm's kill switch: every agent of the run stops at once; the conversation's own agent goes on. */}
+          {running > 1 && <div className="flex justify-end"><Button size="sm" variant="ghost" icon="stop" data-stop-agents onClick={() => void client.sessions.stopAgents(id).catch(() => {})}>Stop all {running} agents</Button></div>}
+          {agents.map((a) => <div key={a.name} className={cx((a.depth ?? 1) >= 3 ? 'ml-8' : (a.depth ?? 1) === 2 ? 'ml-4' : '')} data-subagent-depth={a.depth ?? 1}><AgentRow a={a} /></div>)}
+        </PanelGroup>
+      )}
       {tasks.length > 0 && <PanelGroup title="Background" icon="activity" count={tasks.filter((t) => t.status === 'running').length}>{tasks.map((t) => <TaskRow key={t.id} t={t} />)}</PanelGroup>}
       {linked.length > 0 && <PanelGroup title="Linked sessions" icon="split" count={linked.length}>{linked.map((l) => <LinkedRow key={l} id={l} fallback={reasons[l]?.title} reason={reasons[l]?.reason} />)}</PanelGroup>}
       {!!openProps?.length && (

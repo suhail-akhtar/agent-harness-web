@@ -5,7 +5,7 @@ import type { AgentDef } from '../plugins/api.ts';
 import type { Tool } from '../tools/types.ts';
 import { bool, str } from '../tools/types.ts';
 import { asList, parseFrontmatter } from '../util/frontmatter.ts';
-import { AcceptanceError, type Check, parseChecks, type Stakes, withProtection } from './acceptance.ts';
+import { AcceptanceError, type Check, parseChecks, type Stakes, trailingJson, withProtection } from './acceptance.ts';
 
 // Sub-agents are named specialists: a prompt, a tool subset, and optionally a
 // cheaper or stronger model. Two are built in; plugins and projects add more
@@ -16,6 +16,14 @@ export const READ_ONLY_TOOLS = ['glob', 'grep', 'read', 'skill', 'tool_search', 
 export const INTERACTIVE_TOOLS = ['agent', 'ask_user', 'dismiss_proposal', 'enter_plan_mode', 'exit_plan_mode', 'hand_off', 'list_sessions', 'mark_chapter', 'send_message', 'start_session', 'todo_write', 'desktop_command', 'desktop_describe', 'desktop_notify', 'desktop_open'];
 /** The ones a sub-agent does get when it may start its own (settings.maxSubagentDepth). */
 export const NESTING_TOOLS = ['agent', 'send_message'];
+/**
+ * Tools no agent of a swarm gets, whatever its definition lists (docs/swarm/SWARM.md, phase 1c): each outlives the run
+ * or reaches past it (a routine that runs later, a secret written, a branch pushed). Memory a swarm agent only reads
+ * (the harness refuses its writes: a note every later conversation reads stays the conversation's own agent's). They stay the person's and the conversation's own agent's; a swarm agent reports, and its lead decides.
+ */
+export const PERSISTENT_TOOLS = ['schedule', 'vault', 'publish_branch'];
+/** Permission rules every swarm agent has: the project's agent, workflow, skill and settings files are the person's. */
+export const CONTROL_PLANE_DENY = ['write(.harness/**)', 'edit(.harness/**)', 'write(.claude/**)', 'edit(.claude/**)'];
 
 export const BUILTIN_AGENTS: AgentDef[] = [
   {
@@ -333,7 +341,62 @@ export interface Acceptance {
   /** How much rides on it: high is verified on another provider; critical also runs two replicas and compares them. */
   stakes?: Stakes;
 }
-export interface SubagentArgs { description: string; prompt: string; type: string; model?: string; effort?: Effort; isolation?: 'worktree'; acceptance?: Acceptance }
+export interface SubagentArgs { description: string; prompt: string; type: string; model?: string; effort?: Effort; isolation?: 'worktree'; acceptance?: Acceptance; /** A fan-out's agents still to start, this one included (the governor asks once for all). */ batch?: number }
+
+/** How the harness found an agent's work, read from its report (what fan-out tables and replicas show). */
+export function outcomeOf(report: string): string {
+  if (/^Not started: /.test(report)) return 'not started';
+  if (/^Stopped: /.test(report)) return 'stopped';
+  if (/^Failed: /.test(report)) return 'failed';
+  if (/BLOCKED by the agent/.test(report)) return 'blocked';
+  if (/^UNKNOWN at critical stakes/.test(report)) return 'unknown';
+  if (/NOT ACCEPTED/.test(report)) return 'not accepted';
+  if (/UNVERIFIED/.test(report)) return 'unverified';
+  if (/\(The agent stopped early: /.test(report)) return 'stopped';
+  if (/\n---\n(Done criteria|Verification by)|CRITICAL STAKES: corroborated/.test(report)) return 'accepted';
+  return 'done';
+}
+
+const FAN_OUT_AT_ONCE = 8;
+
+/**
+ * One brief over many items (docs/swarm/SWARM.md): each item its own agent, at most FAN_OUT_AT_ONCE at a time (and
+ * the session's slots), each granted by the governor (one question to the person for the rest of a fan-out past the
+ * charter), checked and verified on its own; back comes one table (each item's outcome and its fields) and each
+ * item's report, cut.
+ */
+async function fanOut(args: SubagentArgs, items: string[], fields: string[], run: (a: SubagentArgs) => Promise<string>, signal: AbortSignal): Promise<string> {
+  const ask = fields.length ? `\n\nEnd your report with one line of JSON and nothing after it, with these fields: ${JSON.stringify(Object.fromEntries(fields.map((f) => [f, '...'])))}` : '';
+  const brief = (item: string) => `${args.prompt.includes('{{item}}') ? args.prompt.split('{{item}}').join(item) : `${args.prompt}\n\nThe item: ${item}`}${ask}`;
+  const reports: string[] = new Array(items.length).fill('');
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(FAN_OUT_AT_ONCE, items.length) }, async () => {
+    while (next < items.length && !signal.aborted) {
+      const i = next++;
+      try { reports[i] = await run({ ...args, prompt: brief(items[i]!), description: `${args.description}: ${items[i]!.slice(0, 40)}`, batch: items.length - i }); } catch (e) {
+        // Refused by the governor, stopped, or failed: said as such, never taken for a report.
+        const m = (e as Error).message;
+        reports[i] = /^Not started: /.test(m) ? m : /stopped by|abort/i.test(m) ? `Stopped: ${m}` : `Failed: ${m}`;
+      }
+    }
+  }));
+  const cell = (s: unknown) => String(s ?? '').replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim().slice(0, 120);
+  const rows = items.map((item, i) => {
+    const r = reports[i] || 'Not started: the fan-out was stopped.';
+    const words = r.split('\n\n---\n')[0]!.replace(/\n\n\(agent id: [^)]*\)\s*$/, '');
+    const got = fields.length ? trailingJson(words) as Record<string, unknown> | undefined : undefined;
+    return { item, outcome: outcomeOf(r), id: /\(agent ids?: ([^)]+)\)/.exec(r)?.[1] ?? '', values: fields.map((f) => (got && f in got ? cell(got[f]) : '?')), words };
+  });
+  const count = (o: string) => rows.filter((r) => r.outcome === o).length;
+  const outcomes = [...new Set(rows.map((r) => r.outcome))];
+  const missing = fields.length ? rows.filter((r) => r.values.every((v) => v === '?') && r.outcome !== 'not started').length : 0;
+  return [
+    `Fan-out of ${items.length}: ${outcomes.map((o) => `${count(o)} ${o}`).join(', ')}.${missing ? ` ${missing} gave no fields (shown as ?).` : ''}`,
+    '', `| # | item | outcome |${fields.map((f) => ` ${cell(f)} |`).join('')}`, `|---|---|---|${fields.map(() => '---|').join('')}`,
+    ...rows.map((r, i) => `| ${i + 1} | ${cell(r.item)} | ${r.outcome} |${r.values.map((v) => ` ${v} |`).join('')}`),
+    '', ...rows.map((r, i) => `### ${i + 1}. ${cell(r.item)} (${r.outcome}${r.id ? `, ${r.id}` : ''})\n${r.words.trim().slice(0, Math.max(300, Math.floor(12_000 / items.length)))}`),
+  ].join('\n');
+}
 
 /**
  * The `agent` tool for one session: its enum and description list exactly the agents available
@@ -365,6 +428,8 @@ export function makeAgentTool(agents: AgentDef[], opts: { catalogue?: string; is
   extra.may_change_tests = { type: 'boolean', description: 'The task is to change existing tests.' };
   extra.verify = { type: 'string', description: 'A clean-context check of the work after its checks pass: "yes" (a team\'s reviewer, else the built-in verifier) or an agent\'s name.' };
   extra.stakes = { type: 'string', enum: ['normal', 'high', 'critical'], description: 'high: verified on another provider. critical: also two replicas on two providers, compared.' };
+  extra.items = { type: 'array', items: { type: 'string' }, maxItems: 100, description: 'The same brief for each item ({{item}} in the prompt), one agent each, a table back.' };
+  extra.fields = { type: 'array', items: { type: 'string' }, description: 'What each item reports (a column each).' };
   extra.max_fix_rounds = { type: 'number', description: 'Fix rounds, 0 to 3 (default 2).' };
   return {
     kind: 'meta', parallelSafe: true, remoteable: false,
@@ -412,6 +477,9 @@ export function makeAgentTool(agents: AgentDef[], opts: { catalogue?: string; is
         ...(acceptance ? { acceptance } : {}),
       };
       const start = ctx.services?.tasks?.startAgent;
+      // A fan-out: the same brief for each item, each its own agent (granted, checked and verified on its own), one table back.
+      const items = (Array.isArray(input.items) ? input.items : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 100);
+      if (items.length) return { content: await fanOut(args, items, (Array.isArray(input.fields) ? input.fields : []).map(String).filter(Boolean).slice(0, 12), ctx.runSubagent, ctx.signal) };
       try {
         if (background && start) {
           const id = await start(args);

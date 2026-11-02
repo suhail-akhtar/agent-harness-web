@@ -26,6 +26,22 @@ export interface SubAgent {
   last?: string;
   /** Its work as the harness last checked it: done criteria passed of run, and a verifier's verdict. */
   accepted?: { checks?: { passed: number; total: number }; verdict?: 'pass' | 'fail' | 'unknown'; verifier?: string; round: number; blocked?: boolean; corroborated?: boolean };
+  /** In the swarm's tree: the agent that started it (absent: the conversation's own) and how deep it is. */
+  parent?: string;
+  depth?: number;
+}
+
+/** The agents as the swarm's tree: each after the agent that started it, in the order they started. */
+export function asTree(agents: SubAgent[]): SubAgent[] {
+  const byStart = [...agents].sort((x, y) => (x.startedAt ?? 0) - (y.startedAt ?? 0));
+  const names = new Set(byStart.map((x) => x.name));
+  const out: SubAgent[] = [];
+  const add = (parent: string | undefined, guard: number) => {
+    if (guard > 5) return;
+    for (const x of byStart) if ((x.parent && names.has(x.parent) ? x.parent : undefined) === parent && !out.includes(x)) { out.push(x); add(x.name, guard + 1); }
+  };
+  add(undefined, 0);
+  return [...out, ...byStart.filter((x) => !out.includes(x))];
 }
 
 export interface ModelCost { model: string; cost: number; requests: number; input: number; output: number; cacheRead: number }
@@ -43,6 +59,12 @@ export function foldAgent(a: Agents, e: HarnessEvent, now = Date.now()): Agents 
     const cur = a[e.task.id] ?? { ...blank(e.task.id), startedAt: e.task.startedAt };
     const status = e.task.status === 'running' ? 'running' : e.task.status === 'completed' ? 'done' : e.task.status === 'failed' ? 'failed' : 'stopped';
     return { ...a, [e.task.id]: { ...cur, background: true, description: cur.description ?? e.task.description, status, ...(e.task.endedAt ? { endedAt: e.task.endedAt } : {}), ...(e.task.cost !== undefined ? { cost: Math.max(cur.cost, e.task.cost) } : {}) } };
+  }
+  // The governor granted it: where it sits in the swarm's tree.
+  if (e.kind === 'swarm') {
+    if (e.phase !== 'start' || !e.agent) return a;
+    const c = a[e.agent] ?? { ...blank(e.agent), startedAt: now };
+    return { ...a, [e.agent]: { ...c, depth: e.depth ?? 1, ...(e.parent && e.parent !== 'main' ? { parent: e.parent } : {}) } };
   }
   // Critical stakes: the comparison is about both replicas.
   if (e.kind === 'acceptance' && e.phase === 'compare') {

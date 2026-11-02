@@ -178,6 +178,8 @@ export class HarnessClient {
     /** Sends a message; attachments (new) need a server that accepts them. */
     send: (id: string, text: string, attachments?: Attachment[]) => this.post<{ state: string; images?: number; files?: string[] }>(`/api/sessions/${id}/messages`, { text, ...(attachments?.length ? { attachments } : {}) }),
     abort: (id: string) => this.post<{ ok: boolean }>(`/api/sessions/${id}/abort`),
+    /** The swarm's kill switch: every agent of the run stops; the conversation's own agent goes on. */
+    stopAgents: (id: string) => this.post<{ stopped: number }>(`/api/sessions/${id}/stop_agents`),
     /** `answer`: text, or for a question with a form, the filled-in object. */
     respond: (id: string, b: { requestId: string; decision: string; feedback?: string; answer?: string | Record<string, unknown> }) => this.post<{ ok: boolean }>(`/api/sessions/${id}/respond`, b),
     archive: (id: string) => this.post<SessionMeta>(`/api/sessions/${id}/archive`),

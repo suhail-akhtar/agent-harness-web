@@ -114,6 +114,8 @@ export type HarnessEvent =
   /** Debug: a request read much less from the provider's cache than the one before wrote, and which section changed first (src/core/cache.ts). */
   | { kind: 'cache_miss'; cause: string; section: string; index?: number; expected: number; read: number; gapMs: number; agent?: string }
   /** A delegated agent's work checked by the harness (docs/agents-mcp/COORDINATION.md): its done criteria, or a verifier's verdict. */
+  /** The swarm governor (docs/swarm/SWARM.md, phase 1c): an agent granted under the run's charter, refused (and why), or the run's agents stopped. */
+  | { kind: 'swarm'; phase: 'start' | 'refused' | 'stopped'; agent?: string; parent?: string; depth?: number; reason?: string; started?: number; limit?: number }
   | { kind: 'acceptance'; agent: string; phase: 'checks' | 'verdict' | 'compare'; round: number; results?: Array<{ label: string; ok: boolean; detail: string; hidden?: boolean }>; verifier?: string; verifierModel?: string; verdict?: 'pass' | 'fail' | 'unknown'; requirements?: Array<{ requirement: string; status: 'met' | 'unmet' | 'unverifiable' }>; replicas?: Array<{ agent: string; model: string; outcome: string }>; agree?: boolean; issues?: Array<{ file?: string; line?: number; problem: string }>; overruled?: string; blocked?: string; findings?: Array<{ file: string; line?: number; why: string; text: string }> }
   | { kind: 'turn_end'; reason: TurnEndReason; agent?: string }
   | { kind: 'status'; status: SessionStatus };

@@ -3,7 +3,7 @@ import { constants as fsc } from 'node:fs';
 import fs from 'node:fs/promises';
 import { resolveIn } from '../tools/paths.ts';
 import path from 'node:path';
-import { type Acceptance, BUILTIN_AGENTS, COMPARATOR_AGENT, VERIFIER_MODELS, INTERACTIVE_TOOLS, loadAgentDir, makeAgentTool, mcpServerOf, NESTING_TOOLS, stricterMode, teamBrief, toolMatches, VERIFIER_AGENT } from '../agents/agents.ts';
+import { type Acceptance, BUILTIN_AGENTS, COMPARATOR_AGENT, CONTROL_PLANE_DENY, PERSISTENT_TOOLS, VERIFIER_MODELS, INTERACTIVE_TOOLS, loadAgentDir, makeAgentTool, mcpServerOf, NESTING_TOOLS, stricterMode, teamBrief, toolMatches, VERIFIER_AGENT } from '../agents/agents.ts';
 import { stopShellScript } from '../tools/exec.ts';
 import { describeWatch, TASK_TOOLS, type TaskEntry, TaskRegistry, type TaskService, watchTask } from '../tools/tasks.ts';
 import { formatGates, makeGatesTool, runGates } from '../gates/gates.ts';
@@ -42,7 +42,7 @@ import type { Effort, ModelSpec } from './models.ts';
 import { costOf } from './models.ts';
 import { loadInstructions, workspaceReader } from './instructions.ts';
 import { environmentBlock, firstMessageText, resolveOutputStyle, SUBAGENT_PROMPT, systemPrompt } from './prompt.ts';
-import { applyUserSettings, loadProjectSettings, loadUserInstructions, loadUserSettings, mergeSettings, operatorSettings, type Settings } from './settings.ts';
+import { applyUserSettings, type Charter, DEFAULT_CHARTER, loadProjectSettings, loadUserInstructions, loadUserSettings, mergeSettings, operatorSettings, type Settings } from './settings.ts';
 import type { HarnessEvent, QuestionChoice, ImageBlock, Message, PermissionMode, SessionStatus, Todo, ToolUseBlock, TurnEndReason, Usage, WorkflowRunView } from './types.ts';
 import { addUsage, emptyUsage } from './types.ts';
 import type { LeaseRecord, Leases } from '../util/lease.ts';
@@ -1922,6 +1922,84 @@ export class Session {
     return other || (background && this.status === 'running');
   }
 
+  // ---------- the swarm governor (docs/swarm/SWARM.md, phase 1c) ----------
+
+  /** This run's swarm (a new one as each turn starts): agents started, when, from what brief; more the person allowed; whether it was stopped. */
+  private swarm: { started: number; extra: number; times: number[]; briefs: Map<string, string>; stopped: string; startCost: number; startedAt: number; asking?: Promise<void>; denied?: boolean } = { started: 0, extra: 0, times: [], briefs: new Map(), stopped: '', startCost: 0, startedAt: Date.now() };
+  /** Each running agent's own stop: the kill switch stops them all. */
+  private swarmStops = new Map<string, AbortController>();
+
+  private newSwarm(): void { this.swarm = { started: 0, extra: 0, times: [], briefs: new Map(), stopped: '', startCost: this.meta.cost, startedAt: Date.now() }; }
+
+  /**
+   * Grants an agent under the run's charter, or refuses it (its lead hears why). Past the number of agents the charter
+   * allows, the person is asked (once for a whole fan-out); where nobody can be asked it is refused: a swarm never goes
+   * past its charter by itself. A loop (the same brief as an agent above it), a burst past the charter's rate, the
+   * run's spend or time reached, a stopped run: refused.
+   */
+  private async govern(o: { name: string; parent: string; brief: string; depth: number; batch: number; signal: AbortSignal; settings: Settings }): Promise<void> {
+    const c = o.settings.swarm ?? DEFAULT_CHARTER;
+    const w = this.swarm;
+    const refuse = (reason: string): never => {
+      this.emit({ kind: 'swarm', phase: 'refused', agent: o.name, parent: o.parent, depth: o.depth, reason });
+      throw new Error(`Not started: ${reason}`);
+    };
+    if (w.stopped) refuse(`this run's agents were stopped (${w.stopped}); no more start in it.`);
+    if (o.depth > 3) refuse('three levels of agents is the most a swarm nests.');
+    const key = o.brief.replace(/\s+/g, ' ').trim().toLowerCase();
+    const parentOf = new Map(this.workLog.map((e) => [e.name, e.parent]));
+    for (let p: string | undefined = o.parent, i = 0; p && p !== 'main' && i < 10; p = parentOf.get(p), i++) {
+      if (w.briefs.get(p) === key) refuse(`${o.parent} gave it the same brief ${p} was given: a loop, not a split. Do the work, or split it into different parts.`);
+    }
+    const now = Date.now();
+    w.times = w.times.filter((t) => now - t < 60_000);
+    if (w.times.length >= c.ratePerMinute) refuse(`${w.times.length} agents were started in the last minute, the most this run's charter allows; wait for their reports before starting more.`);
+    const spent = this.meta.cost - w.startCost;
+    if (c.maxUsd && spent >= c.maxUsd) refuse(`this run's agents have spent $${spent.toFixed(2)}, the charter's limit of $${c.maxUsd}.`);
+    if (c.maxMinutes && now - w.startedAt >= c.maxMinutes * 60_000) refuse(`this run has started agents for ${c.maxMinutes} minutes, the charter's limit.`);
+    if (w.started >= c.maxAgents + w.extra) {
+      // Past the charter: the person's call, never the swarm's. One question at a time (agents of a fan-out arrive
+      // together), and after a no, none again in this run.
+      while (w.asking) await w.asking;
+      if (w.started >= c.maxAgents + w.extra && !w.denied) {
+        w.asking = this.askMoreAgents(Math.max(o.batch, 1), c).then((more) => { w.extra += more; w.denied = !more; }).finally(() => { w.asking = undefined; });
+        await w.asking;
+      }
+      if (w.stopped) refuse(`this run's agents were stopped (${w.stopped}); no more start in it.`);
+      if (w.started >= c.maxAgents + w.extra) refuse(`this run has started ${w.started} agents, the charter's limit; the person can allow more when asked, or raise it (Settings > Permissions).`);
+    }
+    w.started++;
+    w.times.push(now);
+    w.briefs.set(o.name, key);
+    this.emit({ kind: 'swarm', phase: 'start', agent: o.name, parent: o.parent, depth: o.depth, started: w.started, limit: c.maxAgents + w.extra });
+  }
+
+  /** Asks the person for more agents than the charter allows (`needed`: a fan-out's rest at least); 0 when they say no or nobody can be asked. */
+  private async askMoreAgents(needed: number, c: Charter): Promise<number> {
+    const mode = this.agent?.permissionMode() ?? this.meta.mode;
+    if (mode === 'bypass' || mode === 'dontAsk') return 0;
+    const more = Math.max(needed, Math.ceil(c.maxAgents / 2));
+    const r = await this.request('permission', { kind: 'permission_request', requestId: crypto.randomUUID(), tool: 'agent', summary: `This run's agents have reached the swarm charter's limit (${this.swarm.started} started). Allow ${more} more?`, input: { started: this.swarm.started, limit: c.maxAgents + this.swarm.extra, more } });
+    return r.decision === 'allow' || r.decision === 'allow_always' ? more : 0;
+  }
+
+  /** The charter's spend reached by the run's agents: why they stop, or undefined. */
+  private swarmOverSpend(settings: Settings): string | undefined {
+    const c = settings.swarm;
+    const spent = this.meta.cost - this.swarm.startCost;
+    return c?.maxUsd && spent >= c.maxUsd ? `Stopped: this run's agents reached the swarm charter's spend of $${c.maxUsd} ($${spent.toFixed(4)} spent).` : undefined;
+  }
+
+  /** The kill switch: every agent of the run stops (in the foreground and the background, at every depth); no more start in it. */
+  stopSwarm(by = 'the person'): number {
+    this.swarm.stopped = by;
+    const n = this.swarmStops.size;
+    for (const c of this.swarmStops.values()) c.abort(new Error(`stopped by ${by}`));
+    this.emit({ kind: 'swarm', phase: 'stopped', reason: by, started: n });
+    this.emit({ kind: 'notice', level: 'warn', text: `Stopped ${n} agent${n === 1 ? '' : 's'} of this run (${by}); no more start in it.` });
+    return n;
+  }
+
   /** The workspace files an agent's own file tools (and its sub-agents') wrote or edited; changes made through a shell cannot be told apart. */
   private toolWrites(agent: Agent, root: string): Set<string> {
     const out = new Set<string>();
@@ -1999,7 +2077,7 @@ export class Session {
     // existing tests among it), the agents it starts must keep unchanged too, whatever their own brief says.
     const inherited = parent && parent !== this.agent ? [...this.subs.values()].find((x) => x.agent === parent)?.acceptance?.checks.filter((c) => 'unchanged' in c || 'protect' in c) : undefined;
     const acceptance = inherited?.length ? { maxFixRounds: 2, ...a.acceptance, checks: withProtection(a.acceptance?.checks ?? [], { mayChangeTests: true, inherited }) } : a.acceptance;
-    const base = { agent: a.type, description: a.description, prompt: a.prompt, signal: signal ?? this.abortCtl?.signal ?? new AbortController().signal, depth, parent, keep: true, tainted: (parent ?? this.agent)?.tainted, ...(a.effort ? { effort: a.effort } : {}), ...(host ? { host } : {}) };
+    const base = { agent: a.type, description: a.description, prompt: a.prompt, signal: signal ?? this.abortCtl?.signal ?? new AbortController().signal, depth, parent, keep: true, tainted: (parent ?? this.agent)?.tainted, ...(a.effort ? { effort: a.effort } : {}), ...(host ? { host } : {}), ...(a.batch ? { batch: a.batch } : {}) };
     if (acceptance?.stakes === 'critical') return this.runReplicas(a, base, acceptance);
     const r = await this.runAgent({ ...base, ...(a.model ? { model: a.model, delegated: true } : {}), ...(a.isolation ? { isolation: a.isolation } : {}), ...(acceptance ? { acceptance } : {}) });
     return `${r.report}\n\n(agent id: ${r.id})`;
@@ -2306,7 +2384,7 @@ export class Session {
    * Runs a named agent in a fresh context: a chat sub-agent, or a workflow's
    * agent node. One cache key per agent kind, so sibling runs share a prefix.
    */
-  async runAgent(a: { agent: string; prompt: string; signal: AbortSignal; label?: string; description?: string; model?: string; effort?: Effort; maxSteps?: number; /** Calls allowed per tool (a workflow step's toolBudget). */ toolBudget?: Record<string, number>; allowTodos?: boolean; /** A hook's verifier: no hooks of its own (they would start it again). */ noHooks?: boolean; /** 1 for a sub-agent of the main agent, 2 for one of its own, ... */ depth?: number; /** The agent that started it (it is tainted with it, and starts tainted when it is). */ parent?: Agent; /** Kept after it ends, for send_message. */ keep?: boolean; /** Starts tainted: its brief came from an agent that read untrusted content. */ tainted?: boolean; /** `model` was chosen by an agent or a workflow: only a model the person allowed (delegation). */ delegated?: boolean; /** The delegation was checked (and approved) already. */ approved?: boolean; /** Works in a fresh git worktree of the session's repository. */ isolation?: 'worktree'; /** Where its tools work (a worktree agent's sub-agents share its worktree). */ host?: ToolHost; /** Deferred tool groups it starts with loaded (a plugin's workflow: that plugin's). */ loadGroups?: string[]; /** What its work must meet before its report counts (done criteria, a verifier). */ acceptance?: Acceptance; /** A definition the harness runs that is not in the catalogue (the built-in verifier). */ def?: AgentDef; /** It checks another agent's work (only reads): not counted as at work in the folder. */ verifier?: boolean; /** Started in the background (the conversation's agent may work beside it). */ background?: boolean }): Promise<{ report: string; reason: string; cost: number; id: string; agent?: Agent; outcome?: Outcome; changes?: string }> {
+  async runAgent(a: { agent: string; prompt: string; signal: AbortSignal; label?: string; description?: string; model?: string; effort?: Effort; maxSteps?: number; /** Calls allowed per tool (a workflow step's toolBudget). */ toolBudget?: Record<string, number>; allowTodos?: boolean; /** A hook's verifier: no hooks of its own (they would start it again). */ noHooks?: boolean; /** 1 for a sub-agent of the main agent, 2 for one of its own, ... */ depth?: number; /** The agent that started it (it is tainted with it, and starts tainted when it is). */ parent?: Agent; /** Kept after it ends, for send_message. */ keep?: boolean; /** Starts tainted: its brief came from an agent that read untrusted content. */ tainted?: boolean; /** `model` was chosen by an agent or a workflow: only a model the person allowed (delegation). */ delegated?: boolean; /** The delegation was checked (and approved) already. */ approved?: boolean; /** Works in a fresh git worktree of the session's repository. */ isolation?: 'worktree'; /** Where its tools work (a worktree agent's sub-agents share its worktree). */ host?: ToolHost; /** Deferred tool groups it starts with loaded (a plugin's workflow: that plugin's). */ loadGroups?: string[]; /** What its work must meet before its report counts (done criteria, a verifier). */ acceptance?: Acceptance; /** A definition the harness runs that is not in the catalogue (the built-in verifier). */ def?: AgentDef; /** It checks another agent's work (only reads): not counted as at work in the folder. */ verifier?: boolean; /** Started in the background (the conversation's agent may work beside it). */ background?: boolean; /** Agents of the same fan-out still to start, this one included (one question to the person for all of them). */ batch?: number }): Promise<{ report: string; reason: string; cost: number; id: string; agent?: Agent; outcome?: Outcome; changes?: string }> {
     const sessionHost = await this.getHost();
     const settings = await this.getSettings(sessionHost);
     const tb = await this.getToolbox(sessionHost);
@@ -2328,6 +2406,12 @@ export class Session {
     if (def.team && depth < 3) nests = true;
     const n = ++this.subagents;
     name = a.label ?? `${def.name}-${n}`;
+    // The governor grants it under the run's charter (a verifier, part of another agent's acceptance, is not a spawn).
+    if (!a.verifier) await this.govern({ name, parent: a.parent?.cfg.name ?? 'main', brief: a.prompt, depth, batch: a.batch ?? 1, signal: a.signal, settings });
+    // Its own stop, beside its parent's: the kill switch stops every agent of the run, the conversation's goes on.
+    const own = new AbortController();
+    this.swarmStops.set(name, own);
+    a = { ...a, signal: AbortSignal.any([a.signal, own.signal]) };
     // A model the agent named is used as named (it was allowed); a definition's or the operator's falls back to the session's when missing.
     let model = a.model && a.delegated ? this.deps.registry.model(a.model) : this.subagentModel({ ...def, model: a.model ?? def.model }, settings);
     // A person's or a repository's agent naming another model sends this session's data to that company too:
@@ -2350,7 +2434,8 @@ export class Session {
     const host = isolated?.host ?? a.host ?? sessionHost;
     // agent and send_message only where it may start its own; never the user-facing tools.
     const banned = INTERACTIVE_TOOLS.filter((t) => !(a.allowTodos && t === 'todo_write') && !(nests && NESTING_TOOLS.includes(t)));
-    const tools = this.toolsFor(def, tb, (t) => !banned.includes(t.spec.name)).filter((t) => !NESTING_TOOLS.includes(t.spec.name) || nests);
+    // Never what outlives the run (PERSISTENT_TOOLS), whatever its definition lists: tool policy, not instructions.
+    const tools = this.toolsFor(def, tb, (t) => !banned.includes(t.spec.name)).filter((t) => (!NESTING_TOOLS.includes(t.spec.name) || nests) && !PERSISTENT_TOOLS.includes(t.spec.name));
     if (a.allowTodos && def.tools && !tools.some((t) => t.spec.name === 'todo_write')) { const td = tb.tools.find((t) => t.spec.name === 'todo_write'); if (td) tools.push(td); }
     const wanted = a.effort ?? def.effort;
     const effort = wanted && model.efforts.includes(wanted) ? wanted : (model.efforts.includes(this.meta.effort) ? this.meta.effort : model.effort);
@@ -2363,6 +2448,11 @@ export class Session {
     // Its definition's autonomy (never more than the session's) and its spend limit for one run.
     if (def.permissionMode) hooks.getMode = () => stricterMode(this.meta.mode, def.permissionMode);
     if (def.maxCostUsd) { const base = hooks.overBudget; hooks.overBudget = () => base() ?? (cost.n >= def.maxCostUsd! ? `Stopped: the ${def.name} agent reached its spend limit of $${def.maxCostUsd} for one run ($${cost.n.toFixed(cost.n < 0.01 ? 6 : 4)} spent).` : undefined); }
+    // The charter's spend for the whole run's agents.
+    { const base = hooks.overBudget; hooks.overBudget = () => base() ?? this.swarmOverSpend(settings); }
+    // The control plane stays the person's: a swarm agent cannot write the project's agent, workflow, skill or
+    // settings files (each would be a new agent, a new way to start agents, or a change to the rules).
+    { const base = hooks.rules; hooks.rules = () => { const r = base(); return { ...r, deny: [...r.deny, ...CONTROL_PLANE_DENY] }; }; }
     const sub = new Agent({
       name, model, provider: this.deps.registry.provider(model), effort,
       ...(nests ? { runSubagent: (x: SubagentArgs) => this.runSubagent(x, depth + 1, self.agent, a.signal, host === sessionHost ? undefined : host) } : {}),
@@ -2409,7 +2499,12 @@ export class Session {
     }
     // The change set too when a verifier reads it or a command checks the work (the lines that can game a check).
     const acc: AccRun | undefined = a.acceptance ? { acceptance: a.acceptance, baseline: await takeBaseline(host, a.acceptance.checks, { changes: !!a.acceptance.verify || a.acceptance.checks.some((c) => 'run' in c) }), host, brief: a.prompt, depth, since: this.workSeq, background: !!a.background, shared: this.othersAt(name, host.root, this.workSeq, !!a.background) } : undefined;
-    const r = await this.drive(entry, name, a.signal, acc);
+    const r = await this.drive(entry, name, a.signal, acc).catch((e: Error) => {
+      // Its run ended in an error (or was stopped): it ends all the same, for everyone watching (else it shows as at
+      // work for ever), and the error goes up.
+      this.emit({ kind: 'turn_end', reason: a.signal.aborted ? 'aborted' : 'error', agent: name });
+      throw e;
+    });
     if (isolated) r.report += await this.closeSubWorktree(isolated);
     return { ...r, id: name, agent: sub };
     } catch (e) {
@@ -2420,6 +2515,7 @@ export class Session {
       release();
       if (entry) entry.running = false;
       this.atWork.delete(name);
+      this.swarmStops.delete(name);
       this.agentSignals.delete(name);
       this.trimSubs();
     }
@@ -3219,6 +3315,8 @@ export class Session {
       agent.append({ role: 'user', content: [...pre.map((q) => ({ type: 'text' as const, text: q })), { type: 'text', text: body }, ...(images ?? [])] });
       this.emit({ kind: 'user_message', text, ...(origin === 'auto' || origin === 'link' ? { origin } : {}) });
       // A team with a reviewer: the workspace as the turn starts, for the verification its stop needs.
+      // A new run: a new swarm (its charter counts from here).
+      this.newSwarm();
       this.turnBaseline = this.turnVerifier() ? await takeBaseline(host, [], { changes: true }).catch(() => undefined) : undefined;
       reason = await agent.run(signal);
     } catch (err) {

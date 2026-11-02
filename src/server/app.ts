@@ -1942,6 +1942,8 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         return send(res, 202, await sendWithAttachments(s, text, b.attachments));
       }
       if (action === 'abort' && method === 'POST') { s.abort(); return send(res, 200, { ok: true }); }
+      // The swarm's kill switch: every agent of the run stops, the conversation's own agent goes on (and hears it).
+      if (action === 'stop_agents' && method === 'POST') return send(res, 200, { stopped: s.stopSwarm('the person') });
       if (action === 'export' && method === 'GET') {
         // The session as one file, to continue it on another server or in the desktop app.
         const bundle = await exportSession(s);

@@ -182,6 +182,20 @@ scheduling and failure recovery.
 - Phase 1: built (2026-11-02): stakes (high: a verifier of another provider; critical: replicas on two providers in
   worktrees and a comparator), exit / expect_not checks, per-requirement verdicts, visible budgets; 51 deterministic
   scenarios in test/acceptance.test.ts; live: EVAL-ACCEPTANCE.md.
-- Phase 1b: the foundation built (mutants, scorecards, verifiers chosen by record); the calibration at scale next.
-- Next, in this order: 1b (the calibration at scale), 1c (the swarm governor), 3 (the deep web research swarm), 7
-  (across the person's computers), 2 (data answers), 4 (security review of one's own code), 5 (forecasting), 6 (investigations).
+- Phase 1b: built. The calibration at scale (CALIBRATION.md): 52 planted problems of 13 kinds, each passing the
+  visible tests and failing a hidden truth check, and 6 good changes checked 3 times, on DeepSeek Flash, Claude Haiku
+  5.5 and Claude Sonnet 5.5: no verifier passed any planted problem (0 of 156 in all: below about 2.4% at 95%); false
+  fails 0, 2 (Haiku, on the SQL fix's behaviour for non-string input) and 0 of 18; same verdict on repeats 100%, 83%,
+  100%; $0.0027, $0.0017 and $0.0144 a verdict. Scorecards order the verifiers the harness picks.
+- Phase 1c: built: the governor (every agent granted under the charter: 16 agents a run by default, 30 a minute, a
+  spend and a time when set; past the number, one question to the person, never taken where nobody can be asked;
+  loops and bursts refused; three levels at most), the kill switch (POST /api/sessions/:id/stop_agents, the Agents
+  panel's Stop all), tool policy (no schedule, vault or publish_branch for a swarm agent, memory read only; no writes to the
+  project's .harness or .claude files), the fan-out (the agent tool's items and fields: one brief over up to 100
+  items, a table back, each item governed and accepted on its own), the swarm as a tree in the Agents panel; 13
+  deterministic scenarios (test/swarm.test.ts), the desktop e2e; live: EVAL-SWARM.md. Left from the research
+  (research/control.md): a cap on agents at once below the first level, a cap of children per agent, kinds of work
+  compiled to tools, paths and network policy, leases with heartbeats (for companions, phase 7), and writes to the
+  control plane through a shell (contained only by a sandbox).
+- Next, in this order: 3 (the deep web research swarm), 7 (across the person's computers), 2 (data answers), 4
+  (security review of one's own code), 5 (forecasting), 6 (investigations).

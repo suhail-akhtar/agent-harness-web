@@ -126,6 +126,7 @@ export type HarnessEvent =
   /** A progress review at a step checkpoint: started, extended, refreshed (a fresh start), stopped, a flagged "done", a test-discipline nudge. */
   | { kind: 'progress'; phase: 'checkpoint' | 'extended' | 'refreshed' | 'stopped' | 'flagged' | 'nudge'; step: number; budget: number; by: 'signals' | 'review'; text: string; reasons: string[]; verdict?: string; advice?: string; agent?: string }
   /** A delegated agent's work checked by the harness: its done criteria (run by the harness), or a verifier's verdict. */
+  | { kind: 'swarm'; phase: 'start' | 'refused' | 'stopped'; agent?: string; parent?: string; depth?: number; reason?: string; started?: number; limit?: number }
   | { kind: 'acceptance'; agent: string; phase: 'checks' | 'verdict' | 'compare'; round: number; results?: AcceptanceCheck[]; verifier?: string; verifierModel?: string; verdict?: 'pass' | 'fail' | 'unknown'; requirements?: AcceptanceRequirement[]; replicas?: AcceptanceReplica[]; agree?: boolean; issues?: AcceptanceIssue[]; overruled?: string; blocked?: string; findings?: AcceptanceFinding[] }
   | { kind: 'retry'; attempt: number; delayMs: number; reason: string }
   | { kind: 'turn_end'; reason: string; agent?: string }
