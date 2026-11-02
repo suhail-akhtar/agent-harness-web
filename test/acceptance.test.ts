@@ -599,6 +599,24 @@ test('verify each turn (a person\'s setting): the conversation\'s own agent cann
   } finally { await c.t.close(); }
 });
 
+test('verify each turn, an impossible request: after a failed verdict, an agent that changes nothing more and says what cannot be done may finish (no loop of verifications)', async () => {
+  const c = await conversation();
+  try {
+    assert.equal((await c.t.call(OPERATOR, 'PUT', '/api/me/settings', { verifyTurns: true })).status, 200);
+    c.t.ds.scripts.imp = [
+      { calls: [{ name: 'write', input: { path: 'cart.js', content: 'export const total = (items) => items.reduce((s, i) => s + i.price * (i.qty ?? 1), 0);\n' } }] }, { text: 'Fixed the total. [[impgate]]' },
+      // Told the request is not met, it changes nothing and explains.
+      { text: 'The test wants 12 but the README rule gives 11: the test is wrong, so it cannot pass without breaking the rule. Not done: the test. [[impgate]]' },
+    ];
+    c.t.ds.scripts.impgate = [{ text: '{"verdict": "fail", "issues": [{"file": "test/cart.test.js", "line": 6, "problem": "the requested test still fails (11, expected 12)"}]}' }, { text: '{"verdict": "fail", "issues": []}' }];
+    await c.turn('[[imp]] Make the failing test pass.');
+    assert.equal(c.t.ds.byKey.impgate!.length, 1, 'verified once: the same changes are not verified again');
+    assert.equal(c.t.ds.byKey.imp!.length, 3);
+    assert.match(userTexts(c.t.ds.byKey.imp![2]!), /the request itself may be impossible as asked[\s\S]*then you may finish/);
+    assert.deepEqual(c.acceptance().filter((e) => e.agent === 'main').map((e) => e.verdict), ['fail'], 'the failed verdict stays visible');
+  } finally { await c.t.close(); }
+});
+
 test('verify each turn: the operator\'s "on" holds whatever the person says; the person can switch it on', async () => {
   const { applyUserSettings, cleanUserSettings, defaultSettings } = await import('../src/core/settings.ts');
   const off = defaultSettings();

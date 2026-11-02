@@ -1894,6 +1894,7 @@ export class Session {
   /** The workspace as this turn started (a team with a reviewer); the change set a passing verification covered. */
   private turnBaseline?: Baseline;
   private verifiedChanges?: string;
+  private failedChanges?: string;
 
   /**
    * Agents at work and the folders they work in (verifiers aside): whether others changed a worker's folder while it
@@ -1957,6 +1958,9 @@ export class Session {
         if (changes === '(no changes)' || changes.startsWith('(no record') || changes.startsWith('(the change set')) return undefined;
         const key = crypto.createHash('sha1').update(changes).digest('hex');
         if (this.verifiedChanges === key) return undefined;
+        // The same changes it already failed: the agent changed nothing since and is saying what is not done (or
+        // cannot be: the request may be impossible). The verdict stands in the transcript; asking again only loops.
+        if (this.failedChanges === key) return undefined;
         const r = await this.verifyWork({ worker: team ? 'the team' : 'this turn', acc: { acceptance: { checks: [], verify, maxFixRounds: 0 }, baseline: base, host: ctx.host, brief: `What the person asked for in this turn:\n${this.latestPrompt}`, depth: 1 }, results: [], report: this.lastText(this.agent), signal: ctx.signal })
           .catch((err: Error) => ({ verdict: { verdict: 'fail', issues: [{ problem: `the verification could not run: ${err.message}` }] } as Verdict, by: 'the harness' }));
         this.emit({ kind: 'acceptance', agent: 'main', phase: 'verdict', round: 0, verifier: r.by, verdict: r.verdict.verdict, issues: r.verdict.issues, ...(r.verdict.overruled ? { overruled: r.verdict.overruled } : {}) });
@@ -1967,7 +1971,8 @@ export class Session {
           this.verifiedChanges = key;
           return { block: true, feedback: `${who} could not tell whether this turn's work is done:\n${summarizeVerdict(r.verdict, r.by)}\n\nSay so plainly in your answer, with what the person should check.` };
         }
-        return { block: true, feedback: `${who} checked this turn's changes before you finish:\n${summarizeVerdict(r.verdict, r.by)}\n\n${team ? 'Have each issue fixed by the member who did that part' : 'Fix each issue'}, or, if it cannot be done, say plainly in your answer what is not done.` };
+        this.failedChanges = key;
+        return { block: true, feedback: `${who} checked this turn's changes before you finish:\n${summarizeVerdict(r.verdict, r.by)}\n\n${team ? 'Have each issue fixed by the member who did that part' : 'Fix each issue'}, or, if it cannot be done (the request itself may be impossible as asked), say plainly in your answer what is not done and why: then you may finish.` };
       },
     }];
   }

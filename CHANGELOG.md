@@ -32,7 +32,7 @@
     BLOCKED), and badges on the agent's card in the Agents panel ("checks 3/4", "verified", "unverified", "blocked").
   - **Safer git**: a worker's own `.git/config` or `.gitattributes` can no longer make the harness run a command
     (fsmonitor, clean filters, external diff and textconv are off for the harness's git on a workspace).
-  - Tested: 42 deterministic scenarios (test/acceptance.test.ts), the desktop end to end, and live on real models
+  - Tested: 43 deterministic scenarios (test/acceptance.test.ts), the desktop end to end, and live on real models
     (scripts/live-acceptance-eval.mjs, docs/agents-mcp/EVAL-ACCEPTANCE.md).
 - **Fixed: saving Settings > Permissions erased your other settings** (the models your agents may use, linked-session
   choices): the page sent only rules and limits, and the server keeps only what it is sent.

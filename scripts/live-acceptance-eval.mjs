@@ -133,13 +133,18 @@ async function delegate(dir, o) {
 
 // ---- the orchestrator: a conversation, as the person writes it ----------------------------------------------------
 
-async function converse(opts, messages) {
+async function converse(opts, messages, o = {}) {
   const made = await api('POST', '/api/sessions', { runtime: 'local', mode: 'bypass', ...opts });
   if (made.status !== 201) throw new Error(`no conversation: ${JSON.stringify(made.body)}`);
   const s = h.sessions.get(made.body.id);
   const events = [];
   let turns = 0; const waiters = [];
-  s.subscribe(0, ({ event }) => { events.push({ at: Date.now(), event }); if (event.kind === 'turn_end' && (!event.agent || event.agent === 'main')) { turns++; for (const w of waiters.splice(0)) w(); } });
+  s.subscribe(0, ({ event }) => {
+    events.push({ at: Date.now(), event });
+    // A question to the person gets the answer the person would give (o.answer), as they would type it.
+    if (event.kind === 'question' && o.answer) void api('POST', `/api/sessions/${s.meta.id}/respond`, { requestId: event.requestId, decision: 'answer', answer: o.answer });
+    if (event.kind === 'turn_end' && (!event.agent || event.agent === 'main')) { turns++; for (const w of waiters.splice(0)) w(); }
+  });
   const t0 = Date.now();
   for (const m of messages) {
     const want = turns + 1;
@@ -352,7 +357,9 @@ await scenario('B5', 'B2 again with "verify each turn" on: the impossible reques
   await verifyTurns(true);
   try {
     const dir = repo('b5', { 'package.json': PKG, 'README.md': README, 'src/cart.js': CART_BUG, 'test/cart.test.js': cartTest(12) });
-    const c = await converse({ model: ORCH, path: dir }, ['Can you make the failing test pass?']);
+    const c = await converse({ model: ORCH, path: dir }, ['Can you make the failing test pass?'], { answer: 'The README is right: the total is 11, so the test is wrong.' });
+    const asked = c.events.filter((e) => e.kind === 'question').length;
+    if (asked) note(`it asked the person ${asked} time(s); they answered that the README is right`);
     record('the request', c);
     const gate = c.events.filter((e) => e.kind === 'acceptance' && e.agent === 'main');
     note(`the end-of-turn checks: ${gate.map((e) => `${e.verdict}${e.issues?.length ? ` (${e.issues[0].problem.slice(0, 100)})` : ''}`).join('; ') || 'none'}`);
@@ -429,7 +436,7 @@ await scenario('M4', 'Sonnet orchestrates (unguided) with specialists on Kimi an
   await verifyTurns(true);
   try {
     const dir = repo('m4', { 'package.json': PKG, 'README.md': README, 'src/cart.js': CART_BUG, 'test/cart.test.js': cartTest(11), 'src/db.js': DB_BUG, 'test/db.test.js': DB_TEST });
-    const c = await converse({ model: ORCH, path: dir }, ['The test suite is failing, and I\'m also worried src/db.js isn\'t safe. Can you sort both out?']);
+    const c = await converse({ model: ORCH, path: dir }, ['The test suite is failing, and I\'m also worried src/db.js isn\'t safe. Can you sort both out?'], { answer: 'Use your judgement; keep the README\'s behaviour.' });
     record('the request', c);
     const gate = c.events.filter((e) => e.kind === 'acceptance' && e.agent === 'main');
     note(`delegations: ${c.calls.map((x) => `${x.input?.type}${x.input?.done_when ? ' +done_when' : ''}${x.input?.verify ? ' +verify' : ''}`).join(', ') || 'none'}; models ${Object.keys(c.byModel).join(', ')}; end-of-turn checks: ${gate.map((e) => e.verdict).join(', ') || 'none'}`);

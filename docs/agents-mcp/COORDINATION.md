@@ -177,7 +177,9 @@ Permissions; or the operator's, `HARNESS_VERIFY_TURNS=1`, which the person canno
 conversation with the built-in verifier. It covers the orchestrator's own edits, which done criteria (on
 delegations only) do not: in the live run the orchestrator fixed a bug itself, the tests passed, and the case the
 README names (an item without a quantity) gave NaN (EVAL-ACCEPTANCE.md, B1 and B4). It costs one verifier run per
-turn that changes files, so it is off by default.
+turn that changes files, so it is off by default. A failed verdict is given once per set of changes: an agent that
+then changes nothing more and says what cannot be done may finish (found live: with an impossible request, "make
+this contradictory test pass", the same changes were failed again and again until the agent asked the person).
 
 **Safety of the harness's own git.** The worker can write `.git/config` and `.gitattributes`, and git runs what they
 name (an fsmonitor command, a clean filter, an external diff or textconv) on the machine running git, which for a
@@ -193,7 +195,7 @@ the agent's result; the worker gets exactly what failed.
 **Cost in the prompt.** The four fields add about 245 tokens to the agent tool, in every request (the base prefix is
 4,410 tokens; its budget test says so).
 
-**Tests.** `test/acceptance.test.ts`: 42 deterministic scenarios (every rule above, the adversarial ones included: a
+**Tests.** `test/acceptance.test.ts`: 43 deterministic scenarios (every rule above, the adversarial ones included: a
 worker that rewrites the test it must pass, a conftest.py that passes everything, a verdict planted in the code, a
 verifier that changes files, a check command the conversation may not run, a check that hangs, a held-out check
 leaking, a sibling's writes during a verification, the worker's git config that would run code). The desktop e2e
