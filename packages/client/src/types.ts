@@ -125,6 +125,8 @@ export type HarnessEvent =
   | { kind: 'notice'; level: 'info' | 'warn' | 'error'; text: string; agent?: string; notify?: boolean }
   /** A progress review at a step checkpoint: started, extended, refreshed (a fresh start), stopped, a flagged "done", a test-discipline nudge. */
   | { kind: 'progress'; phase: 'checkpoint' | 'extended' | 'refreshed' | 'stopped' | 'flagged' | 'nudge'; step: number; budget: number; by: 'signals' | 'review'; text: string; reasons: string[]; verdict?: string; advice?: string; agent?: string }
+  /** A delegated agent's work checked by the harness: its done criteria (run by the harness), or a verifier's verdict. */
+  | { kind: 'acceptance'; agent: string; phase: 'checks' | 'verdict'; round: number; results?: AcceptanceCheck[]; verifier?: string; verdict?: 'pass' | 'fail' | 'unknown'; issues?: AcceptanceIssue[]; overruled?: string; blocked?: string; findings?: AcceptanceFinding[] }
   | { kind: 'retry'; attempt: number; delayMs: number; reason: string }
   | { kind: 'turn_end'; reason: string; agent?: string }
   | { kind: 'status'; status: SessionStatus }
@@ -301,6 +303,13 @@ export interface AgentOptions {
   skills: Array<{ name: string; description: string }>;
   models: Array<{ id: string; label?: string; provider: string; efforts: Effort[] }>;
 }
+
+/** One done criterion as the harness ran it. */
+export interface AcceptanceCheck { label: string; ok: boolean; detail: string; hidden?: boolean }
+/** One issue a verifier found, where it is. */
+export interface AcceptanceIssue { file?: string; line?: number; problem: string }
+/** An added line that can game a check (a skipped test, an early exit): for a closer look, not a failure. */
+export interface AcceptanceFinding { file: string; line?: number; why: string; text: string }
 
 /** A tool's policy on a person's MCP server: auto (the server's read-only hint decides), allow, ask, block. */
 export type McpToolPolicy = 'auto' | 'allow' | 'ask' | 'block';

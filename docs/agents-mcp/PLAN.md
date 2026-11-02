@@ -176,6 +176,15 @@ and checks the end state against the truth; the report is `EVAL.md`. The fixes i
 (your own agents used for their work, a report from an agent that ran out of steps, team sizing, a team lead's
 default agent). Coordination research and a design: `COORDINATION.md`.
 
+### Acceptance: coordination steps 1 and 5 (built 2026-11-02)
+
+Delegated work is accepted by the harness, not on the agent's word: done criteria the harness runs (`done_when`), fix
+rounds, a clean-context verifier (`verify`), the existing tests protected by default, a BLOCKED way out, held-out
+checks, attribution in shared folders, and a team that cannot end a turn unverified. The specification and the
+research behind each rule: `COORDINATION.md` and `research/verification.md`. Tested: 42 deterministic scenarios
+(`test/acceptance.test.ts`), the desktop end to end, and live on real models (`scripts/live-acceptance-eval.mjs`,
+`EVAL-ACCEPTANCE.md`).
+
 ### Gaps closed after the five phases
 
 - **A delegated team leads.** Sub-agents may not start sub-agents by default (`maxSubagentDepth` 1), so a team the

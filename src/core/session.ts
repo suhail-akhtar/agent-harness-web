@@ -3,7 +3,7 @@ import { constants as fsc } from 'node:fs';
 import fs from 'node:fs/promises';
 import { resolveIn } from '../tools/paths.ts';
 import path from 'node:path';
-import { BUILTIN_AGENTS, INTERACTIVE_TOOLS, loadAgentDir, makeAgentTool, mcpServerOf, NESTING_TOOLS, stricterMode, teamBrief, toolMatches } from '../agents/agents.ts';
+import { type Acceptance, BUILTIN_AGENTS, INTERACTIVE_TOOLS, loadAgentDir, makeAgentTool, mcpServerOf, NESTING_TOOLS, stricterMode, teamBrief, toolMatches, VERIFIER_AGENT } from '../agents/agents.ts';
 import { stopShellScript } from '../tools/exec.ts';
 import { describeWatch, TASK_TOOLS, type TaskEntry, TaskRegistry, type TaskService, watchTask } from '../tools/tasks.ts';
 import { formatGates, makeGatesTool, runGates } from '../gates/gates.ts';
@@ -49,7 +49,9 @@ import type { LeaseRecord, Leases } from '../util/lease.ts';
 import { readJson, withFileLock, writeFileAtomic } from '../util/shared-file.ts';
 import { seal, serverKey, unseal } from '../util/sealed.ts';
 import type { ChangeService } from '../ops/changes.ts';
-import { ruleMatches } from './permissions.ts';
+import { decide, ruleMatches } from './permissions.ts';
+import { bashTool } from '../tools/exec.ts';
+import { acceptanceNote, type Baseline, blockedReason, changeSet, type CheckResult, finalVerdict, type Finding, parseVerdict, runChecks, summarizeChecks, summarizeFindings, summarizeVerdict, takeBaseline, tamperFindings, type Verdict, VERDICT_AGAIN, VERDICT_ASK, verifierBrief, withProtection } from '../agents/acceptance.ts';
 import { ArtifactError, type ArtifactMeta, type ArtifactService, ArtifactStore, artifactTool } from './artifacts.ts';
 import { DATA_TOOLS, dataServiceFor, dataToolsFor } from '../data/tools.ts';
 import { type ClientDecl, clientPrompt, clientSkillDirs, cleanClientPlugins, type ClientPresence, type DesktopTool } from './client.ts';
@@ -196,6 +198,19 @@ interface SubEntry {
   cost: { n: number };
   /** The agent it reports to (tainted with it); absent: the main agent. */
   parent?: Agent;
+  /** Its definition (a team lead's reviewer verifies its members' work). */
+  def?: AgentDef;
+  /** What its work must meet (the agents it starts inherit what it must keep unchanged). */
+  acceptance?: Acceptance;
+}
+
+/** A delegation's acceptance as it runs: what it must meet, where, and the workspace it started from. */
+interface AccRun {
+  acceptance: Acceptance; baseline: Baseline; host: ToolHost; brief: string; depth: number;
+  /** The work log's count as it started (others' work since then is seen), and whether it runs in the background. */
+  since?: number; background?: boolean;
+  /** Others changed its folder while it worked: it is held to its own changes. */
+  shared?: boolean;
 }
 
 /** Finished sub-agents kept per session for send_message (least recently used go first). */
@@ -1653,7 +1668,7 @@ export class Session {
       // Deferred plugin groups, loaded as the session's whole history says (a load outlives a compaction).
       toolGroups: model.deferTools === false || as?.def.tools ? [] : as ? tb.groups.map((g) => ({ ...g, tools: g.tools.filter((n) => as.tools.some((t) => t.spec.name === n)) })).filter((g) => g.tools.length) : tb.groups, loadHistory: this.history, spill: this.spillFor(host),
       cacheKey: this.meta.cacheKey ?? `hw-${this.meta.id}`, maxSteps: Math.min(as?.def.maxTurns ?? settings.maxSteps, settings.maxSteps), readFiles: this.readFiles,
-      inProcessHooks: [...this.deps.registry.hooks, ...this.gatesOnStopHook(settings)],
+      inProcessHooks: [...this.deps.registry.hooks, ...this.gatesOnStopHook(settings), ...this.turnVerifyHook()],
       hookJudge: this.hookJudge(settings),
       hookRunners: this.hookRunners(),
       autoCheck: this.autoCheck(settings),
@@ -1876,6 +1891,87 @@ export class Session {
   }
 
   /** "Don't finish while a blocking gate fails" (settings.gatesOnStop / HARNESS_GATES_ON_STOP=1). */
+  /** The workspace as this turn started (a team with a reviewer); the change set a passing verification covered. */
+  private turnBaseline?: Baseline;
+  private verifiedChanges?: string;
+
+  /**
+   * Agents at work and the folders they work in (verifiers aside): whether others changed a worker's folder while it
+   * worked or was verified, so that it is held only to its own changes.
+   */
+  private workLog: Array<{ name: string; root: string; parent: string; seq: number }> = [];
+  private atWork = new Set<string>();
+  private workSeq = 0;
+
+  /**
+   * Did an agent other than `worker`, its own sub-agents and the agents above it work in `root` since `since`: one
+   * started since, one at work now, or one at work when the window began (`atStart`, a snapshot of atWork)?
+   */
+  private othersAt(worker: string, root: string, since: number, background = false, atStart?: Set<string>): boolean {
+    const parentOf = new Map(this.workLog.map((e) => [e.name, e.parent]));
+    const above = new Set<string>();
+    for (let p = parentOf.get(worker); p && p !== 'main' && !above.has(p); p = parentOf.get(p)) above.add(p);
+    const below = (n: string) => { for (let p = parentOf.get(n), i = 0; p && i < 10; p = parentOf.get(p), i++) if (p === worker) return true; return false; };
+    const other = this.workLog.some((e) => e.root === root && e.name !== worker && !above.has(e.name) && !below(e.name) && (e.seq > since || this.atWork.has(e.name) || !!atStart?.has(e.name)));
+    // In the background, the conversation's own agent may be changing the same folder.
+    return other || (background && this.status === 'running');
+  }
+
+  /** The workspace files an agent's own file tools (and its sub-agents') wrote or edited; changes made through a shell cannot be told apart. */
+  private toolWrites(agent: Agent, root: string): Set<string> {
+    const out = new Set<string>();
+    const name = agent.cfg.name;
+    const agents = [agent, ...this.workLog.filter((e) => { for (let p: string | undefined = e.parent, i = 0; p && i < 10; p = this.workLog.find((x) => x.name === p)?.parent, i++) if (p === name) return true; return false; }).map((e) => this.subs.get(e.name)?.agent).filter((a): a is Agent => !!a)];
+    for (const a of agents) for (const m of a.messages) {
+      if (m.role !== 'assistant') continue;
+      for (const b of m.content) {
+        if (b.type !== 'tool_use' || (b.name !== 'write' && b.name !== 'edit')) continue;
+        const p = (b.input as { path?: unknown }).path;
+        if (typeof p !== 'string' || !p) continue;
+        const rel = path.relative(root, path.resolve(root, p)).replace(/\\/g, '/');
+        if (rel && !rel.startsWith('..')) out.add(rel);
+      }
+    }
+    return out;
+  }
+
+  /** Who checks this turn's changes before it may end: a team's reviewer, or the built-in verifier when the settings say so. */
+  private turnVerifier(): string | true | undefined {
+    return this.agentView?.def.team?.reviewer ?? (this.settings?.verifyTurns ? true : undefined);
+  }
+
+  /**
+   * A turn whose changes no verification passed cannot end (COORDINATION.md, step 5) in a team with a reviewer, or
+   * anywhere with settings.verifyTurns (the conversation's own agent's work is checked too, not only what it
+   * delegates): its stop has the verifier check the turn's changes against the person's request, and a failing
+   * verdict goes back to the agent (at most three times a turn, as for any Stop hook).
+   */
+  private turnVerifyHook(): InProcessHook[] {
+    return [{
+      event: 'Stop', plugin: 'harness', handler: async (_p, ctx) => {
+        const verify = this.turnVerifier();
+        const base = this.turnBaseline;
+        if (!verify || !base || !this.agent) return undefined;
+        const team = verify !== true;
+        const changes = await changeSet(ctx.host, base);
+        if (changes === '(no changes)' || changes.startsWith('(no record') || changes.startsWith('(the change set')) return undefined;
+        const key = crypto.createHash('sha1').update(changes).digest('hex');
+        if (this.verifiedChanges === key) return undefined;
+        const r = await this.verifyWork({ worker: team ? 'the team' : 'this turn', acc: { acceptance: { checks: [], verify, maxFixRounds: 0 }, baseline: base, host: ctx.host, brief: `What the person asked for in this turn:\n${this.latestPrompt}`, depth: 1 }, results: [], report: this.lastText(this.agent), signal: ctx.signal })
+          .catch((err: Error) => ({ verdict: { verdict: 'fail', issues: [{ problem: `the verification could not run: ${err.message}` }] } as Verdict, by: 'the harness' }));
+        this.emit({ kind: 'acceptance', agent: 'main', phase: 'verdict', round: 0, verifier: r.by, verdict: r.verdict.verdict, issues: r.verdict.issues, ...(r.verdict.overruled ? { overruled: r.verdict.overruled } : {}) });
+        if (r.verdict.verdict === 'pass') { this.verifiedChanges = key; return undefined; }
+        const who = team ? 'Your reviewer' : 'A verifier';
+        // It could not tell: nothing to fix, but the person hears it (these changes are not checked again).
+        if (r.verdict.verdict === 'unknown') {
+          this.verifiedChanges = key;
+          return { block: true, feedback: `${who} could not tell whether this turn's work is done:\n${summarizeVerdict(r.verdict, r.by)}\n\nSay so plainly in your answer, with what the person should check.` };
+        }
+        return { block: true, feedback: `${who} checked this turn's changes before you finish:\n${summarizeVerdict(r.verdict, r.by)}\n\n${team ? 'Have each issue fixed by the member who did that part' : 'Fix each issue'}, or, if it cannot be done, say plainly in your answer what is not done.` };
+      },
+    }];
+  }
+
   private gatesOnStopHook(settings: Settings): InProcessHook[] {
     if (!settings.gatesOnStop || !this.deps.registry.gates.size) return [];
     return [{
@@ -1890,7 +1986,11 @@ export class Session {
 
   /** The agent tool: a sub-agent of `parent`, under its signal (a background agent's children stop with it), kept for send_message. */
   private async runSubagent(a: SubagentArgs, depth = 1, parent?: Agent, signal?: AbortSignal, host?: ToolHost): Promise<string> {
-    const r = await this.runAgent({ agent: a.type, description: a.description, prompt: a.prompt, signal: signal ?? this.abortCtl?.signal ?? new AbortController().signal, depth, parent, keep: true, tainted: (parent ?? this.agent)?.tainted, ...(a.model ? { model: a.model, delegated: true } : {}), ...(a.effort ? { effort: a.effort } : {}), ...(a.isolation ? { isolation: a.isolation } : {}), ...(host ? { host } : {}) });
+    // Constraints only tighten down a chain of delegation: what the delegating agent must keep unchanged (the
+    // existing tests among it), the agents it starts must keep unchanged too, whatever their own brief says.
+    const inherited = parent && parent !== this.agent ? [...this.subs.values()].find((x) => x.agent === parent)?.acceptance?.checks.filter((c) => 'unchanged' in c || 'protect' in c) : undefined;
+    const acceptance = inherited?.length ? { maxFixRounds: 2, ...a.acceptance, checks: withProtection(a.acceptance?.checks ?? [], { mayChangeTests: true, inherited }) } : a.acceptance;
+    const r = await this.runAgent({ agent: a.type, description: a.description, prompt: a.prompt, signal: signal ?? this.abortCtl?.signal ?? new AbortController().signal, depth, parent, keep: true, tainted: (parent ?? this.agent)?.tainted, ...(a.model ? { model: a.model, delegated: true } : {}), ...(a.effort ? { effort: a.effort } : {}), ...(a.isolation ? { isolation: a.isolation } : {}), ...(host ? { host } : {}), ...(acceptance ? { acceptance } : {}) });
     return `${r.report}\n\n(agent id: ${r.id})`;
   }
 
@@ -1918,7 +2018,7 @@ export class Session {
       addShell: (s) => this.addShell(s, caller),
       sendMessage: (to, message, background, signal) => this.sendMessage(caller, to, message, main && background, signal),
       ...(main ? {
-        startAgent: (a: { description: string; prompt: string; type: string }) => this.startBackgroundAgent(a),
+        startAgent: (a: SubagentArgs) => this.startBackgroundAgent(a),
         monitorInBackground: (t: TaskEntry, p: RegExp | undefined, ms: number, existing: boolean) => this.startMonitor(t, p, ms, existing),
       } : {}),
     };
@@ -2023,7 +2123,7 @@ export class Session {
     if (a.isolation) this.isolationRefusal();
     const id = `${def.name}-${++this.subagents}`;
     const parent = this.agent;
-    this.runAgentInBackground(id, a.description, (signal) => this.runAgent({ agent: def.name, label: id, description: a.description, prompt: a.prompt, signal, depth: 1, parent, keep: true, ...(a.model ? { model: a.model, delegated: true, approved: true } : {}), ...(a.effort ? { effort: a.effort } : {}), ...(a.isolation ? { isolation: a.isolation } : {}) }));
+    this.runAgentInBackground(id, a.description, (signal) => this.runAgent({ agent: def.name, label: id, description: a.description, prompt: a.prompt, signal, depth: 1, parent, keep: true, background: true, ...(a.model ? { model: a.model, delegated: true, approved: true } : {}), ...(a.effort ? { effort: a.effort } : {}), ...(a.isolation ? { isolation: a.isolation } : {}), ...(a.acceptance ? { acceptance: a.acceptance } : {}) }));
     return id;
   }
 
@@ -2138,7 +2238,7 @@ export class Session {
    * Runs a named agent in a fresh context: a chat sub-agent, or a workflow's
    * agent node. One cache key per agent kind, so sibling runs share a prefix.
    */
-  async runAgent(a: { agent: string; prompt: string; signal: AbortSignal; label?: string; description?: string; model?: string; effort?: Effort; maxSteps?: number; /** Calls allowed per tool (a workflow step's toolBudget). */ toolBudget?: Record<string, number>; allowTodos?: boolean; /** A hook's verifier: no hooks of its own (they would start it again). */ noHooks?: boolean; /** 1 for a sub-agent of the main agent, 2 for one of its own, ... */ depth?: number; /** The agent that started it (it is tainted with it, and starts tainted when it is). */ parent?: Agent; /** Kept after it ends, for send_message. */ keep?: boolean; /** Starts tainted: its brief came from an agent that read untrusted content. */ tainted?: boolean; /** `model` was chosen by an agent or a workflow: only a model the person allowed (delegation). */ delegated?: boolean; /** The delegation was checked (and approved) already. */ approved?: boolean; /** Works in a fresh git worktree of the session's repository. */ isolation?: 'worktree'; /** Where its tools work (a worktree agent's sub-agents share its worktree). */ host?: ToolHost; /** Deferred tool groups it starts with loaded (a plugin's workflow: that plugin's). */ loadGroups?: string[] }): Promise<{ report: string; reason: string; cost: number; id: string }> {
+  async runAgent(a: { agent: string; prompt: string; signal: AbortSignal; label?: string; description?: string; model?: string; effort?: Effort; maxSteps?: number; /** Calls allowed per tool (a workflow step's toolBudget). */ toolBudget?: Record<string, number>; allowTodos?: boolean; /** A hook's verifier: no hooks of its own (they would start it again). */ noHooks?: boolean; /** 1 for a sub-agent of the main agent, 2 for one of its own, ... */ depth?: number; /** The agent that started it (it is tainted with it, and starts tainted when it is). */ parent?: Agent; /** Kept after it ends, for send_message. */ keep?: boolean; /** Starts tainted: its brief came from an agent that read untrusted content. */ tainted?: boolean; /** `model` was chosen by an agent or a workflow: only a model the person allowed (delegation). */ delegated?: boolean; /** The delegation was checked (and approved) already. */ approved?: boolean; /** Works in a fresh git worktree of the session's repository. */ isolation?: 'worktree'; /** Where its tools work (a worktree agent's sub-agents share its worktree). */ host?: ToolHost; /** Deferred tool groups it starts with loaded (a plugin's workflow: that plugin's). */ loadGroups?: string[]; /** What its work must meet before its report counts (done criteria, a verifier). */ acceptance?: Acceptance; /** A definition the harness runs that is not in the catalogue (the built-in verifier). */ def?: AgentDef; /** It checks another agent's work (only reads): not counted as at work in the folder. */ verifier?: boolean; /** Started in the background (the conversation's agent may work beside it). */ background?: boolean }): Promise<{ report: string; reason: string; cost: number; id: string; agent?: Agent }> {
     const sessionHost = await this.getHost();
     const settings = await this.getSettings(sessionHost);
     const tb = await this.getToolbox(sessionHost);
@@ -2152,7 +2252,7 @@ export class Session {
     let name = '';
     let isolated: { w: Worktree; host: LocalHost } | undefined;
     try {
-    const def = tb.agents.find((x) => x.name === a.agent) ?? tb.agents.find((x) => x.name === 'general')!;
+    const def = a.def ?? tb.agents.find((x) => x.name === a.agent) ?? tb.agents.find((x) => x.name === 'general')!;
     // A switched-off plugin's agent type is still listed (the cached prefix is unchanged) but does not run.
     const defOff = switchedOff(def, `the ${def.name} agent`);
     if (defOff) throw new Error(defOff);
@@ -2218,7 +2318,7 @@ export class Session {
     self.agent = sub;
     // A brief from an agent that read outside content may carry some of it: the sub-agent starts as tainted.
     if (a.tainted || a.parent?.tainted) sub.markTainted();
-    entry = { agent: sub, owner: a.parent?.cfg.name ?? 'main', running: true, queue: [], cost, parent: a.parent };
+    entry = { agent: sub, owner: a.parent?.cfg.name ?? 'main', running: true, queue: [], cost, parent: a.parent, def, ...(a.acceptance ? { acceptance: a.acceptance } : {}) };
     if (a.keep) this.subs.set(name, entry);
     this.agentSignals.set(name, a.signal);
     const env = await this.preamble(host, false);
@@ -2227,11 +2327,20 @@ export class Session {
     for (const e of start.errors) this.emit({ kind: 'notice', level: 'warn', text: e, agent: name });
     const extra = start.feedback ? `\n\n<subagent_start_context>\n${start.feedback}\n</subagent_start_context>` : '';
     const where = isolated ? `\n\n<system-reminder>You work in your own git worktree (${isolated.w.dir}) on branch ${isolated.w.branch}. Commit your changes there when they are done.</system-reminder>` : '';
-    sub.append({ role: 'user', content: [{ type: 'text', text: `${env}${def.prompt ? `\n\n<role>\n${def.prompt}\n</role>` : ''}${await this.skillBriefs(def, tb)}${teamBrief(def, tb.agents)}${extra}${where}\n\n<brief>\n${a.prompt}\n</brief>` }] });
+    sub.append({ role: 'user', content: [{ type: 'text', text: `${env}${def.prompt ? `\n\n<role>\n${def.prompt}\n</role>` : ''}${await this.skillBriefs(def, tb)}${teamBrief(def, tb.agents)}${extra}${where}\n\n<brief>\n${a.prompt}\n</brief>${acceptanceNote(a.acceptance)}` }] });
     this.emit({ kind: 'notice', level: 'info', text: `Started ${name} (${def.name}, ${model.id})${isolated ? ` in worktree ${isolated.w.branch}` : ''}${a.description ? `: ${a.description}` : ''}`, agent: name });
-    const r = await this.drive(entry, name, a.signal);
+    // Done criteria and the change set start from the workspace as it is before the work (where the agent works).
+    // At work in this folder (a verifier only reads): others' checks see it.
+    if (!a.verifier) {
+      this.workLog.push({ name, root: host.root, parent: a.parent?.cfg.name ?? 'main', seq: ++this.workSeq });
+      if (this.workLog.length > 500) this.workLog.splice(0, 100);
+      this.atWork.add(name);
+    }
+    // The change set too when a verifier reads it or a command checks the work (the lines that can game a check).
+    const acc: AccRun | undefined = a.acceptance ? { acceptance: a.acceptance, baseline: await takeBaseline(host, a.acceptance.checks, { changes: !!a.acceptance.verify || a.acceptance.checks.some((c) => 'run' in c) }), host, brief: a.prompt, depth, since: this.workSeq, background: !!a.background, shared: this.othersAt(name, host.root, this.workSeq, !!a.background) } : undefined;
+    const r = await this.drive(entry, name, a.signal, acc);
     if (isolated) r.report += await this.closeSubWorktree(isolated);
-    return { ...r, id: name };
+    return { ...r, id: name, agent: sub };
     } catch (e) {
       // A worktree made for an agent that never ran (or failed) goes when it holds nothing.
       if (isolated) await this.closeSubWorktree(isolated).catch(() => '');
@@ -2239,6 +2348,7 @@ export class Session {
     } finally {
       release();
       if (entry) entry.running = false;
+      this.atWork.delete(name);
       this.agentSignals.delete(name);
       this.trimSubs();
     }
@@ -2257,28 +2367,157 @@ export class Session {
     return `\n\n(It worked in a git worktree: ${i.w.dir}, branch ${i.w.branch}, ${ch.commits} commit(s)${ch.dirty ? ', with uncommitted changes' : ''}. Review or merge that branch; the worktree stays until the session is deleted.)`;
   }
 
-  /** Runs a sub-agent until it ends (answering messages sent as it finished) and returns its report. */
-  private async drive(e: SubEntry, name: string, signal: AbortSignal): Promise<{ report: string; reason: string; cost: number }> {
+  /**
+   * Runs a sub-agent until it ends (answering messages sent as it finished) and returns its report. With
+   * acceptance (docs/agents-mcp/COORDINATION.md, steps 1 and 5): its done criteria are run by the harness and,
+   * when they pass, a verifier with a clean context checks the work; failures go back to it for a bounded number
+   * of fix rounds; its report says what passed, what failed and why.
+   */
+  private async drive(e: SubEntry, name: string, signal: AbortSignal, acc?: AccRun): Promise<{ report: string; reason: string; cost: number }> {
     const sub = e.agent;
     const before = e.cost.n;
-    let reason = await sub.run(signal);
-    while (reason === 'done' && e.queue.length && !signal.aborted) {
-      sub.append({ role: 'user', content: e.queue.splice(0).map((text) => ({ type: 'text' as const, text })) });
-      reason = await sub.run(signal);
-    }
-    // Out of steps or time before it was done: one last call for its report (else its work reaches nobody).
-    if ((reason === 'max_steps' || reason === 'time') && !signal.aborted) {
-      await sub.wrapUp(reason === 'time' ? 'You have reached your time limit.' : 'You have reached your step limit.', signal).catch((err: Error) => this.emit({ kind: 'notice', level: 'warn', text: `The ${name} agent could not write its report: ${err.message}`, agent: name }));
+    const work = async (): Promise<TurnEndReason> => {
+      let r = await sub.run(signal);
+      while (r === 'done' && e.queue.length && !signal.aborted) {
+        sub.append({ role: 'user', content: e.queue.splice(0).map((text) => ({ type: 'text' as const, text })) });
+        r = await sub.run(signal);
+      }
+      // Out of steps or time before it was done: one last call for its report (else its work reaches nobody).
+      if ((r === 'max_steps' || r === 'time') && !signal.aborted) {
+        await sub.wrapUp(r === 'time' ? 'You have reached your time limit.' : 'You have reached your step limit.', signal).catch((err: Error) => this.emit({ kind: 'notice', level: 'warn', text: `The ${name} agent could not write its report: ${err.message}`, agent: name }));
+      }
+      return r;
+    };
+    let reason = await work();
+    let accepted = '';
+    if (acc && !signal.aborted && reason !== 'aborted') {
+      const max = acc.acceptance.maxFixRounds;
+      let before = '';
+      for (let round = 0; ; round++) {
+        // Its way out: a criterion it says is wrong or impossible goes to the lead, not into a fix round.
+        const blocked = blockedReason(this.lastText(sub));
+        // Others changed this folder while it worked: it is held to the files its own tools wrote.
+        acc.shared ||= this.othersAt(name, acc.host.root, acc.since ?? 0, acc.background);
+        const mine = acc.shared ? this.toolWrites(sub, acc.host.root) : undefined;
+        const results = acc.acceptance.checks.length ? await runChecks(acc.acceptance.checks, { host: acc.host, baseline: acc.baseline, permit: (cmd) => this.permitCheck(cmd, name, e.parent, acc.host, signal), signal, redact: (t) => this.redactor.redact(t), ...(mine ? { mine } : {}) }) : [];
+        // What the work added that can game a check (a skipped test, an early exit): for the verifier and the lead.
+        const changes = acc.baseline.tree || acc.baseline.files ? await changeSet(acc.host, acc.baseline) : undefined;
+        const findings = changes ? tamperFindings(changes) : [];
+        const checksEvent = results.length > 0 || !!blocked;
+        if (checksEvent) this.emit({ kind: 'acceptance', agent: name, phase: 'checks', round, results, ...(blocked ? { blocked } : {}), ...(findings.length ? { findings } : {}) });
+        let verdict: { verdict: Verdict; by: string } | undefined;
+        if (!blocked && acc.acceptance.verify && results.every((r) => r.ok) && !signal.aborted) {
+          verdict = await this.verifyWork({ worker: name, workerDef: e.def, parent: e.parent, acc, results, report: this.lastText(sub), signal, ...(changes ? { changes } : {}), findings, ...(mine ? { mine } : {}) })
+            .catch((err: Error) => ({ verdict: { verdict: 'fail', issues: [{ problem: `the verification could not run: ${err.message}` }] } as Verdict, by: 'the harness' }));
+          this.emit({ kind: 'acceptance', agent: name, phase: 'verdict', round, verifier: verdict.by, verdict: verdict.verdict.verdict, issues: verdict.verdict.issues, ...(verdict.verdict.overruled ? { overruled: verdict.verdict.overruled } : {}), ...(!checksEvent && findings.length ? { findings } : {}) });
+        }
+        const failed = results.some((r) => !r.ok) || verdict?.verdict.verdict === 'fail';
+        // The same failures twice: another round would not help (more rounds mostly add gaming, not passes).
+        const now = JSON.stringify([results.filter((r) => !r.ok).map((r) => [r.label, r.detail]), verdict?.verdict.issues ?? []]);
+        const stuck = round > 0 && failed && now === before;
+        before = now;
+        accepted = [
+          blocked ? `BLOCKED by the agent: ${blocked}` : '',
+          results.length ? summarizeChecks(results) : '',
+          verdict ? summarizeVerdict(verdict.verdict, verdict.by) : acc.acceptance.verify && !blocked && results.some((r) => !r.ok) ? 'Verification: not run (done criteria failed first).' : '',
+          summarizeFindings(findings),
+        ].filter(Boolean).join('\n\n');
+        if (blocked) { accepted += '\n\nNOT ACCEPTED: the agent says a criterion is wrong or cannot be met. Decide: change the criteria or the task, or give it to someone else.'; break; }
+        if (!failed) {
+          if (verdict?.verdict.verdict === 'unknown') accepted += '\n\nUNVERIFIED: the checks passed, but the verifier could not tell whether the task is done. Check it before relying on it.';
+          break;
+        }
+        // No more rounds: what it is now is the report. A run stopped by money, a refusal or an error is not sent back.
+        if (stuck || round >= max || signal.aborted || reason === 'budget' || reason === 'refusal' || reason === 'error') {
+          accepted += `\n\nNOT ACCEPTED${max ? ` after ${round} fix round${round === 1 ? '' : 's'}` : ''}: treat this work as unfinished.${stuck && round < max ? ' (Stopped early: the same failures as the round before.)' : ''}`;
+          break;
+        }
+        // The worker hears what failed, but never what a held-out check is or printed.
+        const told = [results.length ? summarizeChecks(results, { forWorker: true }) : '', verdict ? summarizeVerdict(verdict.verdict, verdict.by) : ''].filter(Boolean).join('\n\n');
+        const beside = acc.shared ? ' Other agents work in this folder too: never undo their changes; if what fails is theirs, not yours, say so with BLOCKED.' : '';
+        sub.append({ role: 'user', content: [{ type: 'text', text: `<system-reminder>Your work is not accepted yet (fix round ${round + 1} of ${max}). The harness checked it:\n\n${told}\n\nFix what failed (not the checks: they are fixed), then report again. If a criterion cannot be met by doing the task properly, end your report with "BLOCKED: <the criterion and your evidence>".${beside}</system-reminder>` }] });
+        this.emit({ kind: 'notice', level: 'info', text: `${name}: not accepted yet, fix round ${round + 1} of ${max}`, agent: name });
+        reason = await work();
+      }
     }
     // Its report carries whatever it read: the delegating agent is now tainted too.
     if (sub.tainted) (e.parent ?? this.agent)?.markTainted();
     this.emit({ kind: 'turn_end', reason, agent: name });
-    const last = [...sub.messages].reverse().find((m) => m.role === 'assistant');
-    const text = last?.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n').trim() ?? '';
+    const text = this.lastText(sub);
     // A sub-agent that read outside content may repeat hidden text from it.
     const clean = sub.tainted ? stripInvisible(text).text : text;
     const report = clean ? (clean.length > 16_000 ? clean.slice(0, 16_000) + '\n[report truncated]' : clean) : 'The agent finished without a report.';
-    return { report: reason === 'done' ? report : `${report}\n\n(The agent stopped early: ${reason}.)`, reason, cost: e.cost.n - before };
+    const withAcceptance = accepted ? `${report}\n\n---\n${accepted}` : report;
+    return { report: reason === 'done' ? withAcceptance : `${withAcceptance}\n\n(The agent stopped early: ${reason}.)`, reason, cost: e.cost.n - before };
+  }
+
+  /** An agent's last message's text. */
+  private lastText(a: Agent): string {
+    const last = [...a.messages].reverse().find((m) => m.role === 'assistant');
+    return last?.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n').trim() ?? '';
+  }
+
+  /**
+   * Whether a done criterion's command may run: decided as a command of the agent that wrote it (its mode, the
+   * rules), where the worker works. Read-only commands run; others are asked (auto mode's checker first) or, in a
+   * conversation that never asks, refused. A check never has more rights than its author.
+   */
+  private async permitCheck(command: string, worker: string, parent: Agent | undefined, host: ToolHost, signal: AbortSignal): Promise<{ allow: boolean; reason?: string }> {
+    const lead = parent ?? this.agent;
+    const mode = lead?.permissionMode() ?? this.meta.mode;
+    const d = decide(bashTool, { command }, { mode, rules: this.rules(), sandboxed: host.sandboxed, tainted: !!lead?.tainted, network: host.networkPolicy, hostKind: host.kind });
+    if (d.action === 'allow') return { allow: true };
+    if (d.action === 'deny') return { allow: false, reason: d.reason };
+    const summary = `Done criterion for ${worker}: ${command}`;
+    if (mode === 'auto' && !d.guard && !d.always) {
+      const v = await this.autoCheck(this.settings ?? await this.getSettings(host))({ tool: 'bash', summary, input: { command }, reason: d.reason, request: this.latestPrompt, untrustedContentSeen: !!lead?.tainted }, signal).catch(() => undefined);
+      if (v?.ok) return { allow: true };
+    }
+    const r = await this.request('permission', { kind: 'permission_request', requestId: crypto.randomUUID(), tool: 'bash', summary, input: { command }, ...(lead && lead.cfg.name !== 'main' ? { agent: lead.cfg.name } : {}) });
+    return r.decision === 'allow' || r.decision === 'allow_always' ? { allow: true } : { allow: false, reason: 'the person did not allow it' };
+  }
+
+  /**
+   * A clean-context check of finished work: the named agent, else a team lead's reviewer, else the built-in
+   * verifier (never the worker). It gets the brief, the harness's check results, the change set and the worker's
+   * report as claims; its last JSON line is the verdict; a pass is overruled by a failed check, or by the verifier
+   * changing files itself.
+   */
+  private async verifyWork(o: { worker: string; workerDef?: AgentDef; parent?: Agent; acc: AccRun; results: CheckResult[]; report: string; signal: AbortSignal; changes?: string; findings?: Finding[]; mine?: Set<string> }): Promise<{ verdict: Verdict; by: string }> {
+    const tb = await this.getToolbox(await this.getHost());
+    const v = o.acc.acceptance.verify;
+    // The delegating agent: a sub-agent that leads (its entry), or the conversation's own agent (a team it runs as).
+    const leadDef = o.parent && o.parent !== this.agent ? [...this.subs.values()].find((x) => x.agent === o.parent)?.def : this.agentView?.def;
+    let def: AgentDef = typeof v === 'string' ? tb.agents.find((a) => a.name === v) ?? VERIFIER_AGENT
+      : leadDef?.team?.reviewer ? tb.agents.find((a) => a.name === leadDef.team!.reviewer) ?? VERIFIER_AGENT : VERIFIER_AGENT;
+    if (def.name === o.workerDef?.name) def = VERIFIER_AGENT;
+    const changes = o.changes ?? await changeSet(o.acc.host, o.acc.baseline);
+    const findings = o.findings ?? tamperFindings(changes);
+    // What the verifier itself changes would not be the worker's: watched, and a change fails the verification.
+    const guard = await takeBaseline(o.acc.host, [], { changes: true });
+    const seq = this.workSeq;
+    const atStart = new Set(this.atWork);
+    const busyAtStart = !!o.acc.background && this.status === 'running';
+    const r = await this.runAgent({
+      agent: def.name, ...(def === VERIFIER_AGENT ? { def } : {}), description: `verify ${o.worker}`, label: `${def.name}-${++this.subagents}`,
+      prompt: verifierBrief({ brief: o.acc.brief, results: o.results, changes, report: o.report, findings, ...(o.mine ? { mine: o.mine } : {}) }),
+      // One level beneath the worker: part of its run, it takes no slot of its own (parallel workers waiting for their
+      // verifiers while holding every slot would wait for ever).
+      signal: o.signal, depth: o.acc.depth + 1, parent: o.parent, keep: false, host: o.acc.host, tainted: (o.parent ?? this.agent)?.tainted, verifier: true,
+    });
+    let parsed = parseVerdict(r.report);
+    // A reply without the verdict line (out of steps, or it forgot): asked once more, without tools; still none is a fail.
+    if (parsed.missing && r.agent && !o.signal.aborted) {
+      await r.agent.wrapUp(VERDICT_AGAIN, o.signal, VERDICT_ASK).catch(() => {});
+      parsed = parseVerdict(this.lastText(r.agent));
+    }
+    let verdict = finalVerdict(parsed, o.results);
+    // A change while other agents worked in the folder cannot be laid on the verifier.
+    const touched = busyAtStart || this.othersAt(o.worker, o.acc.host.root, seq, o.acc.background, atStart) ? '(no changes)' : await changeSet(o.acc.host, guard);
+    if (touched !== '(no changes)' && !touched.startsWith('(no record') && !touched.startsWith('(the change set is not available')) {
+      verdict = { ...verdict, verdict: 'fail', overruled: `the verifier changed files itself (a verifier only reads and runs checks)${verdict.overruled ? `; ${verdict.overruled}` : ''}` };
+    }
+    return { verdict, by: r.id };
   }
 
   // ---------- workflows ----------
@@ -2884,6 +3123,8 @@ export class Session {
       const pre = this.queued.splice(0).filter((q) => q.startsWith('<system-reminder>'));
       agent.append({ role: 'user', content: [...pre.map((q) => ({ type: 'text' as const, text: q })), { type: 'text', text: body }, ...(images ?? [])] });
       this.emit({ kind: 'user_message', text, ...(origin === 'auto' || origin === 'link' ? { origin } : {}) });
+      // A team with a reviewer: the workspace as the turn starts, for the verification its stop needs.
+      this.turnBaseline = this.turnVerifier() ? await takeBaseline(host, [], { changes: true }).catch(() => undefined) : undefined;
       reason = await agent.run(signal);
     } catch (err) {
       if (signal.aborted) reason = 'aborted';

@@ -53,6 +53,9 @@ export function AgentRow({ a }: { a: SubAgent }) {
           {a.worktree && <span className="inline-flex items-center gap-0.5" title="Works in its own git worktree"><Icon name="git-branch" size={11} />{a.worktree}</span>}
           {ms !== undefined && <span>{duration(ms)}</span>}
           {a.cost > 0 && <span data-subagent-cost>{money(a.cost)}</span>}
+          {a.accepted?.checks && <span data-subagent-checks={a.accepted.checks.passed === a.accepted.checks.total ? 'pass' : 'fail'} className={cx('rounded px-1', a.accepted.checks.passed === a.accepted.checks.total ? 'bg-hx-success-soft text-hx-success' : 'bg-hx-warning-soft text-hx-warning')} title="Done criteria, run by the harness">checks {a.accepted.checks.passed}/{a.accepted.checks.total}</span>}
+          {a.accepted?.verdict && <span data-subagent-verdict={a.accepted.verdict} className={cx('rounded px-1', a.accepted.verdict === 'pass' ? 'bg-hx-success-soft text-hx-success' : 'bg-hx-warning-soft text-hx-warning')} title={`Verified by ${a.accepted.verifier ?? 'a verifier'}`}>{a.accepted.verdict === 'pass' ? 'verified' : a.accepted.verdict === 'unknown' ? 'unverified' : 'not verified'}</span>}
+          {a.accepted?.blocked && <span data-subagent-blocked className="rounded bg-hx-warning-soft px-1 text-hx-warning" title="It says a done criterion is wrong or cannot be met">blocked</span>}
           {a.status === 'running' && a.last && <span className="truncate">· {a.last}</span>}
         </div>
       </div>

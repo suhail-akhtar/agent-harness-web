@@ -24,6 +24,8 @@ export interface SubAgent {
   background?: boolean;
   /** Its last tool call, as a line. */
   last?: string;
+  /** Its work as the harness last checked it: done criteria passed of run, and a verifier's verdict. */
+  accepted?: { checks?: { passed: number; total: number }; verdict?: 'pass' | 'fail' | 'unknown'; verifier?: string; round: number; blocked?: boolean };
 }
 
 export interface ModelCost { model: string; cost: number; requests: number; input: number; output: number; cacheRead: number }
@@ -53,6 +55,13 @@ export function foldAgent(a: Agents, e: HarnessEvent, now = Date.now()): Agents 
     case 'usage': return { ...a, [name]: { ...cur, cost: cur.cost + e.cost, calls: cur.calls + 1, model: cur.model ?? e.model } };
     case 'tool_call': return { ...a, [name]: { ...cur, tools: cur.tools + 1, last: `${e.name}` } };
     case 'turn_end': return { ...a, [name]: { ...cur, status: e.reason === 'done' ? 'done' : e.reason === 'aborted' ? 'stopped' : 'failed', endedAt: now } };
+    case 'acceptance': {
+      const prev = cur.accepted;
+      const accepted = e.phase === 'checks'
+        ? { round: e.round, ...((e.results ?? []).length ? { checks: { passed: (e.results ?? []).filter((r) => r.ok).length, total: (e.results ?? []).length } } : {}), ...(e.blocked ? { blocked: true } : {}) }
+        : { round: e.round, ...(prev?.round === e.round && prev.checks ? { checks: prev.checks } : {}), ...(e.verdict ? { verdict: e.verdict } : {}), ...(e.verifier ? { verifier: e.verifier } : {}) };
+      return { ...a, [name]: { ...cur, accepted } };
+    }
     default: return a;
   }
 }

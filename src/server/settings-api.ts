@@ -57,6 +57,8 @@ export async function effectiveSettings(o: { dataDir: string; owner: string | un
   out.push({ key: 'linkedSessions', value: { autoContinue: true, maxAutoContinues: 5, ...user.linkedSessions }, source: user.linkedSessions ? 'account' : 'default', scope: 'account', locked: false, layers: { default: { autoContinue: true, maxAutoContinues: 5 }, ...(user.linkedSessions ? { account: user.linkedSessions } : {}) } });
   const gates = op.gatesOnStop ?? (project?.gatesOnStop === true ? true : undefined);
   out.push({ key: 'gatesOnStop', value: gates ?? false, source: op.gatesOnStop !== undefined ? 'operator' : project?.gatesOnStop === true ? 'project' : 'default', scope: 'operator', locked: true, layers: { default: false, ...(op.gatesOnStop !== undefined ? { operator: op.gatesOnStop } : {}), ...(project?.gatesOnStop !== undefined ? { project: project.gatesOnStop } : {}) } });
+  // A verifier for each turn's changes: on when the operator or the person says so (the person cannot switch off the operator's).
+  out.push({ key: 'verifyTurns', value: !!eff.verifyTurns, source: op.verifyTurns ? 'operator' : user.verifyTurns ? 'account' : 'default', scope: 'account', locked: !!op.verifyTurns, layers: { default: false, ...(op.verifyTurns !== undefined ? { operator: op.verifyTurns } : {}), ...(user.verifyTurns !== undefined ? { account: user.verifyTurns } : {}) } });
   // Rules add up: every tier's list, the value their union; the source is the tier with the strongest say (operator first).
   for (const k of ['deny', 'ask', 'allow'] as const) {
     const layers: Partial<Record<Tier, string[]>> = {};

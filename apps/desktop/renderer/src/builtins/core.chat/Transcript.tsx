@@ -143,6 +143,7 @@ function DefaultItem({ item, sessionId, fence, sources, running, isLastAnswer, o
     case 'compaction': return <div className="my-2 flex items-center gap-3 text-caption text-hx-muted"><span className="h-px flex-1 bg-hx-border-subtle" />Context compacted{item.before ? ` · ${fmtTokens(item.before)} → ${fmtTokens(item.after ?? 0)} tokens` : ''}<span className="h-px flex-1 bg-hx-border-subtle" /></div>;
     case 'workflow': return <WorkflowCard item={item} sessionId={sessionId} />;
     case 'progress': return <ProgressCard item={item} />;
+    case 'acceptance': return <AcceptanceCard item={item} />;
     // Without the plugin that draws them (core.agents): a line each.
     case 'chapter': return <div data-chapter={item.index} className="mt-4 text-body-lg font-semibold">{item.index}. {item.title}</div>;
     case 'proposal': return <div data-proposal={item.id} className="rounded-lg bg-hx-pill px-3 py-2 text-small">Proposed session: <b>{item.title}</b></div>;
@@ -153,6 +154,57 @@ function DefaultItem({ item, sessionId, fence, sources, running, isLastAnswer, o
 const PROGRESS_TITLE: Record<Extract<Item, { kind: 'progress' }>['phase'], string> = {
   checkpoint: 'Reviewing progress', extended: 'Progress checked', refreshed: 'Fresh start', stopped: 'Stopped', flagged: 'Check this result', nudge: 'Progress note',
 };
+
+/**
+ * A delegated agent's work as the harness checked it: its done criteria (each with its output when it failed), or a
+ * verifier's verdict with the issues it found. The lead sees the same in the agent's result.
+ */
+function AcceptanceCard({ item }: { item: Extract<Item, { kind: 'acceptance' }> }) {
+  const ok = !item.blocked && (item.phase === 'checks' ? item.results.every((r) => r.ok) : item.verdict === 'pass');
+  const passed = item.results.filter((r) => r.ok).length;
+  // The team's own check of a turn's changes is the main agent's.
+  const whose = item.agent === 'main' ? "this turn's changes" : item.agent;
+  const title = item.blocked
+    ? `Blocked · ${whose} says a criterion is wrong or cannot be met`
+    : item.phase === 'checks'
+      ? `Done criteria · ${whose}: ${passed} of ${item.results.length} passed`
+      : `Verified by ${item.verifier ?? 'a verifier'} · ${whose}: ${item.verdict === 'pass' ? 'pass' : item.verdict === 'unknown' ? 'could not tell' : 'fail'}`;
+  return (
+    <div data-acceptance={item.phase} data-acceptance-ok={ok ? 'yes' : 'no'} {...(item.blocked ? { 'data-acceptance-blocked': '' } : {})} className={cx('my-1 rounded-lg border px-3 py-2 text-small', ok ? 'border-hx-success-border bg-hx-success-soft' : 'border-hx-warning-border bg-hx-warning-soft')}>
+      <div className="flex items-center gap-2">
+        <Icon name={ok ? 'check-circle' : 'warning'} size={14} className={cx('shrink-0', ok ? 'text-hx-success' : 'text-hx-warning')} />
+        <span className="font-medium">{title}</span>
+        {item.round > 0 && <span className="text-tiny opacity-70">fix round {item.round}</span>}
+      </div>
+      {item.blocked && <div className="mt-1 whitespace-pre-wrap break-words">{item.blocked}</div>}
+      {item.phase === 'checks' && item.results.length > 0 && (
+        <ul className="mt-1 space-y-0.5">
+          {item.results.map((r, i) => (
+            <li key={i} data-check-result={r.ok ? 'pass' : 'fail'}>
+              <span className={cx('font-medium', r.ok ? 'text-hx-success' : 'text-hx-danger')}>{r.ok ? 'PASS' : 'FAIL'}</span> <span className="font-mono text-caption">{r.label}</span>
+              {r.hidden && <span className="ml-1 text-tiny opacity-70" title="The agent is not shown this check">held out</span>}
+              {!r.ok && r.detail && <pre className="mt-0.5 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-hx-pill p-1.5 font-mono text-caption text-hx-secondary">{r.detail}</pre>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {item.findings.length > 0 && (
+        <div className="mt-1" data-acceptance-findings={item.findings.length}>
+          <div className="font-medium text-hx-warning">Look closer: added lines that can game a check</div>
+          <ul className="list-disc space-y-0.5 pl-5">
+            {item.findings.map((f, i) => <li key={i}><span className="font-mono text-caption">{f.file}{f.line ? `:${f.line}` : ''}</span> {f.why}: <span className="font-mono text-caption">{f.text}</span></li>)}
+          </ul>
+        </div>
+      )}
+      {item.overruled && <div className="mt-1 text-hx-warning">Overruled: {item.overruled}</div>}
+      {item.issues.length > 0 && (
+        <ul className="mt-1 list-disc space-y-0.5 pl-5">
+          {item.issues.map((x, i) => <li key={i} data-issue><span className="font-mono text-caption">{x.file ? `${x.file}${x.line ? `:${x.line}` : ''}` : ''}</span>{x.file ? ' ' : ''}{x.problem}</li>)}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 /** A progress review at a step checkpoint: why it extended, restarted fresh or stopped. */
 function ProgressCard({ item }: { item: Extract<Item, { kind: 'progress' }> }) {

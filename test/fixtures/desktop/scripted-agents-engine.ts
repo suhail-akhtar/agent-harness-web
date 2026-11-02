@@ -8,6 +8,7 @@
 //                   desktop_notify, desktop_command (switch the theme: asked first), then a summary
 //   "form"       -> ask_user with a JSON-Schema form, then thanks the person by the name they gave
 //   "delegate"   -> a review sub-agent on claude-sonnet-5-5 (allowed by the delegation setting)
+//   "accept"     -> two delegations with done criteria: one whose checks fail, one whose verifier finds an issue
 //   'studio "<folder>"' -> desktop_describe of Studio, model_info (a model card), desktop_command
 //                   games3d:open-model and games3d:open-playtest, then Studio's cards as fences
 //   anything else -> a short reply
@@ -93,6 +94,13 @@ const SCRIPTS: Record<string, Script> = {
     { calls: [{ name: 'agent', input: { description: 'Review the change', prompt: 'Review the change for bugs.', type: 'explore', model: 'claude-sonnet-5-5' } }] },
     (r) => ({ text: `The review on Claude says: ${(r.at(-1) ?? '').split('\n')[0]}` }),
   ],
+  // Acceptance (docs/agents-mcp/COORDINATION.md, steps 1 and 5): a delegation whose done criteria fail (a file it
+  // never writes), then one whose checks pass and whose verifier finds an issue; each gets one fix round.
+  accept: [
+    { calls: [{ name: 'agent', input: { description: 'Write the notes', prompt: 'Write the release notes to notes.txt.', type: 'general', done_when: [{ file: 'notes.txt', contains: 'release' }, { run: 'echo checked' }], max_fix_rounds: 1 } }] },
+    { calls: [{ name: 'agent', input: { description: 'Tidy the notes', prompt: 'Tidy the release notes.', type: 'general', done_when: [{ run: 'echo checked' }], verify: 'yes', max_fix_rounds: 1 } }] },
+    { text: 'Neither piece was accepted: the notes are missing, and the verifier found an issue.' },
+  ],
 };
 
 class ScriptedProvider implements Provider {
@@ -111,7 +119,8 @@ class ScriptedProvider implements Provider {
     if (brief !== undefined && last.role === 'user' && !last.content.some((b) => b.type === 'tool_result')) {
       // A sub-agent or a workflow agent node: one answer.
       await wait(400);
-      await say(/review/i.test(brief) ? `No bugs found (reviewed on ${req.model.id}).` : /modules/i.test(brief) ? 'Three modules: core, server, ui.' : `Done: ${brief.slice(0, 60)}`);
+      // A verifier (its brief is the harness's) finds an issue; anything else answers its brief.
+      await say(/^Check this finished work/.test(brief) ? 'The notes miss the date.\n{"verdict": "fail", "issues": [{"file": "notes.txt", "line": 1, "problem": "the notes do not give the release date"}]}' : /review/i.test(brief) ? `No bugs found (reviewed on ${req.model.id}).` : /modules/i.test(brief) ? 'Three modules: core, server, ui.' : `Done: ${brief.slice(0, 60)}`);
     } else if (/CHILD:/.test(first) && !msgs.slice(1).some((m) => m.role === 'assistant')) {
       // A linked session's first turn.
       await wait(600);

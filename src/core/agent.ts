@@ -578,14 +578,17 @@ export class Agent {
     return want === '1h' || (want === 'auto' && this.longGaps) ? '1h' : undefined;
   }
 
+  /** Its permission mode now (a command written for it, such as a done criterion, is decided as its own would be). */
+  permissionMode(): PermissionMode { return this.hooks.getMode(); }
+
   /**
    * A run that stopped before it was done (its step or time limit): one last request, its tools offered but not
    * usable (the same prefix, so the cache holds), for its report of what it did and found and what is left. A
    * delegating agent otherwise gets nothing from work that ran out of steps.
    */
-  async wrapUp(why: string, signal: AbortSignal): Promise<void> {
+  async wrapUp(why: string, signal: AbortSignal, ask = 'No more tool calls: write your report now. What you did and found so far (with the evidence), what you did not get to, and what is left to do.'): Promise<void> {
     if (signal.aborted) return;
-    const note = { type: 'text' as const, text: `<system-reminder>${why} No more tool calls: write your report now. What you did and found so far (with the evidence), what you did not get to, and what is left to do.</system-reminder>` };
+    const note = { type: 'text' as const, text: `<system-reminder>${why} ${ask}</system-reminder>` };
     const last = this.messages.at(-1);
     if (last?.role === 'user') last.content.push(note); else this.append({ role: 'user', content: [note] });
     const resp = await this.callModel(this.messages, signal, false, true);

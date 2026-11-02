@@ -1,4 +1,4 @@
-import type { HarnessEvent, ImageData, Message, ToolDisplay, WorkflowRunView } from './types.ts';
+import type { AcceptanceCheck, AcceptanceFinding, AcceptanceIssue, HarnessEvent, ImageData, Message, ToolDisplay, WorkflowRunView } from './types.ts';
 
 // The chat view is a list of items rebuilt from the stored history, then kept
 // current by live events. Pure functions, so they are easy to test. Shared by
@@ -14,6 +14,8 @@ export type Item =
   /** A progress review at a step checkpoint (a review in flight is replaced by its outcome). */
   | { kind: 'progress'; key: string; phase: 'checkpoint' | 'extended' | 'refreshed' | 'stopped' | 'flagged' | 'nudge'; step: number; budget: number; by: 'signals' | 'review'; text: string; reasons: string[]; verdict?: string; advice?: string; agent?: string }
   | { kind: 'workflow'; key: string; run: WorkflowRunView; activity: Record<string, Activity[]> }
+  /** A delegated agent's work checked by the harness: its done criteria, or a verifier's verdict (one item per round). */
+  | { kind: 'acceptance'; key: string; agent: string; phase: 'checks' | 'verdict'; round: number; results: AcceptanceCheck[]; verifier?: string; verdict?: 'pass' | 'fail' | 'unknown'; issues: AcceptanceIssue[]; overruled?: string; blocked?: string; findings: AcceptanceFinding[] }
   /** A session the agent offered to start (start_session with initiation offer / own_initiative). */
   | { kind: 'proposal'; key: string; id: string; title: string; brief: string; initiation: string; context?: string; model?: string; effort?: string; expiresAt?: number }
   /** A linked session: started from here, its report, or a message from another session. */
@@ -230,6 +232,8 @@ export function apply(live: Live, e: HarnessEvent, now: number = Date.now()): Li
       }
       return { ...live, items: [...items, item] };
     }
+    case 'acceptance':
+      return { ...live, items: [...items, { kind: 'acceptance', key: key(), agent: e.agent, phase: e.phase, round: e.round, results: e.results ?? [], issues: e.issues ?? [], findings: e.findings ?? [], ...(e.verifier ? { verifier: e.verifier } : {}), ...(e.verdict ? { verdict: e.verdict } : {}), ...(e.overruled ? { overruled: e.overruled } : {}), ...(e.blocked ? { blocked: e.blocked } : {}) }] };
     case 'compaction':
       return { ...live, items: [...items, { kind: 'compaction', key: key(), before: e.before, after: e.after }], contextTokens: e.after };
     case 'usage':
@@ -365,9 +369,13 @@ export function toRows(items: Item[], running = false): Row[] {
   let turnIndex = 0;
   const flush = (live: boolean) => {
     if (!turn.length) return;
-    // Chapters open the turn's work; proposals and linked sessions follow it (rows of their own, never folded).
-    const own = turn.filter((i) => OWN_ROW.has(i.kind));
-    turn = turn.filter((i) => !OWN_ROW.has(i.kind));
+    // Chapters open the turn's work; proposals and linked sessions follow it (rows of their own, never folded), and so
+    // does each delegation's acceptance as it last stands (its last round; earlier rounds stay in the steps).
+    const lastRound = new Map<string, number>();
+    for (const i of turn) if (i.kind === 'acceptance') lastRound.set(i.agent, Math.max(lastRound.get(i.agent) ?? -1, i.round));
+    const isOwn = (i: Item) => OWN_ROW.has(i.kind) || (i.kind === 'acceptance' && i.round === lastRound.get(i.agent));
+    const own = turn.filter(isOwn);
+    turn = turn.filter((i) => !isOwn(i));
     for (const it of own) if (it.kind === 'chapter') rows.push({ kind: 'item', key: it.key, item: it });
     const after = own.filter((i) => i.kind !== 'chapter');
     const lastTool = findLastIndex(turn, (i) => i.kind === 'tool');

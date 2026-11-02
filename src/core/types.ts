@@ -113,6 +113,8 @@ export type HarnessEvent =
   | { kind: 'retry'; attempt: number; delayMs: number; reason: string }
   /** Debug: a request read much less from the provider's cache than the one before wrote, and which section changed first (src/core/cache.ts). */
   | { kind: 'cache_miss'; cause: string; section: string; index?: number; expected: number; read: number; gapMs: number; agent?: string }
+  /** A delegated agent's work checked by the harness (docs/agents-mcp/COORDINATION.md): its done criteria, or a verifier's verdict. */
+  | { kind: 'acceptance'; agent: string; phase: 'checks' | 'verdict'; round: number; results?: Array<{ label: string; ok: boolean; detail: string; hidden?: boolean }>; verifier?: string; verdict?: 'pass' | 'fail' | 'unknown'; issues?: Array<{ file?: string; line?: number; problem: string }>; overruled?: string; blocked?: string; findings?: Array<{ file: string; line?: number; why: string; text: string }> }
   | { kind: 'turn_end'; reason: TurnEndReason; agent?: string }
   | { kind: 'status'; status: SessionStatus };
 

@@ -72,7 +72,9 @@ test('a team\'s spend limit covers its members: the run stops when the whole tea
   try {
     const mk = (b: Record<string, unknown>) => t.call(OPERATOR, 'POST', '/api/me/agents', { model: 'deepseek-flash', tools: ['read'], ...b });
     assert.equal((await mk({ name: 'helper', description: 'Helps with any small task.', prompt: 'Help.' })).status, 201);
-    assert.equal((await mk({ name: 'thrifty', description: 'A team that must stay cheap.', prompt: 'Lead.', maxCostUsd: 0.0001, team: { members: ['helper'] } })).status, 201);
+    // A scripted call costs $0.000021 off-peak and $0.000042 at DeepSeek's peak hours: at either price the lead's own
+    // calls stay under $0.00006 and its member's take the team over it before a second member starts.
+    assert.equal((await mk({ name: 'thrifty', description: 'A team that must stay cheap.', prompt: 'Lead.', maxCostUsd: 0.00006, team: { members: ['helper'] } })).status, 201);
     t.ds.scripts.cheap = [
       { calls: [{ name: 'agent', input: { description: 'help', type: 'helper', prompt: '[[hp]] Help.' } }] },
       { calls: [{ name: 'agent', input: { description: 'help again', type: 'helper', prompt: '[[hp2]] Help again.' } }] },

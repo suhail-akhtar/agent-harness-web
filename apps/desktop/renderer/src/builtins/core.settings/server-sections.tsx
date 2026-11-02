@@ -181,17 +181,18 @@ export function OnboardModel(): React.ReactElement {
 export function Permissions(): React.ReactElement {
   const [mine, err, reload] = useLoad(() => client.settings.mine());
   const [eff] = useLoad(() => client.settings.effective());
-  const [draft, setDraft] = useState<{ allow: string; deny: string; ask: string; maxSteps: string; maxCostUsd: string; maxTurnMinutes: string } | null>(null);
+  const [draft, setDraft] = useState<{ allow: string; deny: string; ask: string; maxSteps: string; maxCostUsd: string; maxTurnMinutes: string; verifyTurns: boolean } | null>(null);
   useEffect(() => {
     if (!mine) return;
     const p = (mine.permissions ?? {}) as { allow?: string[]; deny?: string[]; ask?: string[] };
-    setDraft({ allow: (p.allow ?? []).join('\n'), deny: (p.deny ?? []).join('\n'), ask: (p.ask ?? []).join('\n'), maxSteps: String(mine.maxSteps ?? ''), maxCostUsd: String(mine.maxCostUsd ?? ''), maxTurnMinutes: String(mine.maxTurnMinutes ?? '') });
+    setDraft({ allow: (p.allow ?? []).join('\n'), deny: (p.deny ?? []).join('\n'), ask: (p.ask ?? []).join('\n'), maxSteps: String(mine.maxSteps ?? ''), maxCostUsd: String(mine.maxCostUsd ?? ''), maxTurnMinutes: String(mine.maxTurnMinutes ?? ''), verifyTurns: mine.verifyTurns === true });
   }, [mine]);
   if (err) return <InfoNote>{err}</InfoNote>;
   if (!draft) return <Spinner />;
   const lines = (s: string) => s.split('\n').map((x) => x.trim()).filter(Boolean);
   const num = (s: string) => (s.trim() && Number(s) > 0 ? Number(s) : undefined);
-  const save = async () => { try { await client.settings.saveMine({ permissions: { allow: lines(draft.allow), deny: lines(draft.deny), ask: lines(draft.ask) }, maxSteps: num(draft.maxSteps), maxCostUsd: num(draft.maxCostUsd), maxTurnMinutes: num(draft.maxTurnMinutes) }); toast('Saved', { kind: 'success' }); reload(); } catch (e) { fail(e); } };
+  // The rest of the person's settings (delegation, linked sessions) are kept: the server replaces what it is sent.
+  const save = async () => { try { await client.settings.saveMine({ ...mine, permissions: { allow: lines(draft.allow), deny: lines(draft.deny), ask: lines(draft.ask) }, maxSteps: num(draft.maxSteps), maxCostUsd: num(draft.maxCostUsd), maxTurnMinutes: num(draft.maxTurnMinutes), verifyTurns: draft.verifyTurns }); toast('Saved', { kind: 'success' }); reload(); } catch (e) { fail(e); } };
   return (
     <div data-section="permissions">
       <p className="mb-2 text-body text-hx-secondary">Your rules are added to the operator's: a deny or ask there can never be loosened here, and your limits apply only where they are lower. One rule per line, e.g. <code>bash(npm test)</code> or <code>edit(src/**)</code>.</p>
@@ -202,6 +203,10 @@ export function Permissions(): React.ReactElement {
         <Field label="Steps per turn"><Input type="number" value={draft.maxSteps} onChange={(e) => setDraft({ ...draft, maxSteps: e.target.value })} placeholder="operator default" /></Field>
         <Field label="Spend per conversation (USD)"><Input type="number" value={draft.maxCostUsd} onChange={(e) => setDraft({ ...draft, maxCostUsd: e.target.value })} placeholder="operator default" /></Field>
         <Field label="Minutes per turn"><Input type="number" value={draft.maxTurnMinutes} onChange={(e) => setDraft({ ...draft, maxTurnMinutes: e.target.value })} placeholder="no limit" /></Field>
+      </div>
+      <div className="mt-3" data-verify-turns={draft.verifyTurns ? 'on' : 'off'}>
+        <Switch checked={draft.verifyTurns} onChange={(on) => setDraft({ ...draft, verifyTurns: on })} label="Check each turn's changes with a verifier before it ends" />
+        <p className="mt-1 text-small text-hx-secondary">A second agent with a clean context reads what the turn changed against what you asked; what it finds goes back to the agent first. One more model run for each turn that changes files.</p>
       </div>
       <div className="mt-2 flex justify-end"><Button variant="primary" onClick={() => void save()}>Save</Button></div>
       {eff && eff.length > 0 && <EffectiveTable rows={eff} />}

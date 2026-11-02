@@ -314,6 +314,22 @@ test('desktop app end to end: the agent platform', { timeout: 15 * 60_000 }, asy
       await page.click('[data-side-panel] button[aria-label="Close the panel"]');
     });
 
+    await step('acceptance is visible: the done criteria and a verifier\'s verdict in the transcript (not folded away), badges on the agents\' cards', async () => {
+      const id = await startChat('accept the release notes');
+      await idle(id);
+      const checks = page.locator('[data-acceptance="checks"][data-acceptance-ok="no"]').first();
+      await checks.waitFor();
+      assert.match(await checks.innerText(), /FAIL[\s\S]*notes\.txt exists and matches \/release\/[\s\S]*notes\.txt does not exist/);
+      const verdict = page.locator('[data-acceptance="verdict"][data-acceptance-ok="no"]').first();
+      await verdict.waitFor();
+      assert.match(await verdict.innerText(), /Verified by verifier-\d+[\s\S]*fail[\s\S]*notes\.txt:1[\s\S]*release date/);
+      await openPanel('core.agents:agents');
+      await page.waitForSelector('[data-agents-panel] [data-subagent-checks="fail"]');
+      await page.waitForSelector('[data-agents-panel] [data-subagent-verdict="fail"]');
+      await shot('agents-acceptance', page.locator('[data-side-panel]'));
+      await page.click('[data-side-panel] button[aria-label="Close the panel"]');
+    });
+
     await step('a workflow added after the session started is offered and runs, drawn as a graph; a node opens its output', async () => {
       await page.click(`[data-session-row="${agentsSession}"] button`);
       await page.waitForSelector(`[data-session="${agentsSession}"]`);

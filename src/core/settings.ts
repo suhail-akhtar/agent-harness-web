@@ -72,6 +72,11 @@ export interface Settings {
   /** Run blocking quality gates when the agent tries to finish, and send it back if any fail. */
   gatesOnStop?: boolean;
   /**
+   * A clean-context verifier checks each turn's changes before the turn may end, and what it finds goes back to the
+   * agent (a team with a reviewer always does, with its reviewer). One verifier run per turn that changed files.
+   */
+  verifyTurns?: boolean;
+  /**
    * Which models agents may hand work to (sub-agents, linked sessions, workflow nodes with a
    * model): the operator's cap, then (applyUserSettings) what the person allows within it.
    * Data goes to that model's company: only with consent. Default: the session's own model.
@@ -165,6 +170,7 @@ export const defaultSettings = (): Settings => ({
   ...(process.env.HARNESS_SUBAGENT_MODEL ? { subagentModel: process.env.HARNESS_SUBAGENT_MODEL } : {}),
   ...(process.env.HARNESS_AUTO_MODEL ? { autoModel: process.env.HARNESS_AUTO_MODEL } : {}),
   ...(process.env.HARNESS_GATES_ON_STOP === '1' ? { gatesOnStop: true } : {}),
+  ...(process.env.HARNESS_VERIFY_TURNS === '1' ? { verifyTurns: true } : {}),
   // The operator's cap on delegation: HARNESS_DELEGATION_MODELS ("*" or a comma list); none by default.
   delegation: { allowedModels: process.env.HARNESS_DELEGATION_MODELS && process.env.HARNESS_DELEGATION_MODELS.trim() !== '*' ? process.env.HARNESS_DELEGATION_MODELS.split(',').map((m) => m.trim()).filter(Boolean) : '*' },
   efficiency: defaultEfficiency(),
@@ -201,6 +207,7 @@ export async function operatorSettings(env: NodeJS.ProcessEnv = process.env): Pr
   if (typeof j.subagentModel === 'string') base.subagentModel = j.subagentModel;
   if (typeof j.autoModel === 'string') base.autoModel = j.autoModel;
   if (typeof j.gatesOnStop === 'boolean') base.gatesOnStop = j.gatesOnStop;
+  if (typeof j.verifyTurns === 'boolean') base.verifyTurns = j.verifyTurns;
   const d = cleanDelegation((j as { delegation?: unknown }).delegation);
   if (d) base.delegation = d;
   base.efficiency = cleanEfficiency((j as { efficiency?: unknown }).efficiency, base.efficiency);
@@ -265,6 +272,8 @@ export interface UserSettings {
   delegation?: Delegation;
   /** Linked sessions: on for sessions without a desktop or web client, auto-continue of an idle parent and its cap. */
   linkedSessions?: LinkedSessionSettings;
+  /** A verifier checks each turn's changes before it ends (on where the operator has it on). */
+  verifyTurns?: boolean;
 }
 
 const PLUGIN_SETTINGS_MAX = 64 * 1024;
@@ -283,6 +292,7 @@ export function cleanUserSettings(j: unknown): UserSettings {
   if (pos(o.maxSteps)) out.maxSteps = Math.floor(pos(o.maxSteps)!);
   if (pos(o.maxCostUsd)) out.maxCostUsd = pos(o.maxCostUsd);
   if (pos(o.maxTurnMinutes)) out.maxTurnMinutes = pos(o.maxTurnMinutes);
+  if (typeof o.verifyTurns === 'boolean') out.verifyTurns = o.verifyTurns;
   if (o.plugins && typeof o.plugins === 'object' && !Array.isArray(o.plugins)) {
     const plugins = Object.fromEntries(Object.entries(o.plugins as Record<string, unknown>)
       .filter(([k, v]) => /^[a-z0-9][a-z0-9._-]{0,63}$/i.test(k) && v && typeof v === 'object' && !Array.isArray(v))
@@ -339,6 +349,8 @@ export function applyUserSettings(base: Settings, u: UserSettings): Settings {
     maxTurnMinutes: u.maxTurnMinutes ? (base.maxTurnMinutes > 0 ? Math.min(base.maxTurnMinutes, u.maxTurnMinutes) : u.maxTurnMinutes) : base.maxTurnMinutes,
     delegation: effectiveDelegation(base.delegation, u.delegation),
     ...(u.linkedSessions ? { linkedSessions: u.linkedSessions } : {}),
+    // The person may switch it on; where the operator has it on, it stays on.
+    ...(base.verifyTurns || u.verifyTurns ? { verifyTurns: true } : {}),
   };
 }
 

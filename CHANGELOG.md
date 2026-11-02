@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+- **Delegated work is accepted by the harness, not on the agent's word** (docs/agents-mcp/COORDINATION.md, steps 1
+  and 5). The agent tool takes `done_when`: checks the harness runs itself when the agent says it is done (a command
+  that must pass, a file that must exist, files that must stay as they were, a pattern that must be absent), with the
+  delegating agent's permissions. What fails goes back to the agent with the exact output, for at most 2 fix rounds
+  (`max_fix_rounds`). The agent's report says what passed, and "NOT ACCEPTED" when the work isn't done.
+  - **A verifier** (`verify`) checks the work after its checks pass, with a clean context. It sees the task, the
+    harness's results, the actual diff and the report as a claim, never the worker's transcript. It is a team's
+    reviewer or a built-in verifier, never the worker. Its verdict is pass, fail or unknown ("unverified", never a
+    pass). A pass is overruled when a check failed or when the verifier changed files itself. A verdict planted in
+    the code does not count, and a reply with no verdict is asked again once.
+  - **Existing tests are protected by default** whenever a check runs a command. A changed or removed test line, a
+    new conftest.py or runner config, a changed test script, or an added skip or early exit fails the check; new
+    tests are fine. `may_change_tests` lifts it when the task is the tests.
+  - **A way out**: an agent that finds a criterion wrong or impossible ends with `BLOCKED: <why>`. No fix round is
+    spent; the lead decides.
+  - **Held-out checks** (`"hidden": true`): the agent never sees what they are or what they print.
+  - **The fix rounds stop early** when the same failures come twice.
+  - **Lines that can game a check** (an added skip, focus, early exit, or a turned-off type or lint check) are pointed
+    out to the verifier and the lead.
+  - **Constraints only tighten down a chain**: an agent's sub-agents keep what it must keep unchanged.
+  - **Agents in the same folder are held only to their own changes**: another agent's write is reported, never sent
+    back to be undone.
+  - **A team with a reviewer cannot end a turn with unverified changes**: its reviewer checks them first. **Check each
+    turn's changes** (Settings > Permissions, off by default) does the same in any conversation, so the
+    orchestrator's own edits are checked too, not only what it delegates. In the live run, the orchestrator fixed a
+    bug itself and the tests passed, but the case the README names gave NaN.
+  - **Seen**: a card per delegation in the conversation (checks with their output, the verdict with its issues,
+    BLOCKED), and badges on the agent's card in the Agents panel ("checks 3/4", "verified", "unverified", "blocked").
+  - **Safer git**: a worker's own `.git/config` or `.gitattributes` can no longer make the harness run a command
+    (fsmonitor, clean filters, external diff and textconv are off for the harness's git on a workspace).
+  - Tested: 42 deterministic scenarios (test/acceptance.test.ts), the desktop end to end, and live on real models
+    (scripts/live-acceptance-eval.mjs, docs/agents-mcp/EVAL-ACCEPTANCE.md).
+- **Fixed: saving Settings > Permissions erased your other settings** (the models your agents may use, linked-session
+  choices): the page sent only rules and limits, and the server keeps only what it is sent.
 - **A live evaluation of agents and MCP** (`scripts/live-agents-eval.mjs`, report in docs/agents-mcp/EVAL.md): a
   provider added in the app and a custom agent on its model, the orchestrator routing a mixed request to specialists
   on different models, one agent against a team (writing and reading), a custom MCP server built from a database and
