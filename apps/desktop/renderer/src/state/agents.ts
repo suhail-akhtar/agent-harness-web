@@ -25,7 +25,7 @@ export interface SubAgent {
   /** Its last tool call, as a line. */
   last?: string;
   /** Its work as the harness last checked it: done criteria passed of run, and a verifier's verdict. */
-  accepted?: { checks?: { passed: number; total: number }; verdict?: 'pass' | 'fail' | 'unknown'; verifier?: string; round: number; blocked?: boolean };
+  accepted?: { checks?: { passed: number; total: number }; verdict?: 'pass' | 'fail' | 'unknown'; verifier?: string; round: number; blocked?: boolean; corroborated?: boolean };
 }
 
 export interface ModelCost { model: string; cost: number; requests: number; input: number; output: number; cacheRead: number }
@@ -43,6 +43,12 @@ export function foldAgent(a: Agents, e: HarnessEvent, now = Date.now()): Agents 
     const cur = a[e.task.id] ?? { ...blank(e.task.id), startedAt: e.task.startedAt };
     const status = e.task.status === 'running' ? 'running' : e.task.status === 'completed' ? 'done' : e.task.status === 'failed' ? 'failed' : 'stopped';
     return { ...a, [e.task.id]: { ...cur, background: true, description: cur.description ?? e.task.description, status, ...(e.task.endedAt ? { endedAt: e.task.endedAt } : {}), ...(e.task.cost !== undefined ? { cost: Math.max(cur.cost, e.task.cost) } : {}) } };
+  }
+  // Critical stakes: the comparison is about both replicas.
+  if (e.kind === 'acceptance' && e.phase === 'compare') {
+    let out = a;
+    for (const r of e.replicas ?? []) { const c = out[r.agent] ?? { ...blank(r.agent), startedAt: now }; out = { ...out, [r.agent]: { ...c, accepted: { round: 0, ...c.accepted, corroborated: !!e.agree } } }; }
+    return out;
   }
   if (!name) return a;
   const cur = a[name] ?? { ...blank(name), startedAt: now };

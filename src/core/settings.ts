@@ -76,6 +76,8 @@ export interface Settings {
    * agent (a team with a reviewer always does, with its reviewer). One verifier run per turn that changed files.
    */
   verifyTurns?: boolean;
+  /** Models that check work at high stakes, in order (the first of another provider than the worker's that the person allows). */
+  verifierModels?: string[];
   /**
    * Which models agents may hand work to (sub-agents, linked sessions, workflow nodes with a
    * model): the operator's cap, then (applyUserSettings) what the person allows within it.
@@ -208,6 +210,7 @@ export async function operatorSettings(env: NodeJS.ProcessEnv = process.env): Pr
   if (typeof j.autoModel === 'string') base.autoModel = j.autoModel;
   if (typeof j.gatesOnStop === 'boolean') base.gatesOnStop = j.gatesOnStop;
   if (typeof j.verifyTurns === 'boolean') base.verifyTurns = j.verifyTurns;
+  if (Array.isArray(j.verifierModels)) base.verifierModels = j.verifierModels.map(String);
   const d = cleanDelegation((j as { delegation?: unknown }).delegation);
   if (d) base.delegation = d;
   base.efficiency = cleanEfficiency((j as { efficiency?: unknown }).efficiency, base.efficiency);

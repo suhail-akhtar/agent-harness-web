@@ -57,7 +57,8 @@ test('dashboards end to end', { timeout: 15 * 60_000 }, async (t) => {
   writeCsv([['EMEA', 'Online', 120, 3], ['EMEA', 'Retail', 80, 2], ['Americas', 'Online', 200, 5], ['APAC', 'Retail', 150, 4]]);
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !/_API_KEY$|^GW_|^HARNESS_/.test(k)) env[k] = v;
-  Object.assign(env, { HARNESS_DESKTOP_DATA: data, HARNESS_DESKTOP_ENGINE: path.join(root, 'test', 'fixtures', 'dashboards', 'engine.ts'), HARNESS_DESKTOP_NO_TRAY: '1', HARNESS_PLUGIN_LOOPS: 'off' });
+  // Off-screen, never focused, not in the taskbar (as every desktop e2e): HARNESS_E2E_SHOW=1 shows it to watch.
+  Object.assign(env, { HARNESS_DESKTOP_DATA: data, HARNESS_DESKTOP_TEST: '1', ...(process.env.HARNESS_E2E_SHOW ? { HARNESS_E2E_SHOW: process.env.HARNESS_E2E_SHOW } : {}), HARNESS_DESKTOP_ENGINE: path.join(root, 'test', 'fixtures', 'dashboards', 'engine.ts'), HARNESS_DESKTOP_NO_TRAY: '1', HARNESS_PLUGIN_LOOPS: 'off' });
   let app: import('playwright-core').ElectronApplication;
   try { app = await pw._electron.launch({ executablePath: electronExe, args: [desktop], env, timeout: 60_000 }); } catch (e) { t.skip(`Electron could not start here: ${(e as Error).message.split('\n')[0]}`); return; }
   if (SHOTS) fs.mkdirSync(SHOTS, { recursive: true });

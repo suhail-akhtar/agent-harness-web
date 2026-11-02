@@ -3,7 +3,7 @@ import { constants as fsc } from 'node:fs';
 import fs from 'node:fs/promises';
 import { resolveIn } from '../tools/paths.ts';
 import path from 'node:path';
-import { type Acceptance, BUILTIN_AGENTS, INTERACTIVE_TOOLS, loadAgentDir, makeAgentTool, mcpServerOf, NESTING_TOOLS, stricterMode, teamBrief, toolMatches, VERIFIER_AGENT } from '../agents/agents.ts';
+import { type Acceptance, BUILTIN_AGENTS, COMPARATOR_AGENT, VERIFIER_MODELS, INTERACTIVE_TOOLS, loadAgentDir, makeAgentTool, mcpServerOf, NESTING_TOOLS, stricterMode, teamBrief, toolMatches, VERIFIER_AGENT } from '../agents/agents.ts';
 import { stopShellScript } from '../tools/exec.ts';
 import { describeWatch, TASK_TOOLS, type TaskEntry, TaskRegistry, type TaskService, watchTask } from '../tools/tasks.ts';
 import { formatGates, makeGatesTool, runGates } from '../gates/gates.ts';
@@ -51,7 +51,7 @@ import { seal, serverKey, unseal } from '../util/sealed.ts';
 import type { ChangeService } from '../ops/changes.ts';
 import { decide, ruleMatches } from './permissions.ts';
 import { bashTool } from '../tools/exec.ts';
-import { acceptanceNote, type Baseline, blockedReason, changeSet, type CheckResult, finalVerdict, type Finding, parseVerdict, runChecks, summarizeChecks, summarizeFindings, summarizeVerdict, takeBaseline, tamperFindings, type Verdict, VERDICT_AGAIN, VERDICT_ASK, verifierBrief, withProtection } from '../agents/acceptance.ts';
+import { acceptanceNote, type Baseline, blockedReason, changeSet, comparatorBrief, parseComparison, type Replica, type CheckResult, finalVerdict, type Finding, parseVerdict, runChecks, summarizeChecks, summarizeFindings, summarizeVerdict, takeBaseline, tamperFindings, type Verdict, VERDICT_AGAIN, VERDICT_ASK, verifierBrief, withProtection } from '../agents/acceptance.ts';
 import { ArtifactError, type ArtifactMeta, type ArtifactService, ArtifactStore, artifactTool } from './artifacts.ts';
 import { DATA_TOOLS, dataServiceFor, dataToolsFor } from '../data/tools.ts';
 import { type ClientDecl, clientPrompt, clientSkillDirs, cleanClientPlugins, type ClientPresence, type DesktopTool } from './client.ts';
@@ -203,6 +203,9 @@ interface SubEntry {
   /** What its work must meet (the agents it starts inherit what it must keep unchanged). */
   acceptance?: Acceptance;
 }
+
+/** How the harness found a delegation's work in the end. */
+type Outcome = 'accepted' | 'not accepted' | 'blocked' | 'unverified';
 
 /** A delegation's acceptance as it runs: what it must meet, where, and the workspace it started from. */
 interface AccRun {
@@ -1995,8 +1998,67 @@ export class Session {
     // existing tests among it), the agents it starts must keep unchanged too, whatever their own brief says.
     const inherited = parent && parent !== this.agent ? [...this.subs.values()].find((x) => x.agent === parent)?.acceptance?.checks.filter((c) => 'unchanged' in c || 'protect' in c) : undefined;
     const acceptance = inherited?.length ? { maxFixRounds: 2, ...a.acceptance, checks: withProtection(a.acceptance?.checks ?? [], { mayChangeTests: true, inherited }) } : a.acceptance;
-    const r = await this.runAgent({ agent: a.type, description: a.description, prompt: a.prompt, signal: signal ?? this.abortCtl?.signal ?? new AbortController().signal, depth, parent, keep: true, tainted: (parent ?? this.agent)?.tainted, ...(a.model ? { model: a.model, delegated: true } : {}), ...(a.effort ? { effort: a.effort } : {}), ...(a.isolation ? { isolation: a.isolation } : {}), ...(host ? { host } : {}), ...(acceptance ? { acceptance } : {}) });
+    const base = { agent: a.type, description: a.description, prompt: a.prompt, signal: signal ?? this.abortCtl?.signal ?? new AbortController().signal, depth, parent, keep: true, tainted: (parent ?? this.agent)?.tainted, ...(a.effort ? { effort: a.effort } : {}), ...(host ? { host } : {}) };
+    if (acceptance?.stakes === 'critical') return this.runReplicas(a, base, acceptance);
+    const r = await this.runAgent({ ...base, ...(a.model ? { model: a.model, delegated: true } : {}), ...(a.isolation ? { isolation: a.isolation } : {}), ...(acceptance ? { acceptance } : {}) });
     return `${r.report}\n\n(agent id: ${r.id})`;
+  }
+
+  /**
+   * Critical stakes (docs/swarm/SWARM.md, phase 1): two independent replicas of the work on two providers, each in its
+   * own worktree and each accepted on its own as at high stakes; then a comparator with a clean context reads both
+   * against the brief. Both accepted and in agreement: the preferred one, corroborated. Anything else: UNKNOWN with
+   * both, never a silent pick (models' errors are correlated: agreement is weak evidence, disagreement strong).
+   */
+  private async runReplicas(a: SubagentArgs, base: Parameters<Session['runAgent']>[0], acceptance: Acceptance): Promise<string> {
+    const sessionHost = await this.getHost();
+    const settings = await this.getSettings(sessionHost);
+    const high = { ...acceptance, stakes: 'high' as const };
+    // Apart from each other: a worktree each, in a git folder on this machine.
+    const git = !base.host && sessionHost instanceof LocalHost && (await run('git', ['-C', sessionHost.root, 'rev-parse', '--is-inside-work-tree'], { timeoutMs: 5000 }).catch(() => undefined))?.code === 0;
+    if (!git) {
+      this.emit({ kind: 'notice', level: 'warn', text: `Critical stakes: replicas need a git folder on this machine to work apart; "${a.description}" is verified at high stakes instead.` });
+      const r = await this.runAgent({ ...base, ...(a.model ? { model: a.model, delegated: true } : {}), acceptance: high });
+      return `${r.report}\n\n(Critical stakes: replicas need a git folder to work apart, so this was verified at high stakes instead.)\n\n(agent id: ${r.id})`;
+    }
+    const tb = await this.getToolbox(sessionHost);
+    const def = tb.agents.find((x) => x.name === a.type) ?? tb.agents.find((x) => x.name === 'general')!;
+    const first = a.model ? this.deps.registry.model(a.model) : this.subagentModel(def, settings);
+    const second = this.crossModel(first.provider, settings);
+    if (!second) this.emit({ kind: 'notice', level: 'warn', text: `Critical stakes: both replicas of "${a.description}" run on ${first.id}: no model of another provider is allowed for agents.` });
+    const [ra, rb] = await Promise.all([
+      this.runAgent({ ...base, isolation: 'worktree', acceptance: high, ...(a.model ? { model: a.model, delegated: true } : {}) }),
+      this.runAgent({ ...base, isolation: 'worktree', acceptance: high, model: second ?? first.id, delegated: true }),
+    ]);
+    const replica = (r: typeof ra): Replica => ({ name: r.id, model: r.agent?.cfg.model.id ?? '?', outcome: r.outcome ?? 'not checked', report: r.report, ...(r.changes !== undefined ? { changes: r.changes } : {}) });
+    const A = replica(ra);
+    const B = replica(rb);
+    const c = await this.runAgent({
+      agent: COMPARATOR_AGENT.name, def: COMPARATOR_AGENT, description: `compare ${A.name} and ${B.name}`, label: `comparator-${++this.subagents}`,
+      prompt: comparatorBrief({ brief: a.prompt, a: A, b: B }), signal: base.signal, depth: (base.depth ?? 1) + 1, parent: base.parent, keep: false, host: sessionHost, tainted: base.tainted, verifier: true,
+    });
+    let cmp = parseComparison(c.report);
+    if (cmp.missing && c.agent && !base.signal.aborted) {
+      await c.agent.wrapUp('Your reply did not end with the comparison line the harness reads.', base.signal, 'No more tool calls. End your reply now with exactly one line of JSON and nothing after it: {"agree": true | false, "prefer": "A" | "B" | null, "differences": [{"point": "...", "a": "...", "b": "..."}]}').catch(() => {});
+      cmp = parseComparison(this.lastText(c.agent));
+    }
+    const both = A.outcome === 'accepted' && B.outcome === 'accepted';
+    const corroborated = both && cmp.agree;
+    this.emit({ kind: 'acceptance', agent: A.name, phase: 'compare', round: 0, verifier: c.id, replicas: [A, B].map((r) => ({ agent: r.name, model: r.model, outcome: r.outcome })), agree: corroborated, issues: cmp.differences.map((d) => ({ problem: `${d.point}${d.a ? ` (A: ${d.a})` : ''}${d.b ? ` (B: ${d.b})` : ''}` })) });
+    const line = (r: Replica) => `${r.name} on ${r.model} (${r.outcome})`;
+    if (corroborated) {
+      const [pick, other] = cmp.prefer === 'B' ? [rb, A] : [ra, B];
+      return `${pick.report}\n\n---\nCRITICAL STAKES: corroborated. Two independent replicas, ${line(A)} and ${line(B)}, were each accepted, and the comparator (${c.id}) found that they agree. This is ${pick.id}'s work; ${other.name}'s is kept in its worktree.\n\n(agent id: ${pick.id})`;
+    }
+    const usable = [A, B].filter((r) => r.outcome === 'accepted');
+    const diffs = cmp.differences.map((d) => `- ${d.point}${d.a ? `\n    A: ${d.a}` : ''}${d.b ? `\n    B: ${d.b}` : ''}`).join('\n');
+    return [
+      `UNKNOWN at critical stakes: the two independent replicas ${both ? 'disagree' : usable.length ? 'were not both accepted' : 'were neither accepted'}. Decide before relying on either${usable.length === 1 ? `: ${usable[0]!.name}'s passed its checks and verification but nothing corroborates it` : ''}.`,
+      `Replica A, ${line(A)}:\n${A.report.trim().slice(0, 6000)}`,
+      `Replica B, ${line(B)}:\n${B.report.trim().slice(0, 6000)}`,
+      ...(diffs ? [`Where they differ (comparator ${c.id}${cmp.prefer ? `, which prefers ${cmp.prefer}` : ''}):\n${diffs}`] : []),
+      `(agent ids: ${ra.id}, ${rb.id}; each worktree is kept if it changed anything)`,
+    ].join('\n\n---\n');
   }
 
   // ---------- background work ----------
@@ -2243,7 +2305,7 @@ export class Session {
    * Runs a named agent in a fresh context: a chat sub-agent, or a workflow's
    * agent node. One cache key per agent kind, so sibling runs share a prefix.
    */
-  async runAgent(a: { agent: string; prompt: string; signal: AbortSignal; label?: string; description?: string; model?: string; effort?: Effort; maxSteps?: number; /** Calls allowed per tool (a workflow step's toolBudget). */ toolBudget?: Record<string, number>; allowTodos?: boolean; /** A hook's verifier: no hooks of its own (they would start it again). */ noHooks?: boolean; /** 1 for a sub-agent of the main agent, 2 for one of its own, ... */ depth?: number; /** The agent that started it (it is tainted with it, and starts tainted when it is). */ parent?: Agent; /** Kept after it ends, for send_message. */ keep?: boolean; /** Starts tainted: its brief came from an agent that read untrusted content. */ tainted?: boolean; /** `model` was chosen by an agent or a workflow: only a model the person allowed (delegation). */ delegated?: boolean; /** The delegation was checked (and approved) already. */ approved?: boolean; /** Works in a fresh git worktree of the session's repository. */ isolation?: 'worktree'; /** Where its tools work (a worktree agent's sub-agents share its worktree). */ host?: ToolHost; /** Deferred tool groups it starts with loaded (a plugin's workflow: that plugin's). */ loadGroups?: string[]; /** What its work must meet before its report counts (done criteria, a verifier). */ acceptance?: Acceptance; /** A definition the harness runs that is not in the catalogue (the built-in verifier). */ def?: AgentDef; /** It checks another agent's work (only reads): not counted as at work in the folder. */ verifier?: boolean; /** Started in the background (the conversation's agent may work beside it). */ background?: boolean }): Promise<{ report: string; reason: string; cost: number; id: string; agent?: Agent }> {
+  async runAgent(a: { agent: string; prompt: string; signal: AbortSignal; label?: string; description?: string; model?: string; effort?: Effort; maxSteps?: number; /** Calls allowed per tool (a workflow step's toolBudget). */ toolBudget?: Record<string, number>; allowTodos?: boolean; /** A hook's verifier: no hooks of its own (they would start it again). */ noHooks?: boolean; /** 1 for a sub-agent of the main agent, 2 for one of its own, ... */ depth?: number; /** The agent that started it (it is tainted with it, and starts tainted when it is). */ parent?: Agent; /** Kept after it ends, for send_message. */ keep?: boolean; /** Starts tainted: its brief came from an agent that read untrusted content. */ tainted?: boolean; /** `model` was chosen by an agent or a workflow: only a model the person allowed (delegation). */ delegated?: boolean; /** The delegation was checked (and approved) already. */ approved?: boolean; /** Works in a fresh git worktree of the session's repository. */ isolation?: 'worktree'; /** Where its tools work (a worktree agent's sub-agents share its worktree). */ host?: ToolHost; /** Deferred tool groups it starts with loaded (a plugin's workflow: that plugin's). */ loadGroups?: string[]; /** What its work must meet before its report counts (done criteria, a verifier). */ acceptance?: Acceptance; /** A definition the harness runs that is not in the catalogue (the built-in verifier). */ def?: AgentDef; /** It checks another agent's work (only reads): not counted as at work in the folder. */ verifier?: boolean; /** Started in the background (the conversation's agent may work beside it). */ background?: boolean }): Promise<{ report: string; reason: string; cost: number; id: string; agent?: Agent; outcome?: Outcome; changes?: string }> {
     const sessionHost = await this.getHost();
     const settings = await this.getSettings(sessionHost);
     const tb = await this.getToolbox(sessionHost);
@@ -2315,6 +2377,9 @@ export class Session {
       autoCheck: this.autoCheck(settings),
       injectionCheck: this.injectionCheck(settings),
       progressReviewer: this.progressReviewer(settings),
+      // At stakes, or under a spend limit, it sees what it has left with every step's results (BATS: an agent that sees
+      // its budget spends it as well as one with ten times as much).
+      ...(a.acceptance?.stakes || def.maxCostUsd ? { budgetLine: (step: number, steps: number) => `Budget: step ${step} of ${steps}${def.maxCostUsd ? `; $${cost.n.toFixed(4)} of $${def.maxCostUsd} spent` : ''}. Spend what is left on what decides the task, and check your result before you report.` } : {}),
       // Files in a worktree are on its branch: rewinding the session's checkpoints does not cover them.
       beforeWrite: this.checkpoints && host === sessionHost ? (p: string) => this.checkpoints!.before(p) : undefined,
       services: await this.services(false, name),
@@ -2378,7 +2443,7 @@ export class Session {
    * when they pass, a verifier with a clean context checks the work; failures go back to it for a bounded number
    * of fix rounds; its report says what passed, what failed and why.
    */
-  private async drive(e: SubEntry, name: string, signal: AbortSignal, acc?: AccRun): Promise<{ report: string; reason: string; cost: number }> {
+  private async drive(e: SubEntry, name: string, signal: AbortSignal, acc?: AccRun): Promise<{ report: string; reason: string; cost: number; outcome?: Outcome; changes?: string }> {
     const sub = e.agent;
     const before = e.cost.n;
     const work = async (): Promise<TurnEndReason> => {
@@ -2395,6 +2460,9 @@ export class Session {
     };
     let reason = await work();
     let accepted = '';
+    // How the harness found the work in the end, and what it changed (critical stakes compare replicas by them).
+    let outcome: Outcome | undefined;
+    let lastChanges: string | undefined;
     if (acc && !signal.aborted && reason !== 'aborted') {
       const max = acc.acceptance.maxFixRounds;
       let before = '';
@@ -2408,13 +2476,14 @@ export class Session {
         // What the work added that can game a check (a skipped test, an early exit): for the verifier and the lead.
         const changes = acc.baseline.tree || acc.baseline.files ? await changeSet(acc.host, acc.baseline) : undefined;
         const findings = changes ? tamperFindings(changes) : [];
+        lastChanges = changes;
         const checksEvent = results.length > 0 || !!blocked;
         if (checksEvent) this.emit({ kind: 'acceptance', agent: name, phase: 'checks', round, results, ...(blocked ? { blocked } : {}), ...(findings.length ? { findings } : {}) });
-        let verdict: { verdict: Verdict; by: string } | undefined;
+        let verdict: { verdict: Verdict; by: string; model?: string } | undefined;
         if (!blocked && acc.acceptance.verify && results.every((r) => r.ok) && !signal.aborted) {
-          verdict = await this.verifyWork({ worker: name, workerDef: e.def, parent: e.parent, acc, results, report: this.lastText(sub), signal, ...(changes ? { changes } : {}), findings, ...(mine ? { mine } : {}) })
+          verdict = await this.verifyWork({ worker: name, workerDef: e.def, workerModel: sub.cfg.model, parent: e.parent, acc, results, report: this.lastText(sub), signal, ...(changes ? { changes } : {}), findings, ...(mine ? { mine } : {}) })
             .catch((err: Error) => ({ verdict: { verdict: 'fail', issues: [{ problem: `the verification could not run: ${err.message}` }] } as Verdict, by: 'the harness' }));
-          this.emit({ kind: 'acceptance', agent: name, phase: 'verdict', round, verifier: verdict.by, verdict: verdict.verdict.verdict, issues: verdict.verdict.issues, ...(verdict.verdict.overruled ? { overruled: verdict.verdict.overruled } : {}), ...(!checksEvent && findings.length ? { findings } : {}) });
+          this.emit({ kind: 'acceptance', agent: name, phase: 'verdict', round, verifier: verdict.by, ...(verdict.model ? { verifierModel: verdict.model } : {}), verdict: verdict.verdict.verdict, issues: verdict.verdict.issues, ...(verdict.verdict.requirements ? { requirements: verdict.verdict.requirements } : {}), ...(verdict.verdict.overruled ? { overruled: verdict.verdict.overruled } : {}), ...(!checksEvent && findings.length ? { findings } : {}) });
         }
         const failed = results.some((r) => !r.ok) || verdict?.verdict.verdict === 'fail';
         // The same failures twice: another round would not help (more rounds mostly add gaming, not passes).
@@ -2424,17 +2493,19 @@ export class Session {
         accepted = [
           blocked ? `BLOCKED by the agent: ${blocked}` : '',
           results.length ? summarizeChecks(results) : '',
-          verdict ? summarizeVerdict(verdict.verdict, verdict.by) : acc.acceptance.verify && !blocked && results.some((r) => !r.ok) ? 'Verification: not run (done criteria failed first).' : '',
+          verdict ? summarizeVerdict(verdict.verdict, verdict.model ? `${verdict.by} on ${verdict.model}` : verdict.by) : acc.acceptance.verify && !blocked && results.some((r) => !r.ok) ? 'Verification: not run (done criteria failed first).' : '',
           summarizeFindings(findings),
         ].filter(Boolean).join('\n\n');
-        if (blocked) { accepted += '\n\nNOT ACCEPTED: the agent says a criterion is wrong or cannot be met. Decide: change the criteria or the task, or give it to someone else.'; break; }
+        if (blocked) { accepted += '\n\nNOT ACCEPTED: the agent says a criterion is wrong or cannot be met. Decide: change the criteria or the task, or give it to someone else.'; outcome = 'blocked'; break; }
         if (!failed) {
           if (verdict?.verdict.verdict === 'unknown') accepted += '\n\nUNVERIFIED: the checks passed, but the verifier could not tell whether the task is done. Check it before relying on it.';
+          outcome = verdict?.verdict.verdict === 'unknown' ? 'unverified' : 'accepted';
           break;
         }
         // No more rounds: what it is now is the report. A run stopped by money, a refusal or an error is not sent back.
         if (stuck || round >= max || signal.aborted || reason === 'budget' || reason === 'refusal' || reason === 'error') {
           accepted += `\n\nNOT ACCEPTED${max ? ` after ${round} fix round${round === 1 ? '' : 's'}` : ''}: treat this work as unfinished.${stuck && round < max ? ' (Stopped early: the same failures as the round before.)' : ''}`;
+          outcome = 'not accepted';
           break;
         }
         // The worker hears what failed, but never what a held-out check is or printed.
@@ -2453,7 +2524,7 @@ export class Session {
     const clean = sub.tainted ? stripInvisible(text).text : text;
     const report = clean ? (clean.length > 16_000 ? clean.slice(0, 16_000) + '\n[report truncated]' : clean) : 'The agent finished without a report.';
     const withAcceptance = accepted ? `${report}\n\n---\n${accepted}` : report;
-    return { report: reason === 'done' ? withAcceptance : `${withAcceptance}\n\n(The agent stopped early: ${reason}.)`, reason, cost: e.cost.n - before };
+    return { report: reason === 'done' ? withAcceptance : `${withAcceptance}\n\n(The agent stopped early: ${reason}.)`, reason, cost: e.cost.n - before, ...(outcome ? { outcome } : {}), ...(lastChanges !== undefined ? { changes: lastChanges } : {}) };
   }
 
   /** An agent's last message's text. */
@@ -2488,8 +2559,12 @@ export class Session {
    * report as claims; its last JSON line is the verdict; a pass is overruled by a failed check, or by the verifier
    * changing files itself.
    */
-  private async verifyWork(o: { worker: string; workerDef?: AgentDef; parent?: Agent; acc: AccRun; results: CheckResult[]; report: string; signal: AbortSignal; changes?: string; findings?: Finding[]; mine?: Set<string> }): Promise<{ verdict: Verdict; by: string }> {
+  private async verifyWork(o: { worker: string; workerDef?: AgentDef; workerModel?: ModelSpec; parent?: Agent; acc: AccRun; results: CheckResult[]; report: string; signal: AbortSignal; changes?: string; findings?: Finding[]; mine?: Set<string> }): Promise<{ verdict: Verdict; by: string; model?: string }> {
     const tb = await this.getToolbox(await this.getHost());
+    const stakes = o.acc.acceptance.stakes;
+    // At high stakes the verifier is of another family than the worker: one of the same passes more of its mistakes.
+    const cross = stakes && o.workerModel ? this.crossModel(o.workerModel.provider, await this.getSettings(await this.getHost())) : undefined;
+    if (stakes && o.workerModel && !cross) this.emit({ kind: 'notice', level: 'warn', text: `${o.worker} is verified on the same provider as it worked (${o.workerModel.provider}): no model of another provider is allowed for agents. Allow one (Settings > Models) for a verifier of another family.` });
     const v = o.acc.acceptance.verify;
     // The delegating agent: a sub-agent that leads (its entry), or the conversation's own agent (a team it runs as).
     const leadDef = o.parent && o.parent !== this.agent ? [...this.subs.values()].find((x) => x.agent === o.parent)?.def : this.agentView?.def;
@@ -2509,6 +2584,7 @@ export class Session {
       // One level beneath the worker: part of its run, it takes no slot of its own (parallel workers waiting for their
       // verifiers while holding every slot would wait for ever).
       signal: o.signal, depth: o.acc.depth + 1, parent: o.parent, keep: false, host: o.acc.host, tainted: (o.parent ?? this.agent)?.tainted, verifier: true,
+      ...(cross ? { model: cross, delegated: true } : {}),
     });
     let parsed = parseVerdict(r.report);
     // A reply without the verdict line (out of steps, or it forgot): asked once more, without tools; still none is a fail.
@@ -2516,13 +2592,26 @@ export class Session {
       await r.agent.wrapUp(VERDICT_AGAIN, o.signal, VERDICT_ASK).catch(() => {});
       parsed = parseVerdict(this.lastText(r.agent));
     }
-    let verdict = finalVerdict(parsed, o.results);
+    let verdict = finalVerdict(parsed, o.results, stakes ? { stakes } : {});
     // A change while other agents worked in the folder cannot be laid on the verifier.
     const touched = busyAtStart || this.othersAt(o.worker, o.acc.host.root, seq, o.acc.background, atStart) ? '(no changes)' : await changeSet(o.acc.host, guard);
     if (touched !== '(no changes)' && !touched.startsWith('(no record') && !touched.startsWith('(the change set is not available')) {
       verdict = { ...verdict, verdict: 'fail', overruled: `the verifier changed files itself (a verifier only reads and runs checks)${verdict.overruled ? `; ${verdict.overruled}` : ''}` };
     }
-    return { verdict, by: r.id };
+    return { verdict, by: r.id, ...(r.agent ? { model: r.agent.cfg.model.id } : {}) };
+  }
+
+  /**
+   * A model of another provider than `provider` for checking work: the first of the operator's order (or
+   * VERIFIER_MODELS) that is available and that the person allows agents to use (the conversation's own model always
+   * counts), or undefined.
+   */
+  private crossModel(provider: string, settings: Settings): string | undefined {
+    const allowed = settings.delegation?.allowedModels ?? [];
+    const ok = (id: string) => id === this.meta.model || allowed === '*' || allowed.includes(id);
+    const models = this.deps.registry.listModels().filter((m) => m.available && m.provider !== provider && ok(m.id));
+    const order = settings.verifierModels ?? VERIFIER_MODELS;
+    return (order.map((id) => models.find((m) => m.id === id)).find((m) => m) ?? models[0])?.id;
   }
 
   // ---------- workflows ----------

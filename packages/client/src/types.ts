@@ -126,7 +126,7 @@ export type HarnessEvent =
   /** A progress review at a step checkpoint: started, extended, refreshed (a fresh start), stopped, a flagged "done", a test-discipline nudge. */
   | { kind: 'progress'; phase: 'checkpoint' | 'extended' | 'refreshed' | 'stopped' | 'flagged' | 'nudge'; step: number; budget: number; by: 'signals' | 'review'; text: string; reasons: string[]; verdict?: string; advice?: string; agent?: string }
   /** A delegated agent's work checked by the harness: its done criteria (run by the harness), or a verifier's verdict. */
-  | { kind: 'acceptance'; agent: string; phase: 'checks' | 'verdict'; round: number; results?: AcceptanceCheck[]; verifier?: string; verdict?: 'pass' | 'fail' | 'unknown'; issues?: AcceptanceIssue[]; overruled?: string; blocked?: string; findings?: AcceptanceFinding[] }
+  | { kind: 'acceptance'; agent: string; phase: 'checks' | 'verdict' | 'compare'; round: number; results?: AcceptanceCheck[]; verifier?: string; verifierModel?: string; verdict?: 'pass' | 'fail' | 'unknown'; requirements?: AcceptanceRequirement[]; replicas?: AcceptanceReplica[]; agree?: boolean; issues?: AcceptanceIssue[]; overruled?: string; blocked?: string; findings?: AcceptanceFinding[] }
   | { kind: 'retry'; attempt: number; delayMs: number; reason: string }
   | { kind: 'turn_end'; reason: string; agent?: string }
   | { kind: 'status'; status: SessionStatus }
@@ -308,6 +308,10 @@ export interface AgentOptions {
 export interface AcceptanceCheck { label: string; ok: boolean; detail: string; hidden?: boolean }
 /** One issue a verifier found, where it is. */
 export interface AcceptanceIssue { file?: string; line?: number; problem: string }
+/** A requirement of the brief as the verifier found it. */
+export interface AcceptanceRequirement { requirement: string; status: 'met' | 'unmet' | 'unverifiable' }
+/** At critical stakes: one of the two independent replicas, and how the harness found its work. */
+export interface AcceptanceReplica { agent: string; model: string; outcome: string }
 /** An added line that can game a check (a skipped test, an early exit): for a closer look, not a failure. */
 export interface AcceptanceFinding { file: string; line?: number; why: string; text: string }
 

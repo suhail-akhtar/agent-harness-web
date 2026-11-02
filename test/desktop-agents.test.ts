@@ -61,9 +61,10 @@ test('the base prefix (system prompt and tool definitions of a plain session) st
     // Measured 4,011 before the multi-agent work and 4,047 after (the form field of ask_user,
     // the tools each named agent has), ~4,100 at 0.2.5, 4,112 with todo_write's activeForm (the
     // chat's live task line), 4,165 with the schedule tool's routines, workflows and watches and
-    // 4,410 with the agent tool's acceptance (done_when, may_change_tests, verify, max_fix_rounds);
+    // 4,410 with the agent tool's acceptance (done_when, may_change_tests, verify, max_fix_rounds) and
+    // 4,463 with stakes and exit / expect_not checks (docs/swarm/SWARM.md, phase 1);
     // the budget leaves a little room, not a lot.
-    assert.ok(tokens <= 4450, `base prefix ~${tokens} tokens (budget 4450)`);
+    assert.ok(tokens <= 4500, `base prefix ~${tokens} tokens (budget 4500)`);
     // A desktop session's additions are bounded too.
     const d = await t.harness.sessions.create({ model: 'deepseek-flash', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: await tempDir() }, client: { kind: 'desktop', version: '1', renderers: ['mermaid'], tools: ['desktop_command', 'desktop_describe', 'desktop_notify', 'desktop_open'] } });
     const dev = record(d);

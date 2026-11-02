@@ -87,6 +87,8 @@ export interface AgentConfig {
   hookJudge?: HookJudge;
   /** Looks for instructions aimed at the agent in outside content (HARNESS_INJECTION_SCAN=on). */
   injectionCheck?: (text: string, signal: AbortSignal) => Promise<{ flagged: boolean; reason?: string }>;
+  /** What it has left, shown with every step's results (an agent that sees its budget spends it better: BATS). */
+  budgetLine?: (step: number, steps: number) => string | undefined;
   /** MCP tools and verifying agents for mcp_tool and agent hooks. */
   hookRunners?: Omit<HookRunners, 'judge'>;
   /** auto mode: whether a call that would be asked about fits what the user asked for. */
@@ -370,7 +372,8 @@ export class Agent {
       for (const r of results) {
         if (r.images?.length && !this.cfg.model.vision) content.push({ type: 'text', text: `<system-reminder>${r.label} produced ${r.images.length} image(s), but this model cannot view images.</system-reminder>` });
       }
-      for (const r of [...this.notes.splice(0), ...this.reminders(calls)]) content.push({ type: 'text', text: `<system-reminder>${r}</system-reminder>` });
+      const budget = this.cfg.budgetLine?.(step + 1, turn.budget);
+      for (const r of [...this.notes.splice(0), ...this.reminders(calls), ...(budget ? [budget] : [])]) content.push({ type: 'text', text: `<system-reminder>${r}</system-reminder>` });
       for (const t of this.hooks.takeQueuedUserText()) {
         content.push({ type: 'text', text: t.startsWith('<system-reminder>') ? t : `The user added while you were working:\n${t}` });
       }

@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **Proof-carrying swarms, phase 1** (docs/swarm/SWARM.md; research in docs/swarm/research/):
+  - **Stakes on a delegation.** `stakes: "high"` always verifies the work, with a verifier from another provider
+    than the worker's (the first allowed in the order Sonnet, gpt-6-luna, Kimi K3.1 Pro, GLM 5.3, ...). Another
+    family's verifier passes fewer of the worker's mistakes. `stakes: "critical"` also runs two independent replicas
+    on two providers, each in its own worktree and each verified, then a comparator with a clean context. It isn't
+    told which model did which. Agreement means corroborated; anything else comes back UNKNOWN with both results,
+    never a silent pick.
+  - **Oracle-grade checks.** A `run` check can require an exit code, or "nonzero" (it must fail), and output that
+    must not appear (`expect_not`). For example: "the proof of the crash no longer fires".
+  - **Per-requirement verdicts.** The verifier lists each requirement as met, unmet or unverifiable. A pass with an
+    unmet one is a fail. At high stakes, a pass with an unverifiable one is UNVERIFIED.
+  - **Visible budgets.** At stakes, or under a spend limit, an agent sees its remaining steps and spend with each
+    step.
+  - **Shown in the app.** The verifier's model, the requirements and the replicas appear on the card, and
+    "corroborated" or "not corroborated" on the agent's card.
+- Fixed: the Dashboards end-to-end test opened the app on the person's screen, focused, in the taskbar; it now runs
+  off-screen like every desktop test. A Noticing test counted a banner before the Inbox had read its new state.
 - **Delegated work is accepted by the harness, not on the agent's word** (docs/agents-mcp/COORDINATION.md, steps 1
   and 5). The agent tool takes `done_when`: checks the harness runs itself when the agent says it is done (a command
   that must pass, a file that must exist, files that must stay as they were, a pattern that must be absent), with the

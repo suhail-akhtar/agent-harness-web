@@ -141,6 +141,8 @@ test('desktop app end to end: noticing', { timeout: 10 * 60_000 }, async (t) => 
       await page.waitForSelector('[data-noticing][data-noticing-mode="on"]');
       assert.equal((await overview()).mode, 'on');
       await closeDialog();
+      // The Inbox reads the overview again when the dialog closes (asynchronously): the banner goes once it has.
+      await page.waitForSelector('[data-noticing-banner]', { state: 'detached', timeout: 10_000 });
       assert.equal(await page.locator('[data-noticing-banner]').count(), 0, 'no banner once it is on');
     });
 

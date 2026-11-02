@@ -160,7 +160,7 @@ const PROGRESS_TITLE: Record<Extract<Item, { kind: 'progress' }>['phase'], strin
  * verifier's verdict with the issues it found. The lead sees the same in the agent's result.
  */
 function AcceptanceCard({ item }: { item: Extract<Item, { kind: 'acceptance' }> }) {
-  const ok = !item.blocked && (item.phase === 'checks' ? item.results.every((r) => r.ok) : item.verdict === 'pass');
+  const ok = !item.blocked && (item.phase === 'checks' ? item.results.every((r) => r.ok) : item.phase === 'compare' ? item.agree === true : item.verdict === 'pass');
   const passed = item.results.filter((r) => r.ok).length;
   // The team's own check of a turn's changes is the main agent's.
   const whose = item.agent === 'main' ? "this turn's changes" : item.agent;
@@ -168,7 +168,9 @@ function AcceptanceCard({ item }: { item: Extract<Item, { kind: 'acceptance' }> 
     ? `Blocked · ${whose} says a criterion is wrong or cannot be met`
     : item.phase === 'checks'
       ? `Done criteria · ${whose}: ${passed} of ${item.results.length} passed`
-      : `Verified by ${item.verifier ?? 'a verifier'} · ${whose}: ${item.verdict === 'pass' ? 'pass' : item.verdict === 'unknown' ? 'could not tell' : 'fail'}`;
+      : item.phase === 'compare'
+        ? `Critical stakes · two replicas ${item.agree ? 'corroborate each other' : 'not corroborated: decide before relying on either'}`
+        : `Verified by ${item.verifier ?? 'a verifier'}${item.verifierModel ? ` on ${item.verifierModel}` : ''} · ${whose}: ${item.verdict === 'pass' ? 'pass' : item.verdict === 'unknown' ? 'could not tell' : 'fail'}`;
   return (
     <div data-acceptance={item.phase} data-acceptance-ok={ok ? 'yes' : 'no'} {...(item.blocked ? { 'data-acceptance-blocked': '' } : {})} className={cx('my-1 rounded-lg border px-3 py-2 text-small', ok ? 'border-hx-success-border bg-hx-success-soft' : 'border-hx-warning-border bg-hx-warning-soft')}>
       <div className="flex items-center gap-2">
@@ -195,6 +197,16 @@ function AcceptanceCard({ item }: { item: Extract<Item, { kind: 'acceptance' }> 
             {item.findings.map((f, i) => <li key={i}><span className="font-mono text-caption">{f.file}{f.line ? `:${f.line}` : ''}</span> {f.why}: <span className="font-mono text-caption">{f.text}</span></li>)}
           </ul>
         </div>
+      )}
+      {item.replicas.length > 0 && (
+        <ul className="mt-1 space-y-0.5" data-acceptance-replicas>
+          {item.replicas.map((r) => <li key={r.agent}><span className="font-mono text-caption">{r.agent}</span> on {r.model}: {r.outcome}</li>)}
+        </ul>
+      )}
+      {item.requirements.length > 0 && (
+        <ul className="mt-1 space-y-0.5" data-acceptance-requirements>
+          {item.requirements.map((r, i) => <li key={i} data-requirement={r.status}><span className={cx('font-medium', r.status === 'met' ? 'text-hx-success' : r.status === 'unmet' ? 'text-hx-danger' : 'text-hx-warning')}>{r.status}</span> {r.requirement}</li>)}
+        </ul>
       )}
       {item.overruled && <div className="mt-1 text-hx-warning">Overruled: {item.overruled}</div>}
       {item.issues.length > 0 && (

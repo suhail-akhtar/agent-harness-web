@@ -105,4 +105,6 @@ criminal investigations is high-risk (Annex III 6(c)); untargeted scraping for f
 ## Status
 
 - Research: done (2026-11-02).
-- Phase 1: in progress.
+- Phase 1: built (2026-11-02): stakes (high: a verifier of another provider; critical: replicas on two providers in
+  worktrees and a comparator), exit / expect_not checks, per-requirement verdicts, visible budgets; 51 deterministic
+  scenarios in test/acceptance.test.ts; live: EVAL-ACCEPTANCE.md, P1-P3 and the calibration.

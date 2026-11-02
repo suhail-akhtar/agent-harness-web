@@ -1,4 +1,4 @@
-import type { AcceptanceCheck, AcceptanceFinding, AcceptanceIssue, HarnessEvent, ImageData, Message, ToolDisplay, WorkflowRunView } from './types.ts';
+import type { AcceptanceCheck, AcceptanceFinding, AcceptanceIssue, AcceptanceReplica, AcceptanceRequirement, HarnessEvent, ImageData, Message, ToolDisplay, WorkflowRunView } from './types.ts';
 
 // The chat view is a list of items rebuilt from the stored history, then kept
 // current by live events. Pure functions, so they are easy to test. Shared by
@@ -15,7 +15,7 @@ export type Item =
   | { kind: 'progress'; key: string; phase: 'checkpoint' | 'extended' | 'refreshed' | 'stopped' | 'flagged' | 'nudge'; step: number; budget: number; by: 'signals' | 'review'; text: string; reasons: string[]; verdict?: string; advice?: string; agent?: string }
   | { kind: 'workflow'; key: string; run: WorkflowRunView; activity: Record<string, Activity[]> }
   /** A delegated agent's work checked by the harness: its done criteria, or a verifier's verdict (one item per round). */
-  | { kind: 'acceptance'; key: string; agent: string; phase: 'checks' | 'verdict'; round: number; results: AcceptanceCheck[]; verifier?: string; verdict?: 'pass' | 'fail' | 'unknown'; issues: AcceptanceIssue[]; overruled?: string; blocked?: string; findings: AcceptanceFinding[] }
+  | { kind: 'acceptance'; key: string; agent: string; phase: 'checks' | 'verdict' | 'compare'; round: number; results: AcceptanceCheck[]; verifier?: string; verifierModel?: string; verdict?: 'pass' | 'fail' | 'unknown'; issues: AcceptanceIssue[]; requirements: AcceptanceRequirement[]; replicas: AcceptanceReplica[]; agree?: boolean; overruled?: string; blocked?: string; findings: AcceptanceFinding[] }
   /** A session the agent offered to start (start_session with initiation offer / own_initiative). */
   | { kind: 'proposal'; key: string; id: string; title: string; brief: string; initiation: string; context?: string; model?: string; effort?: string; expiresAt?: number }
   /** A linked session: started from here, its report, or a message from another session. */
@@ -233,7 +233,7 @@ export function apply(live: Live, e: HarnessEvent, now: number = Date.now()): Li
       return { ...live, items: [...items, item] };
     }
     case 'acceptance':
-      return { ...live, items: [...items, { kind: 'acceptance', key: key(), agent: e.agent, phase: e.phase, round: e.round, results: e.results ?? [], issues: e.issues ?? [], findings: e.findings ?? [], ...(e.verifier ? { verifier: e.verifier } : {}), ...(e.verdict ? { verdict: e.verdict } : {}), ...(e.overruled ? { overruled: e.overruled } : {}), ...(e.blocked ? { blocked: e.blocked } : {}) }] };
+      return { ...live, items: [...items, { kind: 'acceptance', key: key(), agent: e.agent, phase: e.phase, round: e.round, results: e.results ?? [], issues: e.issues ?? [], findings: e.findings ?? [], requirements: e.requirements ?? [], replicas: e.replicas ?? [], ...(e.agree !== undefined ? { agree: e.agree } : {}), ...(e.verifierModel ? { verifierModel: e.verifierModel } : {}), ...(e.verifier ? { verifier: e.verifier } : {}), ...(e.verdict ? { verdict: e.verdict } : {}), ...(e.overruled ? { overruled: e.overruled } : {}), ...(e.blocked ? { blocked: e.blocked } : {}) }] };
     case 'compaction':
       return { ...live, items: [...items, { kind: 'compaction', key: key(), before: e.before, after: e.after }], contextTokens: e.after };
     case 'usage':
