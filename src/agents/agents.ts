@@ -245,7 +245,7 @@ export function teamBrief(def: AgentDef, agents: AgentDef[]): string {
     '', '', `<team lead="${def.name}">`,
     'You lead a team. The agent tool offers only your members:', ...roster, '',
     'How you work:',
-    '1. Size the effort to the task: a small one goes to one member (or you do it yourself); a broad one is split among 2 to 5 members. Never more agents than the work needs.',
+    '1. Size the effort to the task. Every member starts from nothing (it reads the project again), so splitting pays only when the parts are substantial (each more than a few minutes of work) or mostly reading (searching, reviewing, researching). Small parts go together to one member, or you do them yourself; a broad task is split among 2 to 5 members. Never more agents than the work needs.',
     '2. Split it into parts that do not depend on each other. Each member gets a complete brief: the goal, the context it needs (files, decisions so far, constraints), what done looks like, and the exact shape of its report. Members do not see this conversation.',
     '3. Start independent parts in the same turn (several agent calls at once run in parallel). Never give two members the same files to change; where the folder is a git repository, a member that writes works in its own worktree (isolation: "worktree").',
     '4. Check each report against its brief. For a gap, continue that member (send_message) instead of redoing its work.',
@@ -294,10 +294,14 @@ export interface SubagentArgs { description: string; prompt: string; type: strin
  */
 export function makeAgentTool(agents: AgentDef[], opts: { catalogue?: string; isolation?: boolean } = {}): Tool {
   const names = agents.map((a) => a.name);
+  // Without a type: explore where it is offered, else the first agent offered (a team's lead never reaches past its members).
+  const fallback = names.includes('explore') ? 'explore' : names[0] ?? 'explore';
   // One line each, in every request of the session: long descriptions and tool lists are cut (more so with many agents).
   const room = agents.length > 15 ? 140 : 300;
   const toolsOf = (t: string[]) => (t.length > 12 ? `${t.slice(0, 12).join(', ')}, +${t.length - 12}` : t.join(', '));
-  const list = agents.map((a) => `- ${a.name}${a.tools ? ` [${toolsOf(a.tools)}]` : ''}${a.mcpServers?.length ? ` {mcp: ${a.mcpServers.join(', ')}}` : ''}${a.model ? ` (${a.model})` : ''}: ${a.description.length > room ? `${a.description.slice(0, room - 1)}…` : a.description}`).join('\n');
+  // The person's own agents, said: they made them to be used for their kind of work.
+  const mine = agents.some((a) => a.source === 'user');
+  const list = agents.map((a) => `- ${a.name}${a.source === 'user' ? ' (yours)' : ''}${a.tools ? ` [${toolsOf(a.tools)}]` : ''}${a.mcpServers?.length ? ` {mcp: ${a.mcpServers.join(', ')}}` : ''}${a.model ? ` (${a.model})` : ''}: ${a.description.length > room ? `${a.description.slice(0, room - 1)}…` : a.description}`).join('\n');
   const extra: Record<string, unknown> = {};
   if (opts.catalogue) {
     extra.model = { type: 'string', description: 'Another allowed model (below).' };
@@ -308,23 +312,24 @@ export function makeAgentTool(agents: AgentDef[], opts: { catalogue?: string; is
     kind: 'meta', parallelSafe: true, remoteable: false,
     spec: {
       name: 'agent',
-      description: `Delegate a self-contained task to a sub-agent with its own fresh context; it returns only its final report, with its id (send_message continues it later with its context). Write the prompt as a complete brief: the goal, what you already know, and what to report back. Several agent calls in one turn run in parallel. With run_in_background it starts and you get its id at once; keep working, and its report reaches you as a reminder when it finishes. Agents:\n${list}${opts.catalogue ? `\n${opts.catalogue}` : ''}`,
+      description: `Delegate a self-contained task to a sub-agent with its own fresh context; it returns only its final report, with its id (send_message continues it later with its context). Write the prompt as a complete brief: the goal, what you already know, and what to report back. Several agent calls in one turn run in parallel. With run_in_background it starts and you get its id at once; keep working, and its report reaches you as a reminder when it finishes. ${mine ? 'Agents marked (yours) are the person\'s own specialists, each made for a kind of work and often on a model chosen for it: when part of the task is that kind of work, give that part to that agent rather than doing it yourself. ' : ''}Agents:\n${list}${opts.catalogue ? `\n${opts.catalogue}` : ''}`,
       input_schema: {
         type: 'object',
         properties: {
           description: { type: 'string', description: 'Three to five words, shown to the user.' },
           prompt: { type: 'string' },
-          type: { type: 'string', enum: names, description: 'Which agent; default explore.' },
+          type: { type: 'string', enum: names, description: `Which agent; default ${fallback}.` },
           run_in_background: { type: 'boolean', description: 'Start it and return at once; its report arrives later.' },
           ...extra,
         },
-        required: ['description', 'prompt'],
+        // A team's lead names the member (an omitted type sent its review to a developer): no silent default there.
+        required: names.includes('explore') ? ['description', 'prompt'] : ['description', 'prompt', 'type'],
       },
     },
-    summarize: (i) => `${bool(i.run_in_background) ? '[background] ' : ''}${str(i.type) || 'explore'}${str(i.model) ? ` on ${str(i.model)}` : ''}${str(i.isolation) ? ' (worktree)' : ''}: ${str(i.description)}`,
+    summarize: (i) => `${bool(i.run_in_background) ? '[background] ' : ''}${str(i.type) || fallback}${str(i.model) ? ` on ${str(i.model)}` : ''}${str(i.isolation) ? ' (worktree)' : ''}: ${str(i.description)}`,
     async run(input, ctx) {
       if (!ctx.runSubagent) return { content: 'Sub-agents cannot start other sub-agents. Do the work directly.', is_error: true };
-      const type = names.includes(str(input.type)) ? str(input.type) : 'explore';
+      const type = names.includes(str(input.type)) ? str(input.type) : fallback;
       // An agent made to work in the background does, unless the call says otherwise.
       const background = input.run_in_background === undefined || input.run_in_background === null ? !!agents.find((a) => a.name === type)?.background : bool(input.run_in_background);
       const effort = EFFORTS.find((e) => e === str(input.effort));

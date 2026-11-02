@@ -225,6 +225,27 @@ test('desktop app end to end: custom agents', { timeout: 10 * 60_000 }, async (t
       assert.match(last, /The crew finished/);
     });
 
+    await step('a model for an agent: the builder lists each model with its provider; one not allowed yet is said, and Allow it allows it', async () => {
+      const models = ((await api('GET', '/api/agents/options')).body as { models: Array<{ id: string }> }).models.map((m) => m.id);
+      const other = models.find((m) => m !== 'deepseek-flash');
+      assert.ok(other, `another model to choose (${models.join(', ')})`);
+      await api('PUT', '/api/me/settings', { delegation: { allowedModels: [] } });
+      await openMine();
+      await card('test-writer').locator('[data-agent-edit]').click();
+      await page.waitForSelector('[data-agent-form="edit"]');
+      assert.match(await page.locator('[data-agent-model] option').allInnerTexts().then((x) => x.join('|')), / · deepseek/);
+      await page.selectOption('[data-agent-model]', other!);
+      await page.waitForSelector('[data-agent-model-allow]');
+      await shot('agent-model-allow', page.locator('[data-agent-model-allow]'));
+      await page.click('[data-agent-allow-model]');
+      await page.waitForSelector('[data-agent-model-allow]', { state: 'detached' });
+      const d = ((await api('GET', '/api/me/settings')).body as { delegation?: { allowedModels?: string[] } }).delegation;
+      assert.deepEqual(d?.allowedModels, [other]);
+      await page.click('[data-agent-save]');
+      await page.waitForSelector('[data-agent-form]', { state: 'detached' });
+      assert.equal((await mine()).find((a) => a.name === 'test-writer') && ((await mine()).find((a) => a.name === 'test-writer') as unknown as { model?: string }).model, other);
+    });
+
     await step('deleted from its menu; gone from the catalogue', async () => {
       await openMine();
       await card('doc-writer').locator('[data-agent-more]').click();

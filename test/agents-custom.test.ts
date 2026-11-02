@@ -127,7 +127,7 @@ test('where it runs: its tools and deny list (globs), only its MCP servers and s
     const offered = (agentTool.input_schema.properties as { type: { enum: string[] } }).type.enum;
     assert.ok(['reader', 'no-shell', 'planner', 'short', 'thrifty', 'slow'].every((n) => offered.includes(n)));
     assert.ok(!offered.includes('mine-only') && !offered.includes('off-one'), 'kept for the person, or switched off');
-    assert.match(agentTool.description, /- reader \[read, glob, mcp__beta__\*\] \{mcp: alpha\}: Reads files/);
+    assert.match(agentTool.description, /- reader \(yours\) \[read, glob, mcp__beta__\*\] \{mcp: alpha\}: Reads files/);
     // reader: read and glob; alpha's tools (its server), not beta's (not its server, though its list names them); only its skill, loaded up front.
     const rq = t.ds.byKey.r![0]!;
     const rt = toolNames(rq);
@@ -140,8 +140,9 @@ test('where it runs: its tools and deny list (globs), only its MCP servers and s
     assert.ok(nt.includes('write') && nt.includes('read') && !nt.includes('bash') && !nt.some((n) => n.startsWith('run_')));
     // planner: plan mode in a bypass conversation; its write is refused.
     assert.match(subResults(ev, /^planner/)[0]!.content, /plan mode/i);
-    // short: 2 steps at most.
-    assert.equal(t.ds.byKey.s!.length, 2);
+    // short: 2 steps at most, then one call without tools for its report.
+    assert.equal(t.ds.byKey.s!.length, 3);
+    assert.equal(t.ds.byKey.s![2]!.toolChoice, 'none');
     // thrifty: stopped at its spend limit.
     assert.ok(ev.some((e) => e.kind === 'notice' && e.agent?.startsWith('thrifty') && /the thrifty agent reached its spend limit of \$0\.000001 for one run \(\$0\.0000\d+ spent\)/.test(e.text)));
     // slow: in the background by default.

@@ -191,6 +191,8 @@ export function AgentEditor({ open, edit, draft, onClose, onSaved }: { open: boo
   const [f, setF] = useState<Form>(() => toForm(edit ?? draft));
   const [opts, setOpts] = useState<AgentOptions | null>(null);
   const [others, setOthers] = useState<Array<{ name: string; description: string }>>([]);
+  // The person's settings: which models agents may run on (delegation.allowedModels).
+  const [mine, setMine] = useState<Record<string, unknown> | null>(null);
   const [describe, setDescribe] = useState('');
   const [busy, setBusy] = useState<'' | 'generate' | 'save'>('');
   const [error, setError] = useState('');
@@ -200,6 +202,7 @@ export function AgentEditor({ open, edit, draft, onClose, onSaved }: { open: boo
     if (!open) return;
     setF(toForm(edit ?? draft)); setError(''); setNote(''); setDescribe('');
     client.agents.options().then(setOpts).catch((e: Error) => setError(e.message));
+    client.settings.mine().then(setMine).catch(() => setMine(null));
     // The agents a team can be made of (not itself).
     client.agents.list().then((l) => setOthers(l.filter((a) => a.name !== edit?.name && (a.source !== 'user' || a.enabled !== false)).map((a) => ({ name: a.name, description: a.description })))).catch(() => setOthers([]));
     if (edit) client.agents.versions(edit.name).then((v) => setVersions(v.map((x) => ({ version: x.version, at: x.at })))).catch(() => setVersions([]));
@@ -265,9 +268,29 @@ export function AgentEditor({ open, edit, draft, onClose, onSaved }: { open: boo
 
         <Part title="Model">
           <div className="grid gap-x-3 md:grid-cols-2">
-            <Field label="Model" help="Another company's model only runs when you allowed it (Settings > Delegation)"><Select value={f.model} onChange={(v) => set({ model: v })} options={[{ value: '', label: 'The conversation\'s model' }, ...(opts?.models ?? []).map((m) => ({ value: m.id, label: m.label ?? m.id })), ...(f.model && opts && !opts.models.some((m) => m.id === f.model) ? [{ value: f.model, label: `${f.model} (not available here)` }] : [])]} data-agent-model /></Field>
+            <Field label="Model" help="Another company's model only runs when you allowed it (Settings > Delegation)"><Select value={f.model} onChange={(v) => set({ model: v })} options={[{ value: '', label: 'The conversation\'s model' }, ...(opts?.models ?? []).map((m) => ({ value: m.id, label: `${m.label ?? m.id} · ${m.provider}` })), ...(f.model && opts && !opts.models.some((m) => m.id === f.model) ? [{ value: f.model, label: `${f.model} (not available here)` }] : [])]} data-agent-model /></Field>
             <Field label="Effort"><Select value={f.effort} onChange={(v) => set({ effort: v as Form['effort'] })} options={[{ value: '', label: 'The model\'s default' }, ...(['low', 'medium', 'high', 'xhigh', 'max'] as const).map((e) => ({ value: e, label: e }))]} data-agent-effort /></Field>
           </div>
+          {(() => {
+            // A model the person has not allowed agents to use: it would run on the conversation's model instead.
+            const d = (mine?.delegation ?? {}) as { allowedModels?: string[] | '*' };
+            const list = d.allowedModels === '*' ? '*' : d.allowedModels ?? [];
+            if (!mine || !f.model || list === '*' || list.includes(f.model)) return null;
+            const label = opts?.models.find((m) => m.id === f.model)?.label ?? f.model;
+            const allowIt = async () => {
+              try {
+                const next = { ...mine, delegation: { ...d, allowedModels: [...new Set([...(list as string[]), f.model])] } };
+                setMine(await client.settings.saveMine(next));
+                toast(`Agents may run on ${label} now`, { kind: 'success' });
+              } catch (e) { toast((e as Error).message, { kind: 'error' }); }
+            };
+            return (
+              <Callout className="mt-2" tone="warning" data-agent-model-allow title={`${label} is not allowed for agents yet`}
+                actions={<Button size="sm" variant="primary" data-agent-allow-model onClick={() => void allowIt()}>Allow it</Button>}>
+                A conversation on another model hands work to this agent on {label} only once you allow it (Settings &gt; Models &amp; providers &gt; Delegation). Until then it runs on the conversation's model.
+              </Callout>
+            );
+          })()}
         </Part>
 
         <Part title="Tools" help="The fewer, the safer and the better it chooses.">

@@ -2266,6 +2266,10 @@ export class Session {
       sub.append({ role: 'user', content: e.queue.splice(0).map((text) => ({ type: 'text' as const, text })) });
       reason = await sub.run(signal);
     }
+    // Out of steps or time before it was done: one last call for its report (else its work reaches nobody).
+    if ((reason === 'max_steps' || reason === 'time') && !signal.aborted) {
+      await sub.wrapUp(reason === 'time' ? 'You have reached your time limit.' : 'You have reached your step limit.', signal).catch((err: Error) => this.emit({ kind: 'notice', level: 'warn', text: `The ${name} agent could not write its report: ${err.message}`, agent: name }));
+    }
     // Its report carries whatever it read: the delegating agent is now tainted too.
     if (sub.tainted) (e.parent ?? this.agent)?.markTainted();
     this.emit({ kind: 'turn_end', reason, agent: name });

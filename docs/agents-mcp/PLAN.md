@@ -169,6 +169,13 @@ Each phase is tested on its own (engine, API, the desktop app end to end) and li
   first live run: members ran in the background (the default for agents), so the lead briefed its reviewer before
   the work had come back; a lead's members now run in the foreground unless it asks otherwise.
 
+### The live evaluation (2026-11-02)
+
+`scripts/live-agents-eval.mjs` runs seven scenarios on real models with prompts written as a person would write them,
+and checks the end state against the truth; the report is `EVAL.md`. The fixes it led to are in the CHANGELOG
+(your own agents used for their work, a report from an agent that ran out of steps, team sizing, a team lead's
+default agent). Coordination research and a design: `COORDINATION.md`.
+
 ### Gaps closed after the five phases
 
 - **A delegated team leads.** Sub-agents may not start sub-agents by default (`maxSubagentDepth` 1), so a team the

@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **A live evaluation of agents and MCP** (`scripts/live-agents-eval.mjs`, report in docs/agents-mcp/EVAL.md): a
+  provider added in the app and a custom agent on its model, the orchestrator routing a mixed request to specialists
+  on different models, one agent against a team (writing and reading), a custom MCP server built from a database and
+  a data agent, an agent out of steps, an MCP server crashing mid-run, background agents. What it found is fixed:
+  - **Your own agents are used for their kind of work.** The orchestrator did small jobs itself even when you had an
+    agent for them (fixing tests, querying your database). The agent tool now marks your agents "(yours)" and says to
+    give their kind of work to them; rerun, it routed each part to the right specialist, in parallel, on its model.
+  - **An agent that runs out of steps still reports**: one last call without tools for what it did and found and what
+    is left (its partial work used to be lost).
+  - **Teams split only when it pays**: the lead's procedure says every member starts from nothing, so small parts go
+    together; a team of three small modules went from 8 agent runs to 5.
+  - **A team lead must name the member it hands work to**: a call without one fell back to an agent outside the team,
+    or sent a review to a developer; it is now refused and says which members there are.
+- **Choosing an agent's model is easier**: the builder lists each model with its provider, and when the model is not
+  yet allowed for agents (delegation) it says so, with "Allow it".
+- Research on agent coordination (docs/agents-mcp/research/) and a design for it (docs/agents-mcp/COORDINATION.md).
 - Agents and MCP, gaps closed: a team the orchestrator delegates to now leads its members (it had no agent tool
   past the default nesting depth); Generate drafts teams from your agents; a `.mcpb` can be one of your own servers
   (administrators; secrets as vault references); runs from other apps can wait for your approval in the app

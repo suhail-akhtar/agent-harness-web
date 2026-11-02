@@ -135,3 +135,61 @@ test('Generate can draft a team: members only from the agents listed (others dro
   const one = await generateAgent({ ...common, provider: answer({ ...base, team: { members: ['test-writer'] } }) as never });
   assert.equal(one.draft.team, undefined);
 });
+
+test('the agent tool marks the person\'s own agents and says to give their kind of work to them; without any, it says nothing of the sort', async () => {
+  const { makeAgentTool, BUILTIN_AGENTS } = await import('../src/agents/agents.ts');
+  const withMine = makeAgentTool([...BUILTIN_AGENTS, { name: 'test-fixer', description: 'Fixes failing tests.', prompt: '', source: 'user', model: 'deepseek-flash' }]);
+  assert.match(withMine.spec.description, /- test-fixer \(yours\) \(deepseek-flash\): Fixes failing tests\./);
+  assert.match(withMine.spec.description, /Agents marked \(yours\) are the person's own specialists[\s\S]*give that part to that agent/);
+  assert.doesNotMatch(withMine.spec.description, /- general \(yours\)/);
+  assert.doesNotMatch(makeAgentTool(BUILTIN_AGENTS).spec.description, /\(yours\)/);
+});
+
+test('an agent that runs out of steps still reports: one last call without tools, its partial findings reach the agent that delegated', async () => {
+  const t = await setupServer();
+  try {
+    assert.equal((await t.call(OPERATOR, 'POST', '/api/me/agents', { name: 'brief-auditor', description: 'Audits files for problems and reports them.', prompt: 'Audit.', model: 'deepseek-flash', tools: ['read', 'glob'], maxTurns: 1 })).status, 201);
+    t.ds.scripts.boss = [{ calls: [{ name: 'agent', input: { description: 'audit', type: 'brief-auditor', prompt: '[[aud]] Audit the files.' } }] }, { text: 'Relayed the partial audit.' }];
+    t.ds.scripts.aud = [{ calls: [{ name: 'glob', input: { pattern: '*' } }] }, { text: 'Partial audit: listed the files; did not read any of them yet. Left: read and check each one.' }];
+    const made = await t.call(OPERATOR, 'POST', '/api/sessions', { model: 'deepseek-flash', runtime: 'local', mode: 'bypass' });
+    const s = t.harness.sessions.get(made.body.id)!;
+    const events: HarnessEvent[] = [];
+    s.subscribe(0, ({ event }) => events.push(event));
+    await s.send('[[boss]] Audit everything.');
+    await waitFor(() => events.some((e) => e.kind === 'turn_end' && !e.agent), 'done');
+    const reqs = t.ds.byKey.aud!;
+    assert.equal(reqs.length, 2, 'one step, then the wrap-up');
+    assert.equal(reqs[1]!.toolChoice, 'none', 'the wrap-up cannot call tools');
+    assert.match(JSON.stringify(reqs[1]!.messages), /reached your step limit[\s\S]*write your report now/);
+    const res = s.history.flatMap((m) => m.content).filter((b) => b.type === 'tool_result').map((b) => String((b as { content: unknown }).content)).find((r) => /Partial audit/.test(r));
+    assert.match(res ?? '', /^Partial audit: listed the files[\s\S]*\(The agent stopped early: max_steps\.\)/);
+  } finally { await t.close(); }
+});
+
+test('a team lead must name the member: a call without one is refused (it says which members there are), never sent outside the team', async () => {
+  const t = await setupServer();
+  try {
+    const mk = (b: Record<string, unknown>) => t.call(OPERATOR, 'POST', '/api/me/agents', { model: 'deepseek-flash', tools: ['read'], ...b });
+    assert.equal((await mk({ name: 'only-member', description: 'The one member of a small team.', prompt: 'Work.' })).status, 201);
+    assert.equal((await mk({ name: 'tiny-team', description: 'A team of one member, for tests.', prompt: 'Lead.', team: { members: ['only-member'] } })).status, 201);
+    t.ds.scripts.tl = [
+      { calls: [{ name: 'agent', input: { description: 'no type', prompt: '[[nt]] Do it.' } }] },
+      { calls: [{ name: 'agent', input: { description: 'named', type: 'only-member', prompt: '[[nt]] Do it.' } }] },
+      { text: 'Done.' },
+    ];
+    t.ds.scripts.nt = [{ text: 'Did it.' }];
+    const made = await t.call(OPERATOR, 'POST', '/api/sessions', { agent: 'tiny-team', model: 'deepseek-flash', runtime: 'local', mode: 'bypass' });
+    const s = t.harness.sessions.get(made.body.id)!;
+    const events: HarnessEvent[] = [];
+    s.subscribe(0, ({ event }) => events.push(event));
+    await s.send('[[tl]] Go.');
+    await waitFor(() => events.some((e) => e.kind === 'turn_end' && !e.agent), 'done');
+    const schema = t.ds.byKey.tl![0]!.tools.find((x) => x.name === 'agent')!.input_schema as { required: string[] };
+    assert.ok(schema.required.includes('type'), 'a team names its member');
+    const first = events.find((e) => e.kind === 'tool_result' && e.name === 'agent') as Extract<HarnessEvent, { kind: 'tool_result' }>;
+    assert.equal(first.is_error, true);
+    assert.match(first.content, /type/);
+    assert.ok(events.some((e) => e.kind === 'turn_end' && e.agent?.startsWith('only-member')), 'then it named the member, which ran');
+    assert.ok(!events.some((e) => 'agent' in e && typeof e.agent === 'string' && e.agent.startsWith('explore')), 'no explore agent ran');
+  } finally { await t.close(); }
+});

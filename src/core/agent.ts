@@ -578,7 +578,25 @@ export class Agent {
     return want === '1h' || (want === 'auto' && this.longGaps) ? '1h' : undefined;
   }
 
-  async callModel(messages: Message[], signal: AbortSignal, compaction = false): Promise<ProviderResponse> {
+  /**
+   * A run that stopped before it was done (its step or time limit): one last request, its tools offered but not
+   * usable (the same prefix, so the cache holds), for its report of what it did and found and what is left. A
+   * delegating agent otherwise gets nothing from work that ran out of steps.
+   */
+  async wrapUp(why: string, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) return;
+    const note = { type: 'text' as const, text: `<system-reminder>${why} No more tool calls: write your report now. What you did and found so far (with the evidence), what you did not get to, and what is left to do.</system-reminder>` };
+    const last = this.messages.at(-1);
+    if (last?.role === 'user') last.content.push(note); else this.append({ role: 'user', content: [note] });
+    const resp = await this.callModel(this.messages, signal, false, true);
+    this.recordUsage(resp);
+    const text = resp.message.content.filter((b) => b.type === 'text');
+    if (!text.length) return;
+    const kept = this.append({ ...resp.message, content: text });
+    this.hooks.emit({ kind: 'assistant_message', message: kept, agent: this.cfg.name });
+  }
+
+  async callModel(messages: Message[], signal: AbortSignal, compaction = false, noTools = false): Promise<ProviderResponse> {
     const tools = this.toolSpecs();
     // A pause longer than the cache lives (the person away, a long call) argues for the 1-hour prefix from now on.
     const now = Date.now();
@@ -592,7 +610,7 @@ export class Agent {
       system: this.cfg.system,
       tools,
       ...(ttl ? { prefixTtl: ttl } : {}),
-      ...(compaction ? { toolChoice: 'none' as const } : {}),
+      ...(compaction || noTools ? { toolChoice: 'none' as const } : {}),
       ...(!compaction ? { effortLog: this.noteEffort(messages.length) } : {}),
       ...(this.cfg.toolGroups?.length ? { allTools: this.specs, deferrable: this.cfg.toolGroups.flatMap((g) => g.tools) } : {}),
       // Already clean when appended; this catches a value registered after its message was (it is hidden from then on).
