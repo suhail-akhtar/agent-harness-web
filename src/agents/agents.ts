@@ -372,6 +372,8 @@ export function outcomeOf(report: string): string {
 }
 
 const FAN_OUT_AT_ONCE = 8;
+/** A placed agent's computer was not there for it: offline at the start, gone silent, or stopped taking work. */
+const MACHINE_LOST = /is offline: its companion is not running|The companion on the user's computer is offline|the companion did not answer in time|stopped taking work: no word from the server/;
 
 /**
  * One brief over many items (docs/swarm/SWARM.md): each item its own agent, at most FAN_OUT_AT_ONCE at a time (and
@@ -383,6 +385,8 @@ async function fanOut(args: SubagentArgs, items: string[], fields: string[], run
   const ask = fields.length ? `\n\nEnd your report with one line of JSON and nothing after it, with these fields: ${JSON.stringify(Object.fromEntries(fields.map((f) => [f, '...'])))}` : '';
   const brief = (item: string) => `${args.prompt.includes('{{item}}') ? args.prompt.split('{{item}}').join(item) : `${args.prompt}\n\nThe item: ${item}`}${ask}`;
   const reports: string[] = new Array(items.length).fill('');
+  const placed: (string | undefined)[] = [];
+  const down = new Set<string>();
   let next = 0;
   await Promise.all(Array.from({ length: Math.min(FAN_OUT_AT_ONCE, items.length) }, async () => {
     while (next < items.length && !signal.aborted) {
@@ -390,12 +394,24 @@ async function fanOut(args: SubagentArgs, items: string[], fields: string[], run
       // Spread across models in turn when asked (each still one the person allows, checked as it starts).
       const model = models.length ? models[i % models.length] : args.model;
       // And across the person's computers in turn (each checks its own policy as the work arrives).
-      const machine = machines.length ? machines[i % machines.length] : args.machine;
-      try { reports[i] = await run({ ...args, ...(model ? { model } : {}), ...(machine ? { machine } : {}), prompt: brief(items[i]!), description: `${args.description}: ${items[i]!.slice(0, 40)}`, batch: items.length - i }); } catch (e) {
-        // Refused by the governor, stopped, or failed: said as such, never taken for a report.
-        const m = (e as Error).message;
-        reports[i] = /^Not started: /.test(m) ? m : /stopped by|abort/i.test(m) ? `Stopped: ${m}` : `Failed: ${m}`;
+      // Re-placed when its computer is offline or drops mid-way (phase 7): the item goes to the next computer of the
+      // fan-out it has not tried, once each, and says so; the governor grants each attempt as its own agent.
+      const tried: string[] = [];
+      for (let machine = machines.length ? machines[i % machines.length] : args.machine; ;) {
+        if (machine) tried.push(machine);
+        try { reports[i] = await run({ ...args, ...(model ? { model } : {}), ...(machine ? { machine } : {}), prompt: brief(items[i]!), description: `${args.description}: ${items[i]!.slice(0, 40)}`, batch: items.length - i }); } catch (e) {
+          // Refused by the governor, stopped, or failed: said as such, never taken for a report.
+          const m = (e as Error).message;
+          reports[i] = /^Not started: /.test(m) ? m : /stopped by|abort/i.test(m) ? `Stopped: ${m}` : `Failed: ${m}`;
+        }
+        if (machine && MACHINE_LOST.test(reports[i]!)) down.add(machine);
+        // Not one already lost in this fan-out (another item found it offline).
+        const next = machines.find((x) => !tried.includes(x) && !down.has(x));
+        if (!machine || !next || signal.aborted || !MACHINE_LOST.test(reports[i]!)) break;
+        machine = next;
       }
+      placed[i] = tried.at(-1);
+      if (tried.length > 1) reports[i] = `(Re-placed from ${tried.slice(0, -1).join(', then ')} to ${tried.at(-1)}: ${tried.slice(0, -1).length === 1 ? 'it was' : 'they were'} offline or dropped.)\n\n${reports[i]}`;
     }
   }));
   const cell = (s: unknown) => String(s ?? '').replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim().slice(0, 120);
@@ -403,7 +419,7 @@ async function fanOut(args: SubagentArgs, items: string[], fields: string[], run
     const r = reports[i] || 'Not started: the fan-out was stopped.';
     const words = r.split('\n\n---\n')[0]!.replace(/\n\n\(agent id: [^)]*\)\s*$/, '');
     const got = fields.length ? trailingJson(words) as Record<string, unknown> | undefined : undefined;
-    return { item, model: [models.length ? models[i % models.length]! : '', machines.length ? `on ${machines[i % machines.length]!}` : ''].filter(Boolean).join(' '), outcome: outcomeOf(r), id: /\(agent ids?: ([^)]+)\)/.exec(r)?.[1] ?? '', values: fields.map((f) => (got && f in got ? cell(got[f]) : '?')), words };
+    return { item, model: [models.length ? models[i % models.length]! : '', machines.length ? `on ${placed[i] ?? machines[i % machines.length]!}` : ''].filter(Boolean).join(' '), outcome: outcomeOf(r), id: /\(agent ids?: ([^)]+)\)/.exec(r)?.[1] ?? '', values: fields.map((f) => (got && f in got ? cell(got[f]) : '?')), words };
   });
   const count = (o: string) => rows.filter((r) => r.outcome === o).length;
   const outcomes = [...new Set(rows.map((r) => r.outcome))];

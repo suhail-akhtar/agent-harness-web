@@ -6,6 +6,7 @@ import { resolveShell } from '../runtime/host.ts';
 import { sandboxedFolderHost } from '../runtime/local-sandbox.ts';
 import type { LocalSandbox } from '../runtime/os-sandbox.ts';
 import { type CompanionJob, cleanPolicy, createCompanionHandler, DEFAULT_POLICY, type MachinePolicy } from './handler.ts';
+import { machineKey, policyPayload, resultPayload, sign } from './sign.ts';
 
 // harness-companion: lets the browser harness work on a folder on THIS computer.
 //   node harness-companion.mjs --server https://your-server --token hwc_... [--dir .] [--allow-hooks] [--allow-desktop]
@@ -43,6 +44,8 @@ const server = (arg('server') ?? process.env.HARNESS_SERVER ?? '').replace(/\/$/
 const tokenFile = path.resolve(arg('token-file') ?? path.join(os.homedir(), '.harness-companion', `${crypto.createHash('sha256').update(server).digest('hex').slice(0, 16)}.token`));
 const stored = (): string => { try { return fs.readFileSync(tokenFile, 'utf8').trim(); } catch { return ''; } };
 let token = arg('token') ?? process.env.HARNESS_COMPANION_TOKEN ?? stored();
+// This machine's own key, next to its token (never sent: only its public half, and signatures).
+const key = machineKey(tokenFile.replace(/\.token$/, '') + '.key', fs, path);
 const dir = path.resolve(arg('dir') ?? process.cwd());
 const allowHooks = process.argv.includes('--allow-hooks');
 // The project's own MCP servers (.mcp.json) start on this computer only with this, or inside a sandbox.
@@ -102,9 +105,9 @@ async function run(job: CompanionJob): Promise<void> {
   const { ok, value } = await handle(job);
   for (let i = 0; i < 3; i++) {
     try {
-      const res = await post('/api/companion/result', { jobId: job.id, ok, value });
+      const res = await post('/api/companion/result', { jobId: job.id, ok, value, signature: sign(key.privateKey, resultPayload(job.id, ok, value)) });
       // Refused (too large, say): tell the server, so the job fails instead of waiting out its timeout.
-      if (res.status >= 400 && res.status !== 404) await post('/api/companion/result', { jobId: job.id, ok: false, value: { error: `the server refused this result (HTTP ${res.status})` } });
+      if (res.status >= 400 && res.status !== 404) { const v = { error: `the server refused this result (HTTP ${res.status})` }; await post('/api/companion/result', { jobId: job.id, ok: false, value: v, signature: sign(key.privateKey, resultPayload(job.id, false, v)) }); }
       return;
     } catch { await new Promise((r) => setTimeout(r, 1000 * (i + 1))); }
   }
@@ -117,7 +120,7 @@ async function loop(): Promise<void> {
     try {
       const h = sandbox.host;
       const info = { platform: h.platform, shell: h.kind === 'docker' ? 'bash' : resolveShell().kind, root: h.displayRoot, version: '0.6.0', sandbox: sandbox.kind, network: h.sandboxed ? h.networkPolicy : 'full', trustProject, desktop: allowDesktop, policy: readPolicy() };
-      const res = await post('/api/companion/poll', { info, running: handle.running() }, AbortSignal.timeout(60_000));
+      const res = await post('/api/companion/poll', { info, running: handle.running(), publicKey: key.publicKey, policySignature: sign(key.privateKey, policyPayload(info.policy)) }, AbortSignal.timeout(60_000));
       if (res.status !== 401) { heard = performance.now(); if (fencedNow) { fencedNow = false; handle.unfence(); console.log('the server is heard again: taking work'); } }
       if (res.status === 401) {
         // Started with an old token, but a fresher one was kept from an earlier run.

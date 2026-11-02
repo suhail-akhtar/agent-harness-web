@@ -13,3 +13,6 @@
     then a reporter writes the report.
   - **The mandate** (`.harness/security-mandate.json`: scope, who authorized it, dates): written by the person.
     Swarm agents cannot write it.
+- **`fix_variants`**: variant analysis. It reads the repository's security-fix commits and lists the places in scope
+  that still look like the code each fix removed: the same line, or the same call to a sink under other names. The
+  lead runs it first.

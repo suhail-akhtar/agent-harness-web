@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import crypto from 'node:crypto';
+import { assignJob, closeJob, killJob } from './winjob.ts';
 import path from 'node:path';
 import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import type { ToolDisplay } from '../core/types.ts';
@@ -186,6 +187,8 @@ export function run(cmd: string, args: string[], opts: ExecOptions): Promise<Exe
     const tag = win && /bash(\.exe)?$/i.test(cmd) ? crypto.randomUUID() : undefined;
     const env = tag ? { ...(opts.env ?? process.env), HARNESS_RUN_TAG: tag } : opts.env;
     const child = spawn(cmd, args, { cwd: opts.cwd, env, detached: !win, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    // Windows: the command in a Job Object of its own as it starts, so a stop ends everything it started at once.
+    const job = win && child.pid !== undefined ? assignJob(child.pid) : undefined;
     const out: Buffer[] = []; const err: Buffer[] = [];
     const so = { n: 0 }; const se = { n: 0 };
     let timedOut = false;
@@ -196,7 +199,7 @@ export function run(cmd: string, args: string[], opts: ExecOptions): Promise<Exe
     const kill = () => {
       if (child.pid === undefined) return;
       try {
-        if (win) void killWindowsTree(child.pid, cmd, tag);
+        if (win) { void job?.then((j) => { if (j) void killJob(j); }); void killWindowsTree(child.pid, cmd, tag); }
         else process.kill(-child.pid, 'SIGKILL');
       } catch { try { child.kill('SIGKILL'); } catch { /* gone */ } }
     };
@@ -212,6 +215,7 @@ export function run(cmd: string, args: string[], opts: ExecOptions): Promise<Exe
       done = true;
       clearTimeout(timer);
       opts.signal?.removeEventListener('abort', onAbort);
+      void job?.then((j) => { if (j) closeJob(j); });
       resolve({ stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8'), code, timedOut, ...(orphans ? { orphansKilled: true } : {}) });
     };
     child.on('error', (e) => { err.push(Buffer.from(String(e.message))); finish(127); });

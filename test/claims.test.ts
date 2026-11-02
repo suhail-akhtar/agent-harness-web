@@ -179,3 +179,39 @@ test('the claims gate: only where a workflow names it (it calls models), fails o
     assert.deepEqual([n['final-ledger']!.gates, n['final-ledger']!.next], [['claims'], { on: { pass: 'done', fail: 'fix-claims-final', exhausted: 'done-with-findings' } }]);
   } finally { await h.close(); }
 });
+
+test('the crawl frontier: links followed breadth first on the site, robots.txt honoured, each page read through web_fetch and archived with its hash', async () => {
+  const { SourceStore } = await import('../src/research/sources.ts');
+  const crypto = await import('node:crypto');
+  const h = await createHarness({ dataDir: await tempDir(), plugins: [path.join(here, '..', 'plugins', 'research')], search: null, memory: 'off' });
+  try {
+    const root = await tempDir();
+    const sources = new SourceStore(await tempDir());
+    const site: Record<string, string> = {
+      'https://agency.example/robots.txt': 'User-agent: *\nDisallow: /private\n',
+      'https://agency.example/': 'Home. See the report (https://agency.example/report) and data (https://agency.example/data.csv) and https://agency.example/private/x and elsewhere (https://other.example/news).',
+      'https://agency.example/report': 'The 2026 report. Annex: https://agency.example/annex',
+      'https://agency.example/data.csv': 'year,value\n2026,42',
+      'https://agency.example/annex': 'Annex A.',
+    };
+    const fetched: string[] = [];
+    const ctx = {
+      host: new LocalHost(root), signal: new AbortController().signal, services: { sources },
+      callTool: async (name: string, input: { url: string }) => {
+        assert.equal(name, 'web_fetch');
+        fetched.push(input.url);
+        const text = site[input.url.replace(/\/$/, '') === 'https://agency.example' ? 'https://agency.example/' : input.url];
+        if (text === undefined) return { content: '404', is_error: true };
+        await sources.recordFetch({ url: input.url, finalUrl: input.url, text });
+        return { content: text };
+      },
+    } as unknown as import('../src/tools/types.ts').ToolContext;
+    const r = await h.registry.tools.get('crawl')!.run({ start: 'https://agency.example/', max_pages: 3 }, ctx);
+    assert.match(r.content, /^Read 3 page\(s\) from https:\/\/agency\.example\/; 2 more link\(s\) not followed/);
+    assert.ok(!fetched.some((u) => /other\.example|\/private/.test(u)), `not another site, not what robots.txt disallows: ${fetched.join(' ')}`);
+    assert.deepEqual(fetched.filter((u) => !u.endsWith('robots.txt')), ['https://agency.example/', 'https://agency.example/report', 'https://agency.example/data.csv'], 'breadth first');
+    const archive = JSON.parse(await fs.readFile(path.join(root, 'research', 'archive.json'), 'utf8')) as { url: string; sha256: string }[];
+    assert.equal(archive.length, 3);
+    assert.equal(archive[1]!.sha256, crypto.createHash('sha256').update(site['https://agency.example/report']!).digest('hex'), 'the hash of the text as stored');
+  } finally { await h.close(); }
+});

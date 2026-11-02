@@ -2,6 +2,8 @@
 // The pages an agent read are kept by the harness (ctx.services.sources), not
 // in the workspace, so a report cannot cite "sources" the agent wrote itself.
 
+import crypto from 'node:crypto';
+
 const REPORTS = ['research/report.md', 'report.md'];
 
 async function readReport(api, host, rel) {
@@ -67,6 +69,82 @@ export default {
         if (!services?.claims) return { pass: false, summary: 'claims cannot be checked here' };
         const r = await claimLedger(api, host, services, REPORTS[0], signal);
         return { pass: r.pass, summary: r.summary, details: r.text };
+      },
+    });
+
+    // The crawl frontier (phase 3): from a start page to the primary sources it links to, breadth first, each page
+    // read through web_fetch (the harness's own network rules and its source store) and archived with the SHA-256 of
+    // its text in research/archive.json, robots.txt honoured, one request a second to a site, a bounded count.
+    api.registerTool({
+      name: 'crawl',
+      description: 'Follow links from a start page to the pages it cites (breadth first, the same site unless told otherwise, at most max_pages), reading each with web_fetch so it joins the pages read in this session, and archiving each with the SHA-256 of its text in research/archive.json. Honours robots.txt; one request a second to a site. Use it to reach primary sources a page points to.',
+      parameters: { type: 'object', properties: {
+        start: { type: 'string', description: 'The first page' },
+        max_pages: { type: 'number', description: 'Pages to read in all (default 10, at most 40)' },
+        same_site: { type: 'boolean', description: 'Only pages of the start page\'s site (default true)' },
+        follow: { type: 'string', description: 'Only links whose URL matches this regular expression (e.g. "\\\\.pdf$|/report")' },
+      }, required: ['start'] },
+      kind: 'network', parallelSafe: false, untrusted: true,
+      summarize: (i) => `crawl from ${i.start}`,
+      async run(input, ctx) {
+        if (!ctx.callTool || !ctx.services?.sources) return { content: 'Crawling is not available here (web_fetch and the source store are needed).', is_error: true };
+        let start;
+        try { start = new URL(String(input.start ?? '')); } catch { return { content: 'start must be a URL (https://...)', is_error: true }; }
+        const max = Math.min(40, Math.max(1, Math.floor(Number(input.max_pages) || 10)));
+        const same = input.same_site !== false;
+        let follow;
+        try { follow = input.follow ? new RegExp(String(input.follow), 'i') : undefined; } catch { return { content: 'follow is not a valid regular expression', is_error: true }; }
+        const site = (u) => u.hostname.replace(/^www\./, '');
+        const robots = new Map();
+        const allowed = async (u) => {
+          if (!robots.has(u.origin)) {
+            const r = await ctx.callTool('web_fetch', { url: `${u.origin}/robots.txt` }).catch(() => ({ content: '', is_error: true }));
+            const rules = [];
+            let mine = false;
+            for (const line of (r.is_error ? '' : String(r.content)).split('\n')) {
+              const m = /^\s*(user-agent|disallow)\s*:\s*(.*?)\s*$/i.exec(line);
+              if (!m) continue;
+              if (/^user-agent$/i.test(m[1])) mine = m[2] === '*' || /harness/i.test(m[2]);
+              else if (mine && m[2]) rules.push(m[2]);
+            }
+            robots.set(u.origin, rules);
+          }
+          return !robots.get(u.origin).some((p) => u.pathname.startsWith(p));
+        };
+        const last = new Map();
+        const queue = [start.href];
+        const seen = new Set(queue);
+        const archive = [];
+        const skipped = [];
+        while (queue.length && archive.length < max && !ctx.signal.aborted) {
+          const href = queue.shift();
+          const u = new URL(href);
+          if (!(await allowed(u))) { skipped.push(`${href} (robots.txt)`); continue; }
+          const wait = 1000 - (Date.now() - (last.get(u.host) ?? 0));
+          if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+          last.set(u.host, Date.now());
+          const r = await ctx.callTool('web_fetch', { url: href });
+          if (r.is_error) { skipped.push(`${href} (${String(r.content).slice(0, 80)})`); continue; }
+          const entry = await ctx.services.sources.find(href);
+          const text = entry ? await ctx.services.sources.text(entry) : String(r.content);
+          archive.push({ url: href, finalUrl: entry?.finalUrl ?? href, sha256: crypto.createHash('sha256').update(text).digest('hex'), chars: text.length, fetchedAt: new Date().toISOString() });
+          for (const m of String(r.content).matchAll(/https?:\/\/[^\s)"'<>\]]+/g)) {
+            let v;
+            try { v = new URL(m[0].replace(/[.,;:]+$/, '')); } catch { continue; }
+            v.hash = '';
+            if (seen.has(v.href) || (same && site(v) !== site(start)) || (follow && !follow.test(v.href)) || !/^https?:$/.test(v.protocol)) continue;
+            if (/\.(png|jpe?g|gif|svg|webp|ico|css|js|woff2?|zip|mp4|mp3)(\?|$)/i.test(v.pathname)) continue;
+            seen.add(v.href); queue.push(v.href);
+          }
+        }
+        const fs = await import('node:fs/promises');
+        const pathMod = await import('node:path');
+        const out = await api.workspacePath(ctx.host, 'research/archive.json');
+        let kept = [];
+        try { kept = JSON.parse(await fs.readFile(out, 'utf8')); } catch { /* new */ }
+        await fs.mkdir(pathMod.dirname(out), { recursive: true });
+        await fs.writeFile(out, JSON.stringify([...kept, ...archive], null, 2));
+        return [`Read ${archive.length} page(s) from ${start.href}${queue.length ? `; ${queue.length} more link(s) not followed (max_pages ${max})` : ''}. Each is in the pages read in this session (sources) and archived with its hash in research/archive.json:`, ...archive.map((a) => `- ${a.finalUrl} (${a.chars} chars, sha256 ${a.sha256.slice(0, 16)}...)`), ...(skipped.length ? ['Not read:', ...skipped.slice(0, 20).map((s) => `- ${s}`)] : [])].join('\n');
       },
     });
 

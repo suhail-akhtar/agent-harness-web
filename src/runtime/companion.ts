@@ -51,6 +51,8 @@ interface CompanionRecord {
   /** The token it replaced, still accepted until prevValidUntil (a reply with the new one may have been lost). */
   prevTokenHash?: string;
   prevValidUntil?: number;
+  /** The machine's own public key (Ed25519, PEM), pinned the first time it polled: its results must be signed with it. */
+  publicKey?: string;
 }
 
 // Companion tokens are short-lived: each lasts HARNESS_COMPANION_TOKEN_DAYS (30).
@@ -64,7 +66,7 @@ const envNum = (v: string | undefined, d: number) => (v !== undefined && v !== '
 
 interface Live {
   lastSeen: number;
-  info: { platform: string; shell: string; root: string; version?: string; /** How the companion contains commands ('off' or absent: not at all). */ sandbox?: string; network?: 'none' | 'full'; /** The user started it with --trust-project: the project's MCP servers may start there. */ trustProject?: boolean; /** Started with --allow-desktop: the computer tool may use its real screen. */ desktop?: boolean; /** What the machine offers to swarm work, as it reports it (it enforces it itself). */ policy?: import('../companion/handler.ts').MachinePolicy };
+  info: { platform: string; shell: string; root: string; version?: string; /** How the companion contains commands ('off' or absent: not at all). */ sandbox?: string; network?: 'none' | 'full'; /** The user started it with --trust-project: the project's MCP servers may start there. */ trustProject?: boolean; /** Started with --allow-desktop: the computer tool may use its real screen. */ desktop?: boolean; /** What the machine offers to swarm work, as it reports it (it enforces it itself). */ policy?: import('../companion/handler.ts').MachinePolicy; /** The policy came signed with the machine's pinned key. */ policySigned?: boolean };
   queue: CompanionJob[];
   /** Jobs sent to the machine and not answered (a stop sends each a cancel). */
   sent: Set<string>;
@@ -227,6 +229,19 @@ export class CompanionHub {
     });
   }
 
+  /**
+   * Pins a machine's key the first time it polls (kept with its record); later polls must show the same key. 'pinned'
+   * (new), 'same', or 'changed' (refused: another key means another machine, or a stolen token).
+   */
+  async pinKey(id: string, publicKey: string): Promise<'pinned' | 'same' | 'changed'> {
+    const now = this.records.get(id)?.publicKey;
+    if (now) return now === publicKey ? 'same' : 'changed';
+    return this.mutate(() => { const r = this.records.get(id); if (!r) return 'changed' as const; if (r.publicKey) return r.publicKey === publicKey ? 'same' as const : 'changed' as const; r.publicKey = publicKey; return 'pinned' as const; });
+  }
+
+  /** The machine's pinned public key, if it has one. */
+  publicKeyOf(id: string): string | undefined { return this.records.get(id)?.publicKey; }
+
   async remove(id: string): Promise<void> {
     await this.mutate(() => { this.records.delete(id); });
     const l = this.live.get(id);
@@ -237,7 +252,7 @@ export class CompanionHub {
   list() {
     return [...this.records.values()].map((r) => {
       const l = this.live.get(r.id);
-      return { id: r.id, name: r.name, owner: r.owner, online: !!l && Date.now() - l.lastSeen < 60_000, info: l?.info ?? null, expiresAt: r.expiresAt, running: l?.sent.size ?? 0 };
+      return { id: r.id, name: r.name, owner: r.owner, online: !!l && Date.now() - l.lastSeen < 60_000, info: l?.info ?? null, expiresAt: r.expiresAt, running: l?.sent.size ?? 0, keyed: !!r.publicKey };
     });
   }
 

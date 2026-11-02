@@ -17,6 +17,7 @@ import { MemoryError, MemoryStore } from '../memory/store.ts';
 import { allowedImages, dockerAvailable, dockerDefaults, imageExists, sessionImage } from '../runtime/docker.ts';
 import { COMPANION_RESULT_LIMIT } from '../runtime/companion.ts';
 import { cleanPolicy } from '../companion/handler.ts';
+import { cleanPublicKey, policyPayload, resultPayload, verify } from '../companion/sign.ts';
 import { replay, verifyBundle } from '../core/recorder.ts';
 import { BundleError, exportSession, importSession } from '../core/portable.ts';
 import { OUTPUT_STYLES } from '../core/prompt.ts';
@@ -829,14 +830,27 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         const info = (body.info ?? {}) as { platform?: string; shell?: string; root?: string; version?: string; sandbox?: string; network?: string; trustProject?: boolean; desktop?: boolean; policy?: unknown };
         const running = Array.isArray(body.running) ? (body.running as unknown[]).filter((r): r is string => typeof r === 'string' && r.length <= 64).slice(0, 256) : undefined;
         const sandbox = ['bwrap', 'seatbelt', 'docker'].includes(String(info.sandbox)) ? String(info.sandbox) : 'off';
+        // The machine's own key: pinned the first time, the same one every time after (another key is another machine,
+        // or a stolen token), and once pinned, a poll without it is refused too.
+        const key = cleanPublicKey(body.publicKey);
+        const pinned = companions.publicKeyOf(id);
+        if (pinned && !key) throw new HttpError(401, 'this companion signs its work with its own key: a poll without it is refused (update the companion)');
+        if (key && (await companions.pinKey(id, key)) === 'changed') throw new HttpError(401, 'the key of this companion is not the one first seen for it: if the computer was reinstalled, remove the companion in the web app and add it again');
+        const policySigned = !!key && !!info.policy && verify(key, policyPayload(info.policy), body.policySignature);
         // Short-lived tokens: a fresh one rides on a poll's reply when it is due, and the companion
         // keeps it. Due now: reply at once rather than after the long poll. Else it may fall due
         // while the poll waits - unless the token was revoked meanwhile (checked again).
         let fresh = await companions.renew(id, auth.previous);
-        const job = await companions.poll(id, { platform: String(info.platform ?? 'unknown'), shell: String(info.shell ?? 'bash'), root: String(info.root ?? ''), version: info.version, sandbox, network: info.network === 'none' ? 'none' : 'full', trustProject: info.trustProject === true, desktop: info.desktop === true, ...(info.policy ? { policy: cleanPolicy(info.policy) } : {}) }, fresh ? 0 : undefined, running);
+        const job = await companions.poll(id, { platform: String(info.platform ?? 'unknown'), shell: String(info.shell ?? 'bash'), root: String(info.root ?? ''), version: info.version, sandbox, network: info.network === 'none' ? 'none' : 'full', trustProject: info.trustProject === true, desktop: info.desktop === true, ...(info.policy ? { policy: cleanPolicy(info.policy), policySigned } : {}) }, fresh ? 0 : undefined, running);
         if (!fresh) { const still = companions.authenticateToken(token); if (still?.id === id) fresh = await companions.renew(id, still.previous); }
         const h: Record<string, string> = fresh ? { 'x-harness-companion-token': fresh } : {};
         return job ? send(res, 200, job, h) : send(res, 204, '', h);
+      }
+      // A machine with a key signs each result: an unsigned or forged one is refused, and its job fails.
+      const pub = companions.publicKeyOf(id);
+      if (pub && !verify(pub, resultPayload(String(body.jobId), body.ok === true, body.value), body.signature)) {
+        companions.complete(id, String(body.jobId), false, { error: 'the result was not signed with the key of this machine: refused' });
+        throw new HttpError(403, 'the result is not signed with the key of this machine');
       }
       const ok = companions.complete(id, String(body.jobId), body.ok === true, body.value);
       return send(res, ok ? 200 : 404, { ok });

@@ -225,7 +225,9 @@ scheduling and failure recovery.
   found the 2026 Digital Omnibus delay and cited it. The fixes it led to: the final gate, 100 claims a run, sentence
   splitting, and quotes across two pages.
 
-  Left: a crawl frontier with archived, hashed pages.
+  Then the crawl frontier: the research plugin's `crawl` follows a page's links to the sources it cites, breadth
+  first, through web_fetch (the harness's network rules and source store), honouring robots.txt, one request a second
+  to a site, and archives each page with the SHA-256 of its text in research/archive.json.
 - Phase 7, across the person's computers: built (2026-11-02), recommendations 1 to 4 and 10 of
   research/multi_machine.md.
   - **Stop reaches the machine**: a cancel job and a real abort signal in the companion's tools; jobs a restarted
@@ -239,14 +241,21 @@ scheduling and failure recovery.
   - **Acceptance at stakes**: checks that ran only on the worker's machine leave its work UNVERIFIED.
   - **An audit log on the machine.**
   - **On Windows**: a stop now kills what a command started through `timeout`, `exec` or a nested shell (Git Bash),
-    which before ran on. On a loaded machine about 1 stop in 4 still misses a process; a Job Object is the fix.
+    which before ran on: each command runs in a Windows Job Object of its own (src/runtime/winjob.ts), and a stop
+    terminates the job; a tag sweep stays behind it as a fallback.
+  - **Each machine's own key** (src/companion/sign.ts): an Ed25519 key made on the machine, never sent; the server
+    pins its public key on the first poll and refuses another. Every result must be signed with it, and so is the
+    policy the machine reports (the server shows it as signed).
+  - **Re-placement**: a fan-out item whose computer is offline or drops mid-way goes to the next computer of the
+    fan-out it has not tried (one already lost is skipped), and the table says where it went.
 
   Tests: test/machines.test.ts, test/companion-bundle.test.ts (the real bundle: its policy command, and the lease
   with the server gone). Live (EVAL-MACHINES.md): two real companions, Haiku leading, Grok 4.7 on the office
   computer, 11 of 11 on the final run, after six fixes found by the runs before it.
 
-  Left: per-machine keys and signed consent (5, 6), durable steps (7), re-placement from checkpoints (8), artefacts
-  between machines (9), patch-based acceptance away from the worker (3, in full).
+  Not built, on the research's own ranking: side effects done exactly once across a machine dropping (7: a
+  re-placed item starts again), artefacts between machines (9), patch-based acceptance away from the worker (3, in
+  full).
 - Phase 2, answers over the person's own data: built (2026-11-02). src/data/answers.ts and the data-answers plugin:
   - **`sql_query`**: one read-only SELECT. Each result is kept as a cell in the session's folder, where the agent
     cannot edit it.
@@ -274,8 +283,9 @@ scheduling and failure recovery.
   The three planted flaws and a real hard-coded token were confirmed, no decoy was, all four were fixed, and our own
   probes confirm them closed.
 
-  Left: variant analysis from security-fix commits, SAST triage, sanitizer-built containers, reproducers of other
-  findings as held-out checks.
+  Then variant analysis: `fix_variants` reads the repository's security-fix commits, takes the code each removed, and
+  lists the places in scope that still look like it (the same line, or the same call to a sink with other names),
+  each a candidate to prove; the lead runs it first. Not built: SAST triage, sanitizer-built containers.
 - Phase 5, the forecasting ledger: built, the forecasting plugin. Forecasters on several models, the aggregate in
   code, live questions only, Brier and log scores, calibration, and the extremizing factor refitted from resolved
   questions. Tests: test/forecasting.test.ts. Live (EVAL-FORECAST.md): three open questions, forecasters on Sonnet,
@@ -289,7 +299,8 @@ scheduling and failure recovery.
 
   Tests: test/recorder.test.ts. Live (EVAL-INVESTIGATION.md): planted logs, Haiku, 9 of 9, $0.02.
 
-  Left: the record shown in the desktop app, and signing exported bundles.
+  The desktop app shows the record beside a conversation (Agents > Run record): whether it verifies, its steps,
+  Export. Not built: signing exported bundles with a key of the server's (they verify on their own by their chain).
 - The governor gains `maxChildren` (8 a sub-agent). Still open from research/control.md: a cap on agents at once
   below the first level, kinds of work compiled to tool, path and network policy, and writes to the control plane
   through a shell.

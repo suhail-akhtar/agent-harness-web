@@ -104,6 +104,70 @@ export default {
       },
     });
 
+    // Variant analysis (phase 4): a flaw fixed once is often still there elsewhere. The person's own security-fix
+    // commits show what unsafe code looked like (the lines each fix removed); the code in scope is searched for the same
+    // line, or the same shape with other names, and each match is a candidate for a hunter to prove or dismiss.
+    api.registerTool({
+      name: 'fix_variants',
+      description: 'Variant analysis: reads this repository\'s security-fix commits (messages about security, injection, traversal, XSS, CVE, sanitizing, escaping), takes the code each fix removed, and lists the places in the mandate\'s scope that still look like it (the same line, or the same shape with other names). Each is a candidate to review and prove with confirm_finding, not a finding.',
+      parameters: { type: 'object', properties: { commits: { type: 'number', description: 'How many commits back to read (default 300)' } } },
+      kind: 'read', parallelSafe: true,
+      summarize: () => 'find variants of past security fixes',
+      async run(input, ctx) {
+        const md = await mandate(api, ctx.host);
+        if (!md.m) return { content: `Not run: ${md.why}.`, is_error: true };
+        const n = Math.min(2000, Math.max(1, Math.floor(Number(input.commits) || 300)));
+        const log = await ctx.host.exec(`git log -n ${n} -i -E --grep='secur|vulnerab|cve-|inject|travers|xss|csrf|sanitiz|escap|unsafe|exploit' --format='@@%h %s' -p --no-color -U0`, { timeoutMs: 60_000, signal: ctx.signal });
+        if (log.code !== 0) return { content: `Not a git repository here, or git failed: ${(log.stderr || log.stdout).slice(0, 300)}`, is_error: true };
+        // The removed lines of each fix, with the commit and file they came from.
+        const removed = [];
+        let commit = ''; let file = '';
+        for (const l of log.stdout.split('\n')) {
+          if (l.startsWith('@@') && !l.startsWith('@@ ')) { commit = l.slice(2).trim(); continue; }
+          if (l.startsWith('--- a/')) { file = l.slice(6); continue; }
+          if (l.startsWith('-') && !l.startsWith('---')) {
+            const code = l.slice(1).trim();
+            if (code.length >= 15 && !/^(\/\/|#|\*|\/\*)/.test(code) && /[(=]/.test(code)) removed.push({ commit, file, code });
+          }
+        }
+        if (!removed.length) return 'No security-fix commits with removed code were found in this repository\'s history.';
+        // Shapes: strings and numbers as placeholders, and (for the looser one) names that are not well-known sinks.
+        const SINKS = /^(exec|execSync|spawn|eval|Function|readFile|readFileSync|writeFile|join|resolve|prepare|query|all|run|innerHTML|outerHTML|write|redirect|send|render|load|loads|system|popen|open|unserialize|deserialize|parse|fromCharCode|setTimeout|createReadStream)$/;
+        const exact = (s) => s.replace(/(['"`])(?:\\.|(?!\1).)*\1/g, 'S').replace(/\b\d+\b/g, 'N').replace(/\s+/g, '');
+        const shape = (s) => exact(s).replace(/[A-Za-z_$][\w$]*/g, (w) => (SINKS.test(w) ? w : 'I'));
+        // The calls to a sink in a line, each with its arguments (balanced parentheses): what a variant shares with the
+        // fixed code, whatever surrounds it (a fix of a one-line function still matches a `return` of the same call).
+        const sinkCalls = (s) => {
+          const out = [];
+          for (const m of s.matchAll(/([A-Za-z_$][\w$.]*)\(/g)) {
+            if (!SINKS.test(m[1].split('.').at(-1))) continue;
+            let depth = 0; let end = -1;
+            for (let i = m.index + m[0].length - 1; i < s.length; i++) { if (s[i] === '(') depth++; else if (s[i] === ')' && --depth === 0) { end = i; break; } }
+            if (end > 0) out.push(shape(s.slice(m.index, end + 1)));
+          }
+          return out;
+        };
+        const wantExact = new Map(removed.map((r) => [exact(r.code), r]));
+        const wantShape = new Map(removed.flatMap((r) => sinkCalls(r.code).filter((c) => c.length >= 12).map((c) => [c, r])));
+        const files = await ctx.host.exec('git ls-files', { timeoutMs: 30_000, signal: ctx.signal });
+        const fs = await import('node:fs/promises');
+        const hits = [];
+        for (const f of files.stdout.split('\n').map((x) => x.trim()).filter(Boolean)) {
+          if (!inScope(md.m, f) || !/\.(m?[jt]sx?|cjs|py|rb|go|php|java|cs|rs)$/.test(f)) continue;
+          const text = await fs.readFile(await api.workspacePath(ctx.host, f), 'utf8').catch(() => '');
+          text.split('\n').forEach((line, i) => {
+            const t = line.trim();
+            if (t.length < 15) return;
+            const e = wantExact.get(exact(t));
+            const s = e ? undefined : sinkCalls(t).map((c) => wantShape.get(c)).find(Boolean);
+            if (e || s) hits.push({ file: f, line: i + 1, code: t.slice(0, 200), like: (e ?? s), how: e ? 'the same line' : 'the same shape' });
+          });
+        }
+        if (!hits.length) return `Read ${removed.length} line(s) removed by security fixes; nothing in scope looks like them now.`;
+        return [`${hits.length} candidate(s) in scope that look like code a security fix removed (review each; prove it with confirm_finding, or dismiss it):`, ...hits.slice(0, 60).map((h) => `- ${h.file}:${h.line} (${h.how}): ${h.code}\n  like ${h.like.file} before ${h.like.commit}: ${h.like.code.slice(0, 160)}`), ...(hits.length > 60 ? [`(${hits.length - 60} more)`] : [])].join('\n');
+      },
+    });
+
     api.registerTool({
       name: 'findings',
       description: 'The findings the harness has run reproducers for in this workspace: confirmed, unconfirmed, fixed.',

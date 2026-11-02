@@ -9,6 +9,7 @@
 import { useData, type BuiltinPlugin } from '../../state/data';
 import { navigate, openPluginPanel, useApp } from '../../state/app';
 import { AgentsPanel } from './Panel';
+import { RecordPanel } from './Record';
 import { AgentsPage, watchLinkedNews } from './Page';
 import { ChapterDivider, LinkCard, ProposalCard } from './Cards';
 import { AgentsHome } from './Home';
@@ -20,7 +21,7 @@ export const coreAgents: BuiltinPlugin = {
   ...meta,
   ui,
   guide,
-  components: { AgentsHome, AgentsPanel, AgentsPage, YourAgents, ProposalCard, LinkCard, ChapterDivider },
+  components: { AgentsHome, AgentsPanel, RecordPanel, AgentsPage, YourAgents, ProposalCard, LinkCard, ChapterDivider },
   handlers: {
     panel: () => {
       const r = useApp.getState().route;
@@ -30,6 +31,14 @@ export const coreAgents: BuiltinPlugin = {
       else openPluginPanel('core.agents:agents', { id: r.params.id });
     },
     closeSplit: () => useApp.setState({ split: null }),
+    // The run record beside the conversation: whether it verifies, and its steps.
+    record: () => {
+      const r = useApp.getState().route;
+      if (r.view !== 'core.chat:session' || !r.params?.id) return;
+      const p = useApp.getState().panel;
+      if (p?.kind === 'plugin' && p.panel === 'core.agents:record') useApp.setState({ panel: null });
+      else openPluginPanel('core.agents:record', { id: r.params.id });
+    },
     // Prefilled from the command's arguments (an agent's proposal): the person checks it and saves.
     newAgent: (args) => {
       const a = (args ?? {}) as Record<string, unknown>;

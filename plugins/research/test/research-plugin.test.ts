@@ -12,7 +12,7 @@ test('research: loads whole; check_citations and sources answer clearly', async 
   const kit = await loadPlugin(dir);
   try {
     assert.equal(kit.error, undefined);
-    assert.deepEqual(kit.adds.tools.sort(), ['check_citations', 'sources', 'verify_claims']);
+    assert.deepEqual(kit.adds.tools.sort(), ['check_citations', 'crawl', 'sources', 'verify_claims']);
     assert.deepEqual(kit.adds.agents.sort(), ['counter-evidence', 'fact-checker', 'research-lead', 'research-writer', 'researcher']);
     assert.deepEqual(kit.adds.workflows, ['deep-research']);
     assert.deepEqual(kit.adds.gates.sort(), ['citations', 'claims']);

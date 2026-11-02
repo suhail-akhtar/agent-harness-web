@@ -16,7 +16,7 @@ export const ui = {
       { id: 'agents', title: 'Agents', description: 'Everything working across conversations: sub-agents, background tasks, linked sessions under the one that started them, proposals, Stop.', kind: 'native', component: 'AgentsPage' },
       { id: 'mine', title: 'Your agents', icon: 'bot', description: 'Your own agents (role, instructions, model, tools, MCP servers, skills, autonomy, limits): make, generate, import, chat with them.', kind: 'native', component: 'YourAgents' },
     ],
-    panels: [{ id: 'agents', title: 'Agents', icon: 'bot', kind: 'native', component: 'AgentsPanel', where: 'session' }],
+    panels: [{ id: 'agents', title: 'Agents', icon: 'bot', kind: 'native', component: 'AgentsPanel', where: 'session' }, { id: 'record', title: 'Run record', icon: 'shield', kind: 'native', component: 'RecordPanel', where: 'session' }],
     renderers: [
       { id: 'proposal', for: { event: 'proposal' }, kind: 'native', component: 'ProposalCard' },
       { id: 'link', for: { event: 'link' }, kind: 'native', component: 'LinkCard' },
@@ -26,6 +26,7 @@ export const ui = {
       { id: 'page', title: 'Show every agent at work', category: 'Agents', icon: 'bot', action: { type: 'open-view', view: 'agents' }, agent: { description: 'Open the Agents page: everything at work, with Stop.' } },
       { id: 'panel', title: 'Show this conversation\'s agents', category: 'Agents', icon: 'bot', keybinding: 'Mod+Shift+E', handler: 'panel' },
       { id: 'close-split', title: 'Close the conversation beside', category: 'View', icon: 'x', handler: 'closeSplit' },
+      { id: 'record', title: 'Show the run record of this conversation', category: 'Agents', icon: 'shield', handler: 'record' },
       {
         id: 'new', title: 'New agent…', category: 'Agents', icon: 'plus', handler: 'newAgent',
         agent: {

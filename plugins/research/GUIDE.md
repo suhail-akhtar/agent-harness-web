@@ -21,7 +21,8 @@ a question whose answer lives on the web or in documents, wants sources, or asks
   the claims.
 - **Tools**: `web_search` and `web_fetch` (the session's), `sources` (the pages read so far: list,
   or read one again without fetching), `check_citations` (run it before you hand over a report),
-  `verify_claims` (the claim ledger, written to research/claims.md; it calls models, so once a report is done).
+  `verify_claims` (the claim ledger, written to research/claims.md; it calls models, so once a report is done),
+  `crawl` (follows a page's links to the sources it cites, archiving each page with its hash).
 - **Agents**: research-lead, researcher, research-writer, counter-evidence (looks for evidence against the
   conclusions), fact-checker.
 - **Skills**: research-method, cite-sources. **Gates**: `citations`, `claims` (only where a workflow names it).

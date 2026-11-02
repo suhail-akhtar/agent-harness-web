@@ -180,6 +180,9 @@ export class HarnessClient {
     abort: (id: string) => this.post<{ ok: boolean }>(`/api/sessions/${id}/abort`),
     /** The swarm's kill switch: every agent of the run stops; the conversation's own agent goes on. */
     stopAgents: (id: string) => this.post<{ stopped: number }>(`/api/sessions/${id}/stop_agents`),
+    /** The run recorder: the record's check and its replay (the steps as they happened), or the bundle itself. */
+    record: (id: string) => this.get<{ verify: { ok: boolean; lines: number; problems: string[]; head?: string }; steps: { n: number; at: string; who: string; what: string }[] }>(`/api/sessions/${id}/record?view=replay`),
+    recordBundle: (id: string) => this.get<Record<string, unknown>>(`/api/sessions/${id}/record`),
     /** `answer`: text, or for a question with a form, the filled-in object. */
     respond: (id: string, b: { requestId: string; decision: string; feedback?: string; answer?: string | Record<string, unknown> }) => this.post<{ ok: boolean }>(`/api/sessions/${id}/respond`, b),
     archive: (id: string) => this.post<SessionMeta>(`/api/sessions/${id}/archive`),

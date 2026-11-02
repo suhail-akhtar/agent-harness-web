@@ -107,3 +107,21 @@ test('the report holds to the ledger: an unconfirmed finding called confirmed, a
     for (const a of ['security-lead', 'security-hunter', 'security-reporter']) assert.ok(t.h.registry.agents.has(a), a);
   } finally { await t.h.close(); }
 });
+
+test('variant analysis: a flaw fixed once, still in another file under other names, is found from the fix\'s own commit', async () => {
+  const t = await setup();
+  try {
+    await t.mandate({ scope: ['src/**'], authorizedBy: 'Sam', from: today, until: today });
+    const { execFileSync } = await import('node:child_process');
+    const git = (...a: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@x', ...a], { cwd: t.dir, stdio: 'pipe' });
+    await fs.writeFile(path.join(t.dir, 'src', 'download.mjs'), "import fs from 'node:fs';\nimport path from 'node:path';\nexport function download(base, file) {\n  return fs.readFileSync(path.join(base, 'static', file), 'utf8');\n}\n");
+    git('init', '-q'); git('add', '-A'); git('commit', '-qm', 'the app');
+    // The person fixed the traversal in files.mjs (only there).
+    await fs.copyFile(path.join(t.dir, 'src', 'safe.mjs'), path.join(t.dir, 'src', 'files.mjs'));
+    git('commit', '-qam', 'Fix path traversal in serve');
+    const r = await t.tool('fix_variants', {});
+    assert.equal(r.is_error ?? false, false, r.content);
+    assert.match(r.content, /src\/download\.mjs:4 \(the same shape\): return fs\.readFileSync\(path\.join\(base, 'static', file\), 'utf8'\);\n {2}like src\/files\.mjs before [0-9a-f]+ Fix path traversal in serve/);
+    assert.doesNotMatch(r.content, /src\/files\.mjs:\d/, 'the fixed file itself is not a candidate');
+  } finally { await t.h.close(); }
+});

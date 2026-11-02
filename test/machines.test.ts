@@ -211,7 +211,7 @@ test('at stakes, checks that ran only on the computer that did the work do not a
   assert.equal(finalVerdict(pass, results, { remote: true }).verdict, 'pass', 'at normal stakes: as before');
 });
 
-test('Windows: a stopped command started through timeout, exec or a nested shell is killed with all it started (seen live: a build ran on after Stop all)', { skip: process.platform !== 'win32' && 'Windows only', todo: 'a known gap: on a loaded machine about 1 stop in 4 still misses a process (MSYS cannot always read a busy process environment, so its tag is not seen); a Windows Job Object is the fix' }, async () => {
+test('Windows: a stopped command started through timeout, exec or a nested shell is killed with all it started (seen live: a build ran on after Stop all)', { skip: process.platform !== 'win32' && 'Windows only' }, async () => {
   for (const command of ['timeout 550 bash b.sh', 'timeout 550 bash b.sh > out.txt 2>&1', 'bash -c "exec bash b.sh"', 'bash b.sh']) {
     const dir = await tempDir();
     await fs.writeFile(path.join(dir, 'b.sh'), 'echo started > started.txt\nsleep 8\necho late > late.txt\n');
@@ -234,4 +234,60 @@ test('"these computers" with no items is the same brief on each of them (seen li
   const r = await tool.run({ description: 'count', type: 'general', prompt: 'Count the TODO lines in todo.txt.', machines: ['laptop', 'office'] }, { runSubagent: async (a: { machine?: string; prompt: string }) => { seen.push(a); return `counted on ${a.machine}`; }, signal: new AbortController().signal, services: {} } as never);
   assert.deepEqual(seen.map((a) => a.machine), ['laptop', 'office']);
   assert.match(String(r.content), /\| 1 \| laptop \| on laptop \| done \|[\s\S]*\| 2 \| office \| on office \| done \|/);
+});
+
+test('each machine\'s own key: pinned on its first poll, another key refused; a result must be signed with it (an unsigned or forged one fails its job); its policy shown as signed', async () => {
+  const { machineKey, policyPayload, resultPayload, sign } = await import('../src/companion/sign.ts');
+  const t = await setupServer();
+  try {
+    const made = (await t.call(OPERATOR, 'POST', '/api/companions', { name: 'keyed' })).body as { id: string; token: string };
+    const home = await tempDir();
+    const fsSync = await import('node:fs');
+    const k1 = machineKey(path.join(home, 'a.key'), fsSync, path);
+    const k2 = machineKey(path.join(home, 'b.key'), fsSync, path);
+    assert.deepEqual(machineKey(path.join(home, 'a.key'), fsSync, path), k1, 'the same key on the next start');
+    const policy = { swarm: true, kinds: ['read'], maxJobs: 2, sandboxRequired: true };
+    const poll = (key: { privateKey: string; publicKey: string } | undefined, wait = 0) => fetch(`${t.base}/api/companion/poll`, { method: 'POST', headers: { authorization: `Bearer ${made.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ info: { platform: 'linux', shell: 'bash', root: '/home/u', policy }, ...(key ? { publicKey: key.publicKey, policySignature: sign(key.privateKey, policyPayload(policy)) } : {}), wait }) });
+    // The first poll pins its key (and comes back at once, nothing to do).
+    const first = poll(k1);
+    await new Promise((r) => setTimeout(r, 300));
+    const job = t.harness.companions.host(made.id, 's1').exec('echo hi', { timeoutMs: 30_000 }).then(() => undefined, (e: Error) => e);
+    const got = await (await first).json() as { id: string };
+    assert.equal(t.harness.companions.publicKeyOf(made.id)?.includes('BEGIN PUBLIC KEY'), true);
+    const listed = (await t.call(OPERATOR, 'GET', '/api/companions')).body as { id: string; keyed: boolean; info: { policySigned?: boolean } }[];
+    assert.deepEqual([listed.find((c) => c.id === made.id)!.keyed, listed.find((c) => c.id === made.id)!.info.policySigned], [true, true]);
+    // Another key, or none: refused, whatever the token.
+    assert.equal((await poll(k2)).status, 401);
+    assert.equal((await poll(undefined)).status, 401);
+    // An unsigned result is refused and fails its job; a forged one too.
+    const result = (body: Record<string, unknown>) => fetch(`${t.base}/api/companion/result`, { method: 'POST', headers: { authorization: `Bearer ${made.token}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const value = { stdout: 'hi\n', stderr: '', code: 0, timedOut: false };
+    assert.equal((await result({ jobId: got.id, ok: true, value: { ...value, stdout: 'forged\n' }, signature: sign(k2.privateKey, resultPayload(got.id, true, value)) })).status, 403);
+    assert.match(String((await job)?.message), /not signed with the key of this machine/);
+    // A signed result is taken.
+    const p2 = poll(k1);
+    await new Promise((r) => setTimeout(r, 300));
+    const job2 = t.harness.companions.host(made.id, 's1').exec('echo hi', { timeoutMs: 30_000 });
+    const got2 = await (await p2).json() as { id: string };
+    assert.equal((await result({ jobId: got2.id, ok: true, value, signature: sign(k1.privateKey, resultPayload(got2.id, true, value)) })).status, 200);
+    assert.equal((await job2).stdout, 'hi\n');
+  } finally { await t.close(); }
+});
+
+test('re-placed: an item whose computer is offline (or drops mid-way) goes to the next computer of the fan-out, once each, and says so', async () => {
+  const { makeAgentTool, BUILTIN_AGENTS } = await import('../src/agents/agents.ts');
+  const tool = makeAgentTool(BUILTIN_AGENTS, { machines: ['laptop', 'office', 'server'] });
+  const seen: string[] = [];
+  const run = async (a: { machine?: string; prompt: string }) => {
+    seen.push(`${a.prompt.slice(-6)}@${a.machine}`);
+    if (a.machine === 'laptop') throw new Error('The computer "laptop" is offline: its companion is not running. Work elsewhere, or ask the person to start it.');
+    if (a.machine === 'office' && /item-2/.test(a.prompt)) return 'Could not finish: the companion did not answer in time';
+    return `did ${a.prompt.slice(-6)} on ${a.machine}`;
+  };
+  const r = String((await tool.run({ description: 'jobs', type: 'general', prompt: 'Do {{item}}', items: ['item-1', 'item-2', 'item-3'], machines: ['laptop', 'office', 'server'] }, { runSubagent: run, signal: new AbortController().signal, services: {} } as never)).content);
+  // item-1: laptop offline -> office. item-2: office drops -> server. item-3: server, as placed.
+  assert.deepEqual(seen.sort(), ['item-1@laptop', 'item-1@office', 'item-2@office', 'item-2@server', 'item-3@server'].sort());
+  assert.match(r, /\| 1 \| item-1 \| on office \| done \|[\s\S]*\| 2 \| item-2 \| on server \| done \|[\s\S]*\| 3 \| item-3 \| on server \| done \|/);
+  assert.match(r, /Re-placed from laptop to office: it was offline or dropped/);
+  assert.match(r, /Re-placed from office to server/);
 });

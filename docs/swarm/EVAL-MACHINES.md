@@ -40,8 +40,9 @@ Each run up to the final one failed a check. Every failure was in the harness or
    The fix: every command carries a tag in its environment, and a stop finds every process with the tag through
    MSYS's /proc, sweeping three times.
 
-   It is not complete. On a loaded machine about 1 stop in 4 still misses a process, because MSYS cannot always read
-   a busy process's environment. That test is marked as a known gap (todo); a Windows Job Object is the real fix.
+   That alone was not complete: on a loaded machine about 1 stop in 4 still missed a process, because MSYS cannot
+   always read a busy process's environment. Since then, each command runs in a Windows Job Object of its own and a
+   stop terminates the job (src/runtime/winjob.ts); the test passes, 3 of 3 in a row.
 4. **The agent on the laptop looked in the wrong folder.** The lead wrote its brief from its own folder
    ("/workspace") and the laptop agent found nothing. A placed agent is now told which computer it is on and its
    folder there.

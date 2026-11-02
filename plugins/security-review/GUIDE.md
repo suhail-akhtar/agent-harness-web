@@ -15,5 +15,5 @@ person asks to check their code for vulnerabilities, or to fix one.
   and keeps the run in its own ledger. The security-reporter writes `security/findings.md`, and the
   `findings-confirmed` gate holds it to the ledger.
 - **A fix**: `check_fix` runs the finding's reproducer again (it must no longer fire) and the tests (they must pass).
-- **Tools**: `confirm_finding`, `check_fix`, `findings`. **Agents**: security-lead, security-hunter,
+- **Tools**: `fix_variants` (places that still look like code a past security fix removed), `confirm_finding`, `check_fix`, `findings`. **Agents**: security-lead, security-hunter,
   security-reporter. **Gate**: `findings-confirmed`.

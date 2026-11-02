@@ -16,7 +16,17 @@
   - **Live**: 11 of 11 with two real companions.
 - **Fixed on Windows**: a stopped command that ran through `timeout`, `exec` or a nested shell (Git Bash) kept running
   (seen live: a build finished after Stop all). Every command now carries a tag, and a stop finds and kills all it
-  started. On a loaded machine about 1 stop in 4 still misses a process (a known gap; a Job Object is the fix).
+  started, and each command runs in a Windows Job Object of its own: a stop terminates the job, everything it
+  started included.
+- **Each companion has its own key**: made on the machine, pinned by the server on first contact. Results must be
+  signed with it, and so is the policy the machine reports. A stolen token alone cannot forge a result or pass for
+  the machine.
+- **Re-placement**: a fan-out item whose computer is offline or drops goes to the next computer of the fan-out.
+- **Security review: variant analysis** (`fix_variants`): the places that still look like code a past security fix
+  removed.
+- **Research: a crawl frontier** (`crawl`): links followed to primary sources, robots.txt honoured, rate-limited,
+  each page archived with its SHA-256.
+- **Desktop: the run record beside a conversation** (Agents > Run record): whether it verifies, its steps, Export.
 - **Answers over the person's own data** (phase 2; live in docs/swarm/EVAL-DATA-ANSWERS.md): the data-answers
   plugin.
   - **What it checks**: read-only SQL, each result kept as a cell the agent cannot edit, with the database's own
