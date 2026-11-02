@@ -1,0 +1,174 @@
+{
+  "date": "2026-11-02T16:53:42.465Z",
+  "models": [
+    "claude-sonnet-5-5",
+    "claude-haiku-5-5",
+    "grok-4.7"
+  ],
+  "checks": [
+    {
+      "what": "kept in the ledger with its criteria and a resolution date after today",
+      "ok": true,
+      "detail": "2026-12-17"
+    },
+    {
+      "what": "a probability from each forecaster (Sonnet, Haiku, Grok 4.7)",
+      "ok": true,
+      "detail": "claude-sonnet-5-5, claude-haiku-5-5, grok-4.7"
+    },
+    {
+      "what": "the aggregate is what the code computes from them",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "what": "each forecaster started from a base rate",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "what": "kept in the ledger with its criteria and a resolution date after today",
+      "ok": true,
+      "detail": "2026-12-09"
+    },
+    {
+      "what": "a probability from each forecaster (Sonnet, Haiku, Grok 4.7)",
+      "ok": true,
+      "detail": "claude-sonnet-5-5, claude-haiku-5-5, grok-4.7"
+    },
+    {
+      "what": "the aggregate is what the code computes from them",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "what": "each forecaster started from a base rate",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "what": "kept in the ledger with its criteria and a resolution date after today",
+      "ok": true,
+      "detail": "2027-01-01"
+    },
+    {
+      "what": "a probability from each forecaster (Sonnet, Haiku, Grok 4.7)",
+      "ok": true,
+      "detail": "claude-sonnet-5-5, claude-haiku-5-5, grok-4.7"
+    },
+    {
+      "what": "the aggregate is what the code computes from them",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "what": "each forecaster started from a base rate",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "what": "a question already decided is not forecast",
+      "ok": true,
+      "detail": ""
+    }
+  ],
+  "cost": 1.1167,
+  "ledger": [
+    {
+      "id": "Q1",
+      "question": "Will the Bank of England reduce Bank Rate at its 17 December 2026 MPC decision (i.e., the Bank Rate announced on 17 December 2026 is lower than the Bank Rate in force before that meeting)?",
+      "resolveBy": "2026-12-17",
+      "criteria": "YES if the Bank of England's official announcement of its Monetary Policy Committee decision on 17 December 2026 (published on bankofengland.co.uk, scheduled 12:00 GMT) sets Bank Rate below the rate in force before that meeting. NO if Bank Rate is held or raised. Source: Bank of England Monetary Policy Summary for December 2026 at bankofengland.co.uk/monetary-policy-summary-and-minutes.",
+      "createdAt": "2026-11-02T16:47:22.393Z",
+      "forecasts": [
+        {
+          "model": "claude-sonnet-5-5",
+          "p": 0.01,
+          "at": "2026-11-02T16:45:39.130Z",
+          "cost": 0.027799400000000002,
+          "rationale": "{\"probability\": 0.01, \"base_rate\": 0.25, \"rationale\": \"Markets on 2 Nov 2026 fully price a 25bp BoE hike in November and more hikes ahead amid an energy-driven inflation rebound, so a December cut is a tail event.\"}"
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "p": 0.03,
+          "at": "2026-11-02T16:45:35.475Z",
+          "cost": 0.002657965,
+          "rationale": "{\"probability\": 0.03, \"base_rate\": 0.15, \"rationale\": \"Bank Rate is 3.75% and markets and most economists expected a hike to 4% on 5 November 2026 amid energy-driven inflation (CPI 3.5% in September), so a December cut would require a rapid reversal, well below the ~15% base rate of cuts per meeting.\"}"
+        },
+        {
+          "model": "grok-4.7",
+          "p": 0.045,
+          "at": "2026-11-02T16:47:22.391Z",
+          "cost": 0.1175,
+          "rationale": "{\"probability\": 0.045, \"base_rate\": 0.12, \"rationale\": \"Unconditionally about 12% of BoE meetings since 1997 cut Bank Rate, but with CPI at 3.5% and rising, a hawkish 6-3 hold in September, a fully priced November hike, and year-end SONIA at 4.00%, a cut on 17 December is only a tail risk.\"}"
+        }
+      ],
+      "aggregate": 0.02,
+      "extremize": 1.732
+    },
+    {
+      "id": "Q2",
+      "question": "Will the FOMC lower the federal funds target range at its 8–9 December 2026 meeting?",
+      "resolveBy": "2026-12-09",
+      "criteria": "YES if the FOMC statement issued on 9 December 2026 (federalreserve.gov press release, monetary20261209a) lowers the federal funds target range below its pre-meeting level of 3.75%–4.00%. NO if the range is held or raised. Context as of 2 Nov 2026: the Fed held at 3.75–4.00% on 28 Oct 2026 (10-2 vote, Hammack and Cook dissenting in favour of a hike); inflation is above target, WTI crude is about $100/bbl, and CME FedWatch implied about a 78% chance of a December hike (as of 28 Oct 2026).",
+      "createdAt": "2026-11-02T16:50:13.916Z",
+      "forecasts": [
+        {
+          "model": "claude-sonnet-5-5",
+          "p": 0.02,
+          "at": "2026-11-02T16:48:08.168Z",
+          "cost": 0.0181572,
+          "rationale": "{\"probability\": 0.02, \"base_rate\": 0.03, \"rationale\": \"The Fed hiked in September, held in October with two dissents for a hike, inflation is elevated and oil is near $100, and markets price a ~78% chance of a December hike, so a cut is very unlikely.\"}"
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "p": 0.02,
+          "at": "2026-11-02T16:48:16.208Z",
+          "cost": 0.00155391,
+          "rationale": "{\"probability\": 0.02, \"base_rate\": 0.03, \"rationale\": \"A scheduled FOMC cut when markets price about 75–85% odds of a December hike is historically very rare outside crisis conditions, and no such shock is visible as of 2 Nov 2026, so I put it at about 2%.\"}"
+        },
+        {
+          "model": "grok-4.7",
+          "p": 0.02,
+          "at": "2026-11-02T16:50:13.914Z",
+          "cost": 0.13823000000000002,
+          "rationale": "{\"probability\": 0.02, \"base_rate\": 0.035, \"rationale\": \"In a live tightening phase with inflation still elevated, first cuts almost never arrive five weeks after a hawkish hold, and late-October futures price a December cut at 0% against a ~70–85% hike.\"}"
+        }
+      ],
+      "aggregate": 0.02,
+      "extremize": 1.732
+    },
+    {
+      "id": "Q3",
+      "question": "Will Bitcoin (BTC/USD) close above 150,000 US dollars on 31 December 2026, as a daily close on CoinMarketCap?",
+      "resolveBy": "2027-01-01",
+      "criteria": "YES if the BTC/USD daily closing price for 31 December 2026 on CoinMarketCap (coinmarketcap.com/currencies/bitcoin/historical-data) is strictly above 150,000 USD. NO otherwise. Context as of 2 Nov 2026: BTC trades about 77,750–78,100 USD (CoinDesk/Fortune/OKX, 2 Nov 2026), roughly 48% below the threshold; it fell over 4% on 29 Oct after a reported $6.3B Binance hack; US spot ETFs saw net outflows of about $203M in the prior week.",
+      "createdAt": "2026-11-02T16:53:32.078Z",
+      "forecasts": [
+        {
+          "model": "claude-sonnet-5-5",
+          "p": 0.01,
+          "at": "2026-11-02T16:50:33.860Z",
+          "cost": 0.0073033,
+          "rationale": "{\"probability\": 0.01, \"base_rate\": 0.03, \"rationale\": \"BTC at about 78k needs a roughly 92% gain in 2 months, a move of about 3 standard deviations, and recent news is bearish.\"}"
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "p": 0.005,
+          "at": "2026-11-02T16:50:45.026Z",
+          "cost": 0.001174605,
+          "rationale": "{\"probability\": 0.005, \"base_rate\": 0.03, \"rationale\": \"BTC at about $78k needs a roughly 93% gain in 59 days, which lognormal vol (~50%) puts near z≈3.2 and historical two-month doublings are rare in a weak, outflow-driven regime, so only a small fat-tail allowance is kept.\"}"
+        },
+        {
+          "model": "grok-4.7",
+          "p": 0.011,
+          "at": "2026-11-02T16:53:32.077Z",
+          "cost": 0.200998,
+          "rationale": "{\"probability\": 0.011, \"base_rate\": 0.043, \"rationale\": \"Since 2015 only about 4.3% of two-month windows gained ~94%, and none since 2021; with BTC at ~$77.4k, ~45% vol, ETF outflows, and Sept prediction markets already pricing a $150k touch at 3% with more time left, a 31 Dec 2026 CMC close above $150k is a remote fat-tail outcome.\"}"
+        }
+      ],
+      "aggregate": 0.02,
+      "extremize": 1.732
+    }
+  ]
+}

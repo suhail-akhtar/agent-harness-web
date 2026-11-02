@@ -116,7 +116,7 @@ export type HarnessEvent =
   | { kind: 'plan_proposed'; requestId: string; plan: string }
   | { kind: 'approval_request'; requestId: string; runId: string; node: string; title: string; message: string; files: { path: string; content: string }[] }
   | { kind: 'workflow'; phase: 'started' | 'node_started' | 'node_finished' | 'finished'; node?: string; run: WorkflowRunView }
-  | { kind: 'request_resolved'; requestId: string; decision: string }
+  | { kind: 'request_resolved'; requestId: string; decision: string; answer?: string }
   | { kind: 'usage'; model: string; usage: Usage; cost: number; contextTokens: number; contextWindow: number; agent?: string }
   | { kind: 'todos'; todos: Todo[] }
   | { kind: 'mode'; mode: Mode }

@@ -169,9 +169,9 @@ test('the charter\'s spend for the run\'s agents: once reached, no agent starts 
 
 test('the charter: the operator\'s defaults, the person can only tighten it, and nested agents are granted with their parent and depth', async () => {
   const base = defaultSettings();
-  assert.deepEqual(base.swarm, { maxAgents: 16, ratePerMinute: 30, maxUsd: 0, maxMinutes: 0 });
+  assert.deepEqual(base.swarm, { maxAgents: 16, ratePerMinute: 30, maxUsd: 0, maxMinutes: 0, maxChildren: 8 });
   const mine = applyUserSettings(base, cleanUserSettings({ swarm: { maxAgents: 500, ratePerMinute: 5, maxUsd: 2 } }));
-  assert.deepEqual(mine.swarm, { maxAgents: 16, ratePerMinute: 5, maxUsd: 2, maxMinutes: 0 }, 'never above the operator\'s');
+  assert.deepEqual(mine.swarm, { maxAgents: 16, ratePerMinute: 5, maxUsd: 2, maxMinutes: 0, maxChildren: 8 }, 'never above the operator\'s');
   const c = await conv();
   try {
     const mk = (b: Record<string, unknown>) => c.t.call(OPERATOR, 'POST', '/api/me/agents', { model: 'deepseek-flash', tools: ['read'], ...b });
@@ -183,6 +183,16 @@ test('the charter: the operator\'s defaults, the person can only tighten it, and
     await c.turn('[[lead]] Go.');
     const starts = c.swarm().filter((e) => e.phase === 'start');
     assert.deepEqual(starts.map((e) => [e.depth, e.parent === 'main' ? 'main' : e.parent === starts[0]!.agent ? 'the lead' : e.parent]), [[1, 'main'], [2, 'the lead']]);
+
+    // One sub-agent cannot spend the run: of ten helpers the team's lead asks for, eight start (maxChildren).
+    c.t.ds.scripts.lead = [{ calls: [agentCall({ type: 'crew', prompt: '[[n3]] Analyse all of it.' })] }, { text: 'Done.' }];
+    c.t.ds.scripts.n3 = [{ calls: [agentCall({ type: 'helper', prompt: '[[h]] Analyse {{item}}.', items: Array.from({ length: 10 }, (_, i) => `part ${i + 1}`) })] }, { text: 'Eight parts done.' }];
+    c.t.ds.scripts.h = Array.from({ length: 8 }, () => ({ text: 'Done.' }));
+    await c.turn('[[lead]] Go again.');
+    const crew = c.swarm().filter((e) => e.phase === 'start' && e.parent === 'main').at(-1)!.agent;
+    assert.equal(c.swarm().filter((e) => e.phase === 'start' && e.parent === crew).length, 8);
+    const refused = c.swarm().filter((e) => e.phase === 'refused' && e.parent === crew);
+    assert.deepEqual([refused.length, /has started 8 agents, the most one agent may \(the charter's maxChildren\)/.test(refused[0]?.reason ?? '')], [2, true]);
   } finally { await c.t.close(); }
 });
 

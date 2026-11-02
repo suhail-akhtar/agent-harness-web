@@ -1,0 +1,38 @@
+{
+  "name": "security-review",
+  "version": "1.0.0",
+  "description": "Security review of your own code where every finding is proven: hunters bring a reproducer the harness runs, only what fires counts, fixes are checked against it, all inside the mandate you write.",
+  "icon": "shield",
+  "category": "Developer tools",
+  "tags": [
+    "security",
+    "review",
+    "vulnerabilities",
+    "oracle"
+  ],
+  "publisher": {
+    "name": "Suhail Akhtar",
+    "url": "https://github.com/suhail-akhtar/agent-harness-web"
+  },
+  "license": "MIT",
+  "links": {
+    "repository": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/plugins/security-review",
+    "docs": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/docs",
+    "support": "https://github.com/suhail-akhtar/agent-harness-web/issues"
+  },
+  "engines": {
+    "harness": ">=0.1.0"
+  },
+  "changelog": "CHANGELOG.md",
+  "main": "index.mjs",
+  "agents": "agents",
+  "workflows": "workflows",
+  "ui": {
+    "apiVersion": 1,
+    "guide": "GUIDE.md",
+    "displayName": "Security review",
+    "icon": "shield",
+    "category": "Engineering",
+    "trust": "declarative"
+  }
+}

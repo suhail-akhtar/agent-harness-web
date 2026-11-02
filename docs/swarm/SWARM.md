@@ -212,10 +212,84 @@ scheduling and failure recovery.
   On the final code, 180 of 180 judgements were right and a planted "reply supported" was refused by all nine (the
   earlier runs, and the harness bugs they found, are in the report). The final run cost $0.60.
 
-  Left of phase 3:
-  - a crawl frontier and archiving with hashes;
-  - two origins required for key claims at high stakes (the ledger counts sites; the gate does not yet require two);
-  - a counter-evidence searcher;
-  - the reader/actor split for page readers.
-- Next, in this order: the rest of 3, 7 (across the person's computers), 2 (data answers), 4 (security review of
-  one's own code), 5 (forecasting), 6 (investigations).
+  Then:
+  - **Two sites at high stakes**: `verify_claims` takes `min_sites` (2 for high stakes).
+  - **A counter-evidence searcher**: the counter-evidence agent runs after the ledger, and the fact-checker reads
+    what it found.
+  - **The ledger at the end**: deep-research ends through a final claims gate. A run whose fact-checker approved
+    despite two unsupported claims had ended "Report ready".
+  - **The reader/actor split**: the research agents have no shell; page readers hold read tools, search, fetch and
+    their notes.
+
+  Live end to end (EVAL-DEEP-RESEARCH.md), on Haiku with Grok 4.7 judging: 9 of 11 checks, $2.36, 24.7 minutes. It
+  found the 2026 Digital Omnibus delay and cited it. The fixes it led to: the final gate, 100 claims a run, sentence
+  splitting, and quotes across two pages.
+
+  Left: a crawl frontier with archived, hashed pages.
+- Phase 7, across the person's computers: built (2026-11-02), recommendations 1 to 4 and 10 of
+  research/multi_machine.md.
+  - **Stop reaches the machine**: a cancel job and a real abort signal in the companion's tools; jobs a restarted
+    server no longer knows are stopped.
+  - **A lease the companion enforces itself**: 120 s, at least 40, on monotonic time. With no word from the server it
+    stops everything and takes no work.
+  - **The machine's own policy**: kept outside the folder, unseen by the sandbox, set with `harness-companion
+    policy`, and never widened by the server. It says whether swarm work is allowed, which kinds of tools, the
+    capacity, and whether a sandbox is required beyond reading. With no file: swarm agents may only read.
+  - **Placement**: the agent tool's `machine` and `machines`. A placed agent is told where it is.
+  - **Acceptance at stakes**: checks that ran only on the worker's machine leave its work UNVERIFIED.
+  - **An audit log on the machine.**
+  - **On Windows**: a stop now kills what a command started through `timeout`, `exec` or a nested shell (Git Bash),
+    which before ran on. On a loaded machine about 1 stop in 4 still misses a process; a Job Object is the fix.
+
+  Tests: test/machines.test.ts, test/companion-bundle.test.ts (the real bundle: its policy command, and the lease
+  with the server gone). Live (EVAL-MACHINES.md): two real companions, Haiku leading, Grok 4.7 on the office
+  computer, 11 of 11 on the final run, after six fixes found by the runs before it.
+
+  Left: per-machine keys and signed consent (5, 6), durable steps (7), re-placement from checkpoints (8), artefacts
+  between machines (9), patch-based acceptance away from the worker (3, in full).
+- Phase 2, answers over the person's own data: built (2026-11-02). src/data/answers.ts and the data-answers plugin:
+  - **`sql_query`**: one read-only SELECT. Each result is kept as a cell in the session's folder, where the agent
+    cannot edit it.
+  - **The database's own checks after every query**: join fan-out, repeated groups, a date window the data does not
+    cover.
+  - **Definitions**: a semantics file the person approves before agents query.
+  - **The provenance rule**: every number in the answer is from a cited cell, or marked derived.
+  - **Recomputation**: an agent of another family recomputes from the question and the definitions alone, and the
+    figures are compared in code.
+
+  Tests: test/data-answers.test.ts. Live (EVAL-DATA-ANSWERS.md): 10 questions over two databases with traps, on
+  Haiku and Sonnet, recomputed on Grok 4.7: 10 of 10 right, 33 of 33 checks, $0.51. The first run's three wrong
+  refusals came from the harness's own coverage check, now fixed.
+
+  Left: the gold set over the person's own databases (40 questions), and drafting semantics when an MCP server is
+  built from a database.
+- Phase 4, security review of the person's own code: built (2026-11-02), the security-review plugin.
+  - **The oracle**: a finding counts only when its reproducer, run by the harness, fires. Every run is kept in the
+    harness's own ledger, and a confirmed finding stays confirmed.
+  - **Fixes**: a fix counts when the reproducer no longer fires and the tests pass.
+  - **The report**: held to the ledger, and covering every file of the plan.
+  - **The mandate**: scope, who authorized it, dates; agents cannot write it.
+
+  Tests: test/security-review.test.ts. Live (EVAL-SECURITY.md): review on Haiku, fixes on Sonnet, 12 of 12, $0.12.
+  The three planted flaws and a real hard-coded token were confirmed, no decoy was, all four were fixed, and our own
+  probes confirm them closed.
+
+  Left: variant analysis from security-fix commits, SAST triage, sanitizer-built containers, reproducers of other
+  findings as held-out checks.
+- Phase 5, the forecasting ledger: built, the forecasting plugin. Forecasters on several models, the aggregate in
+  code, live questions only, Brier and log scores, calibration, and the extremizing factor refitted from resolved
+  questions. Tests: test/forecasting.test.ts. Live (EVAL-FORECAST.md): three open questions, forecasters on Sonnet,
+  Haiku and Grok 4.7, 13 of 13 on what can be checked before they resolve, $1.12.
+
+  Left: the scores themselves (once the questions resolve), and a market comparison fed automatically.
+- Phase 6, investigations and the run recorder: built. src/core/recorder.ts and the investigations plugin.
+  - **The recorder**: hash-chained and content-addressed, with a bundle export, verification and a replay.
+  - **Investigations**: leads with their evidence in a ranked queue, decided only by the person; a coverage gate;
+    a mandate.
+
+  Tests: test/recorder.test.ts. Live (EVAL-INVESTIGATION.md): planted logs, Haiku, 9 of 9, $0.02.
+
+  Left: the record shown in the desktop app, and signing exported bundles.
+- The governor gains `maxChildren` (8 a sub-agent). Still open from research/control.md: a cap on agents at once
+  below the first level, kinds of work compiled to tool, path and network policy, and writes to the control plane
+  through a shell.

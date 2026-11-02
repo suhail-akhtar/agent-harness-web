@@ -41,6 +41,8 @@ test('claims: each cited sentence with its sources and independent sites; uncite
   ]);
   // A decimal stays in its sentence (seen live: "8,848.86 metres" was dropped whole), and a line without a stop counts.
   assert.deepEqual(extractClaims('Everest is 8,848.86 metres tall [1]. Growth was 3.5% [1]\n\n[1]: https://e.example/x\n').map((x) => x.sentence), ['Everest is 8,848.86 metres tall.', 'Growth was 3.5%']);
+  // Abbreviations and sites named in the prose do not end a sentence (seen live: "Art. 5" and "artificialintelligenceact.eu" made fragments).
+  assert.deepEqual(extractClaims('- Prohibitions (Art. 5), as adopted: 2 February 2025 [1].\nThe artificialintelligenceact.eu page says so, e.g. for Article 101 [1]. A second sentence here [1].\n\n[1]: https://x.example/a\n').map((x) => x.sentence), ['- Prohibitions (Art. 5), as adopted: 2 February 2025.', 'The artificialintelligenceact.eu page says so, e.g. for Article 101.', 'A second sentence here.']);
   // A URL with parentheses (seen live: a Wikipedia page cited as [n] was read as unread).
   const paren = extractClaims('Python was created by Guido van Rossum [1]. It is [widely taught](https://en.wikipedia.org/wiki/Python_(programming_language)).\n\n[1]: https://en.wikipedia.org/wiki/Python_(programming_language)\n');
   assert.deepEqual(paren.map((x) => x.urls), [['https://en.wikipedia.org/wiki/Python_(programming_language)'], ['https://en.wikipedia.org/wiki/Python_(programming_language)']]);
@@ -69,6 +71,10 @@ test('a verdict held to the page: supported needs a quote that is in the source;
   // An elided quote counts when each part is in the source in order (seen live: GPT quotes "a ... b").
   assert.equal(judged(c!, { status: 'supported', quote: 'In 2026 ... passed 3 TW', why: '' }, src).status, 'supported');
   assert.equal(judged(c!, { status: 'supported', quote: 'passed 3 TW ... In 2026', why: '' }, src).status, 'unverifiable', 'out of order');
+  // A claim citing two pages, its quote a part of each (seen live in a deep-research run): each part verbatim on one of them.
+  const two = ['From 2 August 2025, the obligations for providers of GPAI models entered into application.', 'From 2 August 2026, the Commission can fine providers.'];
+  assert.equal(judged(c!, { status: 'supported', quote: 'the obligations for providers of GPAI models entered into application. ... the Commission can fine providers', why: '' }, two).status, 'supported');
+  assert.equal(judged(c!, { status: 'supported', quote: 'the obligations for providers of GPAI models entered into application. ... the Commission can fine anyone', why: '' }, two).status, 'unverifiable', 'a part on neither page');
   // The same accented word in another Unicode form (seen live: "Sagarmāthā").
   assert.equal(judged(c!, { status: 'supported', quote: 'known in Nepali as Sagarmāthā, in Sherpa as Chamolangma, and in Tibetan as Jomolangma)', why: '' }, ['Mount Everest (known in Nepali as Sagarmāthā[a], in Sherpa as Chamolangma[4], and in Tibetan  as Jomolangma[b]) is high']).status, 'supported', 'and its footnote marks left out');
   // A table row quoted with its cell bars spaced otherwise (seen live: DeepSeek Flash on an infobox).
@@ -158,9 +164,18 @@ test('the claims gate: only where a workflow names it (it calls models), fails o
     assert.match(bad!.details ?? '', /Fix or remove: claim 1 \(line 1, contradicted: it says rose 5%\)/);
     verdict = '{"status": "supported", "quote": "Prices rose 5% in 2026", "why": "x"}';
     assert.equal((await runGates(h.registry, host, ['claims'], signal, services))[0]!.pass, true);
+    // At high stakes (min_sites 2) a supported claim on one site is not enough: the tool says which.
+    const two = await h.registry.tools.get('verify_claims')!.run({ path: 'research/report.md', min_sites: 2 }, { host, signal, services } as unknown as import('../src/tools/types.ts').ToolContext);
+    assert.equal(two.is_error, true);
+    assert.match(two.content, /Backed by fewer than 2 independent sites[^:]*: claim 1 \(line 1\)/);
     const w = h.registry.workflows.get('deep-research')!;
     assert.deepEqual(validateWorkflow(w), []);
-    const n = w.nodes as Record<string, { next?: { on?: Record<string, string> } | string; gates?: string[] }>;
-    assert.deepEqual([n['cite-check']!.next, n.ledger!.gates, n.ledger!.next], [{ on: { pass: 'ledger', fail: 'fix-citations', exhausted: 'failed' } }, ['claims'], { on: { pass: 'fact-check', fail: 'fix-claims', exhausted: 'fact-check' } }]);
+    const n = w.nodes as Record<string, { next?: { on?: Record<string, string> } | string; gates?: string[]; agent?: string }>;
+    // After the ledger, a search for counter-evidence, then the fact-check (which reads it).
+    assert.deepEqual([n['cite-check']!.next, n.ledger!.gates, n.ledger!.next, n.counter!.agent, n.counter!.next], [{ on: { pass: 'ledger', fail: 'fix-citations', exhausted: 'failed' } }, ['claims'], { on: { pass: 'counter', fail: 'fix-claims', exhausted: 'counter' } }, 'counter-evidence', 'fact-check']);
+    // The end goes through the ledger again: "Report ready" only with no unsupported or contradicted claim left (seen live: a fact-checker approved with two left).
+    const ends = Object.entries(w.nodes as Record<string, { next?: { on?: Record<string, string>; default?: string } }>).flatMap(([k, v]) => [...Object.values(v.next?.on ?? {}), v.next?.default].filter((x) => x === 'done').map(() => k));
+    assert.deepEqual(ends, ['final-ledger']);
+    assert.deepEqual([n['final-ledger']!.gates, n['final-ledger']!.next], [['claims'], { on: { pass: 'done', fail: 'fix-claims-final', exhausted: 'done-with-findings' } }]);
   } finally { await h.close(); }
 });

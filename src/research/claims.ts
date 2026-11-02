@@ -8,8 +8,10 @@ export type ClaimStatus = 'supported' | 'partial' | 'unsupported' | 'contradicte
 export interface Claim { id: number; line: number; sentence: string; urls: string[]; domains: string[] }
 export interface Judged extends Claim { status: ClaimStatus; quote?: string; why: string; by?: string }
 
-// A sentence: up to a stop that is not inside a number (8,848.86 stays whole), or a line's end.
-const SENTENCE = /(?:[^.!?\n]|[.!?](?=\d))+(?:[.!?](?!\d)|$)/gm;
+// A sentence: up to a stop followed by a space or the line's end, so a number (8,848.86) or a site named in the prose
+// (artificialintelligenceact.eu, seen live) stays whole, and not after a usual abbreviation ("Art. 5", "e.g."), seen live.
+const ABBREV = String.raw`(?<!\b(?:Art|art|Arts|No|no|Nos|Sec|sec|para|Para|e\.g|i\.e|vs|cf|approx|Inc|Ltd|Co|Corp|St|Dr|Mr|Mrs|Ms|Prof|Fig|fig|Vol|vol|pp|p|ch|Ch|Reg|Dir|U\.S|U\.K|E\.U))`;
+const SENTENCE = new RegExp(String.raw`(?:[^.!?\n]|[.!?](?!\s|$)|${ABBREV.replace('(?<!', '(?<=')}\.)+(?:${ABBREV}[.!?](?=\s|$)|$)`, 'gm');
 
 /** The registrable part of a host (example.co.uk, news.example.com -> example.com): two sites, not two pages of one. */
 export function domainOf(url: string): string {
@@ -88,18 +90,22 @@ export function judgeBrief(claim: Claim, passages: Array<{ url: string; text: st
   ].join('\n');
 }
 
-/** A quote is in the source word for word; one with elisions ("a ... b") has each part there, in order (seen live: GPT elides). */
-function quoted(page: string, words: string): boolean {
-  // A table's cells compare as words: "|Designed by | Guido van Rossum |" ~ "Designed by | Guido van Rossum" (seen live).
-  // Accents compare without their marks, so one Unicode form matches another ("Sagarmāthā", seen live).
-  // Footnote marks a quote leaves out ("Sagarmāthā[a]", "[4]", "[note 2]", "[citation needed]") are not words of it.
-  const flat = (s: string) => s.normalize('NFKD').replace(/\p{M}/gu, '').replace(/\[(?:\d{1,3}|[a-z]{1,2}|note \d+|citation needed)\]/g, '').replace(/\s*\|\s*/g, ' ').replace(/\s+/g, ' ').replace(/\s+([,.;:)])/g, '$1').trim();
-  const source = flat(page);
-  const quote = flat(words);
-  const parts = quote.split(/\s*(?:\.\.\.|…|\[\.\.\.\])\s*/).map((p) => p.trim()).filter(Boolean);
-  let at = 0;
-  for (const p of parts) { const i = source.indexOf(p, at); if (i < 0) return false; at = i + p.length; }
-  return parts.join(' ').length >= 8;
+// A table's cells compare as words: "|Designed by | Guido van Rossum |" ~ "Designed by | Guido van Rossum" (seen live).
+// Accents compare without their marks, so one Unicode form matches another ("Sagarmāthā", seen live).
+// Footnote marks a quote leaves out ("Sagarmāthā[a]", "[4]", "[note 2]", "[citation needed]") are not words of it.
+const flat = (s: string) => s.normalize('NFKD').replace(/\p{M}/gu, '').replace(/\[(?:\d{1,3}|[a-z]{1,2}|note \d+|citation needed)\]/g, '').replace(/\s*\|\s*/g, ' ').replace(/\s+/g, ' ').replace(/\s+([,.;:)])/g, '$1').trim();
+
+/**
+ * A quote is on a page word for word. One with elisions ("a ... b", seen live from GPT) has each part on a page: in
+ * order on one page, or (a claim citing two pages, seen live) each part on one of them. Each part is verbatim either way.
+ */
+function quoted(pages: string[], words: string): boolean {
+  const sources = pages.map(flat);
+  // Split on the elisions first: flattening first would fuse "application. ..." into "application....".
+  const parts = words.split(/\s*(?:\[\.\.\.\]|\.\.\.|…)\s*/).map(flat).filter(Boolean);
+  if (parts.join(' ').length < 8) return false;
+  const inOrder = (source: string) => { let at = 0; for (const p of parts) { const i = source.indexOf(p, at); if (i < 0) return false; at = i + p.length; } return true; };
+  return sources.some(inOrder) || (parts.length > 1 && sources.length > 1 && parts.every((p) => sources.some((s) => s.includes(p))));
 }
 
 /** The judge's verdict, held to the passage: a supported or partial claim must quote a source word for word, else it is unverifiable. */
@@ -109,7 +115,7 @@ export function judged(claim: Claim, reply: unknown, sources: string[], by?: str
   const status = statuses.includes(o?.status as ClaimStatus) ? o!.status as ClaimStatus : 'unverifiable';
   const quote = typeof o?.quote === 'string' ? o.quote.trim().replace(/^["“]|["”]$/g, '') : '';
   const why = typeof o?.why === 'string' ? o.why.slice(0, 400) : o ? '' : 'the judge gave no verdict the harness could read';
-  if ((status === 'supported' || status === 'partial') && !(quote.length >= 8 && sources.some((s) => quoted(canon(s), canon(quote))))) {
+  if ((status === 'supported' || status === 'partial') && !(quote.length >= 8 && quoted(sources.map(canon), canon(quote)))) {
     return { ...claim, status: 'unverifiable', why: `the judge said ${status} but its quote is not in the source${quote ? `: "${quote.slice(0, 120)}"` : ''}`, ...(by ? { by } : {}) };
   }
   return { ...claim, status, ...(quote ? { quote } : {}), why, ...(by ? { by } : {}) };
@@ -133,10 +139,10 @@ export function ledger(all: Judged[]): string {
  */
 export async function verifyClaims(report: string, o: { text: (url: string) => Promise<string | undefined>; judge: (brief: string) => Promise<{ text: string; by: string }>; parse: (reply: string) => unknown; concurrency?: number; max?: number }): Promise<{ judged: Judged[]; ledger: string }> {
   const claims = extractClaims(report);
-  const max = o.max ?? 40;
+  const max = o.max ?? 100;
   const out: Judged[] = new Array(claims.length);
   let next = 0;
-  await Promise.all(Array.from({ length: Math.min(o.concurrency ?? 6, claims.length) }, async () => {
+  await Promise.all(Array.from({ length: Math.min(o.concurrency ?? 8, claims.length) }, async () => {
     while (next < claims.length) {
       const i = next++;
       const c = claims[i]!;

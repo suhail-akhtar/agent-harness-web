@@ -1,0 +1,50 @@
+{
+  "name": "data-answer",
+  "description": "A question answered from the person's own database: the definitions read, the question clarified, read-only SQL with the database's own checks after every query, every number traced to its query cell, and the figures recomputed independently by a model of another family and compared in code.",
+  "inputs": {
+    "question": { "description": "What to find out from the data.", "required": true },
+    "db": { "description": "The SQLite database file in the folder, e.g. data/shop.db", "required": true }
+  },
+  "start": "answer",
+  "maxAgentRuns": 8,
+  "nodes": {
+    "answer": {
+      "type": "agent",
+      "title": "Answer from the data",
+      "agent": "data-analyst",
+      "prompt": "Answer this question from {{input.db}}, and write data/answer.md.\n\n<question>\n{{input.question}}\n</question>",
+      "next": "provenance"
+    },
+    "provenance": {
+      "type": "gate",
+      "title": "Every number from a query",
+      "gates": ["provenance"],
+      "maxFailures": 3,
+      "next": { "on": { "pass": "recompute", "fail": "fix-provenance", "exhausted": "failed" } }
+    },
+    "fix-provenance": {
+      "type": "agent",
+      "title": "Trace the numbers",
+      "agent": "data-analyst",
+      "prompt": "Some numbers in data/answer.md do not come from a query cell. For each: cite the cell it came from and copy it exactly, mark it \"(derived: ...)\" with the cells it was computed from, or run the query that gives it. Run check_answer before you finish.\n\n{{feedback}}",
+      "next": "provenance"
+    },
+    "recompute": {
+      "type": "gate",
+      "title": "Recomputed independently",
+      "gates": ["recompute"],
+      "maxFailures": 2,
+      "next": { "on": { "pass": "done", "fail": "reconcile", "exhausted": "done-with-findings" } }
+    },
+    "reconcile": {
+      "type": "agent",
+      "title": "Reconcile with the recomputation",
+      "agent": "data-analyst",
+      "prompt": "An independent recomputation (data/recompute.md) does not agree with data/answer.md. Find out which is right from the database: re-run the queries, read the CHECKS lines, compare definitions and interpretations. Correct data/answer.md if it is wrong; if it is right, say in it why the recomputation differs. Run check_answer before you finish.\n\n{{feedback}}",
+      "next": "provenance"
+    },
+    "done": { "type": "end", "title": "Answer ready", "status": "success" },
+    "done-with-findings": { "type": "end", "title": "Answer ready, not confirmed by the recomputation", "status": "success" },
+    "failed": { "type": "end", "title": "Numbers without a source", "status": "failure" }
+  }
+}

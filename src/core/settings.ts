@@ -49,16 +49,17 @@ export interface HookSpec {
 /**
  * A swarm's charter for one run (docs/swarm/SWARM.md, phase 1c): at most `maxAgents` agents started in all (the
  * person may allow more when asked), `ratePerMinute` started in any minute, `maxUsd` spent by its agents (0: the
- * conversation's own limit only) and `maxMinutes` of starting new ones (0: no limit).
+ * conversation's own limit only), `maxMinutes` of starting new ones (0: no limit), and `maxChildren` started by any
+ * one sub-agent (the conversation's own agent is held by maxAgents alone): one agent cannot spend the whole run.
  */
-export interface Charter { maxAgents: number; ratePerMinute: number; maxUsd: number; maxMinutes: number }
+export interface Charter { maxAgents: number; ratePerMinute: number; maxUsd: number; maxMinutes: number; maxChildren: number }
 // 16 agents a run by default: the runaways seen in 2026 went to 48, 905 and 1,718 agents with nothing in the way
 // (docs/swarm/research/control.md); a bigger fan-out is one question to the person.
-export const DEFAULT_CHARTER: Charter = { maxAgents: 16, ratePerMinute: 30, maxUsd: 0, maxMinutes: 0 };
+export const DEFAULT_CHARTER: Charter = { maxAgents: 16, ratePerMinute: 30, maxUsd: 0, maxMinutes: 0, maxChildren: 8 };
 export function cleanCharter(raw: unknown, base: Charter): Charter {
   const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const num = (v: unknown, d: number, min: number, max: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : d);
-  return { maxAgents: Math.floor(num(o.maxAgents, base.maxAgents, 1, 1000)), ratePerMinute: Math.floor(num(o.ratePerMinute, base.ratePerMinute, 1, 600)), maxUsd: num(o.maxUsd, base.maxUsd, 0, 10_000), maxMinutes: num(o.maxMinutes, base.maxMinutes, 0, 24 * 60) };
+  return { maxAgents: Math.floor(num(o.maxAgents, base.maxAgents, 1, 1000)), ratePerMinute: Math.floor(num(o.ratePerMinute, base.ratePerMinute, 1, 600)), maxUsd: num(o.maxUsd, base.maxUsd, 0, 10_000), maxMinutes: num(o.maxMinutes, base.maxMinutes, 0, 24 * 60), maxChildren: Math.floor(num(o.maxChildren, base.maxChildren ?? DEFAULT_CHARTER.maxChildren, 1, 100)) };
 }
 
 export interface Settings {
@@ -91,6 +92,8 @@ export interface Settings {
    * agent (a team with a reviewer always does, with its reviewer). One verifier run per turn that changed files.
    */
   verifyTurns?: boolean;
+  /** The run recorder (phase 6): every call and result content-hashed into a hash-chained log in the session's folder. */
+  record?: boolean;
   /** Models that check work at high stakes, in order (the first of another provider than the worker's that the person allows). */
   verifierModels?: string[];
   /** The swarm's charter for each run (docs/swarm/SWARM.md, phase 1c): the governor grants every agent under it. */
@@ -185,12 +188,13 @@ export const defaultSettings = (): Settings => ({
   maxTurnMinutes: Math.max(0, Number(process.env.HARNESS_MAX_TURN_MINUTES ?? 0) || 0),
   maxSubagentDepth: Math.min(3, Math.max(1, Number(process.env.HARNESS_SUBAGENT_DEPTH ?? 1) || 1)),
   maxParallelSubagents: Math.min(20, Math.max(1, Number(process.env.HARNESS_SUBAGENTS_PARALLEL ?? 10) || 10)),
-  swarm: cleanCharter({ maxAgents: Number(process.env.HARNESS_SWARM_AGENTS ?? DEFAULT_CHARTER.maxAgents), ratePerMinute: Number(process.env.HARNESS_SWARM_RATE ?? DEFAULT_CHARTER.ratePerMinute), maxUsd: Number(process.env.HARNESS_SWARM_USD ?? 0), maxMinutes: Number(process.env.HARNESS_SWARM_MINUTES ?? 0) }, DEFAULT_CHARTER),
+  swarm: cleanCharter({ maxAgents: Number(process.env.HARNESS_SWARM_AGENTS ?? DEFAULT_CHARTER.maxAgents), ratePerMinute: Number(process.env.HARNESS_SWARM_RATE ?? DEFAULT_CHARTER.ratePerMinute), maxUsd: Number(process.env.HARNESS_SWARM_USD ?? 0), maxMinutes: Number(process.env.HARNESS_SWARM_MINUTES ?? 0), maxChildren: Number(process.env.HARNESS_SWARM_CHILDREN ?? DEFAULT_CHARTER.maxChildren) }, DEFAULT_CHARTER),
   ...(process.env.HARNESS_COMPACT_AT ? { compactAt: Number(process.env.HARNESS_COMPACT_AT) } : {}),
   ...(process.env.HARNESS_SUBAGENT_MODEL ? { subagentModel: process.env.HARNESS_SUBAGENT_MODEL } : {}),
   ...(process.env.HARNESS_AUTO_MODEL ? { autoModel: process.env.HARNESS_AUTO_MODEL } : {}),
   ...(process.env.HARNESS_GATES_ON_STOP === '1' ? { gatesOnStop: true } : {}),
   ...(process.env.HARNESS_VERIFY_TURNS === '1' ? { verifyTurns: true } : {}),
+  ...(process.env.HARNESS_RECORD === 'on' || process.env.HARNESS_RECORD === '1' ? { record: true } : {}),
   // The operator's cap on delegation: HARNESS_DELEGATION_MODELS ("*" or a comma list); none by default.
   delegation: { allowedModels: process.env.HARNESS_DELEGATION_MODELS && process.env.HARNESS_DELEGATION_MODELS.trim() !== '*' ? process.env.HARNESS_DELEGATION_MODELS.split(',').map((m) => m.trim()).filter(Boolean) : '*' },
   efficiency: defaultEfficiency(),
@@ -228,6 +232,7 @@ export async function operatorSettings(env: NodeJS.ProcessEnv = process.env): Pr
   if (typeof j.autoModel === 'string') base.autoModel = j.autoModel;
   if (typeof j.gatesOnStop === 'boolean') base.gatesOnStop = j.gatesOnStop;
   if (typeof j.verifyTurns === 'boolean') base.verifyTurns = j.verifyTurns;
+  if (j.record === true) base.record = true;
   if (Array.isArray(j.verifierModels)) base.verifierModels = j.verifierModels.map(String);
   if (j.swarm && typeof j.swarm === 'object') base.swarm = cleanCharter(j.swarm, base.swarm);
   const d = cleanDelegation((j as { delegation?: unknown }).delegation);
@@ -276,6 +281,7 @@ export function stackProject(a: Partial<Settings>, b: Partial<Settings>): Partia
     permissions: { allow: [...list(a, 'allow'), ...list(b, 'allow')], deny: [...list(a, 'deny'), ...list(b, 'deny')], ask: [...list(a, 'ask'), ...list(b, 'ask')] },
     hooks,
     ...(a.gatesOnStop === true || b.gatesOnStop === true ? { gatesOnStop: true } : {}),
+    ...(a.record === true || b.record === true ? { record: true } : {}),
   };
 }
 
@@ -296,6 +302,8 @@ export interface UserSettings {
   linkedSessions?: LinkedSessionSettings;
   /** A verifier checks each turn's changes before it ends (on where the operator has it on). */
   verifyTurns?: boolean;
+  /** Record this person's sessions (the run recorder). */
+  record?: boolean;
   /** The person's swarm charter: only lower than the operator's. */
   swarm?: Partial<Charter>;
 }
@@ -317,10 +325,11 @@ export function cleanUserSettings(j: unknown): UserSettings {
   if (pos(o.maxCostUsd)) out.maxCostUsd = pos(o.maxCostUsd);
   if (pos(o.maxTurnMinutes)) out.maxTurnMinutes = pos(o.maxTurnMinutes);
   if (typeof o.verifyTurns === 'boolean') out.verifyTurns = o.verifyTurns;
+  if (typeof o.record === 'boolean') out.record = o.record;
   if (o.swarm && typeof o.swarm === 'object') {
     const s = o.swarm as Record<string, unknown>;
     const c: Partial<Charter> = {};
-    for (const k of ['maxAgents', 'ratePerMinute', 'maxUsd', 'maxMinutes'] as const) if (pos(s[k])) c[k] = k === 'maxUsd' ? pos(s[k]) : Math.floor(pos(s[k])!);
+    for (const k of ['maxAgents', 'ratePerMinute', 'maxUsd', 'maxMinutes', 'maxChildren'] as const) if (pos(s[k])) c[k] = k === 'maxUsd' ? pos(s[k]) : Math.floor(pos(s[k])!);
     if (Object.keys(c).length) out.swarm = c;
   }
   if (o.plugins && typeof o.plugins === 'object' && !Array.isArray(o.plugins)) {
@@ -378,11 +387,12 @@ export function applyUserSettings(base: Settings, u: UserSettings): Settings {
     // 0 is "no limit": a person may set one where the operator has none.
     maxTurnMinutes: u.maxTurnMinutes ? (base.maxTurnMinutes > 0 ? Math.min(base.maxTurnMinutes, u.maxTurnMinutes) : u.maxTurnMinutes) : base.maxTurnMinutes,
     // The person's charter only tightens the operator's (a run past it is asked of the person, never taken).
-    swarm: u.swarm ? { maxAgents: Math.min(base.swarm.maxAgents, u.swarm.maxAgents ?? Infinity), ratePerMinute: Math.min(base.swarm.ratePerMinute, u.swarm.ratePerMinute ?? Infinity), maxUsd: lower(base.swarm.maxUsd, u.swarm.maxUsd), maxMinutes: lower(base.swarm.maxMinutes, u.swarm.maxMinutes) } : base.swarm,
+    swarm: u.swarm ? { maxAgents: Math.min(base.swarm.maxAgents, u.swarm.maxAgents ?? Infinity), ratePerMinute: Math.min(base.swarm.ratePerMinute, u.swarm.ratePerMinute ?? Infinity), maxUsd: lower(base.swarm.maxUsd, u.swarm.maxUsd), maxMinutes: lower(base.swarm.maxMinutes, u.swarm.maxMinutes), maxChildren: Math.min(base.swarm.maxChildren, u.swarm.maxChildren ?? Infinity) } : base.swarm,
     delegation: effectiveDelegation(base.delegation, u.delegation),
     ...(u.linkedSessions ? { linkedSessions: u.linkedSessions } : {}),
     // The person may switch it on; where the operator has it on, it stays on.
     ...(base.verifyTurns || u.verifyTurns ? { verifyTurns: true } : {}),
+    ...(base.record || u.record ? { record: true } : {}),
   };
 }
 
@@ -415,6 +425,8 @@ export function mergeSettings(base: Settings, project: Partial<Settings>, trustP
     hooks: { ...base.hooks },
     // Gates run the project's own commands (npm test, ...): a project may switch this on only when it is trusted.
     gatesOnStop: base.gatesOnStop ?? (trustProject && project.gatesOnStop === true),
+    // A project may turn the run recorder on (it only keeps more, in the session's own folder), never off.
+    ...(base.record || project.record === true ? { record: true } : {}),
   };
   // Operator hooks always run; the project's run in addition, when trusted - and
   // only as commands on the session's host. An http hook runs on the server (it could

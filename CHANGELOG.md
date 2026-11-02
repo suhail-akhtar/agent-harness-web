@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+- **A swarm across the person's computers** (docs/swarm/SWARM.md, phase 7; live in docs/swarm/EVAL-MACHINES.md):
+  - **Stop means stop on the machine**: a cancel job kills a job's processes there. A job the server no longer
+    waits for is stopped at the next poll. With no word from the server for its lease (120 s), the companion stops
+    everything itself and takes no work until it hears the server again.
+  - **The machine decides**: a policy file on the machine (`harness-companion policy --swarm on --kinds
+    read,edit,exec --max-jobs 2`) says what swarm agents may do there. The server can only narrow it. Without one,
+    swarm agents may only read. Beyond reading, swarm work runs only in a sandbox unless the owner says otherwise.
+  - **Placement**: the agent tool's `machine` and `machines` put work on the person's computers, and the agent is
+    told where it is.
+  - **Acceptance and audit**: at stakes, checks that ran only on the worker's machine do not accept its work. Each
+    machine keeps its own audit log.
+  - **Live**: 11 of 11 with two real companions.
+- **Fixed on Windows**: a stopped command that ran through `timeout`, `exec` or a nested shell (Git Bash) kept running
+  (seen live: a build finished after Stop all). Every command now carries a tag, and a stop finds and kills all it
+  started. On a loaded machine about 1 stop in 4 still misses a process (a known gap; a Job Object is the fix).
+- **Answers over the person's own data** (phase 2; live in docs/swarm/EVAL-DATA-ANSWERS.md): the data-answers
+  plugin.
+  - **What it checks**: read-only SQL, each result kept as a cell the agent cannot edit, with the database's own
+    checks after every query (join fan-out, repeated groups, a date window the data does not cover). Every number in
+    the answer traces to a cell. An agent of another family recomputes the figures from the question alone.
+  - **Live**: 10 of 10 right on Haiku and Sonnet, recomputed on Grok 4.7.
+- **Security review of the person's own code, gated by an oracle** (phase 4; the security-review plugin; live in
+  docs/swarm/EVAL-SECURITY.md):
+  - **A finding counts only when its reproducer fires.** The harness runs the reproducer and keeps every run in
+    its own ledger, outside the workspace.
+  - **A fix counts only when the reproducer stops firing and the tests pass.**
+  - **The report is held to the ledger**, and must cover every file on the plan.
+  - **The mandate** (scope, who authorized it, dates) is written by the person, and agents cannot write it.
+- **A forecasting ledger** (phase 5; the forecasting plugin): live questions only.
+  - **Forecasters** on several models, Claude Sonnet, Haiku and Grok 4.7 by default, each starting from the outside
+    view.
+  - **The aggregate, computed in code**: a trimmed mean in log-odds, extremized, capped.
+  - **Scoring**: Brier and log scores and calibration once questions resolve, with the extremizing factor refitted
+    from them.
+- **The run recorder** (phase 6): with `"record": true` in the settings or `HARNESS_RECORD=on`, a session's
+  requests, calls, results, answers and decisions are content-hashed into a hash-chained log.
+  `GET /api/sessions/:id/record` exports it as a bundle that verifies on its own, with `?view=verify` and
+  `?view=replay` (the steps as they happened; nothing runs again).
+- **Investigations as co-pilot work** (phase 6; the investigations plugin):
+  - **Leads**: kept with their evidence in a ranked queue, and decided only by the person; refused where nobody
+    can be asked.
+  - **A coverage checklist** gate, and a mandate the person writes.
+- **The swarm charter gains `maxChildren`** (8): one sub-agent cannot spend the whole run.
+- **Deep research, end to end** (phase 3): live on Haiku with Grok 4.7 judging (docs/swarm/EVAL-DEEP-RESEARCH.md).
+  - **The ledger decides the end**: the workflow now ends through the claim ledger, because a fact-checker had
+    approved a report that still had unsupported claims.
+  - **New steps**: a counter-evidence search, and two independent sites for claims at high stakes.
+  - **The ledger itself**: 100 claims a run; abbreviations and sites in the prose no longer split sentences; a
+    quote may join parts of two cited pages.
 - **The claim ledger** (docs/swarm/SWARM.md, phase 3; live in docs/swarm/EVAL-CLAIMS.md):
   - **Every cited sentence is judged against the pages it cites.** The judge is a model of another family than the
     conversation's, with no tools, and it sees only the sentence and the best passages of each page. A "supported"

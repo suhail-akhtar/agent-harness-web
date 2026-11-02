@@ -1,0 +1,229 @@
+{
+  "date": "2026-11-02T16:58:37.698Z",
+  "model": "claude-haiku-5-5",
+  "checks": [
+    {
+      "what": "a lead on the admin token created at night (with its log line)",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "what": "a lead on the login from a new country",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "what": "a lead on the export job's target changed to the public bucket",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "what": "every lead carries evidence with where it was found",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "what": "no lead was decided without the person",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "what": "the checklist was written and covered",
+      "ok": true,
+      "detail": "0 open"
+    },
+    {
+      "what": "the decision was asked of the person, and recorded as theirs",
+      "ok": true,
+      "detail": "confirmed"
+    },
+    {
+      "what": "the run is recorded, and its record verifies",
+      "ok": true,
+      "detail": "126 lines"
+    },
+    {
+      "what": "the record holds the person's decision",
+      "ok": true,
+      "detail": ""
+    }
+  ],
+  "cost": 0.0225,
+  "leads": [
+    {
+      "id": "L1",
+      "title": "The export-orders crontab was re-pointed from shop-internal to shop-public-assets at 03:15 on 29 Oct, and the first public export ran on 30 Oct at 02:00",
+      "evidence": [
+        {
+          "source": "logs/cron.log:7",
+          "quote": "2026-10-29T03:15:22Z crontab changed job=export-orders target=s3://shop-public-assets/exports/ by=tmp-admin",
+          "hash": "aff25b78831f1759"
+        },
+        {
+          "source": "logs/cron.log:6",
+          "quote": "2026-10-29T02:00:00Z cron export-orders target=s3://shop-internal/exports/",
+          "hash": "053af22493bbd51c"
+        },
+        {
+          "source": "logs/cron.log:9",
+          "quote": "2026-10-30T02:00:00Z cron export-orders target=s3://shop-public-assets/exports/",
+          "hash": "3c144d57ccf6de64"
+        },
+        {
+          "source": "logs/app.log:152",
+          "quote": "2026-10-30T02:00:31Z export orders rows=1288 target=s3://shop-public-assets/exports/ status=ok",
+          "hash": "13dcbd9e11d06145"
+        }
+      ],
+      "score": 0.9,
+      "why": "This is the only logged change of the export target and it directly precedes the public-bucket export; it is the most likely mechanism in our own logs.",
+      "status": "confirmed",
+      "at": "2026-11-02T16:57:39.075Z",
+      "decidedBy": "the person",
+      "decidedAt": "2026-11-02T16:58:34.523Z",
+      "note": "matches what the cloud audit shows"
+    },
+    {
+      "id": "L2",
+      "title": "Was the crontab change made by the account named tmp-admin, and who controls that account? A new admin token was created 4 minutes before the change, then used from a non-GB IP",
+      "evidence": [
+        {
+          "source": "logs/auth.log:126",
+          "quote": "2026-10-29T03:07:41Z token created name=tmp-admin scope=admin by=svc-export",
+          "hash": "47713325d033b363"
+        },
+        {
+          "source": "logs/auth.log:127",
+          "quote": "2026-10-29T03:12:04Z login ok user=tmp-admin from=NL ip=185.220.101.4 token=tmp-admin",
+          "hash": "2d2bae652fd4ee4b"
+        },
+        {
+          "source": "logs/cron.log:7",
+          "quote": "2026-10-29T03:15:22Z crontab changed job=export-orders target=s3://shop-public-assets/exports/ by=tmp-admin",
+          "hash": "aff25b78831f1759"
+        }
+      ],
+      "score": 0.85,
+      "why": "A short-lived admin token, created by a service account, logged in from an address outside the GB range used by every other login, and used to change the job; this is the likely access path, but the logs do not show how the token was obtained.",
+      "status": "open",
+      "at": "2026-11-02T16:57:39.083Z"
+    },
+    {
+      "id": "L3",
+      "title": "The svc-export account created an admin-scope token. Is that account's use expected, and was it used by a person or a process?",
+      "evidence": [
+        {
+          "source": "logs/auth.log:126",
+          "quote": "token created name=tmp-admin scope=admin by=svc-export",
+          "hash": "62675665942556e1"
+        }
+      ],
+      "score": 0.6,
+      "why": "A service account minting an admin-scope token is a privilege question the logs cannot answer; the account's owner and credential history must be checked outside this scope.",
+      "status": "open",
+      "at": "2026-11-02T16:57:39.090Z"
+    },
+    {
+      "id": "L4",
+      "title": "The public-target export ran at 02:00:31 on 30 Oct (1288 rows) and nothing after it is public; the exposure window is unknown from logs",
+      "evidence": [
+        {
+          "source": "logs/app.log:152",
+          "quote": "2026-10-30T02:00:31Z export orders rows=1288 target=s3://shop-public-assets/exports/ status=ok",
+          "hash": "13dcbd9e11d06145"
+        },
+        {
+          "source": "logs/app.log:153",
+          "quote": "2026-10-30T08:16:30Z export orders rows=1217 target=s3://shop-internal/exports/ status=ok",
+          "hash": "546bac74f6aa3ebe"
+        }
+      ],
+      "score": 0.7,
+      "why": "The size of the affected data (1288 rows) and how long the file stayed reachable both matter for response; the bucket's public access history is not in logs/ and needs cloud audit logs.",
+      "status": "open",
+      "at": "2026-11-02T16:57:39.094Z"
+    },
+    {
+      "id": "L5",
+      "title": "Two export entries at 02:00 on 30 Oct (internal and public), but app.log records only the public one",
+      "evidence": [
+        {
+          "source": "logs/cron.log:8",
+          "quote": "2026-10-30T02:00:00Z cron export-orders target=s3://shop-internal/exports/",
+          "hash": "e7832b2936991c6b"
+        },
+        {
+          "source": "logs/cron.log:9",
+          "quote": "2026-10-30T02:00:00Z cron export-orders target=s3://shop-public-assets/exports/",
+          "hash": "3c144d57ccf6de64"
+        },
+        {
+          "source": "logs/app.log:151-152",
+          "quote": "2026-10-29T17:50:30Z ... / 2026-10-30T02:00:31Z export orders rows=1288 target=s3://shop-public-assets/exports/",
+          "hash": "7e145c5babdaa79c"
+        }
+      ],
+      "score": 0.35,
+      "why": "Either the job was duplicated or the logs are incomplete; app.log also shows no 02:00 internal export on any day, so this may be a logging gap rather than a second job.",
+      "status": "open",
+      "at": "2026-11-02T16:57:39.100Z"
+    },
+    {
+      "id": "L6",
+      "title": "Only one login in auth.log is from outside GB, and it is the tmp-admin login",
+      "evidence": [
+        {
+          "source": "logs/auth.log:127",
+          "quote": "login ok user=tmp-admin from=NL ip=185.220.101.4",
+          "hash": "8c07d2a36d7d30c9"
+        },
+        {
+          "source": "logs/auth.log:1-177",
+          "quote": "all other rows: from=GB ip=81.2.69.x",
+          "hash": "caaa82cd023757e4"
+        }
+      ],
+      "score": 0.5,
+      "why": "Corroborates the lead above: a single foreign-origin login is an outlier in the window; geolocation is only what the log says and was not verified against any external source.",
+      "status": "open",
+      "at": "2026-11-02T16:57:39.105Z"
+    },
+    {
+      "id": "L7",
+      "title": "The 10-29 14:00 deploy (1.29.0) happened 11 hours after the crontab change; the 10-30 deploy (1.30.0) is after the public run. Could a deploy have set the target?",
+      "evidence": [
+        {
+          "source": "logs/deploy.log:6",
+          "quote": "2026-10-29T14:00:00Z deploy shop-web version=1.29.0 by=ci status=ok",
+          "hash": "6b41bb9a409cda28"
+        },
+        {
+          "source": "logs/deploy.log:7",
+          "quote": "2026-10-30T14:00:00Z deploy shop-web version=1.30.0 by=ci status=ok",
+          "hash": "3a9415241039afb9"
+        }
+      ],
+      "score": 0.15,
+      "why": "No deploy is logged near 03:15 on 29 Oct, and the deploy log does not record config content, so this is a weak lead to rule out rather than a cause.",
+      "status": "open",
+      "at": "2026-11-02T16:57:39.110Z"
+    },
+    {
+      "id": "L8",
+      "title": "Backup job failed with disk full at 23:00 on 28 Oct; possibly unrelated",
+      "evidence": [
+        {
+          "source": "logs/app.log:126",
+          "quote": "2026-10-28T23:00:00Z backup db status=FAILED reason=disk full",
+          "hash": "74a16e9aa01e83d0"
+        }
+      ],
+      "score": 0.1,
+      "why": "A failure on a different job the evening before the change; no logged link to the export, listed only so it is not overlooked.",
+      "status": "open",
+      "at": "2026-11-02T16:57:39.115Z"
+    }
+  ],
+  "checklist": "# Checklist: how the orders export reached a public bucket on 2026-10-30\n\nPurpose (mandate): find how the customer orders export reached a public bucket on 2026-10-30.\nSubjects (mandate): our own logs in logs/ only.\n\n- [x] logs/app.log: every export run, its target bucket and status, 2026-10-24 to 2026-10-30. Found: 177 export lines, all `target=s3://shop-internal/exports/` except one, `app.log:152` `2026-10-30T02:00:31Z export orders rows=1288 target=s3://shop-public-assets/exports/ status=ok`.\n- [x] logs/app.log: runs around 02:00 UTC on 2026-10-29 and 2026-10-30. Found: no internal 02:00 export line on any day; the only 02:00 line is the public one on 10-30 (`app.log:152`). app.log does not record every cron run.\n- [x] logs/app.log: any failed or errored export. Found: none with status other than ok; `app.log:126` `2026-10-28T23:00:00Z backup db status=FAILED reason=disk full` is a backup job, not the export.\n- [x] logs/cron.log: the export-orders schedule and target over the window. Found: daily 02:00 internal target through `cron.log:6`; `cron.log:7` `2026-10-29T03:15:22Z crontab changed job=export-orders target=s3://shop-public-assets/exports/ by=tmp-admin`; `cron.log:8-9` on 10-30 02:00 two entries, one internal and one `s3://shop-public-assets/exports/`.\n- [x] logs/cron.log: when the crontab change happened relative to the last internal run and the first public run. Found: last internal run 10-29 02:00 (`cron.log:6`), change 10-29 03:15:22 (`cron.log:7`), first public run 10-30 02:00 (`cron.log:9`).\n- [x] logs/auth.log: token and account events in the 24 hours before the crontab change. Found: `auth.log:126` `2026-10-29T03:07:41Z token created name=tmp-admin scope=admin by=svc-export`.\n- [x] logs/auth.log: logins by the account that made the crontab change (tmp-admin) and their source. Found: `auth.log:127` `2026-10-29T03:12:04Z login ok user=tmp-admin from=NL ip=185.220.101.4 token=tmp-admin`. This is the only login in auth.log not from GB.\n- [x] logs/auth.log: logins by named users in the 2 hours around the change. Found: first named-user login after the change is `auth.log:128` 08:47 on 10-29; none between 03:12 and 08:47 on 10-29 (all rows 128-177 are GB, user in dee/cy/ben/ana).\n- [x] logs/auth.log: whether tmp-admin or the token was used after 10-29. Found: no further tmp-admin rows in auth.log (checked all 177 lines).\n- [x] logs/deploy.log: deploys near the change window (10-29 03:00-04:00). Found: deploys are daily at 14:00 (`deploy.log:1-7`); `deploy.log:6` `2026-10-29T14:00:00Z deploy shop-web version=1.29.0 by=ci status=ok`. No deploy near 03:15 on 10-29, so no deploy is recorded in the window of the crontab change.\n- [x] logs/deploy.log: whether a deploy could have changed the export target. Found: the 10-30 deploy (`deploy.log:7`, 14:00) is after the public run at 02:00; no deploy record explains the 02:00 change. Deploy log does not record config content, so it cannot be ruled out from logs alone.\n- [x] Timeline: the 10-30 public export (rows=1288) vs. the internal exports the same day. Found: internal exports continue on 10-30 from 08:16 (`app.log:153`) to 16:27 (`app.log:177`), all to shop-internal; the public run is the only one to shop-public-assets.\n- [x] Exposure window: how long the public target was in use. Found: logs show a single public run (10-30 02:00). App-side exposure ends there; no later public run.\n- [ ] Bucket policy/ACL change events for shop-public-assets: N/A: not in logs/ (mandate subjects are logs/ only); needs cloud audit logs, listed as open.\n- [x] Duplicate cron entries on 10-30 02:00 (`cron.log:8` and `cron.log:9`). Found: both lines present; app.log only shows the public one. Why the internal job also appears is unexplained by these logs.\n- [x] Unrelated failures that could confuse the picture (backup failure 10-28 23:00). Found: `app.log:126` disk full backup failure; no link to the export found in logs. Weak.\n- [ ] Data content of the exported file (which customer fields, personal data): N/A: out of scope; the mandate is limited to logs and the export contents are not in logs/. No personal data was read or collected.\n- [ ] Cloud-side audit trail (S3 access logs, CloudTrail, IAM token issuer): N/A: not in the mandate subjects (logs/ only). Listed as open in the report.\n- [x] Whether the svc-export account was used by a person or a process to create the token: not determinable from logs/. Found: `auth.log:126` `token created name=tmp-admin scope=admin by=svc-export` gives only the account name; no session, client, interactive flag or source IP for that event. `grep \"svc\"` over logs/ returns only this line, and the `by=` field is a bare account name in every record (`by=ci` in deploy.log, `by=tmp-admin` in cron.log:7), so the format does not show whether an actor is human or automated. Open question (see L3), not attributed.\n",
+  "recordLines": 126
+}

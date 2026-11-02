@@ -64,8 +64,12 @@ const envNum = (v: string | undefined, d: number) => (v !== undefined && v !== '
 
 interface Live {
   lastSeen: number;
-  info: { platform: string; shell: string; root: string; version?: string; /** How the companion contains commands ('off' or absent: not at all). */ sandbox?: string; network?: 'none' | 'full'; /** The user started it with --trust-project: the project's MCP servers may start there. */ trustProject?: boolean; /** Started with --allow-desktop: the computer tool may use its real screen. */ desktop?: boolean };
+  info: { platform: string; shell: string; root: string; version?: string; /** How the companion contains commands ('off' or absent: not at all). */ sandbox?: string; network?: 'none' | 'full'; /** The user started it with --trust-project: the project's MCP servers may start there. */ trustProject?: boolean; /** Started with --allow-desktop: the computer tool may use its real screen. */ desktop?: boolean; /** What the machine offers to swarm work, as it reports it (it enforces it itself). */ policy?: import('../companion/handler.ts').MachinePolicy };
   queue: CompanionJob[];
+  /** Jobs sent to the machine and not answered (a stop sends each a cancel). */
+  sent: Set<string>;
+  /** Cancels sent, by target, and when: one each (again only after 10 s), while the job takes its time to die. */
+  cancelled: Map<string, number>;
   waiter?: (job: CompanionJob | null) => void;
   pending: Map<string, Pending>;
 }
@@ -233,7 +237,7 @@ export class CompanionHub {
   list() {
     return [...this.records.values()].map((r) => {
       const l = this.live.get(r.id);
-      return { id: r.id, name: r.name, owner: r.owner, online: !!l && Date.now() - l.lastSeen < 60_000, info: l?.info ?? null, expiresAt: r.expiresAt };
+      return { id: r.id, name: r.name, owner: r.owner, online: !!l && Date.now() - l.lastSeen < 60_000, info: l?.info ?? null, expiresAt: r.expiresAt, running: l?.sent.size ?? 0 };
     });
   }
 
@@ -254,21 +258,41 @@ export class CompanionHub {
 
   private liveOf(id: string): Live {
     let l = this.live.get(id);
-    if (!l) { l = { lastSeen: 0, info: { platform: 'unknown', shell: 'bash', root: '' }, queue: [], pending: new Map() }; this.live.set(id, l); }
+    if (!l) { l = { lastSeen: 0, info: { platform: 'unknown', shell: 'bash', root: '' }, queue: [], pending: new Map(), sent: new Set(), cancelled: new Map() }; this.live.set(id, l); }
     return l;
   }
 
-  /** Long-poll: resolves with the next job, or null after waitMs. */
-  poll(id: string, info: Live['info'], waitMs = 25_000): Promise<CompanionJob | null> {
+  /** A stop for a job on the machine: queued ahead of any other work (phase 7: stop means stop on every machine). */
+  private cancel(l: Live, target: string, reason: string): void {
+    const queued = l.queue.findIndex((j) => j.id === target);
+    if (queued >= 0) { l.queue.splice(queued, 1); return; } // never sent: nothing runs there
+    if (!l.sent.delete(target)) return;
+    l.cancelled.set(target, Date.now());
+    const job = { id: crypto.randomUUID(), kind: 'cancel', sessionId: '', target, reason } as CompanionJob;
+    if (l.waiter) l.waiter(job); else l.queue.unshift(job);
+  }
+
+  /**
+   * Long-poll: resolves with the next job, or null after waitMs. `running`: the jobs the machine says it is running;
+   * one this server no longer waits for (it gave up on it, or restarted) is sent a cancel, so it does not run on.
+   */
+  poll(id: string, info: Live['info'], waitMs = 25_000, running?: string[]): Promise<CompanionJob | null> {
     const l = this.liveOf(id);
     l.lastSeen = Date.now();
     l.info = info;
+    const now = Date.now();
+    for (const [t, at] of l.cancelled) if (now - at > 60_000) l.cancelled.delete(t);
+    for (const r of running ?? []) {
+      if (l.pending.has(r) || now - (l.cancelled.get(r) ?? 0) < 10_000 || l.queue.some((j) => j.kind === 'cancel' && j.target === r)) continue;
+      l.cancelled.set(r, now);
+      l.queue.unshift({ id: crypto.randomUUID(), kind: 'cancel', sessionId: '', target: r, reason: 'the server no longer waits for this job' } as CompanionJob);
+    }
     const next = l.queue.shift();
-    if (next) return Promise.resolve(next);
+    if (next) { if (next.kind !== 'cancel') l.sent.add(next.id); return Promise.resolve(next); }
     l.waiter?.(null);
     return new Promise((resolve) => {
       const t = setTimeout(() => { if (l.waiter === done) l.waiter = undefined; resolve(null); }, waitMs);
-      const done = (job: CompanionJob | null) => { clearTimeout(t); l.waiter = undefined; resolve(job); };
+      const done = (job: CompanionJob | null) => { clearTimeout(t); l.waiter = undefined; if (job && job.kind !== 'cancel') l.sent.add(job.id); resolve(job); };
       l.waiter = done;
     });
   }
@@ -278,6 +302,7 @@ export class CompanionHub {
     const p = l?.pending.get(jobId);
     if (!l || !p) return false;
     l.pending.delete(jobId);
+    l.sent.delete(jobId);
     l.lastSeen = Date.now();
     if (ok) p.resolve(value); else p.reject(new Error(String((value as { error?: string })?.error ?? value)));
     return true;
@@ -288,8 +313,9 @@ export class CompanionHub {
     if (Date.now() - l.lastSeen > 60_000) return Promise.reject(new Error('The companion on the user\'s computer is offline. Ask the user to start it.'));
     const full = { ...job, id: crypto.randomUUID() } as CompanionJob;
     return new Promise<T>((resolve, reject) => {
-      const t = setTimeout(() => { l.pending.delete(full.id); reject(new Error('the companion did not answer in time')); }, timeoutMs);
-      const onAbort = () => { clearTimeout(t); l.pending.delete(full.id); reject(new Error('aborted')); };
+      // Given up on (a timeout, a stop): the machine is told to stop it too, so nothing runs on there.
+      const t = setTimeout(() => { l.pending.delete(full.id); this.cancel(l, full.id, 'it took too long'); reject(new Error('the companion did not answer in time')); }, timeoutMs);
+      const onAbort = () => { clearTimeout(t); l.pending.delete(full.id); this.cancel(l, full.id, 'stopped'); reject(new Error('aborted')); };
       signal?.addEventListener('abort', onAbort, { once: true });
       l.pending.set(full.id, {
         resolve: (v) => { clearTimeout(t); signal?.removeEventListener('abort', onAbort); resolve(v as T); },
@@ -299,12 +325,16 @@ export class CompanionHub {
     });
   }
 
-  host(id: string, sessionId: string): ToolHost {
+  /** `swarm`: the host a swarm agent works on there; its calls are held to the machine's policy for swarm work. */
+  host(id: string, sessionId: string, o: { swarm?: boolean } = {}): ToolHost {
     const l = this.liveOf(id);
     const hub = this;
+    const swarm = o.swarm ? { swarm: true as const } : {};
     return {
       kind: 'companion',
       root: '',
+      companionId: id,
+      swarmHost: () => (o.swarm ? undefined : hub.host(id, sessionId, { swarm: true })),
       get displayRoot() { return l.info.root || '(companion folder)'; },
       get platform() { return l.info.platform; },
       get shell() { return l.info.shell; },
@@ -314,10 +344,10 @@ export class CompanionHub {
       exec(command: string, opts: ExecOptions): Promise<ExecResult> {
         // Vault values stay on the server: the user's computer is not where the operator's secrets go.
         if (opts.secretEnv && Object.keys(opts.secretEnv).length) return Promise.reject(new Error('vault secrets are not sent to a companion (the user\'s own computer)'));
-        return hub.dispatch<ExecResult>(id, { kind: 'exec', sessionId, command, timeoutMs: opts.timeoutMs, stdin: opts.stdin }, opts.signal, opts.timeoutMs + 30_000);
+        return hub.dispatch<ExecResult>(id, { kind: 'exec', sessionId, command, timeoutMs: opts.timeoutMs, stdin: opts.stdin, ...swarm }, opts.signal, opts.timeoutMs + 30_000);
       },
       remoteTool(name: string, input: Record<string, unknown>, signal: AbortSignal): Promise<ToolOutcome> {
-        return hub.dispatch<ToolOutcome>(id, { kind: 'tool', sessionId, name, input }, signal);
+        return hub.dispatch<ToolOutcome>(id, { kind: 'tool', sessionId, name, input, ...swarm }, signal);
       },
       mirror: (signal?: AbortSignal) => hub.mirror(id, sessionId, signal),
       pushFile: (rel: string, data: Buffer, signal?: AbortSignal) => hub.push(id, sessionId, rel, data, signal),

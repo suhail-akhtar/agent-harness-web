@@ -97,7 +97,8 @@ export type HarnessEvent =
   | { kind: 'approval_request'; requestId: string; runId: string; node: string; title: string; message: string; files: { path: string; content: string }[] }
   | { kind: 'workflow'; phase: 'started' | 'node_started' | 'node_finished' | 'finished'; node?: string; run: WorkflowRunView }
   | { kind: 'task'; phase: 'started' | 'finished'; task: TaskView }
-  | { kind: 'request_resolved'; requestId: string; decision: string }
+  /** `answer`: what the person answered a question (kept, so a record of the run holds their decision). */
+  | { kind: 'request_resolved'; requestId: string; decision: string; answer?: string }
   | { kind: 'usage'; model: string; usage: Usage; cost: number; contextTokens: number; contextWindow: number; agent?: string }
   | { kind: 'todos'; todos: Todo[] }
   | { kind: 'mode'; mode: PermissionMode }

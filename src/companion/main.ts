@@ -5,7 +5,7 @@ import path from 'node:path';
 import { resolveShell } from '../runtime/host.ts';
 import { sandboxedFolderHost } from '../runtime/local-sandbox.ts';
 import type { LocalSandbox } from '../runtime/os-sandbox.ts';
-import { type CompanionJob, createCompanionHandler } from './handler.ts';
+import { type CompanionJob, cleanPolicy, createCompanionHandler, DEFAULT_POLICY, type MachinePolicy } from './handler.ts';
 
 // harness-companion: lets the browser harness work on a folder on THIS computer.
 //   node harness-companion.mjs --server https://your-server --token hwc_... [--dir .] [--allow-hooks] [--allow-desktop]
@@ -15,6 +15,27 @@ function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
   return i > 0 ? process.argv[i + 1] : undefined;
 }
+
+// What this machine offers to swarm work (phase 7): a file next to the token, which sandboxed commands cannot see.
+// Only this program changes it (`harness-companion policy ...`); the server can never widen it.
+const policyFile = path.resolve(arg('policy') ?? path.join(os.homedir(), '.harness-companion', 'policy.json'));
+const readPolicy = (): MachinePolicy => { try { return cleanPolicy(JSON.parse(fs.readFileSync(policyFile, 'utf8'))); } catch { return DEFAULT_POLICY; } };
+if (process.argv[2] === 'policy') {
+  const p = readPolicy();
+  const on = (v: string | undefined) => (v === undefined ? undefined : /^(on|yes|true|allow)$/i.test(v));
+  const swarm = on(arg('swarm')); const sbx = on(arg('sandbox-required'));
+  const next = cleanPolicy({ ...p, ...(swarm !== undefined ? { swarm } : {}), ...(arg('kinds') ? { kinds: arg('kinds')!.split(',').map((k) => k.trim()) } : {}), ...(arg('max-jobs') ? { maxJobs: Number(arg('max-jobs')) } : {}), ...(sbx !== undefined ? { sandboxRequired: sbx } : {}) });
+  if (process.argv.length > 3) {
+    fs.mkdirSync(path.dirname(policyFile), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(policyFile, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
+  }
+  console.log(`${policyFile}:\n  swarm work: ${next.swarm ? 'allowed' : 'not allowed'}\n  kinds of tools for swarm agents: ${next.kinds.join(', ')}\n  at most ${next.maxJobs} swarm job(s) at once\n  swarm work only in a sandbox: ${next.sandboxRequired ? 'yes' : 'no'}\nChange it with: harness-companion policy [--swarm on|off] [--kinds read,edit,exec,network] [--max-jobs N] [--sandbox-required on|off]`);
+  process.exit(0);
+}
+// The lease: with no word from the server for this long, everything running here stops and nothing new starts.
+// Longer than the server holds a poll (25 s), or a healthy companion would stop itself.
+const leaseMs = Math.max(40, Number(arg('lease-seconds') ?? process.env.HARNESS_COMPANION_LEASE_S ?? 120)) * 1000;
+const auditFile = path.join(path.dirname(policyFile), 'audit.log');
 
 const server = (arg('server') ?? process.env.HARNESS_SERVER ?? '').replace(/\/$/, '');
 // Tokens are short-lived: the server sends a fresh one before this one expires, and it
@@ -41,7 +62,25 @@ const sandbox = await sandboxedFolderHost(dir, sandboxWant, network).catch((e: E
 console.log(`commands run: ${sandbox.why}${sandbox.kind !== 'off' ? `, network ${network}` : ''}`);
 if (allowDesktop) console.log('DESKTOP CONTROL IS ON (--allow-desktop): the agent can see this screen and use the mouse and keyboard, outside any sandbox. Each action is approved in the web app unless the session bypasses permissions. Stop the companion (Ctrl+C) to take it back.');
 else console.log('desktop control: off (start with --allow-desktop to let the agent see the screen and use the mouse and keyboard)');
-const handle = createCompanionHandler(dir, { allowHooks, trustProject, allowDesktop, host: sandbox.host, log: (m) => console.log(`[${new Date().toLocaleTimeString()}] ${m}`) });
+const handle = createCompanionHandler(dir, {
+  allowHooks, trustProject, allowDesktop, host: sandbox.host, log: (m) => console.log(`[${new Date().toLocaleTimeString()}] ${m}`),
+  policy: readPolicy,
+  // Who asked what, where, and what came of it: kept on this machine, outside the folder.
+  audit: (e) => { try { fs.mkdirSync(path.dirname(auditFile), { recursive: true, mode: 0o700 }); fs.appendFileSync(auditFile, `${JSON.stringify(e)}\n`, { mode: 0o600 }); } catch { /* the log is best effort */ } },
+});
+{ const p = readPolicy(); console.log(`swarm work: ${p.swarm ? `allowed (${p.kinds.join(', ')}; at most ${p.maxJobs} at once${p.sandboxRequired ? '; only in a sandbox' : ''})` : 'not allowed'} (${policyFile}); lease ${leaseMs / 1000}s`); }
+// Monotonic time, so a clock change on this machine cannot stretch the lease.
+let heard = performance.now();
+setInterval(() => {
+  if (performance.now() - heard > leaseMs && !fencedNow) {
+    fencedNow = true;
+    handle.stopAll(`no word from the server for ${Math.round(leaseMs / 1000)}s`, true);
+    console.error(`no word from the server for ${Math.round(leaseMs / 1000)}s: stopped everything running here; work resumes when the server is heard again`);
+  }
+}, 2000).unref();
+let fencedNow = false;
+// Ctrl+C stops what runs here first.
+process.on('SIGINT', () => { handle.stopAll('the companion was stopped on this machine', true); setTimeout(() => process.exit(130), 300); });
 
 async function post(p: string, body: unknown, signal?: AbortSignal): Promise<Response> {
   return fetch(`${server}${p}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body), signal });
@@ -77,8 +116,9 @@ async function loop(): Promise<void> {
   while (true) {
     try {
       const h = sandbox.host;
-      const info = { platform: h.platform, shell: h.kind === 'docker' ? 'bash' : resolveShell().kind, root: h.displayRoot, version: '0.5.0', sandbox: sandbox.kind, network: h.sandboxed ? h.networkPolicy : 'full', trustProject, desktop: allowDesktop };
-      const res = await post('/api/companion/poll', { info }, AbortSignal.timeout(60_000));
+      const info = { platform: h.platform, shell: h.kind === 'docker' ? 'bash' : resolveShell().kind, root: h.displayRoot, version: '0.6.0', sandbox: sandbox.kind, network: h.sandboxed ? h.networkPolicy : 'full', trustProject, desktop: allowDesktop, policy: readPolicy() };
+      const res = await post('/api/companion/poll', { info, running: handle.running() }, AbortSignal.timeout(60_000));
+      if (res.status !== 401) { heard = performance.now(); if (fencedNow) { fencedNow = false; handle.unfence(); console.log('the server is heard again: taking work'); } }
       if (res.status === 401) {
         // Started with an old token, but a fresher one was kept from an earlier run.
         const kept = stored();

@@ -16,6 +16,8 @@ import type { Harness } from '../kernel/harness.ts';
 import { MemoryError, MemoryStore } from '../memory/store.ts';
 import { allowedImages, dockerAvailable, dockerDefaults, imageExists, sessionImage } from '../runtime/docker.ts';
 import { COMPANION_RESULT_LIMIT } from '../runtime/companion.ts';
+import { cleanPolicy } from '../companion/handler.ts';
+import { replay, verifyBundle } from '../core/recorder.ts';
 import { BundleError, exportSession, importSession } from '../core/portable.ts';
 import { OUTPUT_STYLES } from '../core/prompt.ts';
 import { loadUserInstructions, loadUserSettings, saveUserInstructions, saveUserSettings } from '../core/settings.ts';
@@ -824,13 +826,14 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       const id = auth.id;
       const body = await readJson(req, p === '/api/companion/result' ? COMPANION_RESULT_LIMIT : 1_000_000);
       if (p === '/api/companion/poll') {
-        const info = (body.info ?? {}) as { platform?: string; shell?: string; root?: string; version?: string; sandbox?: string; network?: string; trustProject?: boolean; desktop?: boolean };
+        const info = (body.info ?? {}) as { platform?: string; shell?: string; root?: string; version?: string; sandbox?: string; network?: string; trustProject?: boolean; desktop?: boolean; policy?: unknown };
+        const running = Array.isArray(body.running) ? (body.running as unknown[]).filter((r): r is string => typeof r === 'string' && r.length <= 64).slice(0, 256) : undefined;
         const sandbox = ['bwrap', 'seatbelt', 'docker'].includes(String(info.sandbox)) ? String(info.sandbox) : 'off';
         // Short-lived tokens: a fresh one rides on a poll's reply when it is due, and the companion
         // keeps it. Due now: reply at once rather than after the long poll. Else it may fall due
         // while the poll waits - unless the token was revoked meanwhile (checked again).
         let fresh = await companions.renew(id, auth.previous);
-        const job = await companions.poll(id, { platform: String(info.platform ?? 'unknown'), shell: String(info.shell ?? 'bash'), root: String(info.root ?? ''), version: info.version, sandbox, network: info.network === 'none' ? 'none' : 'full', trustProject: info.trustProject === true, desktop: info.desktop === true }, fresh ? 0 : undefined);
+        const job = await companions.poll(id, { platform: String(info.platform ?? 'unknown'), shell: String(info.shell ?? 'bash'), root: String(info.root ?? ''), version: info.version, sandbox, network: info.network === 'none' ? 'none' : 'full', trustProject: info.trustProject === true, desktop: info.desktop === true, ...(info.policy ? { policy: cleanPolicy(info.policy) } : {}) }, fresh ? 0 : undefined, running);
         if (!fresh) { const still = companions.authenticateToken(token); if (still?.id === id) fresh = await companions.renew(id, still.previous); }
         const h: Record<string, string> = fresh ? { 'x-harness-companion-token': fresh } : {};
         return job ? send(res, 200, job, h) : send(res, 204, '', h);
@@ -1944,6 +1947,17 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       if (action === 'abort' && method === 'POST') { s.abort(); return send(res, 200, { ok: true }); }
       // The swarm's kill switch: every agent of the run stops, the conversation's own agent goes on (and hears it).
       if (action === 'stop_agents' && method === 'POST') return send(res, 200, { stopped: s.stopSwarm('the person') });
+      // The run recorder (phase 6): the hash-chained record as a bundle that verifies on its own, its check, or a
+      // replay of it (the steps as they happened; nothing runs again).
+      if (action === 'record' && method === 'GET') {
+        const r = await s.record();
+        if (!r) throw new HttpError(404, 'This session is not recorded: the run recorder is on with "record": true in the settings, or HARNESS_RECORD=on.');
+        const bundle = await r.export(s.meta.id);
+        const view = url.searchParams.get('view');
+        if (view === 'verify') return send(res, 200, verifyBundle(bundle));
+        if (view === 'replay') return send(res, 200, { verify: verifyBundle(bundle), steps: replay(bundle) });
+        return send(res, 200, bundle);
+      }
       if (action === 'export' && method === 'GET') {
         // The session as one file, to continue it on another server or in the desktop app.
         const bundle = await exportSession(s);

@@ -1,0 +1,237 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { test } from 'node:test';
+import { finalVerdict } from '../src/agents/acceptance.ts';
+import { cleanPolicy, type CompanionJob, createCompanionHandler, DEFAULT_POLICY, type MachinePolicy, policyRefusal } from '../src/companion/handler.ts';
+import type { HarnessEvent } from '../src/core/types.ts';
+import { CompanionHub } from '../src/runtime/companion.ts';
+import { LocalHost } from '../src/runtime/host.ts';
+import { tempDir } from './helpers.ts';
+import { OPERATOR, setupServer, waitFor } from './multi-helpers.ts';
+
+// A swarm across the person's computers (docs/swarm/SWARM.md, phase 7; research: docs/swarm/research/multi_machine.md):
+// stop means stop on the machine too (a cancel kills the job's processes; a job the server no longer waits for is
+// stopped; with no word from the server the companion stops everything itself), the machine's own policy decides what
+// swarm agents may do there (the server cannot widen it), a delegation can be placed on a computer, and at stakes a
+// machine's checks of its own work do not accept it. Asserted on the machine's processes and files, not on reports.
+
+type Handler = ReturnType<typeof createCompanionHandler>;
+
+/** A companion in this process that runs its jobs at once, side by side (as the real one does), reporting what runs. */
+function companion(hub: CompanionHub, id: string, dir: string, o: { policy?: MachinePolicy; sandboxed?: boolean; info?: Record<string, unknown> } = {}) {
+  const audit: { kind: string; what: string; swarm: boolean; outcome: string }[] = [];
+  const handle: Handler = createCompanionHandler(dir, { allowHooks: true, policy: () => o.policy ?? DEFAULT_POLICY, audit: (e) => audit.push(e), ...(o.sandboxed ? { host: sandboxedLocal(dir) } : {}) });
+  let on = true;
+  (async () => {
+    while (on) {
+      const job = await hub.poll(id, { platform: process.platform, shell: 'bash', root: dir, ...o.info }, 100, handle.running());
+      if (!job) continue;
+      void handle(job as CompanionJob).then((r) => hub.complete(id, job.id, r.ok, r.value));
+    }
+  })();
+  return { handle, audit, stop: () => { on = false; handle.stopAll('test over'); } };
+}
+
+/** The folder's host, said to be sandboxed (what a bubblewrap or Docker companion reports): for the policy's sandbox rule. */
+function sandboxedLocal(dir: string) {
+  const h = new LocalHost(dir);
+  Object.defineProperty(h, 'sandboxed', { get: () => true });
+  return h;
+}
+
+const exists = (p: string) => fs.access(p).then(() => true, () => false);
+
+test('a stop reaches the machine: the cancelled command\'s processes are killed (its later write never happens), the job is gone from the machine', async () => {
+  const hub = new CompanionHub(await tempDir());
+  const { id } = await hub.create('laptop');
+  const dir = await tempDir();
+  const c = companion(hub, id, dir);
+  try {
+    await new Promise((r) => setTimeout(r, 150));
+    const host = hub.host(id, 'sess');
+    const ac = new AbortController();
+    const t0 = Date.now();
+    const run = host.exec('sleep 10; echo late > late.txt', { timeoutMs: 60_000, signal: ac.signal });
+    await waitFor(() => c.handle.running().length === 1, 'the command runs on the machine');
+    ac.abort();
+    await assert.rejects(run, /aborted/);
+    await waitFor(() => c.handle.running().length === 0, 'stopped on the machine', 10_000);
+    assert.ok(Date.now() - t0 < 9000, 'stopped well before the command would have ended');
+    await new Promise((r) => setTimeout(r, 11_000));
+    assert.equal(await exists(path.join(dir, 'late.txt')), false, 'its processes were killed: the write after the sleep never happened');
+    assert.ok(c.audit.some((e) => e.kind === 'cancel' && e.outcome === 'stopped'), 'the machine\'s own log has the stop');
+    assert.ok(c.audit.some((e) => e.kind === 'exec' && /^stopped/.test(e.outcome)));
+  } finally { c.stop(); }
+});
+
+test('a job the server no longer waits for (it restarted) is stopped at the next poll; two stops are one', async () => {
+  const dir = await tempDir();
+  const data = await tempDir();
+  const hub = new CompanionHub(data);
+  const { id } = await hub.create('laptop');
+  const handle = createCompanionHandler(dir, { allowHooks: true });
+  await hub.poll(id, { platform: process.platform, shell: 'bash', root: dir }, 0);
+  const sent = hub.host(id, 's').exec('sleep 12; echo late > late.txt', { timeoutMs: 60_000 }).catch(() => undefined);
+  const job = (await hub.poll(id, { platform: process.platform, shell: 'bash', root: dir }, 1000))!;
+  const running = handle(job);
+  await waitFor(() => handle.running().length === 1, 'running');
+  // The server restarts: a new hub knows nothing of the job, and the machine says it is running it.
+  const again = new CompanionHub(data);
+  await again.load();
+  const cancel = await again.poll(id, { platform: process.platform, shell: 'bash', root: dir }, 0, handle.running());
+  assert.equal(cancel?.kind, 'cancel');
+  assert.equal((cancel as Extract<CompanionJob, { kind: 'cancel' }>).target, job.id);
+  assert.deepEqual((await handle(cancel!)).value, { stopped: true });
+  assert.deepEqual((await handle(cancel!)).value, { stopped: false }, 'a second stop does nothing');
+  assert.equal((await running).ok, false);
+  assert.equal(handle.running().length, 0);
+  void sent;
+  await new Promise((r) => setTimeout(r, 13_000));
+  assert.equal(await exists(path.join(dir, 'late.txt')), false);
+});
+
+test('fenced (no word from the server for the lease): what runs stops, nothing new starts until the server is heard again', async () => {
+  const dir = await tempDir();
+  const handle = createCompanionHandler(dir, { allowHooks: true });
+  const job = (n: number, command: string): CompanionJob => ({ id: `j${n}`, kind: 'exec', sessionId: 's', command, timeoutMs: 30_000 });
+  const long = handle(job(1, 'sleep 10; echo late > late.txt'));
+  await waitFor(() => handle.running().length === 1, 'running');
+  handle.stopAll('no word from the server for 120s', true);
+  assert.equal((await long).ok, false);
+  const refused = await handle(job(2, 'echo hi'));
+  assert.deepEqual([refused.ok, /stopped taking work: no word from the server/.test(String((refused.value as { error: string }).error))], [false, true]);
+  handle.unfence();
+  assert.equal((await handle(job(3, 'echo hi'))).ok, true);
+  await new Promise((r) => setTimeout(r, 11_000));
+  assert.equal(await exists(path.join(dir, 'late.txt')), false);
+});
+
+test('the machine\'s policy decides what swarm agents do there, whatever the server says; the conversation\'s own agent is as before', () => {
+  const tool = (name: string, input: Record<string, unknown> = {}, swarm = true): CompanionJob => ({ id: 'x', kind: 'tool', sessionId: 's', name, input, swarm });
+  // No policy file: swarm agents may read, nothing more.
+  assert.equal(policyRefusal(tool('read', { path: 'a' }), DEFAULT_POLICY, false), undefined);
+  assert.match(policyRefusal(tool('write', { path: 'a', content: 'x' }), DEFAULT_POLICY, false)!, /policy: write needs edit, and swarm work here may only read/);
+  assert.match(policyRefusal({ id: 'x', kind: 'exec', sessionId: 's', command: 'npm test', timeoutMs: 1, swarm: true }, DEFAULT_POLICY, true)!, /a command needs exec/);
+  assert.equal(policyRefusal(tool('write', { path: 'a', content: 'x' }, false), DEFAULT_POLICY, false), undefined, 'not swarm work: the start flags decide, as before');
+  // Swarm work off altogether.
+  assert.match(policyRefusal(tool('read', { path: 'a' }), cleanPolicy({ swarm: false }), true)!, /does not take swarm work/);
+  // Writing and commands allowed, but only in a sandbox.
+  const p = cleanPolicy({ swarm: true, kinds: ['read', 'edit', 'exec'] });
+  assert.match(policyRefusal(tool('bash', { command: 'make' }), p, false)!, /beyond reading runs only in a sandbox/);
+  assert.equal(policyRefusal(tool('bash', { command: 'make' }), p, true), undefined);
+  assert.match(policyRefusal(tool('bash', { command: 'serve', run_in_background: true }), p, true)!, /background commands outlive the job/);
+  assert.match(policyRefusal(tool('web_fetch', { url: 'https://x.example' }), p, true)!, /needs network/);
+  // A policy file with nonsense in it: the defaults, never more.
+  assert.deepEqual(cleanPolicy({ swarm: 'yes', kinds: ['root', 'read'], maxJobs: 1e9, sandboxRequired: 0 }), { swarm: false, kinds: ['read'], maxJobs: DEFAULT_POLICY.maxJobs, sandboxRequired: true });
+});
+
+test('the machine\'s capacity holds: 6 swarm commands sent at once run at most 2 at a time', async () => {
+  const dir = await tempDir();
+  const policy = cleanPolicy({ swarm: true, kinds: ['read', 'exec'], maxJobs: 2, sandboxRequired: false });
+  const handle = createCompanionHandler(dir, { allowHooks: true, policy: () => policy });
+  const t0 = Date.now();
+  const marks: number[] = [];
+  await Promise.all(Array.from({ length: 6 }, (_, i) => handle({ id: `c${i}`, kind: 'exec', sessionId: 's', command: 'sleep 1', timeoutMs: 30_000, swarm: true }).then((r) => { assert.equal(r.ok, true); marks.push(Date.now() - t0); })));
+  marks.sort((a, b) => a - b);
+  // Two at a time: three waves of about a second each.
+  assert.ok(marks[5]! >= 2800, `the last finished after three waves (${marks.join(', ')} ms)`);
+  assert.ok(marks[1]! < 2500 && marks[2]! >= 1800, `two in the first wave, the third in the second (${marks.join(', ')} ms)`);
+});
+
+test('a delegation placed on the person\'s computer works in that computer\'s folder, under its policy; a stop of the swarm stops its command there', async () => {
+  const t = await setupServer();
+  const { id } = await t.harness.companions.create('laptop');
+  const laptop = await tempDir('hw-laptop-');
+  let policy: MachinePolicy = DEFAULT_POLICY;
+  // The laptop's companion, said to be sandboxed; it reads its policy for each job (the test changes it as its owner would).
+  const handler = createCompanionHandler(laptop, { allowHooks: true, host: sandboxedLocal(laptop), policy: () => policy });
+  let on = true;
+  void (async () => {
+    while (on) {
+      const job = await t.harness.companions.poll(id, { platform: process.platform, shell: 'bash', root: laptop, sandbox: 'bwrap', network: 'none' }, 100, handler.running());
+      if (job) void handler(job as CompanionJob).then((r) => t.harness.companions.complete(id, job.id, r.ok, r.value));
+    }
+  })();
+  try {
+    await new Promise((r) => setTimeout(r, 200));
+    const here = await tempDir('hw-here-');
+    const made = await t.call(OPERATOR, 'POST', '/api/sessions', { model: 'deepseek-flash', runtime: 'local', path: here, mode: 'bypass' });
+    const s = t.harness.sessions.get(made.body.id)!;
+    const ev: HarnessEvent[] = [];
+    s.subscribe(0, ({ event }) => ev.push(event));
+    const ends = () => ev.filter((e) => e.kind === 'turn_end' && (!('agent' in e) || !e.agent)).length;
+    const turn = async (text: string) => { const n = ends(); await s.send(text); await waitFor(() => ends() > n, 'the turn', 60_000); };
+    const call = (input: Record<string, unknown>) => ({ name: 'agent', input: { description: 'on the laptop', type: 'general', machine: 'laptop', ...input } });
+
+    // The default policy: the agent may read on the laptop, and its write is refused there (by the machine).
+    t.ds.scripts.lead = [{ calls: [call({ prompt: '[[w1]] Write the notes.' })] }, { text: 'Tried.' }];
+    t.ds.scripts.w1 = [{ calls: [{ name: 'write', input: { path: 'notes.md', content: 'from the swarm\n' } }] }, { text: 'Could not write.' }];
+    await turn('[[lead]] Go.');
+    const spec = t.ds.requests.find((r) => r.tools.some((x) => x.name === 'agent'))!.tools.find((x) => x.name === 'agent')!;
+    assert.deepEqual((spec.input_schema as { properties: Record<string, { enum?: string[] }> }).properties.machine!.enum, ['laptop'], 'the tool names the person\'s computers');
+    const w1 = ev.find((e): e is Extract<HarnessEvent, { kind: 'tool_result' }> => e.kind === 'tool_result' && e.name === 'write' && !!e.agent && e.agent !== 'main')!;
+    assert.match(w1.content, /refused by this machine's policy: write needs edit/);
+    assert.equal(await exists(path.join(laptop, 'notes.md')), false);
+
+    // The owner allows writing and commands (on the machine): the write lands on the laptop, not here.
+    policy = cleanPolicy({ swarm: true, kinds: ['read', 'edit', 'exec'], maxJobs: 4 });
+    t.ds.scripts.lead = [{ calls: [call({ prompt: '[[w2]] Write the notes.' })] }, { text: 'Done.' }];
+    t.ds.scripts.w2 = [{ calls: [{ name: 'write', input: { path: 'notes.md', content: 'from the swarm\n' } }] }, { text: 'Wrote notes.md.' }];
+    await turn('[[lead]] Go.');
+    assert.equal(await fs.readFile(path.join(laptop, 'notes.md'), 'utf8'), 'from the swarm\n');
+    assert.equal(await exists(path.join(here, 'notes.md')), false, 'nothing in the conversation\'s own folder');
+
+    // A long command on the laptop, then Stop all: it stops there too (its later write never happens).
+    t.ds.scripts.lead = [{ calls: [call({ prompt: '[[w3]] Build it.' })] }, { text: 'Stopped.' }];
+    t.ds.scripts.w3 = [{ calls: [{ name: 'bash', input: { command: 'sleep 12; echo late > late.txt', timeout_ms: 60_000 } }] }, { text: 'Built.' }];
+    const n = ends();
+    await s.send('[[lead]] Go.');
+    await waitFor(() => handler.running().length === 1, 'the command runs on the laptop', 20_000);
+    assert.equal((await t.call(OPERATOR, 'POST', `/api/sessions/${s.meta.id}/stop_agents`, {})).status, 200);
+    await waitFor(() => handler.running().length === 0, 'stopped on the laptop', 10_000);
+    await waitFor(() => ends() > n, 'the turn', 60_000);
+    await new Promise((r) => setTimeout(r, 13_000));
+    assert.equal(await exists(path.join(laptop, 'late.txt')), false, 'the stop reached the laptop\'s processes');
+
+    // A computer that is not one of the person's: refused before anything starts.
+    t.ds.scripts.lead = [{ calls: [call({ prompt: 'x', machine: 'desktop' })] }, { text: 'No such computer.' }];
+    await turn('[[lead]] Go.');
+    const r = ev.filter((e): e is Extract<HarnessEvent, { kind: "tool_result" }> => e.kind === "tool_result" && e.name === "agent").at(-1)!;
+    assert.match(r.content, /parameter "machine" must be one of "laptop"/);
+  } finally { on = false; handler.stopAll('test over'); await t.close(); }
+});
+
+test('at stakes, checks that ran only on the computer that did the work do not accept it', () => {
+  const pass = { verdict: 'pass' as const, issues: [] };
+  const results = [{ label: 'run npm test', ok: true, detail: 'exit 0' }];
+  assert.equal(finalVerdict(pass, results, { stakes: 'high', remote: true }).verdict, 'unknown');
+  assert.match(finalVerdict(pass, results, { stakes: 'high', remote: true }).overruled!, /ran only on the computer that did the work are its own report/);
+  assert.equal(finalVerdict(pass, results, { stakes: 'high' }).verdict, 'pass', 'on the server: as before');
+  assert.equal(finalVerdict(pass, results, { remote: true }).verdict, 'pass', 'at normal stakes: as before');
+});
+
+test('Windows: a stopped command started through timeout, exec or a nested shell is killed with all it started (seen live: a build ran on after Stop all)', { skip: process.platform !== 'win32' && 'Windows only', todo: 'a known gap: on a loaded machine about 1 stop in 4 still misses a process (MSYS cannot always read a busy process environment, so its tag is not seen); a Windows Job Object is the fix' }, async () => {
+  for (const command of ['timeout 550 bash b.sh', 'timeout 550 bash b.sh > out.txt 2>&1', 'bash -c "exec bash b.sh"', 'bash b.sh']) {
+    const dir = await tempDir();
+    await fs.writeFile(path.join(dir, 'b.sh'), 'echo started > started.txt\nsleep 8\necho late > late.txt\n');
+    const ac = new AbortController();
+    const run = new LocalHost(dir).exec(command, { timeoutMs: 60_000, signal: ac.signal });
+    // Stopped once it runs (as Stop all finds a build): a stop in the very first moment of a cold Git Bash start can
+    // still lose a process caught mid-start (seen in a loaded test run); that case is not covered here.
+    await waitFor(() => exists(path.join(dir, 'started.txt')), 'the command runs', 20_000);
+    ac.abort();
+    await run;
+    await new Promise((r) => setTimeout(r, 9000));
+    assert.equal(await exists(path.join(dir, 'late.txt')), false, `${command}: its processes were killed`);
+  }
+});
+
+test('"these computers" with no items is the same brief on each of them (seen live: it ran once, in the conversation\'s own folder)', async () => {
+  const { makeAgentTool, BUILTIN_AGENTS } = await import('../src/agents/agents.ts');
+  const tool = makeAgentTool(BUILTIN_AGENTS, { machines: ['laptop', 'office'] });
+  const seen: { machine?: string; prompt: string }[] = [];
+  const r = await tool.run({ description: 'count', type: 'general', prompt: 'Count the TODO lines in todo.txt.', machines: ['laptop', 'office'] }, { runSubagent: async (a: { machine?: string; prompt: string }) => { seen.push(a); return `counted on ${a.machine}`; }, signal: new AbortController().signal, services: {} } as never);
+  assert.deepEqual(seen.map((a) => a.machine), ['laptop', 'office']);
+  assert.match(String(r.content), /\| 1 \| laptop \| on laptop \| done \|[\s\S]*\| 2 \| office \| on office \| done \|/);
+});

@@ -1,0 +1,36 @@
+{
+  "name": "forecasting",
+  "version": "1.0.0",
+  "description": "A forecasting ledger: live yes/no questions forecast by several models (outside view first), aggregated in code, kept until they resolve, and scored, so skill is shown by resolved questions, not claimed.",
+  "icon": "trending-up",
+  "category": "Productivity",
+  "tags": [
+    "forecasting",
+    "predictions",
+    "calibration"
+  ],
+  "publisher": {
+    "name": "Suhail Akhtar",
+    "url": "https://github.com/suhail-akhtar/agent-harness-web"
+  },
+  "license": "MIT",
+  "links": {
+    "repository": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/plugins/forecasting",
+    "docs": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/docs",
+    "support": "https://github.com/suhail-akhtar/agent-harness-web/issues"
+  },
+  "engines": {
+    "harness": ">=0.1.0"
+  },
+  "changelog": "CHANGELOG.md",
+  "main": "index.mjs",
+  "agents": "agents",
+  "ui": {
+    "apiVersion": 1,
+    "guide": "GUIDE.md",
+    "displayName": "Forecasting",
+    "icon": "trending-up",
+    "category": "Knowledge",
+    "trust": "declarative"
+  }
+}

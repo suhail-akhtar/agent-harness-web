@@ -3,7 +3,7 @@ import path from 'node:path';
 import { LocalHost, type ToolHost } from '../runtime/host.ts';
 import { toolByName } from '../tools/index.ts';
 import { resolveIn } from '../tools/paths.ts';
-import type { FileStamp, ToolContext } from '../tools/types.ts';
+import type { FileStamp, ToolContext, ToolKind } from '../tools/types.ts';
 import { checkRequest, type DesktopExecutor, type DesktopRequest, systemDesktop } from './desktop.ts';
 
 // What a companion does with each job from the server, kept apart from the
@@ -11,8 +11,11 @@ import { checkRequest, type DesktopExecutor, type DesktopRequest, systemDesktop 
 // companion was started in.
 
 export type CompanionJob =
-  | { id: string; kind: 'tool'; sessionId: string; name: string; input: Record<string, unknown> }
-  | { id: string; kind: 'exec'; sessionId: string; command: string; timeoutMs: number; stdin?: string }
+  /** `swarm`: a swarm agent's call (docs/swarm/SWARM.md, phase 7), held to this machine's policy for swarm work. */
+  | { id: string; kind: 'tool'; sessionId: string; name: string; input: Record<string, unknown>; swarm?: boolean }
+  | { id: string; kind: 'exec'; sessionId: string; command: string; timeoutMs: number; stdin?: string; swarm?: boolean }
+  /** Stop a job that is running here (its process tree is killed); a job that is not running is no-op. */
+  | { id: string; kind: 'cancel'; sessionId: string; target: string; reason?: string }
   | { id: string; kind: 'pull'; sessionId: string; known: Record<string, [number, number]>; maxBytes: number; chunkBytes?: number }
   | { id: string; kind: 'push'; sessionId: string; path: string; data: string }
   /** One file in the folder: its bytes (null when absent), or remove it - for checkpoints and project config. */
@@ -38,6 +41,43 @@ const FILE_MAX = 20 * 1024 * 1024;
 const MCP_MESSAGE_MAX = 16 * 1024 * 1024;
 const MCP_INBOX_MAX = 32 * 1024 * 1024;
 
+/**
+ * What this machine offers to agents' work (phase 7): set on the machine, in a file the sandbox cannot see
+ * (~/.harness-companion/policy.json, through `harness-companion policy`), never by the server, which can only
+ * narrow it. The conversation's own agent works as the companion's start flags allow; swarm agents (the sub-agents
+ * a run starts) work here only when `swarm` is on, with the kinds of tools listed, in a sandbox unless the person
+ * turned that off, and at most `maxJobs` at once.
+ */
+export interface MachinePolicy { swarm: boolean; kinds: ToolKind[]; maxJobs: number; sandboxRequired: boolean }
+// With no policy file: swarm agents may read here (an explore agent works as before), nothing more; writing,
+// commands and the network are the owner's to allow. Read-only work needs no sandbox (nothing runs).
+export const DEFAULT_POLICY: MachinePolicy = { swarm: true, kinds: ['read'], maxJobs: 4, sandboxRequired: true };
+const KINDS: ToolKind[] = ['read', 'edit', 'exec', 'network', 'external', 'meta'];
+
+/** A policy from a file's JSON: anything unreadable falls back to the default (no swarm work). */
+export function cleanPolicy(o: unknown): MachinePolicy {
+  const p = o && typeof o === 'object' ? o as Record<string, unknown> : {};
+  const kinds = Array.isArray(p.kinds) ? p.kinds.filter((k): k is ToolKind => KINDS.includes(k as ToolKind)) : DEFAULT_POLICY.kinds;
+  const max = Number(p.maxJobs);
+  return { swarm: p.swarm === true, kinds: [...new Set(kinds)], maxJobs: Number.isInteger(max) && max >= 1 && max <= 64 ? max : DEFAULT_POLICY.maxJobs, sandboxRequired: p.sandboxRequired !== false };
+}
+
+/** Why this machine refuses a swarm agent's job, by its policy (undefined: it runs). */
+export function policyRefusal(job: CompanionJob, policy: MachinePolicy, sandboxed: boolean): string | undefined {
+  if ((job.kind !== 'tool' && job.kind !== 'exec') || !job.swarm) return undefined;
+  const by = 'refused by this machine\'s policy';
+  if (!policy.swarm) return `${by}: it does not take swarm work (its owner can allow it: harness-companion policy --swarm on)`;
+  const tool = job.kind === 'tool' ? toolByName(job.name) : undefined;
+  const kinds: ToolKind[] = job.kind === 'exec' ? ['exec'] : tool?.kindsFor?.(job.input) ?? (tool ? [tool.kind] : ['exec']);
+  const off = kinds.filter((k) => !policy.kinds.includes(k));
+  if (off.length) return `${by}: ${job.kind === 'exec' ? 'a command' : job.name} needs ${off.join(', ')}, and swarm work here may only ${policy.kinds.join(', ')} (its owner can allow more: harness-companion policy --kinds ...)`;
+  // Reading changes nothing; anything more from a swarm agent runs contained, or not at all.
+  if (policy.sandboxRequired && !sandboxed && kinds.some((k) => k !== 'read')) return `${by}: swarm work beyond reading runs only in a sandbox here, and this companion has none (start it with --sandbox, or its owner sets --sandbox-required off)`;
+  // A detached command outlives the job and its lease: not in swarm work.
+  if (job.kind === 'tool' && job.input.run_in_background === true) return `${by}: background commands outlive the job; swarm work here runs commands in the foreground only`;
+  return undefined;
+}
+
 /** A project MCP server running here: what it said and the server has not yet read. */
 interface McpRelay { child: import('node:child_process').ChildProcessWithoutNullStreams; inbox: Record<string, unknown>[]; held: number; waiters: (() => void)[]; closed?: string }
 
@@ -48,10 +88,20 @@ export function createCompanionHandler(dir: string, opts: {
   /** How desktop jobs run (default: this OS's own tools; tests pass a stand-in). */ desktop?: DesktopExecutor;
   log?: (m: string) => void;
   /** Where commands run: a sandboxed host for the folder (default: plain). */ host?: ToolHost;
+  /** This machine's policy for swarm work, read for every job (an edit takes effect at the next one). Default: none. */
+  policy?: () => MachinePolicy;
+  /** A line per job for this machine's own audit log (who asked what, and what came of it). */
+  audit?: (e: { at: string; job: string; kind: string; session: string; what: string; swarm: boolean; outcome: string }) => void;
 } = {}) {
   const host: ToolHost = opts.host ?? new LocalHost(dir);
   const desktop = opts.desktop ?? systemDesktop(dir);
   const readFiles = new Map<string, Map<string, FileStamp>>();
+  /** Jobs running here, each with the signal that stops it (a cancel, the lease running out, the companion stopping). */
+  const running = new Map<string, AbortController>();
+  /** Swarm jobs waiting for a place under the policy's maxJobs. */
+  let swarmActive = 0;
+  const swarmWaiting: (() => void)[] = [];
+  let fenced: string | undefined;
 
   /**
    * Files that changed since the server's copy (by size and mtime); the server
@@ -133,11 +183,11 @@ export function createCompanionHandler(dir: string, opts: {
     return { messages: s.inbox.splice(0), ...(s.closed ? { closed: s.closed } : {}) };
   }
 
-  return async function handle(job: CompanionJob): Promise<{ ok: boolean; value: unknown }> {
+  async function run(job: CompanionJob, signal: AbortSignal): Promise<{ ok: boolean; value: unknown }> {
     try {
       if (job.kind === 'exec') {
         if (!opts.allowHooks) throw new Error('hooks are disabled on this companion (start it with --allow-hooks)');
-        return { ok: true, value: await host.exec(job.command, { timeoutMs: job.timeoutMs, stdin: job.stdin }) };
+        return { ok: true, value: await host.exec(job.command, { timeoutMs: job.timeoutMs, stdin: job.stdin, signal }) };
       }
       if (job.kind === 'pull') {
         opts.log?.('copying changed files for a server-side tool');
@@ -173,7 +223,7 @@ export function createCompanionHandler(dir: string, opts: {
         if (!tool || !tool.remoteable) throw new Error(`tool ${job.name} does not run on the companion`);
         const files = readFiles.get(job.sessionId) ?? new Map<string, FileStamp>();
         readFiles.set(job.sessionId, files);
-        const ctx: ToolContext = { host, signal: new AbortController().signal, readFiles: files, todos: [], setTodos() {}, emit() {} };
+        const ctx: ToolContext = { host, signal, readFiles: files, todos: [], setTodos() {}, emit() {} };
         opts.log?.(tool.summarize(job.input));
         try { return { ok: true, value: await tool.run(job.input, ctx) }; } catch (err) { return { ok: true, value: { content: (err as Error).message, is_error: true } }; }
       }
@@ -181,5 +231,54 @@ export function createCompanionHandler(dir: string, opts: {
     } catch (err) {
       return { ok: false, value: { error: (err as Error).message } };
     }
-  };
+  }
+
+  const what = (job: CompanionJob) => (job.kind === 'tool' ? `${job.name} ${toolByName(job.name)?.summarize(job.input) ?? ''}`.trim() : job.kind === 'exec' ? `exec ${job.command}` : job.kind === 'cancel' ? `cancel ${job.target}` : job.kind).slice(0, 300);
+  const record = (job: CompanionJob, outcome: string) => opts.audit?.({ at: new Date().toISOString(), job: job.id, kind: job.kind, session: job.sessionId, what: what(job), swarm: 'swarm' in job && job.swarm === true, outcome });
+
+  async function handle(job: CompanionJob): Promise<{ ok: boolean; value: unknown }> {
+    if (job.kind === 'cancel') {
+      // Idempotent: a job already stopping (or gone) is left as it is.
+      const c = running.get(job.target);
+      const now = !!c && !c.signal.aborted;
+      if (now) { c!.abort(new Error(job.reason ?? 'cancelled by the server')); opts.log?.(`stopped job ${job.target}${job.reason ? `: ${job.reason}` : ''}`); }
+      record(job, now ? 'stopped' : c ? 'already stopping' : 'not running');
+      return { ok: true, value: { stopped: now } };
+    }
+    // Fenced (the lease ran out without word from the server): nothing new starts until the server is heard again.
+    if (fenced) { record(job, `refused: ${fenced}`); return { ok: false, value: { error: `this companion stopped taking work: ${fenced}` } }; }
+    const policy = opts.policy?.() ?? DEFAULT_POLICY;
+    const no = policyRefusal(job, policy, host.sandboxed === true);
+    if (no) { opts.log?.(no); record(job, no); return { ok: false, value: { error: no } }; }
+    const swarm = 'swarm' in job && job.swarm === true;
+    const c = new AbortController();
+    running.set(job.id, c);
+    try {
+      if (swarm) {
+        while (swarmActive >= policy.maxJobs && !c.signal.aborted) await new Promise<void>((r) => { swarmWaiting.push(r); c.signal.addEventListener('abort', () => r(), { once: true }); });
+        if (c.signal.aborted) { record(job, 'stopped before it started'); return { ok: false, value: { error: `stopped before it started: ${(c.signal.reason as Error)?.message ?? 'cancelled'}` } }; }
+        swarmActive++;
+      }
+      try {
+        const r = await run(job, c.signal);
+        record(job, c.signal.aborted ? `stopped: ${(c.signal.reason as Error)?.message ?? 'cancelled'}` : r.ok ? ((r.value as { is_error?: boolean; code?: number })?.is_error ? 'error' : 'done') : `failed: ${(r.value as { error?: string })?.error ?? ''}`.slice(0, 200));
+        // A stopped job says so, whatever its tool returned on the way out.
+        return c.signal.aborted ? { ok: false, value: { error: `stopped on this machine: ${(c.signal.reason as Error)?.message ?? 'cancelled'}` } } : r;
+      } finally {
+        if (swarm) { swarmActive--; swarmWaiting.shift()?.(); }
+      }
+    } finally { running.delete(job.id); }
+  }
+
+  return Object.assign(handle, {
+    /** The jobs running here now (reported with each poll, so the server can stop the ones it no longer knows). */
+    running: () => [...running.keys()],
+    /** Stops every job running here, and (with `fence`) takes no new work until `unfence`. */
+    stopAll(reason: string, fence = false) {
+      if (fence) fenced = reason;
+      for (const c of running.values()) c.abort(new Error(reason));
+      for (const w of swarmWaiting.splice(0)) w();
+    },
+    unfence() { fenced = undefined; },
+  });
 }

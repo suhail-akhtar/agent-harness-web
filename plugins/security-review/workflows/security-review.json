@@ -1,0 +1,41 @@
+{
+  "name": "security-review",
+  "description": "A security review of the person's own code inside their mandate: files ranked by risk, one hunter per file group, every finding proven by a reproducer the harness runs (no reproducer that fires: unconfirmed, for a person), and a report held to the harness's ledger.",
+  "inputs": {
+    "focus": { "description": "What to look at first, if anything (a feature, a folder, a kind of flaw)", "default": "the whole scope of the mandate" }
+  },
+  "start": "hunt",
+  "maxAgentRuns": 30,
+  "nodes": {
+    "hunt": {
+      "type": "agent",
+      "title": "Plan and hunt",
+      "agent": "security-lead",
+      "prompt": "Review the code in the mandate's scope. Focus: {{input.focus}}. Write security/plan.md with every file in scope, then review every file on it and prove each flaw with confirm_finding.",
+      "next": "report"
+    },
+    "report": {
+      "type": "agent",
+      "title": "Report",
+      "agent": "security-reporter",
+      "prompt": "Write security/findings.md from the findings the harness ran.",
+      "next": "check"
+    },
+    "check": {
+      "type": "gate",
+      "title": "The report holds to the ledger",
+      "gates": ["findings-confirmed"],
+      "maxFailures": 2,
+      "next": { "on": { "pass": "done", "fail": "fix-report", "exhausted": "failed" } }
+    },
+    "fix-report": {
+      "type": "agent",
+      "title": "Fix the report",
+      "agent": "security-reporter",
+      "prompt": "security/findings.md does not hold to the harness's ledger. Fix each problem: call a finding CONFIRMED only when the findings tool says so, and list every confirmed one.\n\n{{feedback}}",
+      "next": "check"
+    },
+    "done": { "type": "end", "title": "Review ready", "status": "success" },
+    "failed": { "type": "end", "title": "The report does not hold to the ledger", "status": "failure" }
+  }
+}

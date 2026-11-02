@@ -54,6 +54,8 @@ import { bashTool } from '../tools/exec.ts';
 import { acceptanceNote, type Baseline, blockedReason, changeSet, comparatorBrief, trailingJson, parseComparison, type Replica, type CheckResult, finalVerdict, type Finding, parseVerdict, runChecks, summarizeChecks, summarizeFindings, summarizeVerdict, takeBaseline, tamperFindings, type Verdict, VERDICT_AGAIN, VERDICT_ASK, verifierBrief, withProtection } from '../agents/acceptance.ts';
 import { byRecord, readScorecards } from '../agents/scorecard.ts';
 import { verifyClaims } from '../research/claims.ts';
+import { Recorder } from './recorder.ts';
+import { CellStore, checkProvenance, compareFigures, figuresOf, openDatabase, runCell, semanticsStatus } from '../data/answers.ts';
 import { ArtifactError, type ArtifactMeta, type ArtifactService, ArtifactStore, artifactTool } from './artifacts.ts';
 import { DATA_TOOLS, dataServiceFor, dataToolsFor } from '../data/tools.ts';
 import { type ClientDecl, clientPrompt, clientSkillDirs, cleanClientPlugins, type ClientPresence, type DesktopTool } from './client.ts';
@@ -420,6 +422,9 @@ export class Session {
   private deps: SessionDeps;
   private host?: ToolHost;
   private settings?: Settings;
+  /** The run recorder, when the settings say to record (phase 6). */
+  private recorder?: Recorder;
+  private recordFailed = false;
   private toolbox?: Promise<Toolbox>;
   private agent?: Agent;
   private checkpoints?: Checkpoints;
@@ -435,6 +440,8 @@ export class Session {
   private saveTimer?: NodeJS.Timeout;
   private memory?: Promise<MemoryStore | undefined>;
   readonly sources: SourceStore;
+  /** Query cells of answers over the person's data (phase 2): in the session's folder, never the agent's workspace. */
+  private cellStore: CellStore;
   /** Background work: shells, sub-agents, workflow runs, monitors (in memory; a restart forgets it). */
   readonly tasks = new TaskRegistry((task, phase) => { this.emit({ kind: 'task', phase, task }); if (phase === 'finished') this.releaseSoon(); });
   /** Stops background agents, workflows and monitors (the user's Stop); replaced after each use. */
@@ -468,6 +475,7 @@ export class Session {
     this.deps = deps;
     this.dir = path.join(deps.dataDir, 'sessions', meta.id);
     this.sources = new SourceStore(path.join(this.dir, 'sources'));
+    this.cellStore = new CellStore(path.join(this.dir, 'cells.json'));
   }
 
   get workspace(): string {
@@ -559,6 +567,8 @@ export class Session {
       if (this.events.length > EVENT_BUFFER) this.events.splice(0, this.events.length - EVENT_BUFFER);
     }
     for (const l of this.listeners) l(e);
+    // Recorded as shown (redacted): a vault value never reaches the record either.
+    this.recorder?.record(e.event, e.at).catch((err: Error) => { if (!this.recordFailed) { this.recordFailed = true; this.emit({ kind: 'notice', level: 'warn', text: `The run recorder could not write: ${err.message}` }); } });
     if (this.deps.onEvent) { try { this.deps.onEvent(this, e.event); } catch { /* a plugin's handler never breaks the session */ } }
   }
 
@@ -934,7 +944,15 @@ export class Session {
 
   private async getSettings(host: ToolHost): Promise<Settings> {
     this.settings ??= await this.loadSettings(host);
+    // The run recorder, from the first moment the settings say so (it keeps what happens from then on).
+    if (this.settings.record && !this.recorder) this.recorder = new Recorder(path.join(this.dir, 'record'));
     return this.settings;
+  }
+
+  /** The run recorder (phase 6), when this session records: its log verified, or exported as a bundle. */
+  async record(): Promise<Recorder | undefined> {
+    await this.getSettings(await this.getHost());
+    return this.recorder;
   }
 
   /**
@@ -1106,6 +1124,30 @@ export class Session {
         const cross = await this.crossModel(this.deps.registry.model(this.meta.model).provider, settings);
         const r = await this.runAgent({ agent: JUDGE_AGENT.name, def: JUDGE_AGENT, label: `judge-${++this.subagents}`, description: 'judge a claim', prompt: brief, signal, depth: 2, keep: false, verifier: true, ...(cross ? { model: cross, delegated: true } : {}) });
         return { text: this.lastText(r.agent!), by: `${r.id} on ${r.agent?.cfg.model.id ?? '?'}` };
+      },
+      // Answers over the person's own data (phase 2): a database file in the workspace, read only; cells kept here.
+      answers: {
+        query: async (db, sql, purpose) => {
+          const conn = await openDatabase(await this.databaseFile(db));
+          try {
+            // The person's definitions come first: while they are a draft, nothing is queried.
+            const sem = await this.semanticsFor(db);
+            if (sem === 'draft') throw new Error(`the definitions for ${db} (its semantics file) are a draft: the person approves them first ("Status: approved")`);
+            return await this.cellStore.add((id) => runCell(conn, sql, id, purpose));
+          } finally { conn.close(); }
+        },
+        schema: async (db) => { const conn = await openDatabase(await this.databaseFile(db)); try { return conn.schema(); } finally { conn.close(); } },
+        cells: () => this.cellStore.all(),
+        provenance: async (answer) => checkProvenance(answer, await this.cellStore.all()),
+        compare: (a, b) => { const fa = figuresOf(a); const fb = figuresOf(b); return { ...(fa ? { a: fa } : {}), ...(fb ? { b: fb } : {}), ...compareFigures(fa ?? {}, fb ?? {}) }; },
+      },
+      // An agent of the catalogue on another family than the conversation's model (where one is allowed): an independent
+      // recomputation (phase 2), a confirmation, a forecaster. It is given its brief only, never the conversation.
+      crossAgent: async (o, signal) => {
+        const settings = await this.getSettings(await this.getHost());
+        const cross = o.model ?? await this.crossModel(this.deps.registry.model(this.meta.model).provider, settings);
+        const r = await this.runAgent({ agent: o.type, label: `${o.type}-${++this.subagents}`, description: o.description ?? o.type, prompt: o.prompt, signal, depth: 2, keep: false, ...(cross ? { model: cross, delegated: true } : {}) });
+        return { report: r.report, model: r.agent?.cfg.model.id ?? cross ?? this.meta.model, cost: r.cost };
       },
       claims: async (report, signal) => {
         const svc = await this.services(main, caller);
@@ -1482,7 +1524,9 @@ export class Session {
     // A sub-agent can get its own worktree where the session works in a server folder that is a git repository.
     const isolation = host instanceof LocalHost && this.meta.runtime.kind === 'local' && (await run('git', ['-C', host.root, 'rev-parse', '--is-inside-work-tree'], { timeoutMs: 5000 }).catch(() => undefined))?.code === 0;
     // The orchestrator delegates to the agents it may (an agent the person keeps for themselves is not offered).
-    tools.push(makeAgentTool([...agents.values()].filter((a) => a.modelInvocable !== false && a.name !== this.meta.agent), { catalogue, isolation }));
+    // The person's computers (their companions) agents may be placed on (phase 7): named in the tool only when there are some.
+    const machines = this.machines().map((m) => m.name);
+    tools.push(makeAgentTool([...agents.values()].filter((a) => a.modelInvocable !== false && a.name !== this.meta.agent), { catalogue, isolation, ...(machines.length ? { machines } : {}) }));
     const linked = this.linkedOn(settings);
     tools.push(...TASK_TOOLS.filter((t) => t.spec.name !== 'send_message'), makeSendMessageTool(linked));
     // Only for sessions that use them, so every other session's prompt stays as it was.
@@ -1940,11 +1984,11 @@ export class Session {
   // ---------- the swarm governor (docs/swarm/SWARM.md, phase 1c) ----------
 
   /** This run's swarm (a new one as each turn starts): agents started, when, from what brief; more the person allowed; whether it was stopped. */
-  private swarm: { started: number; extra: number; times: number[]; briefs: Map<string, string>; stopped: string; startCost: number; startedAt: number; asking?: Promise<void>; denied?: boolean } = { started: 0, extra: 0, times: [], briefs: new Map(), stopped: '', startCost: 0, startedAt: Date.now() };
+  private swarm: { started: number; extra: number; times: number[]; briefs: Map<string, string>; children: Map<string, number>; stopped: string; startCost: number; startedAt: number; asking?: Promise<void>; denied?: boolean } = { started: 0, extra: 0, times: [], briefs: new Map(), children: new Map(), stopped: '', startCost: 0, startedAt: Date.now() };
   /** Each running agent's own stop: the kill switch stops them all. */
   private swarmStops = new Map<string, AbortController>();
 
-  private newSwarm(): void { this.swarm = { started: 0, extra: 0, times: [], briefs: new Map(), stopped: '', startCost: this.meta.cost, startedAt: Date.now() }; }
+  private newSwarm(): void { this.swarm = { started: 0, extra: 0, times: [], briefs: new Map(), children: new Map(), stopped: '', startCost: this.meta.cost, startedAt: Date.now() }; }
 
   /**
    * Grants an agent under the run's charter, or refuses it (its lead hears why). Past the number of agents the charter
@@ -1972,6 +2016,9 @@ export class Session {
     const spent = this.meta.cost - w.startCost;
     if (c.maxUsd && spent >= c.maxUsd) refuse(`this run's agents have spent $${spent.toFixed(2)}, the charter's limit of $${c.maxUsd}.`);
     if (c.maxMinutes && now - w.startedAt >= c.maxMinutes * 60_000) refuse(`this run has started agents for ${c.maxMinutes} minutes, the charter's limit.`);
+    // One sub-agent cannot spend the whole run (the conversation's own agent is held by the run's total alone).
+    const mine = w.children.get(o.parent) ?? 0;
+    if (o.parent !== 'main' && mine >= (c.maxChildren ?? DEFAULT_CHARTER.maxChildren)) refuse(`${o.parent} has started ${mine} agents, the most one agent may (the charter's maxChildren); do the rest of the work yourself, or report what is left.`);
     if (w.started >= c.maxAgents + w.extra) {
       // Past the charter: the person's call, never the swarm's. One question at a time (agents of a fan-out arrive
       // together), and after a no, none again in this run.
@@ -1984,6 +2031,7 @@ export class Session {
       if (w.started >= c.maxAgents + w.extra) refuse(`this run has started ${w.started} agents, the charter's limit; the person can allow more when asked, or raise it (Settings > Permissions).`);
     }
     w.started++;
+    w.children.set(o.parent, mine + 1);
     w.times.push(now);
     w.briefs.set(o.name, key);
     this.emit({ kind: 'swarm', phase: 'start', agent: o.name, parent: o.parent, depth: o.depth, started: w.started, limit: c.maxAgents + w.extra });
@@ -2087,7 +2135,55 @@ export class Session {
   }
 
   /** The agent tool: a sub-agent of `parent`, under its signal (a background agent's children stop with it), kept for send_message. */
+  /** A database file in the workspace (phase 2): read on this server, so not in a companion's folder. */
+  private async databaseFile(db: string): Promise<string> {
+    const host = await this.getHost();
+    if (host.kind === 'companion') throw new Error('the database is on the person\'s computer: answers over data run where the harness can read the file (a folder on the server)');
+    const file = await resolveIn(host, db);
+    const st = await fs.stat(file).catch(() => null);
+    if (!st?.isFile()) throw new Error(`${db} is not a file in the workspace`);
+    const head = Buffer.alloc(16);
+    const fh = await fs.open(file, 'r');
+    try { await fh.read(head, 0, 16, 0); } finally { await fh.close(); }
+    if (head.toString('latin1') !== 'SQLite format 3\0') throw new Error(`${db} is not a SQLite database`);
+    return file;
+  }
+
+  /** The person's definitions for a database: "<db>.semantics.md" or semantics.md beside it; draft until approved. */
+  private async semanticsFor(db: string): Promise<'draft' | 'approved' | 'none'> {
+    const host = await this.getHost();
+    for (const rel of [`${db.replace(/\.(db|sqlite3?)$/i, '')}.semantics.md`, path.posix.join(path.posix.dirname(db.replace(/\\/g, '/')), 'semantics.md')]) {
+      const real = await resolveIn(host, rel).catch(() => undefined);
+      const text = real ? await fs.readFile(real, 'utf8').catch(() => undefined) : undefined;
+      if (text !== undefined) return semanticsStatus(text);
+    }
+    return 'none';
+  }
+
+  /** The session owner's computers (companions), by a unique name each: where a delegation may be placed. */
+  private machines(): { id: string; name: string; online: boolean }[] {
+    const list = this.deps.companions.list().filter((c) => !c.owner || !this.meta.owner || c.owner === this.meta.owner);
+    const seen = new Map<string, number>();
+    return list.map((c) => { const n = (seen.get(c.name) ?? 0) + 1; seen.set(c.name, n); return { id: c.id, name: n > 1 ? `${c.name} (${c.id})` : c.name, online: c.online }; });
+  }
+
+  /** A delegation placed on one of the person's computers: its host there, or why it cannot go (said to the agent). */
+  private machineHost(name: string): ToolHost {
+    const m = this.machines().find((x) => x.name === name || x.id === name);
+    if (!m) throw new Error(`No computer named "${name}" is connected for you: ${this.machines().map((x) => x.name).join(', ') || 'none is'}.`);
+    if (!m.online) throw new Error(`The computer "${m.name}" is offline: its companion is not running. Work elsewhere, or ask the person to start it.`);
+    this.emit({ kind: 'notice', level: 'info', text: `An agent works on ${m.name} (in its folder, under that computer's own policy).` });
+    return this.deps.companions.host(m.id, this.meta.id);
+  }
+
   private async runSubagent(a: SubagentArgs, depth = 1, parent?: Agent, signal?: AbortSignal, host?: ToolHost): Promise<string> {
+    // Placed on a computer of the person's: the work runs there (and only as that computer's policy allows). It is told
+    // where it is: the brief was written from the conversation's own folder (seen live: "look in /workspace", which is
+    // not on the laptop, and the agent found nothing).
+    if (a.machine) {
+      host = this.machineHost(a.machine);
+      a = { ...a, prompt: `[You work on the computer "${a.machine}", in its folder ${host.displayRoot} (${host.platform}). Paths in this brief that point anywhere else, such as the conversation's own folder (/workspace), are not on this computer: use paths relative to your folder.]\n\n${a.prompt}` };
+    }
     // Constraints only tighten down a chain of delegation: what the delegating agent must keep unchanged (the
     // existing tests among it), the agents it starts must keep unchanged too, whatever their own brief says.
     const inherited = parent && parent !== this.agent ? [...this.subs.values()].find((x) => x.agent === parent)?.acceptance?.checks.filter((c) => 'unchanged' in c || 'protect' in c) : undefined;
@@ -2446,7 +2542,9 @@ export class Session {
       if (sessionHost instanceof LocalHost) isolated = await this.subWorktree(name, sessionHost).catch((e: Error) => { this.emit({ kind: 'notice', level: 'warn', text: `The ${def.name} agent works in the session's folder: no worktree (${e.message})` }); return undefined; });
       else this.emit({ kind: 'notice', level: 'warn', text: `The ${def.name} agent works in the session's folder: worktrees are made only in a server folder that is a git repository.` });
     }
-    const host = isolated?.host ?? a.host ?? sessionHost;
+    const placed = isolated?.host ?? a.host ?? sessionHost;
+    // On a person's machine (a companion) a sub-agent is swarm work: the machine holds its calls to its own policy.
+    const host = ('swarmHost' in placed ? placed.swarmHost?.() : undefined) ?? placed;
     // agent and send_message only where it may start its own; never the user-facing tools.
     const banned = INTERACTIVE_TOOLS.filter((t) => !(a.allowTodos && t === 'todo_write') && !(nests && NESTING_TOOLS.includes(t)));
     // Never what outlives the run (PERSISTENT_TOOLS), whatever its definition lists: tool policy, not instructions.
@@ -2470,7 +2568,7 @@ export class Session {
     { const base = hooks.rules; hooks.rules = () => { const r = base(); return { ...r, deny: [...r.deny, ...CONTROL_PLANE_DENY] }; }; }
     const sub = new Agent({
       name, model, provider: this.deps.registry.provider(model), effort,
-      ...(nests ? { runSubagent: (x: SubagentArgs) => this.runSubagent(x, depth + 1, self.agent, a.signal, host === sessionHost ? undefined : host) } : {}),
+      ...(nests ? { runSubagent: (x: SubagentArgs) => this.runSubagent(x, depth + 1, self.agent, a.signal, placed === sessionHost ? undefined : placed) } : {}),
       system: SUBAGENT_PROMPT, tools, host, settings: capTurns(a.noHooks ? { ...settings, hooks: {} } : settings, def.maxTurns),
       // An agent type that names its tools gets them all (someone chose them); any other defers plugin groups like the main agent,
       // but for its own plugin's (a plugin's agent type, a plugin's workflow node), which it has from the start.
@@ -2487,7 +2585,7 @@ export class Session {
       // its budget spends it as well as one with ten times as much).
       ...(a.acceptance?.stakes || def.maxCostUsd ? { budgetLine: (step: number, steps: number) => `Budget: step ${step} of ${steps}${def.maxCostUsd ? `; $${cost.n.toFixed(4)} of $${def.maxCostUsd} spent` : ''}. Spend what is left on what decides the task, and check your result before you report.` } : {}),
       // Files in a worktree are on its branch: rewinding the session's checkpoints does not cover them.
-      beforeWrite: this.checkpoints && host === sessionHost ? (p: string) => this.checkpoints!.before(p) : undefined,
+      beforeWrite: this.checkpoints && placed === sessionHost ? (p: string) => this.checkpoints!.before(p) : undefined,
       services: await this.services(false, name),
       redactor: this.redactor,
     }, hooks);
@@ -2704,7 +2802,7 @@ export class Session {
       await r.agent.wrapUp(VERDICT_AGAIN, o.signal, VERDICT_ASK).catch(() => {});
       parsed = parseVerdict(this.lastText(r.agent));
     }
-    let verdict = finalVerdict(parsed, o.results, stakes ? { stakes } : {});
+    let verdict = finalVerdict(parsed, o.results, stakes ? { stakes, remote: o.acc.host.kind === 'companion' } : {});
     // A change while other agents worked in the folder cannot be laid on the verifier.
     const touched = busyAtStart || this.othersAt(o.worker, o.acc.host.root, seq, o.acc.background, atStart) ? '(no changes)' : await changeSet(o.acc.host, guard);
     if (touched !== '(no changes)' && !touched.startsWith('(no record') && !touched.startsWith('(the change set is not available')) {
@@ -3107,7 +3205,7 @@ export class Session {
     // A form's answer must fit its schema, whoever sends it (throws FormAnswerError; the question stays open).
     if (p.event.kind === 'question' && p.event.form && r.answer !== undefined) r = { ...r, answer: this.formAnswer(requestId, r.answer) };
     this.pending.delete(requestId);
-    this.emit({ kind: 'request_resolved', requestId, decision: r.decision });
+    this.emit({ kind: 'request_resolved', requestId, decision: r.decision, ...(p.event.kind === 'question' && typeof r.answer === 'string' ? { answer: r.answer.slice(0, 2000) } : {}) });
     if (this.pending.size === 0 && this.status === 'waiting') {
       // Background work asked while no turn ran: the session is idle again, and what the user typed meanwhile starts a turn.
       if (p.background && !this.abortCtl) {

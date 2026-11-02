@@ -1,0 +1,89 @@
+{
+  "date": "2026-11-02T13:10:55.314Z",
+  "model": "claude-haiku-5-5",
+  "judges": [
+    "grok-4.7"
+  ],
+  "search": "anthropic",
+  "question": "When do the EU AI Act's obligations apply? I need the dates for the bans, for general-purpose AI models and for high-risk systems, and whether any of them have been delayed.",
+  "minutes": 24.7,
+  "cost": 2.3615,
+  "byModel": {
+    "claude-haiku-5-5": 0.2262,
+    "web_search (anthropic)": 0.3919,
+    "grok-4.7": 1.7434
+  },
+  "pagesRead": 29,
+  "citations": {
+    "citations": 15,
+    "issues": 0
+  },
+  "ledger": "Claims: 58; supported 26, partial 6, unsupported 2, contradicted 0, unverifiable 24; backed by two or more independent sites: 14",
+  "checks": [
+    {
+      "what": "the report was written",
+      "ok": true
+    },
+    {
+      "what": "it cites only pages that were read, and passes check_citations",
+      "ok": true
+    },
+    {
+      "what": "the claim ledger was written",
+      "ok": true
+    },
+    {
+      "what": "the ledger was judged on another family (models used include a judge model)",
+      "ok": true
+    },
+    {
+      "what": "no unsupported or contradicted claim left in the ledger",
+      "ok": false
+    },
+    {
+      "what": "the counter-evidence search was written",
+      "ok": true
+    },
+    {
+      "what": "the fact-check was written",
+      "ok": true
+    },
+    {
+      "what": "the answer holds: entry into force on 1 August 2024",
+      "ok": false
+    },
+    {
+      "what": "the answer holds: prohibitions from 2 February 2025",
+      "ok": true
+    },
+    {
+      "what": "the answer holds: general-purpose AI obligations from 2 August 2025",
+      "ok": true
+    },
+    {
+      "what": "the answer holds: most of the rest from 2 August 2026",
+      "ok": true
+    }
+  ],
+  "steps": [
+    "plan",
+    "research-3",
+    "research-2",
+    "research-1",
+    "gather",
+    "write",
+    "cite-check",
+    "ledger",
+    "fix-claims",
+    "cite-check",
+    "ledger",
+    "counter",
+    "fact-check",
+    "revise",
+    "recheck",
+    "fact-check-2",
+    "revise-2",
+    "recheck-2",
+    "fact-check-3"
+  ]
+}

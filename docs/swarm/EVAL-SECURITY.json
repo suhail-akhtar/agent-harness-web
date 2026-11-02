@@ -1,0 +1,115 @@
+{
+  "date": "2026-11-02T16:37:57.759Z",
+  "review": "claude-haiku-5-5",
+  "fix": "claude-sonnet-5-5",
+  "checks": [
+    {
+      "what": "the path traversal (src/files.mjs) confirmed by a reproducer that fired",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "what": "the SQL injection (src/search.mjs) confirmed by a reproducer that fired",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "what": "the command injection (src/ping.mjs) confirmed by a reproducer that fired",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "what": "no decoy confirmed (src/assets.mjs, src/lookup.mjs)",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "what": "the report held to the ledger (the workflow succeeded)",
+      "ok": true,
+      "detail": "succeeded"
+    },
+    {
+      "what": "the code under review was not changed by the review",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "what": "every confirmed finding fixed (its reproducer no longer fires, the tests pass)",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "what": "the tests pass after the fixes",
+      "ok": true,
+      "detail": "all tests pass"
+    },
+    {
+      "what": "the decoys were left as they were",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "what": "our own probe: the traversal no longer reads config/secrets.env",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "what": "our own probe: the injection no longer reaches the admin token",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "what": "our own probe: the command injection no longer runs a command",
+      "ok": true,
+      "detail": ""
+    }
+  ],
+  "cost": 0.1243,
+  "findings": [
+    {
+      "id": "F1",
+      "title": "OS command injection via host in checkHost (bash -c string interpolation)",
+      "file": "src/ping.mjs",
+      "kind": "command injection (CWE-78)",
+      "reproducer": "node security/repro/F1-ping-command-injection.mjs",
+      "marker": "PWNED",
+      "confirmed": true,
+      "fixed": true,
+      "runs": 2
+    },
+    {
+      "id": "F2",
+      "title": "SQL injection in findStaff via string concatenation of name",
+      "file": "src/search.mjs",
+      "kind": "SQL injection (CWE-89)",
+      "reproducer": "node security/repro/F2-search-sql-injection.mjs",
+      "marker": "SQLI-LEAK",
+      "confirmed": true,
+      "fixed": true,
+      "runs": 2
+    },
+    {
+      "id": "F3",
+      "title": "Path traversal in serveFile: no containment check on request name",
+      "file": "src/files.mjs",
+      "kind": "path traversal (CWE-22)",
+      "reproducer": "node security/repro/F3-files-path-traversal.mjs",
+      "marker": "TRAVERSAL-READ",
+      "confirmed": true,
+      "fixed": true,
+      "runs": 3
+    },
+    {
+      "id": "F4",
+      "title": "Hardcoded admin token in source (openDb seed)",
+      "file": "src/db.mjs",
+      "kind": "secret in code (CWE-798)",
+      "reproducer": "node security/repro/F4-hardcoded-admin-token.mjs",
+      "marker": "HARDCODED-SECRET",
+      "confirmed": true,
+      "fixed": true,
+      "runs": 2
+    }
+  ],
+  "report": "# Security findings\n\nSource: the harness findings ledger (4 entries, all CONFIRMED). Scope: src/** per .harness/security-mandate.json. Plan: security/plan.md.\n\n### F1 CONFIRMED: OS command injection via host in checkHost\n\n- **File:** src/ping.mjs\n- **Class:** OS command injection (CWE-78)\n- **Attacker can:** supply a crafted `host` value that is interpolated into a `bash -c` string, so shell metacharacters run arbitrary commands as the server process. The plan notes the host comes from outside input (status page host).\n- **Reproducer:** `node security/repro/F1-ping-command-injection.mjs`\n- **Fix:** do not build a shell string. Use `execFile`/`spawn` with an argument array (e.g. `execFile('ping', ['-c', '1', host])`), and validate `host` against a strict hostname/IP pattern before use.\n\n### F2 CONFIRMED: SQL injection in findStaff via string concatenation\n\n- **File:** src/search.mjs\n- **Class:** SQL injection (CWE-89)\n- **Attacker can:** inject SQL through the `name` parameter, altering the query. The plan flags possible UNION-based disclosure of other tables.\n- **Reproducer:** `node security/repro/F2-search-sql-injection.mjs`\n- **Fix:** replace concatenation with a parameterized query using `?` placeholders, as src/lookup.mjs already does.\n\n### F3 CONFIRMED: Path traversal in serveFile\n\n- **File:** src/files.mjs\n- **Class:** path traversal (CWE-22)\n- **Attacker can:** read files outside the intended root by sending a `name` containing `..` or absolute path segments, because `serveFile(root, name)` joins the request name with no containment check.\n- **Reproducer:** `node security/repro/F3-files-path-traversal.mjs`\n- **Fix:** resolve the joined path and verify it is inside `root` (compare against `root + path.sep` after `path.resolve`), rejecting otherwise. Mirror the containment check in src/assets.mjs.\n\n### F4 CONFIRMED: Hardcoded admin token in source\n\n- **File:** src/db.mjs (openDb seed)\n- **Class:** secret in code (CWE-798)\n- **Attacker can:** use the admin token that is committed in source to gain administrative access to any deployment that uses the seed.\n- **Reproducer:** `node security/repro/F4-hardcoded-admin-token.mjs`\n- **Fix:** remove the literal token. Load the admin credential from an environment variable or secret store, generate it at first run, and rotate the already-exposed token.\n\n## Unconfirmed (for a person to judge)\n\nNone. All four ledger findings were confirmed by their reproducers.\n\n## Reviewed with nothing found\n\n- src/assets.mjs: resolves the name, checks it stays inside public/ (prefix check with sep, absolute paths rejected). Reviewed as not vulnerable.\n- src/lookup.mjs: `findUser` uses a parameterized query (`?`). Reviewed as not vulnerable.\n"
+}

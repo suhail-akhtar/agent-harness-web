@@ -539,13 +539,16 @@ export function trailingJson(text: string): unknown {
  * requirement the verifier itself marked unmet is a fail; at high stakes, a pass with a requirement it could not
  * verify is an unknown (never a pass).
  */
-export function finalVerdict(v: Verdict, results: CheckResult[], o: { stakes?: Stakes } = {}): Verdict {
+export function finalVerdict(v: Verdict, results: CheckResult[], o: { stakes?: Stakes; /** The work and its checks ran on one of the person's computers (a companion). */ remote?: boolean } = {}): Verdict {
   const failed = results.filter((r) => !r.ok);
   if (v.verdict !== 'fail' && failed.length) return { ...v, verdict: 'fail', overruled: `the verifier approved, but ${failed.length} done ${failed.length === 1 ? 'criterion' : 'criteria'} failed: ${failed.map((r) => r.label).join('; ')}` };
   const unmet = (v.requirements ?? []).filter((r) => r.status === 'unmet');
   if (v.verdict === 'pass' && unmet.length) return { ...v, verdict: 'fail', overruled: `the verifier approved, but marked ${unmet.length === 1 ? 'a requirement' : `${unmet.length} requirements`} unmet: ${unmet.map((r) => r.requirement).join('; ')}` };
   const unverified = (v.requirements ?? []).filter((r) => r.status === 'unverifiable');
   if (o.stakes && v.verdict === 'pass' && unverified.length) return { ...v, verdict: 'unknown', overruled: `at ${o.stakes} stakes a requirement that could not be verified leaves the work unverified: ${unverified.map((r) => r.requirement).join('; ')}` };
+  // A machine is trusted no more than its proofs (phase 7): checks that ran only where the work ran are that machine's
+  // own report of itself, so at stakes they do not accept it.
+  if (o.stakes && o.remote && v.verdict === 'pass' && results.some((r) => r.ok)) return { ...v, verdict: 'unknown', overruled: `at ${o.stakes} stakes, checks that ran only on the computer that did the work are its own report: run them where the harness can (a folder on the server), or have a person confirm` };
   return v;
 }
 

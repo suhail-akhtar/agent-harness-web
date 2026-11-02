@@ -167,7 +167,7 @@ test('the research pack loads; its workflow is valid; the citations gate and too
   const h = await createHarness({ dataDir: await tempDir(), plugins: [path.join(here, '..', 'plugins', 'research')], search: null });
   const w = h.registry.workflows.get('deep-research')!;
   assert.deepEqual(validateWorkflow(w), []);
-  for (const a of ['research-lead', 'researcher', 'research-writer', 'fact-checker']) assert.ok(h.registry.agents.has(a), a);
+  for (const a of ['research-lead', 'researcher', 'research-writer', 'fact-checker', 'counter-evidence']) assert.ok(h.registry.agents.has(a), a);
   const root = await tempDir();
   const host = new LocalHost(root);
   const s = await sources();

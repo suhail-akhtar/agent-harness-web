@@ -1,0 +1,38 @@
+{
+  "name": "data-answers",
+  "version": "1.0.0",
+  "description": "Answers from your own database that you can trace: read-only SQL with the database's own checks, every number cited to the query that produced it, and the figures recomputed independently on another model.",
+  "icon": "database",
+  "category": "Productivity",
+  "tags": [
+    "data",
+    "sql",
+    "answers",
+    "sqlite"
+  ],
+  "publisher": {
+    "name": "Suhail Akhtar",
+    "url": "https://github.com/suhail-akhtar/agent-harness-web"
+  },
+  "license": "MIT",
+  "links": {
+    "repository": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/plugins/data-answers",
+    "docs": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/docs",
+    "support": "https://github.com/suhail-akhtar/agent-harness-web/issues"
+  },
+  "engines": {
+    "harness": ">=0.1.0"
+  },
+  "changelog": "CHANGELOG.md",
+  "main": "index.mjs",
+  "agents": "agents",
+  "workflows": "workflows",
+  "ui": {
+    "apiVersion": 1,
+    "guide": "GUIDE.md",
+    "displayName": "Data answers",
+    "icon": "database",
+    "category": "Knowledge",
+    "trust": "declarative"
+  }
+}

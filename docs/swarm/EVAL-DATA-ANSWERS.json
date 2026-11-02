@@ -1,0 +1,341 @@
+{
+  "date": "2026-11-02T13:49:23.385Z",
+  "recompute": "grok-4.7",
+  "results": [
+    {
+      "n": 1,
+      "db": "shop",
+      "question": "What was our revenue in February 2026?",
+      "model": "claude-haiku-5-5",
+      "truth": 24543.1,
+      "figures": {
+        "revenue_feb_2026": 24543.1
+      },
+      "workflow": "succeeded",
+      "agreed": true,
+      "minutes": 0.9,
+      "cost": 0.0344,
+      "byModel": {
+        "claude-haiku-5-5": 0.0048,
+        "grok-4.7": 0.0295
+      },
+      "checks": [
+        {
+          "what": "the figure is right (truth 24543.1)",
+          "ok": true
+        },
+        {
+          "what": "every number traced to a query cell (the provenance gate passed)",
+          "ok": true
+        },
+        {
+          "what": "recomputed on grok-4.7",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "n": 2,
+      "db": "shop",
+      "question": "How many orders did we get in the first quarter of 2026?",
+      "model": "claude-haiku-5-5",
+      "truth": 397,
+      "figures": {
+        "orders_q1_2026": 397
+      },
+      "workflow": "succeeded",
+      "agreed": true,
+      "minutes": 0.9,
+      "cost": 0.0196,
+      "byModel": {
+        "claude-haiku-5-5": 0.0065,
+        "grok-4.7": 0.0132
+      },
+      "checks": [
+        {
+          "what": "the figure is right (truth 397)",
+          "ok": true
+        },
+        {
+          "what": "every number traced to a query cell (the provenance gate passed)",
+          "ok": true
+        },
+        {
+          "what": "recomputed on grok-4.7",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "n": 3,
+      "db": "shop",
+      "question": "Which region brought in the most revenue in March 2026, and how much?",
+      "model": "claude-haiku-5-5",
+      "truth": 9328.9,
+      "figures": {
+        "north_revenue": 9328.9,
+        "south_revenue": 8305.5,
+        "east_revenue": 7344.5,
+        "west_revenue": 5012.1,
+        "total_march_revenue": 29991
+      },
+      "workflow": "succeeded",
+      "agreed": true,
+      "minutes": 2.2,
+      "cost": 0.0609,
+      "byModel": {
+        "claude-haiku-5-5": 0.0111,
+        "grok-4.7": 0.0498
+      },
+      "checks": [
+        {
+          "what": "the figure is right (truth 9328.9)",
+          "ok": true
+        },
+        {
+          "what": "names north",
+          "ok": true
+        },
+        {
+          "what": "every number traced to a query cell (the provenance gate passed)",
+          "ok": true
+        },
+        {
+          "what": "recomputed on grok-4.7",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "n": 4,
+      "db": "shop",
+      "question": "What's our average order value?",
+      "model": "claude-haiku-5-5",
+      "truth": 248.98,
+      "figures": {
+        "average_order_value": 248.98,
+        "paid_orders": 369,
+        "revenue": 91874.75
+      },
+      "workflow": "succeeded",
+      "agreed": true,
+      "minutes": 1.4,
+      "cost": 0.0495,
+      "byModel": {
+        "claude-haiku-5-5": 0.0064,
+        "grok-4.7": 0.043
+      },
+      "checks": [
+        {
+          "what": "the figure is right (truth 248.98)",
+          "ok": true
+        },
+        {
+          "what": "every number traced to a query cell (the provenance gate passed)",
+          "ok": true
+        },
+        {
+          "what": "recomputed on grok-4.7",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "n": 5,
+      "db": "shop",
+      "question": "What was revenue in the first half of 2026?",
+      "model": "claude-haiku-5-5",
+      "truth": 91874.75,
+      "figures": {
+        "revenue_jan_mar_2026": 91874.75
+      },
+      "workflow": "succeeded",
+      "agreed": true,
+      "minutes": 0.9,
+      "cost": 0.02,
+      "byModel": {
+        "claude-haiku-5-5": 0.0062,
+        "grok-4.7": 0.0138
+      },
+      "checks": [
+        {
+          "what": "the figure is right (truth 91874.75)",
+          "ok": true
+        },
+        {
+          "what": "says the data ends before the period does",
+          "ok": true
+        },
+        {
+          "what": "every number traced to a query cell (the provenance gate passed)",
+          "ok": true
+        },
+        {
+          "what": "recomputed on grok-4.7",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "n": 6,
+      "db": "shop",
+      "question": "What was the refund rate in Q1 2026?",
+      "model": "claude-sonnet-5-5",
+      "truth": 0.0705,
+      "figures": {
+        "refund_rate": 0.0705
+      },
+      "workflow": "succeeded",
+      "agreed": true,
+      "minutes": 1.1,
+      "cost": 0.1041,
+      "byModel": {
+        "claude-sonnet-5-5": 0.0866,
+        "grok-4.7": 0.0175
+      },
+      "checks": [
+        {
+          "what": "the figure is right (truth 0.0705)",
+          "ok": true
+        },
+        {
+          "what": "every number traced to a query cell (the provenance gate passed)",
+          "ok": true
+        },
+        {
+          "what": "recomputed on grok-4.7",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "n": 7,
+      "db": "hr",
+      "question": "What was our headcount at the end of March 2026?",
+      "model": "claude-sonnet-5-5",
+      "truth": 123,
+      "figures": {
+        "headcount": 123
+      },
+      "workflow": "succeeded",
+      "agreed": true,
+      "minutes": 0.5,
+      "cost": 0.0429,
+      "byModel": {
+        "claude-sonnet-5-5": 0.0299,
+        "grok-4.7": 0.013
+      },
+      "checks": [
+        {
+          "what": "the figure is right (truth 123)",
+          "ok": true
+        },
+        {
+          "what": "every number traced to a query cell (the provenance gate passed)",
+          "ok": true
+        },
+        {
+          "what": "recomputed on grok-4.7",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "n": 8,
+      "db": "hr",
+      "question": "What is the average salary of the people in Engineering now?",
+      "model": "claude-sonnet-5-5",
+      "truth": 81466.63,
+      "figures": {
+        "avg_engineering_salary": 81466.625
+      },
+      "workflow": "succeeded",
+      "agreed": true,
+      "minutes": 0.4,
+      "cost": 0.0339,
+      "byModel": {
+        "claude-sonnet-5-5": 0.0265,
+        "grok-4.7": 0.0074
+      },
+      "checks": [
+        {
+          "what": "the figure is right (truth 81466.63)",
+          "ok": true
+        },
+        {
+          "what": "every number traced to a query cell (the provenance gate passed)",
+          "ok": true
+        },
+        {
+          "what": "recomputed on grok-4.7",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "n": 9,
+      "db": "hr",
+      "question": "How many people left last year?",
+      "model": "claude-sonnet-5-5",
+      "truth": 15,
+      "figures": {
+        "leavers_2025": 15
+      },
+      "workflow": "",
+      "agreed": true,
+      "minutes": 1,
+      "cost": 0.1097,
+      "byModel": {
+        "claude-sonnet-5-5": 0.0705,
+        "grok-4.7": 0.0392
+      },
+      "checks": [
+        {
+          "what": "the figure is right (truth 15)",
+          "ok": true
+        },
+        {
+          "what": "states its reading of \"last year\"",
+          "ok": true
+        },
+        {
+          "what": "every number traced to a query cell (the provenance gate passed)",
+          "ok": true
+        },
+        {
+          "what": "recomputed on grok-4.7",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "n": 10,
+      "db": "hr",
+      "question": "How satisfied were our employees in 2025?",
+      "model": "claude-sonnet-5-5",
+      "figures": {},
+      "workflow": "succeeded",
+      "agreed": false,
+      "minutes": 0.4,
+      "cost": 0.033,
+      "byModel": {
+        "claude-sonnet-5-5": 0.0284,
+        "grok-4.7": 0.0045
+      },
+      "checks": [
+        {
+          "what": "says the data cannot answer it",
+          "ok": true
+        },
+        {
+          "what": "every number traced to a query cell (the provenance gate passed)",
+          "ok": true
+        },
+        {
+          "what": "recomputed on grok-4.7",
+          "ok": true
+        }
+      ]
+    }
+  ]
+}

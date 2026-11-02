@@ -24,10 +24,10 @@ export const NESTING_TOOLS = ['agent', 'send_message'];
 export const PERSISTENT_TOOLS = ['schedule', 'vault', 'publish_branch'];
 /**
  * Permission rules every swarm agent has: the project's definitions (agents, workflows, skills, styles, plugins,
- * commands, hooks, settings, the setup script) and .claude are the person's. A workflow's own working state under
+ * commands, hooks, settings, the setup script, the security review's and investigations' mandates) and .claude are the person's. A workflow's own working state under
  * .harness (long-task's .harness/long-task/features.json) stays writable: blocking all of .harness broke it.
  */
-const CONTROL_PLANE = ['.harness/agents/**', '.harness/workflows/**', '.harness/skills/**', '.harness/output-styles/**', '.harness/plugins/**', '.harness/commands/**', '.harness/hooks/**', '.harness/settings.json', '.harness/settings.local.json', '.harness/setup.sh', '.claude/**'];
+const CONTROL_PLANE = ['.harness/agents/**', '.harness/workflows/**', '.harness/skills/**', '.harness/output-styles/**', '.harness/plugins/**', '.harness/commands/**', '.harness/hooks/**', '.harness/settings.json', '.harness/settings.local.json', '.harness/setup.sh', '.harness/security-mandate.json', '.harness/investigation-mandate.json', '.claude/**'];
 export const CONTROL_PLANE_DENY = CONTROL_PLANE.flatMap((p) => [`write(${p})`, `edit(${p})`]);
 
 export const BUILTIN_AGENTS: AgentDef[] = [
@@ -355,7 +355,7 @@ export interface Acceptance {
   /** How much rides on it: high is verified on another provider; critical also runs two replicas and compares them. */
   stakes?: Stakes;
 }
-export interface SubagentArgs { description: string; prompt: string; type: string; model?: string; effort?: Effort; isolation?: 'worktree'; acceptance?: Acceptance; /** A fan-out's agents still to start, this one included (the governor asks once for all). */ batch?: number }
+export interface SubagentArgs { description: string; prompt: string; type: string; model?: string; effort?: Effort; isolation?: 'worktree'; acceptance?: Acceptance; /** A fan-out's agents still to start, this one included (the governor asks once for all). */ batch?: number; /** One of the person's computers (a companion, by name) to work on (phase 7). */ machine?: string }
 
 /** How the harness found an agent's work, read from its report (what fan-out tables and replicas show). */
 export function outcomeOf(report: string): string {
@@ -379,7 +379,7 @@ const FAN_OUT_AT_ONCE = 8;
  * charter), checked and verified on its own; back comes one table (each item's outcome and its fields) and each
  * item's report, cut.
  */
-async function fanOut(args: SubagentArgs, items: string[], fields: string[], run: (a: SubagentArgs) => Promise<string>, signal: AbortSignal, models: string[] = []): Promise<string> {
+async function fanOut(args: SubagentArgs, items: string[], fields: string[], run: (a: SubagentArgs) => Promise<string>, signal: AbortSignal, models: string[] = [], machines: string[] = []): Promise<string> {
   const ask = fields.length ? `\n\nEnd your report with one line of JSON and nothing after it, with these fields: ${JSON.stringify(Object.fromEntries(fields.map((f) => [f, '...'])))}` : '';
   const brief = (item: string) => `${args.prompt.includes('{{item}}') ? args.prompt.split('{{item}}').join(item) : `${args.prompt}\n\nThe item: ${item}`}${ask}`;
   const reports: string[] = new Array(items.length).fill('');
@@ -389,7 +389,9 @@ async function fanOut(args: SubagentArgs, items: string[], fields: string[], run
       const i = next++;
       // Spread across models in turn when asked (each still one the person allows, checked as it starts).
       const model = models.length ? models[i % models.length] : args.model;
-      try { reports[i] = await run({ ...args, ...(model ? { model } : {}), prompt: brief(items[i]!), description: `${args.description}: ${items[i]!.slice(0, 40)}`, batch: items.length - i }); } catch (e) {
+      // And across the person's computers in turn (each checks its own policy as the work arrives).
+      const machine = machines.length ? machines[i % machines.length] : args.machine;
+      try { reports[i] = await run({ ...args, ...(model ? { model } : {}), ...(machine ? { machine } : {}), prompt: brief(items[i]!), description: `${args.description}: ${items[i]!.slice(0, 40)}`, batch: items.length - i }); } catch (e) {
         // Refused by the governor, stopped, or failed: said as such, never taken for a report.
         const m = (e as Error).message;
         reports[i] = /^Not started: /.test(m) ? m : /stopped by|abort/i.test(m) ? `Stopped: ${m}` : `Failed: ${m}`;
@@ -401,15 +403,15 @@ async function fanOut(args: SubagentArgs, items: string[], fields: string[], run
     const r = reports[i] || 'Not started: the fan-out was stopped.';
     const words = r.split('\n\n---\n')[0]!.replace(/\n\n\(agent id: [^)]*\)\s*$/, '');
     const got = fields.length ? trailingJson(words) as Record<string, unknown> | undefined : undefined;
-    return { item, model: models.length ? models[i % models.length]! : '', outcome: outcomeOf(r), id: /\(agent ids?: ([^)]+)\)/.exec(r)?.[1] ?? '', values: fields.map((f) => (got && f in got ? cell(got[f]) : '?')), words };
+    return { item, model: [models.length ? models[i % models.length]! : '', machines.length ? `on ${machines[i % machines.length]!}` : ''].filter(Boolean).join(' '), outcome: outcomeOf(r), id: /\(agent ids?: ([^)]+)\)/.exec(r)?.[1] ?? '', values: fields.map((f) => (got && f in got ? cell(got[f]) : '?')), words };
   });
   const count = (o: string) => rows.filter((r) => r.outcome === o).length;
   const outcomes = [...new Set(rows.map((r) => r.outcome))];
   const missing = fields.length ? rows.filter((r) => r.values.every((v) => v === '?') && r.outcome !== 'not started').length : 0;
   return [
     `Fan-out of ${items.length}: ${outcomes.map((o) => `${count(o)} ${o}`).join(', ')}.${missing ? ` ${missing} gave no fields (shown as ?).` : ''}`,
-    '', `| # | item |${models.length ? ' model |' : ''} outcome |${fields.map((f) => ` ${cell(f)} |`).join('')}`, `|---|---|${models.length ? '---|' : ''}---|${fields.map(() => '---|').join('')}`,
-    ...rows.map((r, i) => `| ${i + 1} | ${cell(r.item)} |${models.length ? ` ${r.model} |` : ''} ${r.outcome} |${r.values.map((v) => ` ${v} |`).join('')}`),
+    '', `| # | item |${models.length || machines.length ? ' model |' : ''} outcome |${fields.map((f) => ` ${cell(f)} |`).join('')}`, `|---|---|${models.length || machines.length ? '---|' : ''}---|${fields.map(() => '---|').join('')}`,
+    ...rows.map((r, i) => `| ${i + 1} | ${cell(r.item)} |${models.length || machines.length ? ` ${r.model} |` : ''} ${r.outcome} |${r.values.map((v) => ` ${v} |`).join('')}`),
     '', ...rows.map((r, i) => `### ${i + 1}. ${cell(r.item)} (${r.outcome}${r.id ? `, ${r.id}` : ''})\n${r.words.trim().slice(0, Math.max(300, Math.floor(12_000 / items.length)))}`),
   ].join('\n');
 }
@@ -419,7 +421,7 @@ async function fanOut(args: SubagentArgs, items: string[], fields: string[], run
  * (with their tools), the other models it may use (`catalogue`, from the delegation setting) and,
  * where the session's folder can have worktrees, `isolation`. Fixed for the session (cached).
  */
-export function makeAgentTool(agents: AgentDef[], opts: { catalogue?: string; isolation?: boolean } = {}): Tool {
+export function makeAgentTool(agents: AgentDef[], opts: { catalogue?: string; isolation?: boolean; /** The person's computers agents may be placed on (phase 7): shown only when there are some. */ machines?: string[] } = {}): Tool {
   const names = agents.map((a) => a.name);
   // Without a type: explore where it is offered, else the first agent offered (a team's lead never reaches past its members).
   const fallback = names.includes('explore') ? 'explore' : names[0] ?? 'explore';
@@ -447,12 +449,16 @@ export function makeAgentTool(agents: AgentDef[], opts: { catalogue?: string; is
   extra.items = { type: 'array', items: { type: 'string' }, maxItems: 100, description: 'The same brief for each item ({{item}} in the prompt), one agent each, a table back.' };
   extra.fields = { type: 'array', items: { type: 'string' }, description: 'What each item reports (a column each).' };
   if (opts.catalogue) extra.models = { type: 'array', items: { type: 'string' }, description: 'Spread the items across these allowed models, in turn.' };
+  if (opts.machines?.length) {
+    extra.machine = { type: 'string', enum: opts.machines, description: 'Work on this computer of the person\'s (in its folder, under its own policy).' };
+    extra.machines = { type: 'array', items: { type: 'string', enum: opts.machines }, description: 'Spread the items across these computers, in turn; with no items, the same brief on each of them.' };
+  }
   extra.max_fix_rounds = { type: 'number', description: 'Fix rounds, 0 to 3 (default 2).' };
   return {
     kind: 'meta', parallelSafe: true, remoteable: false,
     spec: {
       name: 'agent',
-      description: `Delegate a self-contained task to a sub-agent with its own fresh context; it returns only its final report, with its id (send_message continues it later with its context). Write the prompt as a complete brief: the goal, what you already know, and what to report back. When the result can be checked, give done_when (then its report is more than its word); verify work that matters. Several agent calls in one turn run in parallel. With run_in_background it starts and you get its id at once; keep working, and its report reaches you as a reminder when it finishes. ${mine ? 'Agents marked (yours) are the person\'s own specialists, each made for a kind of work and often on a model chosen for it: when part of the task is that kind of work, give that part to that agent rather than doing it yourself. ' : ''}Agents:\n${list}${opts.catalogue ? `\n${opts.catalogue}` : ''}`,
+      description: `Delegate a self-contained task to a sub-agent with its own fresh context; it returns only its final report, with its id (send_message continues it later with its context). Write the prompt as a complete brief: the goal, what you already know, and what to report back. When the result can be checked, give done_when (then its report is more than its word); verify work that matters. Several agent calls in one turn run in parallel. With run_in_background it starts and you get its id at once; keep working, and its report reaches you as a reminder when it finishes. ${mine ? 'Agents marked (yours) are the person\'s own specialists, each made for a kind of work and often on a model chosen for it: when part of the task is that kind of work, give that part to that agent rather than doing it yourself. ' : ''}Agents:\n${list}${opts.catalogue ? `\n${opts.catalogue}` : ''}${opts.machines?.length ? `\nThe person's computers: ${opts.machines.join(', ')}. Their files are not in your folder: work on one with machine, or on several with machines.` : ''}`,
       input_schema: {
         type: 'object',
         properties: {
@@ -492,12 +498,17 @@ export function makeAgentTool(agents: AgentDef[], opts: { catalogue?: string; is
         ...(str(input.model) ? { model: str(input.model) } : {}), ...(effort ? { effort } : {}),
         ...(str(input.isolation) === 'worktree' ? { isolation: 'worktree' as const } : {}),
         ...(acceptance ? { acceptance } : {}),
+        ...(str(input.machine) ? { machine: str(input.machine) } : {}),
       };
       const start = ctx.services?.tasks?.startAgent;
       // A fan-out: the same brief for each item, each its own agent (granted, checked and verified on its own), one table back.
       const items = (Array.isArray(input.items) ? input.items : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 100);
       const models = (Array.isArray(input.models) ? input.models : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 8);
-      if (items.length) return { content: await fanOut(args, items, (Array.isArray(input.fields) ? input.fields : []).map(String).filter(Boolean).slice(0, 12), ctx.runSubagent, ctx.signal, models) };
+      const machines = (Array.isArray(input.machines) ? input.machines : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 16);
+      // Computers with no items: the same brief on each of them (seen live: "machines" alone ran once, in the
+      // conversation's own folder, and found nothing).
+      if (machines.length && !items.length) return { content: await fanOut(args, machines, (Array.isArray(input.fields) ? input.fields : []).map(String).filter(Boolean).slice(0, 12), ctx.runSubagent, ctx.signal, models, machines) };
+      if (items.length) return { content: await fanOut(args, items, (Array.isArray(input.fields) ? input.fields : []).map(String).filter(Boolean).slice(0, 12), ctx.runSubagent, ctx.signal, models, machines) };
       try {
         if (background && start) {
           const id = await start(args);

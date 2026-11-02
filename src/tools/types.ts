@@ -38,6 +38,24 @@ export interface ToolServices {
    * conversation's (where one is allowed), with no tools; its reply and who gave it.
    */
   judge?: (brief: string, signal: AbortSignal) => Promise<{ text: string; by: string }>;
+  /**
+   * An agent of the catalogue (by type) run on a model of another provider than the conversation's (or `model`, one the
+   * person allows), with its brief only: an independent recomputation, a confirmation, a forecaster (phases 2, 4, 5).
+   */
+  crossAgent?: (o: { type: string; prompt: string; description?: string; model?: string }, signal: AbortSignal) => Promise<{ report: string; model: string; cost: number }>;
+  /**
+   * Answers over the person's own data (phase 2): read-only queries on a database file in the workspace, each kept as
+   * a query cell in the session's folder with the database's own checks; the provenance rule over an answer.
+   */
+  answers?: {
+    query(db: string, sql: string, purpose?: string): Promise<import('../data/answers.ts').Cell>;
+    schema(db: string): Promise<string>;
+    cells(): Promise<Map<string, import('../data/answers.ts').Cell>>;
+    /** The provenance rule over an answer: every number cites a cell and is in it, or is marked derived. */
+    provenance(answer: string): Promise<{ issues: import('../data/answers.ts').ProvenanceIssue[]; numbers: number; sentences: number }>;
+    /** Two answers' headline figures (each answer's last JSON line), compared in code. */
+    compare(a: string, b: string): { a?: Record<string, number>; b?: Record<string, number>; agree: string[]; disagree: string[]; unmatched: string[] };
+  };
   /** The claim ledger of a report: each cited sentence judged against the passages of the pages it cites (phase 3). */
   claims?: (report: string, signal: AbortSignal) => Promise<{ judged: import('../research/claims.ts').Judged[]; ledger: string }>;
   /** URLs the web tools refuse (hosts, or host/path prefixes): an eval run's own hidden checks. */

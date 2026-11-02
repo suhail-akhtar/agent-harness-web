@@ -1,0 +1,38 @@
+{
+  "name": "investigations",
+  "version": "1.0.0",
+  "description": "Investigations as co-pilot work: a coverage checklist, evidence kept with every lead in a ranked queue, and every identification and decision left to you, inside the mandate you write.",
+  "icon": "search",
+  "category": "Productivity",
+  "tags": [
+    "investigation",
+    "forensics",
+    "triage",
+    "evidence"
+  ],
+  "publisher": {
+    "name": "Suhail Akhtar",
+    "url": "https://github.com/suhail-akhtar/agent-harness-web"
+  },
+  "license": "MIT",
+  "links": {
+    "repository": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/plugins/investigations",
+    "docs": "https://github.com/suhail-akhtar/agent-harness-web/tree/main/docs",
+    "support": "https://github.com/suhail-akhtar/agent-harness-web/issues"
+  },
+  "engines": {
+    "harness": ">=0.1.0"
+  },
+  "changelog": "CHANGELOG.md",
+  "main": "index.mjs",
+  "agents": "agents",
+  "workflows": "workflows",
+  "ui": {
+    "apiVersion": 1,
+    "guide": "GUIDE.md",
+    "displayName": "Investigations",
+    "icon": "search",
+    "category": "Knowledge",
+    "trust": "declarative"
+  }
+}

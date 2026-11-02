@@ -113,6 +113,10 @@ export interface ToolHost {
   spawnStream?(command: string, args: string[], env: Record<string, string>): Promise<ChildProcessWithoutNullStreams>;
   /** Present on hosts that run whole tool calls themselves (companion). */
   remoteTool?: (name: string, input: Record<string, unknown>, signal: AbortSignal) => Promise<ToolOutcome>;
+  /** Companion: which one (a machine of the person's). */
+  companionId?: string;
+  /** Companion: the same machine as a swarm agent works on it (its calls held to the machine's policy for swarm work). */
+  swarmHost?(): ToolHost | undefined;
   /** Companion: a server-side copy of the folder (changed files copied), for tools that run on the server. */
   mirror?(signal?: AbortSignal): Promise<string>;
   /** Companion: writes a file the server made back into the user's folder. */
@@ -141,11 +145,47 @@ function capture(chunks: Buffer[], size: { n: number }, b: Buffer) {
   size.n += b.length;
 }
 
+/**
+ * Windows: the process tree of `pid` killed, including what an MSYS shell (Git Bash) started through `timeout`,
+ * `setsid` or `exec`: those break the Windows parent links `taskkill /T` follows (Git's bash.exe is a launcher, and a
+ * shell that execs `timeout` shows up under a new Windows id with no parent), so a stopped command ran on (seen live:
+ * `timeout 550 bash build.sh` finished its build after Stop all). Every process the command started carries its
+ * `tag` in its environment: MSYS shows each process's environment and Windows id under /proc, so the tagged ones are
+ * found however their tree was broken, and each is killed with its own Windows tree.
+ */
+async function killWindowsTree(pid: number, shell: string, tag?: string): Promise<void> {
+  const taskkill = (p: number) => spawn('taskkill', ['/T', '/F', '/PID', String(p)], { windowsHide: true }).on('error', () => {});
+  // The tree Windows knows, at once; then whatever else carries the tag.
+  taskkill(pid);
+  if (!tag || !/bash(\.exe)?$/i.test(shell)) return;
+  // One grep over every process's environment (a grep per process took seconds, and the command ran on meanwhile).
+  const script = `for f in $(grep -la 'HARNESS_RUN_TAG=${tag}' /proc/[0-9]*/environ 2>/dev/null); do cat "\${f%/environ}/winpid" 2>/dev/null; done`;
+  const sweep = () => new Promise<number>((resolve) => {
+    const p = spawn(shell, ['-c', script], { windowsHide: true, env: { ...process.env, HARNESS_RUN_TAG: '' } });
+    let o = '';
+    const done = () => { const found = o.split(/\s+/).map(Number).filter((w) => w > 0 && w !== pid); for (const w of found) taskkill(w); resolve(found.length); };
+    p.stdout.on('data', (d: Buffer) => { o += d; });
+    p.on('error', () => resolve(0));
+    p.on('close', done);
+    setTimeout(() => { try { p.kill(); } catch { /* gone */ } }, 8000).unref();
+  });
+  // Swept again while a sweep still finds some: a busy machine may still be starting the command's processes when the
+  // stop comes (seen in tests). Once one finds none, the command is gone (most stops: one sweep, which keeps a full
+  // test run from paying three for every kill).
+  for (const wait of [0, 1500, 5000]) {
+    if (wait) await new Promise((r) => setTimeout(r, wait).unref());
+    if (!(await sweep())) break;
+  }
+}
+
 /** Spawns a process, killing its whole process group on timeout or abort. */
 export function run(cmd: string, args: string[], opts: ExecOptions): Promise<ExecResult> {
   return new Promise((resolve) => {
     const win = process.platform === 'win32';
-    const child = spawn(cmd, args, { cwd: opts.cwd, env: opts.env, detached: !win, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    // Windows and Git Bash: a tag in the command's environment finds all it started when it is stopped (killWindowsTree).
+    const tag = win && /bash(\.exe)?$/i.test(cmd) ? crypto.randomUUID() : undefined;
+    const env = tag ? { ...(opts.env ?? process.env), HARNESS_RUN_TAG: tag } : opts.env;
+    const child = spawn(cmd, args, { cwd: opts.cwd, env, detached: !win, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     const out: Buffer[] = []; const err: Buffer[] = [];
     const so = { n: 0 }; const se = { n: 0 };
     let timedOut = false;
@@ -156,7 +196,7 @@ export function run(cmd: string, args: string[], opts: ExecOptions): Promise<Exe
     const kill = () => {
       if (child.pid === undefined) return;
       try {
-        if (win) spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { windowsHide: true });
+        if (win) void killWindowsTree(child.pid, cmd, tag);
         else process.kill(-child.pid, 'SIGKILL');
       } catch { try { child.kill('SIGKILL'); } catch { /* gone */ } }
     };

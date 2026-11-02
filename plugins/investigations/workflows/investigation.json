@@ -1,0 +1,34 @@
+{
+  "name": "investigation",
+  "description": "An investigation inside the person's mandate: a coverage checklist worked through, evidence kept with each lead in a ranked queue, the checklist's coverage checked, and the leads put to the person, who makes every decision.",
+  "inputs": {
+    "question": { "description": "What to investigate", "required": true }
+  },
+  "start": "work",
+  "maxAgentRuns": 6,
+  "nodes": {
+    "work": {
+      "type": "agent",
+      "title": "Work the checklist",
+      "agent": "investigator",
+      "prompt": "Investigate, inside the mandate:\n\n<question>\n{{input.question}}\n</question>\n\nWrite investigation/checklist.md, work through it, add the leads, and write investigation/report.md.",
+      "next": "coverage"
+    },
+    "coverage": {
+      "type": "gate",
+      "title": "Everything on the checklist covered",
+      "gates": ["coverage"],
+      "maxFailures": 2,
+      "next": { "on": { "pass": "done", "fail": "cover", "exhausted": "done-with-gaps" } }
+    },
+    "cover": {
+      "type": "agent",
+      "title": "Cover what is left",
+      "agent": "investigator",
+      "prompt": "Items of investigation/checklist.md are not covered yet. Check each one (or mark it N/A with why), add any leads, and update investigation/report.md.\n\n{{feedback}}",
+      "next": "coverage"
+    },
+    "done": { "type": "end", "title": "Ready for the person's decisions", "status": "success" },
+    "done-with-gaps": { "type": "end", "title": "Ready, with checklist items not covered", "status": "success" }
+  }
+}
