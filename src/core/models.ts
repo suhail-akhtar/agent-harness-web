@@ -259,7 +259,9 @@ export const BUILTIN_MODELS: ModelSpec[] = [
     contextWindow: 500_000,
     maxOutput: 128_000,
     compactAt: 180_000,
-    effort: 'high',
+    // Reasoning is nearly all of a Grok agent's bill (seen live: 98% of output) and effort is the only control
+    // (max_output_tokens caps the answer, not the reasoning), so medium by default; high and xhigh for hard work.
+    effort: 'medium',
     efforts: ['low', 'medium', 'high', 'xhigh'],
     rate: (size) => size >= 200_000
       ? { input: 4.00, cacheRead: 1.00, cacheWrite: 4.00, output: 12.00 }
