@@ -148,6 +148,10 @@ Live results (2026-11-03). Each model made the skill and then used it as the age
 | DeepSeek V4 Pro | 10/10 | $0.21 | `scripts/reconcile.py`, its test, 120 lines |
 | Kimi K3.1 Pro | 10/10 | $0.25 | `scripts/reconcile.py`, its test |
 | GLM-5.3 | 10/10 | $0.22 | `scripts/reconcile.py`, its test |
+| Grok 4.7 (effort high) | 10/10 | $1.57 | `scripts/reconcile.py`, its test, `references/matching.md` |
+
+Grok 4.7's first try stopped at a $0.40 limit. It was still reasoning, having designed a minimum-cost bipartite
+matching. Reasoning was 98% of its output, so Grok 4.7 now defaults to medium effort.
 
 What the runs found and fixed:
 - An agent without `bash` could not run its skill's scripts. Its `skill_script` went through the agent's own tools, so

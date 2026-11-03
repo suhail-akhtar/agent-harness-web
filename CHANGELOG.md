@@ -18,7 +18,7 @@
     skill's declared tools and MCP servers. If it has no `bash`, it still runs its skills' scripts.
   - **Live**: a person asks for a skill in their own words; an agent given that skill then reconciles two real files
     with its script. 10/10 on each of Claude Haiku 5.5, Sonnet 5.5, Opus 5.5, DeepSeek Flash, DeepSeek V4 Pro, Kimi
-    K3.1 Pro and GLM-5.3 ($0.02 to $0.57 a run).
+    K3.1 Pro, GLM-5.3 and Grok 4.7 ($0.02 to $1.57 a run).
 - **Providers checked against their official docs**:
   - **xAI**: a request's cost is the price xAI reports for it (`cost_in_usd_ticks`). Grok's long-context rate starts
     at 200K tokens, not after.
