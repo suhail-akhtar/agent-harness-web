@@ -42,6 +42,8 @@ export interface Usage {
   output: number;
   /** Subset of output spent on reasoning, when the provider reports it. */
   reasoning: number;
+  /** The provider's own price of this one request, when it reports one (xAI's cost_in_usd_ticks): costOf uses it. */
+  costUsd?: number;
 }
 
 export const emptyUsage = (): Usage => ({ input: 0, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0 });

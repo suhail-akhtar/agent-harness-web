@@ -143,8 +143,13 @@ export class MoonshotProvider implements Provider {
     }
     const turn = await readChatStream(res, req, (e) => kimiError(0, { type: e.type, message: e.message ?? 'stream error' }, undefined, req.model.id, this.baseUrl));
     const out = finishTurn(turn, req.model.id, 'moonshot', body);
-    // Writes under a 1-hour request go to the 1-hour entry (billed at its rate).
-    if ((body.prompt_cache_options as { ttl?: string } | undefined)?.ttl === '1h' && out.usage.cacheWrite) out.usage = { ...out.usage, cacheWrite1h: out.usage.cacheWrite };
+    // The 1-hour share of the writes (billed at its rate): Kimi reports writes by TTL in headers, since an entry keeps
+    // the TTL of its first write; without them, writes under a 1-hour request count as 1-hour ones.
+    if (out.usage.cacheWrite) {
+      const h1 = Number(res.headers.get('msh-usage-cache-write-tokens-1h') ?? NaN);
+      const w1h = Number.isFinite(h1) ? Math.min(h1, out.usage.cacheWrite) : (body.prompt_cache_options as { ttl?: string } | undefined)?.ttl === '1h' ? out.usage.cacheWrite : 0;
+      if (w1h) out.usage = { ...out.usage, cacheWrite1h: w1h };
+    }
     return out;
   }
 
@@ -180,6 +185,8 @@ export function kimiError(status: number, e: { type?: string; message: string },
     case 'permission_denied_error':
       return new ProviderError(`${where}: permission denied - ${msg}`, status || 403, false);
     case 'resource_not_found_error':
+      // K2 models are closed to accounts opened from 2026-10-31 and retired by the end of 2026.
+      if (/^kimi-k2/.test(model)) return new ProviderError(`${where}: model not found or not available to this account - ${msg}. Kimi K2 models are not offered to new accounts (retired by the end of 2026): use kimi-k3.1-pro.`, status || 404, false);
       return new ProviderError(`${where}: model not found or not available to this account - ${msg}. Kimi K3 is unlocked by a first top-up (minimum $1).`, status || 404, false);
   }
   if (status === 400 && /token length too long|context (window|length)/i.test(msg)) {

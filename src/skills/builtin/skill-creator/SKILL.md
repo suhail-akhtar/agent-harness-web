@@ -30,8 +30,9 @@ gets it wrong one time in twenty; a script never does.
 ## 3. Lay it out
 
 Start from the scaffold: `skill_script` with skill `skill-creator`, script `scripts/init_skill.mjs`, args
-`[<folder>, <name>, "<description>", "--scripts", "--references", "--assets", "--tests", "--mcp"]` (only the parts you
-need). It writes:
+`["skills", <name>, "<description>", "--scripts", "--references", "--assets", "--tests", "--mcp"]` (only the parts you
+need). The first argument is the folder the skill goes IN (it makes `skills/<name>/`), not the skill's own folder. It
+writes:
 
 ```
 <name>/

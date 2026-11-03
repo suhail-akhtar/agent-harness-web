@@ -13,6 +13,10 @@ const want = ['SKILL.md', 'scripts/run.py', 'tests/test_run.py', 'references/gui
 const missing = want.filter((f) => !out.created.includes(f) || !fs.existsSync(path.join(tmp, 'csv-tidy', f)));
 if (missing.length) { console.error('missing:', missing.join(', ')); process.exit(1); }
 if (!/^---\nname: csv-tidy\n/.test(fs.readFileSync(path.join(tmp, 'csv-tidy', 'SKILL.md'), 'utf8'))) { console.error('bad frontmatter'); process.exit(1); }
+// The skill's own empty folder as the parent is not nested into (seen live: <name>/<name>/SKILL.md).
+fs.mkdirSync(path.join(tmp, 'own-folder'));
+execFileSync(process.execPath, [init, path.join(tmp, 'own-folder'), 'own-folder', 'A skill laid out in its own folder.'], { encoding: 'utf8' });
+if (!fs.existsSync(path.join(tmp, 'own-folder', 'SKILL.md'))) { console.error('the skill was nested into its own folder'); process.exit(1); }
 if (spawnSync(process.execPath, [init, tmp, 'Bad Name', 'A description long enough to pass.'], { encoding: 'utf8' }).status !== 1) { console.error('a bad name was not refused'); process.exit(1); }
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log('ok');

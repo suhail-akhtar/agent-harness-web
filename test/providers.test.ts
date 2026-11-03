@@ -4,7 +4,7 @@ import { costOf, deepseekPeak, getModel } from '../src/core/models.ts';
 import type { Message } from '../src/core/types.ts';
 import { anthropicBody } from '../src/providers/anthropic.ts';
 import { toChat } from '../src/providers/deepseek.ts';
-import { responsesBody, toInputItems } from '../src/providers/openai.ts';
+import { fromResponse, responsesBody, toInputItems } from '../src/providers/openai.ts';
 import { XAI_FLAVOR } from '../src/providers/xai.ts';
 
 const toolUse: Message = { role: 'assistant', content: [{ type: 'text', text: 'checking' }, { type: 'tool_use', id: 't1', name: 'read', input: { path: 'a' } }] };
@@ -162,4 +162,14 @@ test('responses body: an agent with no tools (a judge) sends no tools and no too
   assert.equal('tools' in none || 'tool_choice' in none || 'parallel_tool_calls' in none, false);
   const some = responsesBody({ model, system: 's', tools: [{ name: 'read', description: 'r', input_schema: { type: 'object', properties: {} } }], messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }], effort: 'medium', cacheKey: 'k' }, XAI_FLAVOR);
   assert.deepEqual(Object.keys(some).slice(0, 6), ['model', 'instructions', 'input', 'tools', 'tool_choice', 'parallel_tool_calls'], 'the cached shape is unchanged');
+});
+
+test('xAI: the request\'s own price (cost_in_usd_ticks) is the cost; the long-context rate starts at 200K tokens exactly', () => {
+  const grok = getModel('grok-4.7')!;
+  const r = fromResponse('grok-4.7', { id: 'r', status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'ok' }] }], usage: { input_tokens: 1000, output_tokens: 10, cost_in_usd_ticks: 23_450_000 } } as never, XAI_FLAVOR);
+  assert.equal(r.usage.costUsd, 0.002345);
+  assert.equal(costOf(grok, r.usage), 0.002345);
+  const at = (n: number) => costOf(grok, { input: n, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0 });
+  assert.equal(at(199_999), 199_999 * 2 / 1e6);
+  assert.equal(at(200_000), 200_000 * 4 / 1e6);
 });

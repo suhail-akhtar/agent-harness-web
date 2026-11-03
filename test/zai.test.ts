@@ -214,3 +214,11 @@ test('zai: a harness session on glm-5.3-flash - the loop runs the tool call and 
     for (const [k, v] of [['ZAI_API_KEY', saved.key], ['ZAI_BASE_URL', saved.base]] as const) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   }
 });
+
+test('zai: a webp or gif image becomes a note (GLM takes png and jpeg only); FlashX is refused on a Coding Plan endpoint before any call', async () => {
+  const img = (media_type: string) => ({ type: 'image' as const, media_type, data: 'AAAA' });
+  const b = zaiBody(request({ messages: [{ role: 'user', content: [{ type: 'text', text: 'look' }, img('image/png'), img('image/webp'), img('image/jpeg'), img('image/gif')] as never }] }));
+  const parts = (b.messages as { content: unknown }[])[1]!.content as { type: string; text?: string; image_url?: { url: string } }[];
+  assert.deepEqual(parts.map((p) => p.type === 'image_url' ? p.image_url!.url.slice(0, 15) : p.text!.slice(0, 22)), ['look', 'data:image/png;', '[An image (webp) was l', 'data:image/jpeg', '[An image (gif) was le']);
+  await assert.rejects(new ZaiProvider('zk', 'https://api.z.ai/api/coding/paas/v4').send(request({ model: getModel('glm-5.3-flashx') })), (e: unknown) => e instanceof ProviderError && !e.retryable && /not on the GLM Coding Plan/.test(e.message));
+});

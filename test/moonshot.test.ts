@@ -6,7 +6,7 @@ import { costOf, getModel } from '../src/core/models.ts';
 import type { Message } from '../src/core/types.ts';
 import { createHarness } from '../src/kernel/harness.ts';
 import { BUILTIN_PROVIDERS } from '../src/providers/index.ts';
-import { kimiEffort, mfjsStrict, moonshotBalance, moonshotBody, moonshotEstimateTokens, MoonshotProvider } from '../src/providers/moonshot.ts';
+import { kimiEffort, kimiError, mfjsStrict, moonshotBalance, moonshotBody, moonshotEstimateTokens, MoonshotProvider } from '../src/providers/moonshot.ts';
 import type { ProviderRequest } from '../src/providers/types.ts';
 import { ProviderError } from '../src/providers/types.ts';
 import { delta, mockServer } from './chat-mock.ts';
@@ -335,4 +335,19 @@ test('moonshot: a stream cut off (no [DONE], no finish reason) is a retryable er
     const r = await new MoonshotProvider('sk', `${finished.url}/v1`).send(request('kimi-k3.1-pro'));
     assert.equal(r.stop, 'end');
   } finally { await finished.close(); }
+});
+
+test('moonshot: the 1-hour share of the cache writes comes from Kimi\'s TTL headers; without them, a 1-hour request\'s writes count as 1-hour', async () => {
+  const sse = [delta({ role: 'assistant', content: '' }), delta({ content: 'ok' }, 'stop'), { choices: [], usage }];
+  const hdr = await mockServer(() => ({ sse, headers: { 'Msh-Usage-Cache-Write-Tokens-5m': '150', 'Msh-Usage-Cache-Write-Tokens-1h': '50' } }));
+  try {
+    const r = await new MoonshotProvider('sk', `${hdr.url}/v1`).send(request('kimi-k3.1-pro', { prefixTtl: '1h' }));
+    assert.deepEqual([r.usage.cacheWrite, r.usage.cacheWrite1h], [200, 50], 'an entry first written for 5 minutes stays a 5-minute one');
+  } finally { await hdr.close(); }
+  const none = await mockServer(() => ({ sse }));
+  try {
+    const r = await new MoonshotProvider('sk', `${none.url}/v1`).send(request('kimi-k3.1-pro', { prefixTtl: '1h' }));
+    assert.equal(r.usage.cacheWrite1h, 200);
+  } finally { await none.close(); }
+  assert.match(kimiError(404, { type: 'resource_not_found_error', message: 'Not found' }, undefined, 'kimi-k2.6').message, /not offered to new accounts[\s\S]*kimi-k3\.1-pro/);
 });

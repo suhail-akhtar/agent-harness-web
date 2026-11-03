@@ -156,6 +156,8 @@ interface ResponseObject {
     output_tokens: number;
     output_tokens_details?: { reasoning_tokens?: number };
     total_tokens?: number;
+    /** xAI: the request's exact price, in ticks of 1e-10 USD. */
+    cost_in_usd_ticks?: number;
   };
 }
 
@@ -229,6 +231,7 @@ export function fromResponse(model: string, r: ResponseObject, flavor: Responses
       ...(w12h ? { cacheWrite1h: w12h } : {}),
       output: (u?.output_tokens ?? 0) + (apart ? reasoning : 0),
       reasoning,
+      ...(typeof u?.cost_in_usd_ticks === 'number' ? { costUsd: u.cost_in_usd_ticks / 1e10 } : {}),
     },
     notice: refusal ? `The model declined: ${refusal}` : undefined,
     ...(compacted ? { compacted: { summaryTokens: 0, before: u?.input_tokens ?? 0 } } : {}),

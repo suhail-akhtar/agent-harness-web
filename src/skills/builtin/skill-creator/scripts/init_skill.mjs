@@ -14,8 +14,10 @@ const [parent, name, description] = args;
 const want = (f) => args.includes(f);
 if (!/^[a-z0-9][a-z0-9_.-]{0,63}$/.test(name)) { console.error(`"${name}" is not a skill name: lower-case letters, digits, "-", "_" or ".", at most 64`); process.exit(1); }
 if (description.length < 20) { console.error('the description must say what the skill does and when to use it (at least 20 characters)'); process.exit(1); }
-const dir = path.join(parent, name);
-if (fs.existsSync(dir)) { console.error(`${dir} exists already`); process.exit(1); }
+// The skill's own (empty) folder given as the parent is taken as the skill's folder, not nested inside it.
+const own = path.basename(path.resolve(parent)) === name && (!fs.existsSync(parent) || fs.readdirSync(parent).length === 0);
+const dir = own ? parent : path.join(parent, name);
+if (!own && fs.existsSync(dir)) { console.error(`${dir} exists already`); process.exit(1); }
 const created = [];
 const write = (rel, text) => { const p = path.join(dir, rel); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, text); created.push(rel); };
 

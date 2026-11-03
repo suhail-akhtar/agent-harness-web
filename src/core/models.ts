@@ -261,7 +261,7 @@ export const BUILTIN_MODELS: ModelSpec[] = [
     compactAt: 180_000,
     effort: 'high',
     efforts: ['low', 'medium', 'high', 'xhigh'],
-    rate: (size) => size > 200_000
+    rate: (size) => size >= 200_000
       ? { input: 4.00, cacheRead: 1.00, cacheWrite: 4.00, output: 12.00 }
       : { input: 2.00, cacheRead: 0.50, cacheWrite: 2.00, output: 6.00 },
   },
@@ -276,7 +276,7 @@ export const BUILTIN_MODELS: ModelSpec[] = [
     compactAt: 180_000,
     effort: 'low',
     efforts: ['low', 'medium', 'high', 'xhigh'],
-    rate: (size) => size > 200_000
+    rate: (size) => size >= 200_000
       ? { input: 2.50, cacheRead: 0.40, cacheWrite: 2.50, output: 5.00 }
       : { input: 1.25, cacheRead: 0.20, cacheWrite: 1.25, output: 2.50 },
   },
@@ -291,7 +291,7 @@ export const BUILTIN_MODELS: ModelSpec[] = [
     compactAt: 160_000,
     effort: 'high',
     efforts: ['low', 'medium', 'high'],
-    rate: (size) => size > 200_000
+    rate: (size) => size >= 200_000
       ? { input: 2.00, cacheRead: 0.40, cacheWrite: 2.00, output: 4.00 }
       : { input: 1.00, cacheRead: 0.20, cacheWrite: 1.00, output: 2.00 },
   },
@@ -306,7 +306,8 @@ export const BUILTIN_MODELS: ModelSpec[] = [
     maxOutput: 131_072,
     // Cached input is $0.03/M, so a long context is cheap; compacting at 200K keeps steps fast.
     compactAt: 200_000,
-    effort: 'high',
+    // Z.ai's recommended setting for agentic work, and the API's default: max (Flash is cheap).
+    effort: 'max',
     efforts: ['low', 'high', 'max'],
     // Implicit caching; cache storage is free for a limited time (no write charge).
     rate: () => ({ input: 0.15, cacheRead: 0.03, cacheWrite: 0.15, output: 0.50 }),
@@ -320,7 +321,8 @@ export const BUILTIN_MODELS: ModelSpec[] = [
     contextWindow: 1_000_000,
     maxOutput: 131_072,
     compactAt: 200_000,
-    effort: 'high',
+    // Z.ai's recommended setting for agentic work, and the API's default: max (Flash is cheap).
+    effort: 'max',
     efforts: ['low', 'high', 'max'],
     // https://docs.z.ai/guides/overview/pricing (checked 2026-10-26).
     rate: () => ({ input: 0.37, cacheRead: 0.075, cacheWrite: 0.37, output: 1.25 }),
@@ -334,6 +336,7 @@ export const BUILTIN_MODELS: ModelSpec[] = [
     contextWindow: 1_000_000,
     maxOutput: 131_072,
     compactAt: 200_000,
+    // Z.ai recommends max for coding; high by default here, since its output is $4.40/M (max is one choice away).
     effort: 'high',
     efforts: ['low', 'high', 'max'],
     rate: () => ({ input: 1.40, cacheRead: 0.26, cacheWrite: 1.40, output: 4.40 }),
@@ -352,6 +355,8 @@ export function getModel(id: string): ModelSpec {
 }
 
 export function costOf(model: ModelSpec, u: Usage, at = new Date()): number {
+  // The provider's own price of the request is exact (an operator's price override still wins).
+  if (u.costUsd !== undefined && Number.isFinite(u.costUsd) && !overrides[model.id]) return u.costUsd;
   const r = overrides[model.id] ?? model.rate(promptTokens(u), at);
   // The 1-hour share of the writes is billed at its own rate; the rest at the 5-minute one.
   const w1h = Math.min(u.cacheWrite, u.cacheWrite1h ?? 0);

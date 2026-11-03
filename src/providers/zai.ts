@@ -11,7 +11,8 @@ import { errorBody, finishTurn, readChatStream, toReasoningChat } from './chat-s
 // GLM controls an agent needs are documented there - thinking.clear_thinking
 // (Preserved Thinking), reasoning_effort, tool_stream - and it is the endpoint
 // pay-as-you-go keys are billed on. ZAI_BASE_URL=https://api.z.ai/api/coding/paas/v4
-// uses a GLM Coding Plan's quota instead (same protocol).
+// uses a GLM Coding Plan's quota instead (same protocol; the plan has no FlashX, and its terms limit it to supported
+// coding tools: https://docs.z.ai/devpack/quick-start).
 // Sources (checked 2026-10-22):
 //   https://docs.z.ai/api-reference/introduction          base URL, auth
 //   https://docs.z.ai/api-reference/llm/chat-completion   request, finish reasons, usage
@@ -32,6 +33,16 @@ const DEFAULT_BASE = 'https://api.z.ai/api/paas/v4';
 /** "A max of 128 functions are supported." */
 const MAX_TOOLS = 128;
 
+/** "jpg, png, jpeg": another image (webp, gif) would fail the whole request, so it becomes a note. */
+function glmImages(m: unknown): unknown {
+  const msg = m as { content?: unknown };
+  if (!Array.isArray(msg.content)) return m;
+  return { ...msg, content: msg.content.map((p: { type?: string; image_url?: { url?: string } }) => {
+    const t = p?.type === 'image_url' ? /^data:image\/([\w.+-]+);/.exec(p.image_url?.url ?? '')?.[1] : undefined;
+    return t && !/^(png|jpe?g)$/i.test(t) ? { type: 'text', text: `[An image (${t}) was left out: Z.ai's GLM models take png and jpeg images only.]` } : p;
+  }) };
+}
+
 export function glmEffort(e: Effort): 'low' | 'high' | 'max' {
   return e === 'low' ? 'low' : e === 'xhigh' || e === 'max' ? 'max' : 'high';
 }
@@ -40,7 +51,7 @@ export function glmEffort(e: Effort): 'low' | 'high' | 'max' {
 export function zaiBody(req: Pick<ProviderRequest, 'model' | 'system' | 'tools' | 'messages' | 'effort'>): Record<string, unknown> {
   const messages: unknown[] = [{ role: 'system', content: req.system }];
   // Tool messages are text only on Z.ai: a result's images follow it as user content.
-  for (const m of req.messages) messages.push(...toReasoningChat(m, { provider: 'zai', toolImages: 'split' }));
+  for (const m of req.messages) messages.push(...toReasoningChat(m, { provider: 'zai', toolImages: 'split' }).map(glmImages));
   const body: Record<string, unknown> = { model: req.model.id, messages };
   if (req.tools.length) {
     if (req.tools.length > MAX_TOOLS) throw new ProviderError(`Z.ai (${req.model.id}) accepts at most ${MAX_TOOLS} tools; this session has ${req.tools.length}. Turn off some plugins or MCP servers for it.`, 400, false);
@@ -64,6 +75,8 @@ export class ZaiProvider implements Provider {
   }
 
   async send(req: ProviderRequest): Promise<ProviderResponse> {
+    // "Not yet available on the plan": a Coding Plan endpoint has no FlashX.
+    if (/\/coding\//.test(this.baseUrl) && req.model.id === 'glm-5.3-flashx') throw new ProviderError(`Z.ai (${req.model.id}): GLM-5.3-FlashX is not on the GLM Coding Plan (ZAI_BASE_URL is ${this.baseUrl}); use glm-5.3-flash, or the general endpoint ${DEFAULT_BASE}.`, 400, false);
     const body = zaiBody(req);
     let res: Response;
     try {
