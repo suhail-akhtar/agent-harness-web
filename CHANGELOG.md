@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+- **A swarm that holds up when a provider stalls, and that the person and the lead can see into and talk to.** From a
+  live run (8 researchers on Sonnet 5.5, Grok 4.7 and DeepSeek Flash; DeepSeek under load: 9 of 40 calls retried, one
+  of 11 minutes, which held the whole fan-out and lost 7 finished reports at the 30-minute tool ceiling):
+  - **Stalls are caught**: DeepSeek streams `: keep-alive` comments while a request waits in its queue
+    (api-docs.deepseek.com, "Rate Limit"); those no longer count as a reply, so a queued request is a stall after
+    the idle time and is retried. Every streamed reply has a ceiling (`HARNESS_CALL_MAX_MS`, 15 minutes).
+  - **Failover**: a sub-agent whose provider stalls twice goes on with the conversation's model, its context intact,
+    when that is another company's, and says so.
+  - **Fan-outs keep what finished**: a fan-out has its own time limit under the tool ceiling (25 minutes; 60 in the
+    background; `HARNESS_FANOUT_MAX_MINUTES`). There it stops its stragglers and returns the table with every finished
+    report. `run_in_background` now really runs a fan-out in the background (it held its lead before); the table
+    arrives as a reminder.
+  - **Honest outcomes**: an agent that ends without a report is "no report" in a fan-out's table, not "done".
+  - **What each sub-agent is doing**: the engine tracks it (running a tool and for how long, waiting on its model and
+    since when, its retries) and lists the agents at work in the session's detail. The Agents panel shows it on each
+    row ("no reply from deepseek-flash for 4m · retry 2"), and agents a reloaded window had shown as done after 1s now
+    show as running.
+  - **The lead is told**: a sub-agent whose model has been quiet for 150 seconds (`HARNESS_STALL_NOTE_S`) is reported
+    to its lead, and to the person, once per wait: how long, its retries, that it is the provider, and what the lead
+    can do.
+  - **Talking both ways**: a sub-agent can tell its lead news while it works (`tell_lead`: the premise is wrong, it is
+    blocked; at most 3 a run, fenced as data). The person can write to any sub-agent at work from the Agents panel.
+  - **Steering**: what the person types while the agent works is listed above the composer, with **Send now** (stops
+    the current step, background work goes on, and sends it) and a way to take each back. Stop keeps those messages
+    instead of dropping them unseen, and one typed while a turn was starting is no longer lost.
+  - **The Agents panel**: a summary (at work, done, failed, time, cost), the mix of models by cost, a timeline of every
+    agent on the run's clock, stragglers marked "slow", and each row edged in its model's colour with its step count.
+  - **Desktop settings**: Models & providers is a compact list of providers (connected first; key, test and an
+    Advanced section for the address and switches), and delegation picks models as chips by company, its switches
+    labelled. The side panel's close button is no longer under the window's own buttons.
+
 - **Skills as packages** (docs/SKILLS.md):
   - **The format**: a skill can be instructions alone, or scripted, with tests, references, assets and MCP servers
     (the Agent Skills layout). Its frontmatter can name the tools it needs (`allowed-tools`) and its MCP servers

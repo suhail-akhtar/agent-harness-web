@@ -71,6 +71,8 @@ export interface AgentConfig {
   name: string;
   model: ModelSpec;
   provider: Provider;
+  /** Where to go on when this model's provider stalls again and again (a sub-agent: the conversation's model); none, or undefined: retry as usual. */
+  failover?: () => { model: ModelSpec; provider: Provider } | undefined;
   effort: Effort;
   system: string;
   tools: Tool[];
@@ -130,6 +132,9 @@ interface TurnBudget { budget: number; extensions: number; refreshes: number; so
 type Checkpoint = { action: 'continue'; budget: number; reminder?: string } | { action: 'refresh'; budget: number; note: string } | { action: 'stop' };
 
 const MAX_RETRIES = 6;
+/** A retryable error that is the provider stalling (providers/http.ts), not a refusal or an overload status. */
+const STALL = /stalled|no response|took longer than/;
+const STALLS_TO_FAIL_OVER = 2;
 const RESULT_PREVIEW = 8000;
 /** Images larger than this are not echoed to the UI (they still reach the model). */
 const UI_IMAGE_MAX = 1_500_000;
@@ -631,7 +636,7 @@ export class Agent {
       onReasoning: (text) => this.hooks.emit({ kind: 'reasoning_delta', text, agent: this.cfg.name }),
     };
     const t0 = Date.now();
-    let imagesDropped = false, compactedForSize = false;
+    let imagesDropped = false, compactedForSize = false, stalls = 0;
     for (let attempt = 0; ; attempt++) {
       try {
         const resp = await this.cfg.provider.send(req);
@@ -669,6 +674,20 @@ export class Agent {
             continue;
           }
           throw new ProviderError(`The request is larger than ${this.cfg.model.provider} accepts, even without images${compactedForSize ? ' and after compacting' : ''}. Start a new conversation (the agent can carry on from a summary: ask it to write one first), or switch to a model with a larger request limit.`, 413, false);
+        }
+        // A provider that stalls again and again (no reply, only keep-alives, a reply past the ceiling) holds
+        // the whole swarm on retries (seen live: DeepSeek under load, 9 retried calls, one of 11 minutes):
+        // after the second stall the work goes on with the failover model, its context intact, and says so.
+        if (err instanceof ProviderError && err.retryable && err.status === 0 && STALL.test(err.message) && ++stalls >= STALLS_TO_FAIL_OVER && this.cfg.failover) {
+          const to = this.cfg.failover();
+          if (to && to.model.id !== this.cfg.model.id) {
+            const from = this.cfg.model.id;
+            this.cfg = { ...this.cfg, model: to.model, provider: to.provider, effort: to.model.efforts.includes(this.cfg.effort) ? this.cfg.effort : to.model.effort };
+            req.model = to.model; req.effort = this.cfg.effort;
+            stalls = 0;
+            this.hooks.emit({ kind: 'notice', level: 'warn', text: `${this.cfg.name}: ${from} stalled ${STALLS_TO_FAIL_OVER} times (${err.message}); it goes on with ${to.model.id}.`, agent: this.cfg.name });
+            continue;
+          }
         }
         if (!(err instanceof ProviderError) || !err.retryable || attempt >= MAX_RETRIES) throw err;
         const delay = Math.min(60_000, err.retryAfterMs ?? 1000 * 2 ** attempt + Math.random() * 500);

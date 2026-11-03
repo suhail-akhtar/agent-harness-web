@@ -30,6 +30,10 @@ export interface ComposerProps {
   placeholder?: string;
   queued?: string[];
   onUnqueue?: (i: number) => void;
+  /** Messages the agent has not seen yet (sent while it works): each can go now (the current step stops) or be taken back. */
+  steering?: string[];
+  onSteerNow?: () => void;
+  onUnsteer?: (i: number) => void;
   autoFocus?: boolean;
   left?: React.ReactNode;
 }
@@ -223,6 +227,19 @@ export function Composer(p: ComposerProps): React.ReactElement {
   const chips = registry.composerChips;
   return (
     <div className="mx-auto w-full max-w-column px-4 pb-3 sm:px-6" data-composer>
+      {p.steering?.length ? (
+        <div className="mb-1.5 space-y-1" data-steering>
+          {p.steering.map((q, i) => (
+            <div key={i} data-steering-item={i} className="flex items-center gap-2 rounded-lg border border-hx-border-subtle bg-hx-pill/70 py-1.5 pl-2.5 pr-1.5 text-small">
+              <Icon name="clock" size={13} className="shrink-0 text-hx-muted" />
+              <span className="min-w-0 flex-1 truncate text-hx-primary" title={q}>{q}</span>
+              <span className="hidden shrink-0 text-tiny text-hx-muted sm:inline">{p.running ? 'at its next step' : 'not sent'}</span>
+              {i === 0 && <Tooltip label={p.running ? 'Stops what the agent is doing now (this step\'s sub-agents too; background work goes on) and sends it' : 'Sends it now'}><Button size="sm" variant="primary" data-steer-now onClick={() => p.onSteerNow?.()}>Send now</Button></Tooltip>}
+              <IconButton icon="x" size="xs" label="Take this message back" data-unsteer onClick={() => p.onUnsteer?.(i)} />
+            </div>
+          ))}
+        </div>
+      ) : null}
       {p.queued?.length ? (
         <div className="mb-1.5 flex flex-wrap gap-1.5" data-queue>
           {p.queued.map((q, i) => <span key={i} className="inline-flex max-w-full items-center gap-1 rounded-lg bg-hx-pill py-1 pl-2 pr-1 text-small text-hx-secondary"><Icon name="clock" size={12} /><span className="max-w-[320px] truncate">Queued: {q}</span><button type="button" aria-label="Remove from the queue" onClick={() => p.onUnqueue?.(i)} className="rounded p-0.5 hover:bg-hx-hover"><Icon name="x" size={12} /></button></span>)}

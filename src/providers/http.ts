@@ -5,6 +5,8 @@ import { ProviderError } from './types.ts';
 // can never be mistaken for a clean finish, and so a stalled stream is caught.
 
 const IDLE_MS = Number(process.env.HARNESS_STREAM_IDLE_MS ?? 180_000);
+/** The longest one reply may stream: past it the call is retried (or failed over), however busy the stream looks. */
+const MAX_CALL_MS = Number(process.env.HARNESS_CALL_MAX_MS ?? 15 * 60_000);
 
 export function isRetryableStatus(status: number): boolean {
   return status === 408 || status === 409 || status === 429 || status >= 500;
@@ -51,21 +53,31 @@ export async function postStream(url: string, headers: Record<string, string>, b
 export interface SseEvent { event?: string; data: string }
 
 /**
- * Yields SSE events from a response body. Throws if the caller's signal fires
- * or no bytes arrive for IDLE_MS, so neither case can look like a finished turn.
+ * Yields SSE events from a response body. Throws if the caller's signal fires, nothing arrives for
+ * IDLE_MS, or the reply streams past MAX_CALL_MS, so none of these can look like a finished turn.
+ * `keepAliveIsIdle`: only data counts, for a server that queues the request and sends keep-alive
+ * comments meanwhile (": keep-alive", as DeepSeek does under load): that is stalled, not streaming.
  */
-export async function* readSse(res: Response, signal: AbortSignal): AsyncGenerator<SseEvent> {
+export async function* readSse(res: Response, signal: AbortSignal, limits: { idleMs?: number; maxMs?: number; keepAliveIsIdle?: boolean } = {}): AsyncGenerator<SseEvent> {
   if (!res.body) throw new ProviderError('empty response body', 0, true);
+  const idleMs = limits.idleMs ?? Number(process.env.HARNESS_STREAM_IDLE_MS ?? IDLE_MS);
+  const maxMs = limits.maxMs ?? Number(process.env.HARNESS_CALL_MAX_MS ?? MAX_CALL_MS);
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
   let event: string | undefined;
   let data: string[] = [];
+  const started = Date.now();
+  let lastData = started;
   try {
     while (true) {
       let timer: NodeJS.Timeout | undefined;
+      const now = Date.now();
+      const toIdle = idleMs - (now - lastData), toMax = maxMs - (now - started);
       const idle = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new ProviderError(`stream stalled for ${IDLE_MS / 1000}s`, 0, true)), IDLE_MS);
+        timer = setTimeout(() => reject(toMax <= toIdle
+          ? new ProviderError(`the reply took longer than ${Math.round(maxMs / 60_000)} min`, 0, true)
+          : new ProviderError(`stream stalled for ${idleMs / 1000}s${lastData === started ? ' (no reply yet)' : ''}`, 0, true)), Math.max(0, Math.min(toIdle, toMax)));
       });
       let chunk: ReadableStreamReadResult<Uint8Array>;
       try {
@@ -80,6 +92,7 @@ export async function* readSse(res: Response, signal: AbortSignal): AsyncGenerat
       }
       if (signal.aborted) throw signal.reason ?? new Error('aborted');
       if (chunk.done) break;
+      if (!limits.keepAliveIsIdle) lastData = Date.now();
       buf += decoder.decode(chunk.value, { stream: true });
       let nl: number;
       while ((nl = buf.indexOf('\n')) >= 0) {
@@ -91,6 +104,7 @@ export async function* readSse(res: Response, signal: AbortSignal): AsyncGenerat
           data = [];
         } else if (line.startsWith('data:')) {
           data.push(line.slice(5).replace(/^ /, ''));
+          lastData = Date.now();
         } else if (line.startsWith('event:')) {
           event = line.slice(6).trim();
         }

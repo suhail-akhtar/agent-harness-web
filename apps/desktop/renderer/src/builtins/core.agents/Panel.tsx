@@ -7,12 +7,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type { Item, TaskView, Todo } from '@harness/client';
 import { duration } from '@harness/client';
-import { Badge, Button, EmptyState, Icon, IconButton, Spinner, Tooltip, cx } from '@harness/ui';
+import { Badge, Button, EmptyState, Icon, IconButton, Input, Spinner, Tooltip, cx, toast } from '@harness/ui';
 import { client, useData } from '../../state/data';
 import { openSession, openSplit } from '../../state/app';
 import { useSessionLive } from '../core.chat/live';
-import { agentMs, asTree, type SubAgent } from '../../state/agents';
+import { activityLine, agentMs, asTree, type SubAgent } from '../../state/agents';
 import { CostByModel, money } from '../../components/CostByModel';
+import { SwarmSummary, SwarmTimeline, modelColor, stragglers } from './Swarm';
 import type { NativeProps } from '../../registry/PluginView';
 import { dismissProposal, startProposal, useOpenProposals } from './proposals';
 
@@ -39,13 +40,38 @@ function PanelGroup({ title, count, children, icon }: { title: string; count?: n
   );
 }
 
-export function AgentRow({ a }: { a: SubAgent }) {
-  const ms = agentMs(a);
+/** Write to a sub-agent at work: it sees it at its next step (a lead's send_message, from the person). */
+function MessageAgent({ sessionId, name, onDone }: { sessionId: string; name: string; onDone: () => void }) {
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const send = async () => {
+    if (!text.trim()) return;
+    setBusy(true);
+    try { await client.sessions.messageAgent(sessionId, name, text.trim()); toast(`${name} sees it at its next step`, { kind: 'success' }); onDone(); } catch (e) { toast((e as Error).message, { kind: 'error' }); } finally { setBusy(false); }
+  };
   return (
-    <div data-subagent={a.name} data-subagent-status={a.status} className="flex gap-2 rounded-lg border border-hx-border-subtle bg-hx-elevated px-2.5 py-2">
+    <div className="mt-1.5 flex gap-1.5" data-message-agent={name}>
+      <Input autoFocus value={text} placeholder={`Tell ${name}…`} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void send(); if (e.key === 'Escape') onDone(); }} className="h-7 text-small" aria-label={`Message to ${name}`} />
+      <Button size="sm" variant="primary" loading={busy} disabled={!text.trim()} onClick={() => void send()}>Send</Button>
+    </div>
+  );
+}
+
+export function AgentRow({ a, slow, sessionId }: { a: SubAgent; slow?: boolean; sessionId?: string }) {
+  const ms = agentMs(a);
+  const act = activityLine(a);
+  const [writing, setWriting] = useState(false);
+  return (
+    <div data-subagent={a.name} data-subagent-status={a.status} className="flex gap-2 rounded-lg border border-l-[3px] border-hx-border-subtle bg-hx-elevated px-2.5 py-2" style={{ borderLeftColor: modelColor(a.model) }}>
       <Dot status={a.status} />
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5"><span className="truncate font-mono text-small text-hx-primary">{a.name}</span>{a.background && <Badge>background</Badge>}</div>
+        <div className="flex items-center gap-1.5">
+          <span className="truncate font-mono text-small text-hx-primary">{a.name}</span>{a.background && <Badge>background</Badge>}
+          {slow && <span data-subagent-slow className="rounded bg-hx-warning-soft px-1 text-tiny text-hx-warning" title="At work well past the agents beside it">slow</span>}
+          {(a.status === 'failed' || a.status === 'stopped') && <span className={cx('text-tiny', a.status === 'failed' ? 'text-hx-danger' : 'text-hx-muted')}>{a.status}</span>}
+          {a.status === 'running' && sessionId && <Tooltip label={`Tell ${a.name} something (it sees it at its next step)`}><IconButton icon="chat" size="xs" label={`Message ${a.name}`} className="ml-auto" data-message-agent-open={a.name} onClick={() => setWriting(!writing)} /></Tooltip>}
+        </div>
+        {act && <div data-subagent-activity={act.stalled ? 'stalled' : 'working'} className={cx('mt-0.5 truncate text-tiny', act.stalled ? 'font-medium text-hx-warning' : 'text-hx-secondary')} title={act.text}>{act.stalled ? 'Stalled? ' : ''}{act.text}</div>}
         {a.description && <div className="truncate text-small text-hx-secondary">{a.description}</div>}
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-tiny text-hx-muted">
           <span>{a.type}</span>
@@ -53,13 +79,15 @@ export function AgentRow({ a }: { a: SubAgent }) {
           {a.worktree && <span className="inline-flex items-center gap-0.5" title="Works in its own git worktree"><Icon name="git-branch" size={11} />{a.worktree}</span>}
           {a.machine && <span data-subagent-machine={a.machine} className="inline-flex items-center gap-0.5" title="Works on this computer of yours, as its policy allows"><Icon name="monitor" size={11} />{a.machine}</span>}
           {ms !== undefined && <span>{duration(ms)}</span>}
+          {a.tools > 0 && <span data-subagent-steps title={`${a.tools} tool calls, ${a.calls} model calls`}>{a.tools} steps</span>}
           {a.cost > 0 && <span data-subagent-cost>{money(a.cost)}</span>}
           {a.accepted?.checks && <span data-subagent-checks={a.accepted.checks.passed === a.accepted.checks.total ? 'pass' : 'fail'} className={cx('rounded px-1', a.accepted.checks.passed === a.accepted.checks.total ? 'bg-hx-success-soft text-hx-success' : 'bg-hx-warning-soft text-hx-warning')} title="Done criteria, run by the harness">checks {a.accepted.checks.passed}/{a.accepted.checks.total}</span>}
           {a.accepted?.verdict && <span data-subagent-verdict={a.accepted.verdict} className={cx('rounded px-1', a.accepted.verdict === 'pass' ? 'bg-hx-success-soft text-hx-success' : 'bg-hx-warning-soft text-hx-warning')} title={`Verified by ${a.accepted.verifier ?? 'a verifier'}`}>{a.accepted.verdict === 'pass' ? 'verified' : a.accepted.verdict === 'unknown' ? 'unverified' : 'not verified'}</span>}
           {a.accepted?.corroborated !== undefined && <span data-subagent-corroborated={a.accepted.corroborated ? 'yes' : 'no'} className={cx('rounded px-1', a.accepted.corroborated ? 'bg-hx-success-soft text-hx-success' : 'bg-hx-warning-soft text-hx-warning')} title="Critical stakes: two independent replicas compared">{a.accepted.corroborated ? 'corroborated' : 'not corroborated'}</span>}
           {a.accepted?.blocked && <span data-subagent-blocked className="rounded bg-hx-warning-soft px-1 text-hx-warning" title="It says a done criterion is wrong or cannot be met">blocked</span>}
-          {a.status === 'running' && a.last && <span className="truncate">· {a.last}</span>}
+          {a.status === 'running' && a.last && !act && <span className="truncate">· {a.last}</span>}
         </div>
+        {writing && sessionId && <MessageAgent sessionId={sessionId} name={a.name} onDone={() => setWriting(false)} />}
       </div>
     </div>
   );
@@ -117,6 +145,8 @@ export function AgentsPanel({ params }: NativeProps): React.ReactElement {
   // As the swarm's tree: each agent after the one that started it.
   const agents = useMemo(() => asTree(Object.values(s.agents)), [s.agents]);
   const running = agents.filter((a) => a.status === 'running').length;
+  const [view, setView] = useState<'list' | 'timeline'>('list');
+  const slow = stragglers(agents);
   const tasks = useMemo(() => s.tasks.filter((t) => t.kind !== 'agent'), [s.tasks]);
   const reasons = useMemo(() => { const r: Record<string, { reason?: string; title: string }> = {}; for (const i of s.live.items as Item[]) if (i.kind === 'link') r[i.id] = { reason: i.phase === 'report' ? i.reason : r[i.id]?.reason, title: i.title }; return r; }, [s.live.items]);
   const linked = useMemo(() => [...new Set([...(s.meta?.linked ?? []), ...Object.keys(reasons)])], [s.meta?.linked, reasons]);
@@ -137,8 +167,18 @@ export function AgentsPanel({ params }: NativeProps): React.ReactElement {
       {agents.length > 0 && (
         <PanelGroup title="Sub-agents" icon="bot" count={agents.length}>
           {/* The swarm's kill switch: every agent of the run stops at once; the conversation's own agent goes on. */}
-          {running > 1 && <div className="flex justify-end"><Button size="sm" variant="ghost" icon="stop" data-stop-agents onClick={() => void client.sessions.stopAgents(id).catch(() => {})}>Stop all {running} agents</Button></div>}
-          {agents.map((a) => <div key={a.name} className={cx((a.depth ?? 1) >= 3 ? 'ml-8' : (a.depth ?? 1) === 2 ? 'ml-4' : '')} data-subagent-depth={a.depth ?? 1}><AgentRow a={a} /></div>)}
+          {agents.length > 1 && <SwarmSummary agents={agents} />}
+          <div className="flex items-center gap-1">
+            {agents.length > 1 && (
+              <div role="tablist" aria-label="How to show the agents" className="flex rounded-md bg-hx-pill p-0.5 text-tiny">
+                {(['list', 'timeline'] as const).map((v) => <button key={v} type="button" role="tab" aria-selected={view === v} data-agents-view={v} onClick={() => setView(v)} className={cx('rounded px-2 py-0.5 capitalize', view === v ? 'bg-hx-bg font-medium text-hx-primary shadow-sm' : 'text-hx-muted hover:text-hx-secondary')}>{v}</button>)}
+              </div>
+            )}
+            {running > 1 && <Button size="sm" variant="ghost" icon="stop" className="ml-auto" data-stop-agents onClick={() => void client.sessions.stopAgents(id).catch(() => {})}>Stop all {running} agents</Button>}
+          </div>
+          {view === 'timeline' && agents.length > 1
+            ? <SwarmTimeline agents={agents} />
+            : agents.map((a) => <div key={a.name} className={cx((a.depth ?? 1) >= 3 ? 'ml-8' : (a.depth ?? 1) === 2 ? 'ml-4' : '')} data-subagent-depth={a.depth ?? 1}><AgentRow a={a} slow={slow.has(a.name)} sessionId={id} /></div>)}
         </PanelGroup>
       )}
       {tasks.length > 0 && <PanelGroup title="Background" icon="activity" count={tasks.filter((t) => t.status === 'running').length}>{tasks.map((t) => <TaskRow key={t.id} t={t} />)}</PanelGroup>}

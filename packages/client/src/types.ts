@@ -114,6 +114,8 @@ export type HarnessEvent =
   | { kind: 'turn_start'; turn: number; agent?: string }
   /** origin: not typed by the person (a linked session's report or message woke it: auto; a linked session's brief: link). */
   | { kind: 'user_message'; text: string; images?: ImageData[]; origin?: 'auto' | 'link' | 'person' }
+  /** What the person typed while the agent works, not yet seen by it (all of it, after each change; newer servers). */
+  | { kind: 'steering'; texts: string[] }
   | { kind: 'text_delta'; text: string; agent?: string }
   | { kind: 'reasoning_delta'; text: string; agent?: string }
   | { kind: 'assistant_message'; message: Message; agent?: string }
@@ -161,7 +163,11 @@ export function isPending(e: HarnessEvent): e is PendingRequest { return (PENDIN
 /** One line of a session's event stream (SSE data). */
 export interface SessionEventEnvelope { seq: number; event: HarnessEvent; at?: number }
 
-export interface SessionDetail { meta: SessionMeta; status: SessionStatus; history: Message[]; pending: HarnessEvent[]; lastSeq: number; tasks?: TaskView[] }
+/** A sub-agent at work now, as the server knows it (newer servers). */
+export interface LiveAgentInfo { name: string; type: string; model: string; startedAt: number; parent: string; depth: number; description?: string; worktree?: string; machine?: string; activity?: AgentActivityInfo }
+/** What a sub-agent at work is doing: waiting on its model (since when, when it last wrote, its retries) or running a tool. */
+export interface AgentActivityInfo { doing: 'model' | 'tool'; since: number; tool?: string; lastOutputAt?: number; retries: number; retryReason?: string }
+export interface SessionDetail { meta: SessionMeta; status: SessionStatus; history: Message[]; pending: HarnessEvent[]; lastSeq: number; tasks?: TaskView[]; /** Its sub-agents at work now (newer servers): the truth about which are running. */ agents?: LiveAgentInfo[]; /** What the person typed that the agent has not seen yet (newer servers). */ steering?: string[] }
 export interface SessionsPage { sessions: SessionMeta[]; next: string | null }
 export interface HistoryPage { total?: number; after?: number; messages: Message[]; next?: number | null }
 

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { test } from 'node:test';
 import { defineTool } from '../src/plugins/api.ts';
-import { postStream } from '../src/providers/http.ts';
+import { postStream, readSse } from '../src/providers/http.ts';
 import { ProviderError } from '../src/providers/types.ts';
 import { makeAgent, results } from './helpers.ts';
 
@@ -50,6 +50,40 @@ test('a model server that takes the request and never answers is a retryable err
     assert.ok(Date.now() - t0 < 5_000);
   } finally {
     if (before === undefined) delete process.env.HARNESS_STREAM_IDLE_MS; else process.env.HARNESS_STREAM_IDLE_MS = before;
+    for (const s of sockets) s.destroy();
+    srv.close();
+  }
+});
+
+test('a queued request that only gets keep-alive comments (DeepSeek under load) is a stall; a reply that streams past the ceiling is cut too', async () => {
+  const sockets = new Set<import('node:net').Socket>();
+  let mode: 'keepalive' | 'endless' = 'keepalive';
+  const srv = http.createServer((req, res) => {
+    req.resume();
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    const t = setInterval(() => { if (res.destroyed) return clearInterval(t); res.write(mode === 'keepalive' ? ': keep-alive\n\n' : 'data: {"choices":[{"delta":{"content":"."}}]}\n\n'); }, 40);
+    res.on('close', () => clearInterval(t));
+  });
+  srv.on('connection', (s) => sockets.add(s));
+  await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${(srv.address() as { port: number }).port}/v1/chat`;
+  const drain = async (limits: Parameters<typeof readSse>[2]) => {
+    const res = await postStream(url, {}, { x: 1 }, new AbortController().signal);
+    let n = 0;
+    try { for await (const _ of readSse(res, new AbortController().signal, limits)) n++; return { n }; } catch (e) { return { n, err: e as Error }; }
+  };
+  try {
+    const t0 = Date.now();
+    const q = await drain({ idleMs: 300, keepAliveIsIdle: true, maxMs: 60_000 });
+    assert.ok(q.err instanceof ProviderError && q.err.retryable, String(q.err));
+    assert.equal(q.err!.message, 'stream stalled for 0.3s (no reply yet)');
+    assert.ok(Date.now() - t0 < 3_000, 'cut after the idle time, not held by the keep-alives');
+    mode = 'endless';
+    const e = await drain({ idleMs: 300, maxMs: 500 });
+    assert.ok(e.err instanceof ProviderError && e.err.retryable, String(e.err));
+    assert.match(e.err!.message, /the reply took longer than/);
+    assert.ok(e.n > 3, 'it streamed until the ceiling');
+  } finally {
     for (const s of sockets) s.destroy();
     srv.close();
   }

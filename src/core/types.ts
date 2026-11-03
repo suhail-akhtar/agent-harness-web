@@ -73,6 +73,8 @@ export type HarnessEvent =
   | { kind: 'turn_start'; turn: number; agent?: string }
   /** origin: not typed by the person - a linked session's brief (link) or a turn a report or message woke (auto). */
   | { kind: 'user_message'; text: string; origin?: 'auto' | 'link' }
+  /** What the person typed while the agent works, not yet seen by it (all of it, after each change). */
+  | { kind: 'steering'; texts: string[] }
   | { kind: 'text_delta'; text: string; agent?: string }
   | { kind: 'reasoning_delta'; text: string; agent?: string }
   | { kind: 'assistant_message'; message: Message; agent?: string }

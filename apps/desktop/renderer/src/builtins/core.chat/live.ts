@@ -11,7 +11,7 @@
 import { useEffect, useState } from 'react';
 import { apply, fromHistory, isPending, type HarnessEvent, type Live, type Message, type WorkflowRunView, type PendingRequest, type SessionDetail, type SessionMeta, type SessionStatus, type TaskView, type Usage } from '@harness/client';
 import { client, dispatchClientCall, useData } from '../../state/data';
-import { addModelUsage, agentsFromItems, foldAgent, withTrace, type Agents } from '../../state/agents';
+import { addModelUsage, agentsFromItems, foldAgent, withLive, withTrace, type Agents } from '../../state/agents';
 
 export interface SessionLive {
   meta: SessionMeta | null;
@@ -21,6 +21,8 @@ export interface SessionLive {
   tasks: TaskView[];
   /** Sub-agents by name. */
   agents: Agents;
+  /** What the person typed while the agent works, not yet seen by it. */
+  steering: string[];
   /** Bumped on every artifact event (the Artifacts panel reloads its list). */
   artifactsSeq: number;
   /** Proposals resolved since the page opened: id -> started (with the new session) / dismissed / expired. */
@@ -30,7 +32,7 @@ export interface SessionLive {
   stream: 'open' | 'retrying' | 'closed' | 'missing' | 'connecting';
 }
 
-const EMPTY: SessionLive = { meta: null, status: 'idle', live: { items: [], contextTokens: 0, contextWindow: 0 }, pending: [], tasks: [], agents: {}, artifactsSeq: 0, resolved: {}, error: '', loaded: false, stream: 'connecting' };
+const EMPTY: SessionLive = { meta: null, status: 'idle', live: { items: [], contextTokens: 0, contextWindow: 0 }, pending: [], tasks: [], agents: {}, steering: [], artifactsSeq: 0, resolved: {}, error: '', loaded: false, stream: 'connecting' };
 
 function addUsage(m: SessionMeta, e: Extract<HarnessEvent, { kind: 'usage' }>): SessionMeta {
   const u = m.usage;
@@ -48,6 +50,7 @@ export function reduce(s: SessionLive, e: HarnessEvent, now = Date.now()): Sessi
     case 'permission_request': case 'question': case 'plan_proposed': case 'approval_request': next.pending = [...s.pending.filter((p) => p.requestId !== e.requestId), e]; break;
     case 'request_resolved': next.pending = s.pending.filter((p) => p.requestId !== e.requestId); break;
     case 'task': next.tasks = [...s.tasks.filter((t) => t.id !== e.task.id), e.task]; break;
+    case 'steering': next.steering = e.texts; break;
     case 'usage':
       if (s.meta) {
         const m = !e.agent || e.agent === 'main' ? addUsage(s.meta, e) : { ...s.meta, cost: s.meta.cost + e.cost };
@@ -90,7 +93,7 @@ export function placeRuns(live: Live, runs: WorkflowRunView[], history: Message[
 /** The state of a conversation as its stored detail gives it. */
 export function fromDetail(d: SessionDetail, contextWindow: number): SessionLive {
   const items = fromHistory(d.history);
-  return { ...EMPTY, meta: d.meta, status: d.status, live: { items, contextTokens: d.meta.lastPromptTokens, contextWindow }, pending: d.pending.filter(isPending), tasks: d.tasks ?? [], agents: agentsFromItems(items, d.meta.model), loaded: true, stream: 'connecting' };
+  return { ...EMPTY, meta: d.meta, status: d.status, live: { items, contextTokens: d.meta.lastPromptTokens, contextWindow }, pending: d.pending.filter(isPending), tasks: d.tasks ?? [], agents: withLive(agentsFromItems(items, d.meta.model), d.agents), steering: d.steering ?? [], loaded: true, stream: 'connecting' };
 }
 
 interface Store { state: SessionLive; listeners: Set<(s: SessionLive) => void>; refs: number; stop?: () => void; idle?: ReturnType<typeof setTimeout>; started: boolean }
@@ -139,7 +142,7 @@ function start(id: string): void {
     // Each card where its run started in the conversation (the messages before it), not after everything.
     client.sessions.workflows(id).then((r) => { if (!cancelled) setState(id, (s) => ({ ...s, live: placeRuns(s.live, [...r.runs].reverse(), d.history) })); }).catch(() => {});
     // Cost and model per sub-agent (the history keeps neither).
-    if (Object.keys(stores.get(id)?.state.agents ?? {}).length || Object.keys(d.meta.byModel ?? {}).length > 1) client.sessions.trace(id).then((spans) => { if (!cancelled && Array.isArray(spans)) setState(id, (s) => ({ ...s, agents: withTrace(s.agents, spans) })); }).catch(() => {});
+    if (Object.keys(stores.get(id)?.state.agents ?? {}).length || Object.keys(d.meta.byModel ?? {}).length > 1 || d.agents?.length) client.sessions.trace(id).then((spans) => { if (!cancelled && Array.isArray(spans)) setState(id, (s) => ({ ...s, agents: withTrace(s.agents, spans) })); }).catch(() => {});
     const stopStream = client.sessions.events(id, d.lastSeq, (e) => {
       if (e.kind === 'client_call') dispatchClientCall(id, e.callId, e.tool, e.input);
       setState(id, (s) => reduce(s, e));
@@ -152,7 +155,7 @@ function start(id: string): void {
 /** The conversation's transcript again from the server (after it was cut back to an earlier message); the stream goes on. */
 export async function reloadHistory(id: string): Promise<void> {
   const [d, runs] = await Promise.all([client.sessions.get(id), client.sessions.workflows(id).then((r) => r.runs, () => [] as WorkflowRunView[])]);
-  setState(id, (s) => ({ ...s, meta: d.meta, status: d.status, live: placeRuns({ ...s.live, items: fromHistory(d.history) }, [...runs].reverse(), d.history), agents: agentsFromItems(fromHistory(d.history), d.meta.model) }));
+  setState(id, (s) => ({ ...s, meta: d.meta, status: d.status, live: placeRuns({ ...s.live, items: fromHistory(d.history) }, [...runs].reverse(), d.history), agents: withLive(agentsFromItems(fromHistory(d.history), d.meta.model), d.agents) }));
 }
 
 function release(id: string): void {

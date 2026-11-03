@@ -1953,7 +1953,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     if (m) {
       const s = sessionFor(me, m[1]!);
       const action = m[2];
-      if (!action && method === 'GET') return send(res, 200, { meta: s.meta, status: s.status, history: s.history, pending: s.pendingRequests(), lastSeq: s.lastSeq, tasks: s.tasks.all().map(view) });
+      if (!action && method === 'GET') return send(res, 200, { meta: s.meta, status: s.status, history: s.history, pending: s.pendingRequests(), lastSeq: s.lastSeq, tasks: s.tasks.all().map(view), agents: s.liveAgents(), steering: s.steering() });
       if (!action && method === 'DELETE') { await sessions.remove(s.meta.id); return send(res, 200, { ok: true }); }
       if (!action && method === 'PATCH') {
         const b = await readJson(req);
@@ -2013,6 +2013,18 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
         return send(res, 202, await sendWithAttachments(s, text, b.attachments));
       }
       if (action === 'abort' && method === 'POST') { s.abort(); return send(res, 200, { ok: true }); }
+      // The person writes to one of the sub-agents at work (it sees it at its next step).
+      if (action === 'agent_message' && method === 'POST') {
+        const b = await readJson(req) as { agent?: string; text?: string };
+        return s.messageAgent(String(b.agent ?? ''), String(b.text ?? '')) ? send(res, 200, { ok: true }) : send(res, 404, { error: `No sub-agent ${b.agent} at work in this conversation (or the message is empty).` });
+      }
+      // What the person typed while the agent works: send it now (the current step stops), or take one back.
+      if (action === 'steering' && method === 'POST') {
+        const b = await readJson(req) as { action?: string; index?: number };
+        if (b.action === 'send_now') return send(res, 200, { result: s.sendNow(), steering: s.steering() });
+        if (b.action === 'remove' && typeof b.index === 'number') return send(res, s.unsteer(b.index) ? 200 : 404, { steering: s.steering() });
+        return send(res, 400, { error: 'action: "send_now", or "remove" with an index' });
+      }
       // The swarm's kill switch: every agent of the run stops, the conversation's own agent goes on (and hears it).
       if (action === 'stop_agents' && method === 'POST') return send(res, 200, { stopped: s.stopSwarm('the person') });
       // The run recorder (phase 6): the hash-chained record as a bundle that verifies on its own, its check, or a

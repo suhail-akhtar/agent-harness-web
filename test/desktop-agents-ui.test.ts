@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { validateUiManifest } from '../packages/plugin-ui/src/index.ts';
 import { fromHistory } from '../packages/client/src/index.ts';
 import { buildRegistry, type PluginEntry } from '../apps/desktop/renderer/src/registry/registry.ts';
-import { addModelUsage, agentMs, agentsFromItems, costByModel, foldAgent, withTrace, type Agents } from '../apps/desktop/renderer/src/state/agents.ts';
+import { activityLine, addModelUsage, agentMs, agentsFromItems, costByModel, foldAgent, modelColor, stragglers, withLive, withTrace, type Agents } from '../apps/desktop/renderer/src/state/agents.ts';
 import { commandRefusal, describeForAgent, resolveOpen } from '../apps/desktop/renderer/src/registry/agent-surface.ts';
 import { edgePath, layoutWorkflow, nodeState } from '../apps/desktop/renderer/src/components/workflow-layout.ts';
 import { crumbsFor, pageTitle } from '../apps/desktop/renderer/src/registry/crumbs.ts';
@@ -25,7 +25,7 @@ test('sub-agents from live events: started (type, model, worktree), cost per cal
   a = foldAgent(a, { kind: 'usage', model: 'claude-sonnet-5-5', usage: { input: 10, cacheRead: 0, cacheWrite: 0, output: 5, reasoning: 0 }, cost: 0.012, contextTokens: 10, contextWindow: 1, agent: 'review-2' }, t0 + 10);
   a = foldAgent(a, { kind: 'tool_call', id: 'x', name: 'read', input: {}, agent: 'review-2' }, t0 + 20);
   a = foldAgent(a, { kind: 'usage', model: 'claude-sonnet-5-5', usage: { input: 10, cacheRead: 0, cacheWrite: 0, output: 5, reasoning: 0 }, cost: 0.008, contextTokens: 10, contextWindow: 1, agent: 'review-2' }, t0 + 30);
-  assert.deepEqual({ ...a['review-2'] }, { name: 'review-2', type: 'review', model: 'claude-sonnet-5-5', worktree: 'hw-sub-review-2', description: 'Review the change', status: 'running', startedAt: t0, cost: 0.02, calls: 2, tools: 1, last: 'read' });
+  assert.deepEqual({ ...a['review-2'] }, { name: 'review-2', type: 'review', model: 'claude-sonnet-5-5', worktree: 'hw-sub-review-2', description: 'Review the change', status: 'running', startedAt: t0, cost: 0.02, calls: 2, tools: 1, last: 'read', activity: { doing: 'model', since: t0 + 30, retries: 0 } });
   a = foldAgent(a, { kind: 'turn_end', reason: 'done', agent: 'review-2' }, t0 + 4000);
   assert.equal(a['review-2']!.status, 'done');
   assert.equal(agentMs(a['review-2']!), 4000);
@@ -63,6 +63,51 @@ test('sub-agents from the stored history and the trace: id and worktree from the
   assert.equal(a['review-1']!.calls, 2);
   assert.equal(a['review-1']!.tools, 1);
   assert.ok(!a.main && !a['hook-check-4'], 'the main agent and hook checks are not sub-agents');
+});
+
+test('a window opened mid-run: the server\'s live agents are running (not done after 1s), and a live call revives one the trace called done', () => {
+  const span = (agent: string, at: number) => ({ type: 'model' as const, at, agent, model: 'deepseek-flash', ms: 1, usage: { input: 1, cacheRead: 0, cacheWrite: 0, output: 1, reasoning: 0 }, cost: 0.001, stop: 'tool_use', retries: 0 });
+  // Two fan-out agents known only from the trace: both look done, from their first span to their last.
+  let a = withTrace({}, [span('researcher-3', 1000), span('researcher-6', 1000), span('researcher-6', 5000)]);
+  assert.equal(a['researcher-3']!.status, 'done');
+  // The server says researcher-3 is at work since 500 (a fan-out child of the main agent, depth 1).
+  a = withLive(withTrace(withLive({}, [{ name: 'researcher-3', type: 'researcher', model: 'deepseek-flash', startedAt: 500, parent: 'main', depth: 1, description: 'timelines' }]), [span('researcher-3', 1000)]), [{ name: 'researcher-3', type: 'researcher', model: 'deepseek-flash', startedAt: 500, parent: 'main', depth: 1 }]);
+  assert.equal(a['researcher-3']!.status, 'running');
+  assert.equal(a['researcher-3']!.startedAt, 500);
+  assert.equal(a['researcher-3']!.endedAt, undefined);
+  assert.equal(agentMs(a['researcher-3']!, 60_500), 60_000, 'its time runs from its start');
+  // An older server (no live list): its next tool call shows it at work again.
+  let b = withTrace({}, [span('researcher-6', 1000)]);
+  b = foldAgent(b, { kind: 'tool_call', id: 't1', name: 'web_search', input: {}, agent: 'researcher-6' } as never, 9000);
+  assert.equal(b['researcher-6']!.status, 'running');
+  assert.equal(b['researcher-6']!.endedAt, undefined);
+  assert.equal(b['researcher-6']!.calls, 1, 'the trace\'s model call kept');
+  assert.equal(b['researcher-6']!.tools, 1, 'and the live tool call counted');
+});
+
+test('what a sub-agent at work is doing, in words: a tool and for how long, its model writing, waiting, or stalled with its retries', () => {
+  let a = foldAgent({}, { kind: 'notice', level: 'info', text: 'Started researcher-3 (researcher, deepseek-flash): angle', agent: 'researcher-3' } as never, 0);
+  a = foldAgent(a, { kind: 'tool_call', id: 't', name: 'web_fetch', input: {}, agent: 'researcher-3' } as never, 1000);
+  assert.deepEqual(activityLine(a['researcher-3']!, 13_000), { text: 'running web_fetch · 12s', stalled: false });
+  a = foldAgent(a, { kind: 'tool_result', id: 't', name: 'web_fetch', content: 'x', is_error: false, ms: 1, agent: 'researcher-3' } as never, 14_000);
+  assert.deepEqual(activityLine(a['researcher-3']!, 44_000), { text: 'waiting on deepseek-flash · 30s', stalled: false });
+  a = foldAgent(a, { kind: 'reasoning_delta', text: 'hm', agent: 'researcher-3' } as never, 50_000);
+  assert.deepEqual(activityLine(a['researcher-3']!, 52_000), { text: 'writing', stalled: false });
+  const same = foldAgent(a, { kind: 'text_delta', text: 'x', agent: 'researcher-3' } as never, 51_000);
+  assert.equal(same, a, 'deltas within a few seconds change nothing (no re-render per token)');
+  a = foldAgent(a, { kind: 'retry', attempt: 1, delayMs: 1000, reason: 'stream stalled for 180s (no reply yet)', agent: 'researcher-3' } as never, 240_000);
+  assert.deepEqual(activityLine(a['researcher-3']!, 250_000), { text: 'no reply from deepseek-flash for 3m 20s · retry 1 (stream stalled for 180s (no reply yet))', stalled: true });
+  a = foldAgent(a, { kind: 'turn_end', reason: 'done', agent: 'researcher-3' } as never, 260_000);
+  assert.equal(activityLine(a['researcher-3']!, 261_000), undefined, 'nothing once it is done');
+});
+
+test('the swarm at a glance: stragglers are the agents at work well past their finished siblings', () => {
+  const ag = (name: string, status: 'running' | 'done', startedAt: number, endedAt?: number) => ({ name, type: 'researcher', status, startedAt, ...(endedAt ? { endedAt } : {}), cost: 0, calls: 0, tools: 0 });
+  const agents = [ag('r1', 'done', 0, 90_000), ag('r2', 'done', 0, 100_000), ag('r3', 'done', 0, 110_000), ag('r4', 'running', 0), ag('r5', 'running', 150_000)];
+  assert.deepEqual([...stragglers(agents, 300_000)], ['r4'], 'r4 runs 300s against a 100s median; r5 only 150s');
+  assert.deepEqual([...stragglers(agents.slice(0, 1).concat(agents[3]!), 300_000)], [], 'one finished sibling is no measure');
+  assert.equal(modelColor('grok-4.7'), modelColor('grok-4.3'), 'one colour per company');
+  assert.notEqual(modelColor('claude-sonnet-5-5'), modelColor('deepseek-flash'));
 });
 
 test('cost per model: the session\'s byModel, live usage added per model, most expensive first', () => {

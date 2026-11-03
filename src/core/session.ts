@@ -25,6 +25,7 @@ import { clientSkills, makeSkillScriptTool, makeSkillTool, type Skill, skillsIn,
 import { BUILTIN_SKILLS_DIR, skillBuilderTools } from '../skills/builder.ts';
 import { sortTools } from '../tools/index.ts';
 import type { AskOutcome, FileStamp, ScheduleSpec, Tool, ToolServices } from '../tools/types.ts';
+import { str } from '../tools/types.ts';
 import { loadedGroups, pluginGroups, sentSpecs, SKILLS_GROUP, type ToolGroup } from '../tools/deferred.ts';
 import { SpillStore } from '../tools/spill.ts';
 import type { ToolSpec } from '../providers/types.ts';
@@ -178,6 +179,17 @@ export interface SessionMeta {
 }
 
 export interface StoredEvent { seq: number; at: number; event: HarnessEvent }
+
+/** What a sub-agent at work is doing: waiting on its model (since when, when it last wrote, its retries) or running a tool. */
+export interface AgentActivity { doing: 'model' | 'tool'; since: number; tool?: string; lastOutputAt?: number; retries: number; retryReason?: string }
+/** A sub-agent at work now (GET /api/sessions/:id carries them as `agents`). */
+export interface LiveAgent { name: string; type: string; model: string; startedAt: number; parent: string; depth: number; description?: string; worktree?: string; machine?: string; activity?: AgentActivity }
+
+/** A sub-agent whose model has been quiet this long is reported to its lead and to the person, once per wait. */
+const stallNoteMs = () => Number(process.env.HARNESS_STALL_NOTE_S ?? 150) * 1000;
+/** At most this many messages from one sub-agent to its lead in one run (tell_lead): news, not a running commentary. */
+const TELL_LEAD_MAX = 3;
+const quietFor = (ms: number) => (ms < 90_000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60_000)} min`);
 
 /** "8 hours", "30 minutes", "45 seconds". */
 export function waitText(ms: number): string {
@@ -577,6 +589,7 @@ export class Session {
       if (this.events.length > EVENT_BUFFER) this.events.splice(0, this.events.length - EVENT_BUFFER);
     }
     for (const l of this.listeners) l(e);
+    if ('agent' in event && typeof event.agent === 'string' && event.agent !== 'main' && this.swarmLive.has(event.agent)) this.trackActivity(event.agent, event, e.at);
     // Recorded as shown (redacted): a vault value never reaches the record either.
     this.recorder?.record(e.event, e.at).catch((err: Error) => { if (!this.recordFailed) { this.recordFailed = true; this.emit({ kind: 'notice', level: 'warn', text: `The run recorder could not write: ${err.message}` }); } });
     if (this.deps.onEvent) { try { this.deps.onEvent(this, e.event); } catch { /* a plugin's handler never breaks the session */ } }
@@ -1724,7 +1737,13 @@ export class Session {
       rules: () => this.rules(),
       requestPermission: (tool, input, summary, suggestion, agent) => this.askPermission(tool, input, summary, suggestion, agent),
       // The main agent: what the user typed and background results; a sub-agent: what send_message sent it.
-      takeQueuedUserText: () => (name === 'main' ? this.queued.splice(0) : this.subs.get(name)?.queue.splice(0) ?? []),
+      takeQueuedUserText: () => {
+        if (name !== 'main') return this.subs.get(name)?.queue.splice(0) ?? [];
+        const taken = this.queued.splice(0);
+        // The person's messages reached the agent: none waits any more.
+        if (taken.some((q) => !q.startsWith('<system-reminder>'))) this.steered();
+        return taken;
+      },
       todos: () => this.meta.todos,
       setTodos: (t) => { this.meta.todos = t; this.scheduleSave(); },
       preamble: async () => this.preamble(await this.getHost(), name === 'main', 'compact'),
@@ -2013,6 +2032,138 @@ export class Session {
   private swarm: { started: number; extra: number; times: number[]; briefs: Map<string, string>; children: Map<string, number>; stopped: string; startCost: number; startedAt: number; asking?: Promise<void>; denied?: boolean } = { started: 0, extra: 0, times: [], briefs: new Map(), children: new Map(), stopped: '', startCost: 0, startedAt: Date.now() };
   /** Each running agent's own stop: the kill switch stops them all. */
   private swarmStops = new Map<string, AbortController>();
+  /** The sub-agents at work now, as their Started notice gave them: what a window opened later shows as running. */
+  private swarmLive = new Map<string, LiveAgent>();
+
+  /** The sub-agents at work now (the session's detail carries them). */
+  liveAgents(): LiveAgent[] { return [...this.swarmLive.values()].map((l) => ({ ...l, activity: l.activity ?? { doing: 'model', since: l.startedAt, retries: 0 } })); }
+
+  /** A sub-agent's events as what it is doing: the panel's "waiting on its model for 4 min", and the watchdog's facts. */
+  private trackActivity(name: string, e: HarnessEvent, now: number): void {
+    const l = this.swarmLive.get(name)!;
+    const a: AgentActivity = l.activity ?? { doing: 'model', since: l.startedAt, retries: 0 };
+    let next: AgentActivity | undefined;
+    switch (e.kind) {
+      case 'tool_call': next = { doing: 'tool', tool: e.name, since: now, retries: 0 }; break;
+      case 'tool_result': case 'usage': next = { doing: 'model', since: now, retries: 0 }; break;
+      case 'text_delta': case 'reasoning_delta': if (a.doing === 'model') next = { ...a, lastOutputAt: now }; break;
+      case 'retry': next = { ...a, retries: a.retries + 1, retryReason: e.reason.slice(0, 160) }; break;
+      default: return;
+    }
+    if (next) this.swarmLive.set(name, { ...l, activity: next });
+  }
+
+  /** Every few seconds while sub-agents work: one whose model has been quiet past the limit is reported, once per wait. */
+  private stallWatch?: NodeJS.Timeout;
+  private stallNoted = new Set<string>();
+  private watchStalls(): void {
+    if (this.stallWatch) return;
+    this.stallWatch = setInterval(() => this.checkStalls(), Math.min(15_000, Math.max(200, stallNoteMs() / 4)));
+    this.stallWatch.unref?.();
+  }
+
+  /**
+   * The lead hears of a sub-agent its model keeps waiting (and the person sees it): how long, the retries and why,
+   * what the harness does about it, and what the lead can do. It is the provider, not the agent's work, and it says so.
+   */
+  checkStalls(now = Date.now()): void {
+    if (!this.swarmLive.size) { clearInterval(this.stallWatch); this.stallWatch = undefined; return; }
+    for (const l of this.swarmLive.values()) {
+      // Nothing yet since it started: it waits on its first reply (the stall seen live).
+      const a = l.activity ?? { doing: 'model' as const, since: l.startedAt, retries: 0 };
+      if (a.doing !== 'model') continue;
+      const quiet = now - Math.max(a.since, a.lastOutputAt ?? 0);
+      const key = `${l.name}:${a.since}`;
+      if (quiet < stallNoteMs() || this.stallNoted.has(key)) continue;
+      this.stallNoted.add(key);
+      const fact = `${l.name} has had no reply from ${l.model} for ${quietFor(quiet)}${a.retries ? ` (${a.retries} retr${a.retries === 1 ? 'y' : 'ies'}: ${a.retryReason})` : ''}: its provider is slow, not its work.`;
+      this.emit({ kind: 'notice', level: 'warn', text: fact, agent: l.name });
+      const note = `<system-reminder>${fact} It goes on by itself (after a second stall it moves to the conversation's model when that is another company's). You can wait, tell it something with send_message ${l.name}, stop it, or do its part another way.</system-reminder>`;
+      if (l.parent === 'main') this.queued.push(note); else this.subs.get(l.parent)?.queue.push(note);
+    }
+  }
+
+  /** The person writes to one of the sub-agents at work: it sees it at its next step. */
+  messageAgent(name: string, text: string): boolean {
+    const e = this.subs.get(name);
+    if (!e?.running || !text.trim()) return false;
+    e.queue.push(`<system-reminder>The person watching this run sends you:\n${text.trim()}</system-reminder>`);
+    this.emit({ kind: 'notice', level: 'info', text: `You to ${name}: ${text.trim().slice(0, 200)}`, agent: name });
+    return true;
+  }
+
+  /** tell_lead: a sub-agent's news for the agent that started it, now (it goes on with its work meanwhile). */
+  private tellLeadTool(name: string, lead: string, self: () => Agent | undefined): Tool {
+    let sent = 0;
+    return {
+      kind: 'meta', parallelSafe: true, remoteable: false,
+      spec: {
+        name: 'tell_lead',
+        description: `Tell the agent that started you (${lead === 'main' ? 'the lead' : lead}) something it should know now, while you keep working: the brief's premise looks wrong, a finding that changes its plan, you are blocked. It sees it at its next step and may answer (you see that at your next step). Not for progress updates; at most ${TELL_LEAD_MAX}.`,
+        input_schema: { type: 'object', properties: { message: { type: 'string' } }, required: ['message'] },
+      },
+      summarize: (i) => `tell the lead: ${str(i.message).slice(0, 80)}`,
+      run: async (input) => {
+        const msg = str(input.message).trim();
+        if (!msg) return { content: 'message is empty', is_error: true };
+        if (sent >= TELL_LEAD_MAX) return { content: `You have told your lead ${TELL_LEAD_MAX} times in this run: put the rest in your report.`, is_error: true };
+        sent++;
+        const me = self();
+        // Its words are data for the lead, as a report is; a sub-agent that read untrusted content taints its lead.
+        const note = `<system-reminder>${name}, working for you, says (it goes on meanwhile; answer with send_message ${name}):\n<agent_message>\n${neutralizeTags(sanitizeUntrusted(msg))}\n</agent_message></system-reminder>`;
+        if (lead === 'main') { this.queued.push(note); if (me?.tainted) this.agent?.markTainted(); } else { const p = this.subs.get(lead); p?.queue.push(note); if (me?.tainted) p?.agent.markTainted(); }
+        this.emit({ kind: 'notice', level: 'info', text: `${name} to ${lead === 'main' ? 'the lead' : lead}: ${msg.slice(0, 200)}`, agent: name });
+        return { content: `Sent to ${lead === 'main' ? 'your lead' : lead}: it sees it at its next step. Go on with your work; an answer, if any, reaches you at your next step.` };
+      },
+    };
+  }
+
+  /** What the person typed that the agent has not seen yet (it sees it at its next step). */
+  steering(): string[] { return this.queued.filter((q) => !q.startsWith('<system-reminder>')); }
+  private steered(): void { this.emit({ kind: 'steering', texts: this.steering() }); }
+  /** The person asked for their waiting message to go now: the current step is stopped, then it is sent. */
+  private sendNowAsked = false;
+
+  /**
+   * Sends what the person typed now instead of at the agent's next step (a step can be long: a fan-out, a slow
+   * provider): the turn's current work is stopped (its sub-agents of this step too; background work goes on) and
+   * the message starts the next turn. Idle: it just starts.
+   */
+  sendNow(): 'interrupted' | 'started' | 'nothing' {
+    const typed = this.steering();
+    if (!typed.length) return 'nothing';
+    if (this.abortCtl && !this.abortCtl.signal.aborted) {
+      this.sendNowAsked = true;
+      this.abortCtl.abort(new Error('interrupted to send the person\'s message'));
+      return 'interrupted';
+    }
+    this.queued = this.queued.filter((q) => q.startsWith('<system-reminder>'));
+    this.steered();
+    void this.send(typed.join('\n\n'), { origin: 'person' }).catch(() => {});
+    return 'started';
+  }
+
+  /** Takes one waiting message back (by its place among them). */
+  unsteer(index: number): boolean {
+    let n = -1;
+    const at = this.queued.findIndex((q) => !q.startsWith('<system-reminder>') && ++n === index);
+    if (at < 0) return false;
+    this.queued.splice(at, 1);
+    this.steered();
+    return true;
+  }
+
+  /**
+   * Where a sub-agent goes on when its model's provider keeps stalling: the conversation's own model, the one the
+   * person chose and the run already uses, when it has a key and is another company's (the same one stalls alike).
+   */
+  private failoverFor(name: string, from: ModelSpec): { model: ModelSpec; provider: import('../providers/types.ts').Provider } | undefined {
+    const own = this.deps.registry.listModels().find((m) => m.id === this.meta.model);
+    if (!own?.available || own.id === from.id || own.provider === from.provider) return undefined;
+    const live = this.swarmLive.get(name);
+    if (live) this.swarmLive.set(name, { ...live, model: own.id });
+    return { model: own, provider: this.deps.registry.provider(own) };
+  }
 
   private newSwarm(): void { this.swarm = { started: 0, extra: 0, times: [], briefs: new Map(), children: new Map(), stopped: '', startCost: this.meta.cost, startedAt: Date.now() }; }
 
@@ -2236,7 +2387,7 @@ export class Session {
     // existing tests among it), the agents it starts must keep unchanged too, whatever their own brief says.
     const inherited = parent && parent !== this.agent ? [...this.subs.values()].find((x) => x.agent === parent)?.acceptance?.checks.filter((c) => 'unchanged' in c || 'protect' in c) : undefined;
     const acceptance = inherited?.length ? { maxFixRounds: 2, ...a.acceptance, checks: withProtection(a.acceptance?.checks ?? [], { mayChangeTests: true, inherited }) } : a.acceptance;
-    const base = { agent: a.type, description: a.description, prompt: a.prompt, signal: signal ?? this.abortCtl?.signal ?? new AbortController().signal, depth, parent, keep: true, tainted: (parent ?? this.agent)?.tainted, ...(a.effort ? { effort: a.effort } : {}), ...(host ? { host } : {}), ...(a.machine ? { machine: a.machine } : {}), ...(a.batch ? { batch: a.batch } : {}) };
+    const base = { agent: a.type, description: a.description, prompt: a.prompt, signal: a.signal ?? signal ?? this.abortCtl?.signal ?? new AbortController().signal, depth, parent, keep: true, tainted: (parent ?? this.agent)?.tainted, ...(a.effort ? { effort: a.effort } : {}), ...(host ? { host } : {}), ...(a.machine ? { machine: a.machine } : {}), ...(a.batch ? { batch: a.batch } : {}) };
     if (acceptance?.stakes === 'critical') return this.runReplicas(a, base, acceptance);
     const r = await this.runAgent({ ...base, ...(a.model ? { model: a.model, delegated: true } : {}), ...(a.isolation ? { isolation: a.isolation } : {}), ...(acceptance ? { acceptance } : {}) });
     return `${r.report}\n\n(agent id: ${r.id})`;
@@ -2324,9 +2475,33 @@ export class Session {
       sendMessage: (to, message, background, signal) => this.sendMessage(caller, to, message, main && background, signal),
       ...(main ? {
         startAgent: (a: SubagentArgs) => this.startBackgroundAgent(a),
+        startWork: (description: string, work: (signal: AbortSignal) => Promise<string>) => this.startBackgroundWork(description, work),
         monitorInBackground: (t: TaskEntry, p: RegExp | undefined, ms: number, existing: boolean) => this.startMonitor(t, p, ms, existing),
       } : {}),
     };
+  }
+
+  /** The agent tool's work in the background (a fan-out): a task of its own, its result delivered as a reminder. */
+  private startBackgroundWork(description: string, work: (signal: AbortSignal) => Promise<string>): string {
+    const id = `fan-out-${++this.subagents}`;
+    const { ctl, signal } = this.bgSignal();
+    let result: string | undefined;
+    this.tasks.add({
+      id, kind: 'agent', description, status: 'running', startedAt: Date.now(), owner: 'main',
+      read: async (offset = 0) => { const t = result ?? 'Still at work: the table comes when every item is done. Each agent of it shows in task_list and the Agents panel.'; return { text: t.slice(offset), size: t.length }; },
+      stop: async () => ctl.abort(new Error('stopped')),
+      // Its agents' reports: as trusted as they were (a sub-agent that read the web taints the main agent as it finishes).
+      untrusted: () => !!this.agent?.tainted,
+    });
+    this.emit({ kind: 'notice', level: 'info', text: `${id} is working in the background: ${description}` });
+    work(signal).then((r) => {
+      result = r;
+      if (this.tasks.finish(id, signal.aborted ? 'stopped' : 'completed')) this.deliver(`Background ${id} (${description}) ${signal.aborted ? 'was stopped' : 'finished'}. Its table:`, r, !signal.aborted);
+    }, (err: Error) => {
+      result = `It failed: ${err.message}`;
+      if (this.tasks.finish(id, signal.aborted ? 'stopped' : 'failed')) this.deliver(`Background ${id} (${description}) failed: ${err.message}`, '', !signal.aborted);
+    });
+    return id;
   }
 
   /** Signal for one piece of background work: its own stop, and the session's (the user's Stop). */
@@ -2602,6 +2777,8 @@ export class Session {
     const effort = wanted && model.efforts.includes(wanted) ? wanted : (model.efforts.includes(this.meta.effort) ? this.meta.effort : model.effort);
     const cost = { n: 0 };
     const self: { agent?: Agent } = {};
+    // An agent another agent started can tell it news while it works (the main agent, a workflow's node: no lead to tell).
+    if (a.parent && !a.verifier) tools.push(this.tellLeadTool(name, a.parent === this.agent ? 'main' : a.parent.cfg.name, () => self.agent));
     // Work on another model is counted apart (delegation.maxCostUsd), and stops at the cap.
     const onOther = model.id !== this.meta.model;
     const hooks = this.hooksFor(name, (c) => { cost.n += c; if (onOther) this.meta.delegationCost = (this.meta.delegationCost ?? 0) + c; });
@@ -2616,6 +2793,7 @@ export class Session {
     { const base = hooks.rules; hooks.rules = () => { const r = base(); return { ...r, deny: [...r.deny, ...CONTROL_PLANE_DENY] }; }; }
     const sub = new Agent({
       name, model, provider: this.deps.registry.provider(model), effort,
+      failover: () => this.failoverFor(name, model),
       ...(nests ? { runSubagent: (x: SubagentArgs) => this.runSubagent(x, depth + 1, self.agent, a.signal, placed === sessionHost ? undefined : placed) } : {}),
       system: SUBAGENT_PROMPT, tools, host, settings: capTurns(a.noHooks ? { ...settings, hooks: {} } : settings, def.maxTurns),
       // An agent type that names its tools gets them all (someone chose them); any other defers plugin groups like the main agent,
@@ -2653,6 +2831,8 @@ export class Session {
     const where = isolated ? `\n\n<system-reminder>You work in your own git worktree (${isolated.w.dir}) on branch ${isolated.w.branch}. Commit your changes there when they are done.</system-reminder>` : '';
     sub.append({ role: 'user', content: [{ type: 'text', text: `${env}${def.prompt ? `\n\n<role>\n${def.prompt}\n</role>` : ''}${await this.skillBriefs(def, tb)}${teamBrief(def, tb.agents)}${extra}${where}\n\n<brief>\n${a.prompt}\n</brief>${acceptanceNote(a.acceptance)}` }] });
     this.emit({ kind: 'notice', level: 'info', text: `Started ${name} (${def.name}, ${model.id})${isolated ? ` in worktree ${isolated.w.branch}` : ''}${a.machine ? ` on computer ${a.machine}` : ''}${a.description ? `: ${a.description}` : ''}`, agent: name });
+    this.swarmLive.set(name, { name, type: def.name, model: model.id, startedAt: Date.now(), parent: a.parent?.cfg.name ?? 'main', depth, ...(a.description ? { description: a.description } : {}), ...(isolated ? { worktree: isolated.w.branch } : {}), ...(a.machine ? { machine: a.machine } : {}) });
+    this.watchStalls();
     // Done criteria and the change set start from the workspace as it is before the work (where the agent works).
     // At work in this folder (a verifier only reads): others' checks see it.
     if (!a.verifier) {
@@ -2679,6 +2859,7 @@ export class Session {
       if (entry) entry.running = false;
       this.atWork.delete(name);
       this.swarmStops.delete(name);
+      this.swarmLive.delete(name);
       this.agentSignals.delete(name);
       this.trimSubs();
     }
@@ -2785,7 +2966,8 @@ export class Session {
     const text = this.lastText(sub);
     // A sub-agent that read outside content may repeat hidden text from it.
     const clean = sub.tainted ? stripInvisible(text).text : text;
-    const report = clean ? (clean.length > 16_000 ? clean.slice(0, 16_000) + '\n[report truncated]' : clean) : 'The agent finished without a report.';
+    // No words back is not done (seen live: a fan-out counted one as done, its two files never written).
+    const report = clean ? (clean.length > 16_000 ? clean.slice(0, 16_000) + '\n[report truncated]' : clean) : 'The agent finished without a report: nothing says its task was done. Check what it was to produce before relying on it.';
     const withAcceptance = accepted ? `${report}\n\n---\n${accepted}` : report;
     return { report: reason === 'done' ? withAcceptance : `${withAcceptance}\n\n(The agent stopped early: ${reason}.)`, reason, cost: e.cost.n - before, ...(outcome ? { outcome } : {}), ...(lastChanges !== undefined ? { changes: lastChanges } : {}) };
   }
@@ -3392,7 +3574,7 @@ export class Session {
       if (opts.images?.length) throw new SessionBusyError('The session is working: images go with a message that starts a turn.');
       this.queued.push(t);
       this.latestPrompt = t;
-      this.emit({ kind: 'notice', level: 'info', text: 'Message queued; the agent will see it at its next step.' });
+      this.steered();
       return 'queued';
     }
     // Several servers: only the one holding the lease drives the session (it may read it again first).
@@ -3478,7 +3660,11 @@ export class Session {
         body = firstMessageText(await this.preamble(host), start.feedback ? `<session_start_context>\n${start.feedback}\n</session_start_context>` : '', task);
       }
       if (prompt.feedback) body += `\n\n<system-reminder>${prompt.feedback}</system-reminder>`;
-      const pre = this.queued.splice(0).filter((q) => q.startsWith('<system-reminder>'));
+      // Reminders go first in the message; what the person typed while the turn was starting stays for its first step
+      // (it was dropped unseen here).
+      const waiting = this.queued.splice(0);
+      const pre = waiting.filter((q) => q.startsWith('<system-reminder>'));
+      this.queued.push(...waiting.filter((q) => !q.startsWith('<system-reminder>')));
       agent.append({ role: 'user', content: [...pre.map((q) => ({ type: 'text' as const, text: q })), { type: 'text', text: body }, ...(images ?? [])] });
       this.emit({ kind: 'user_message', text, ...(origin === 'auto' || origin === 'link' ? { origin } : {}) });
       // A team with a reviewer: the workspace as the turn starts, for the verification its stop needs.
@@ -3502,9 +3688,14 @@ export class Session {
       this.setStatus(this.pending.size ? 'waiting' : 'idle');
       await this.saveMeta().catch(() => {});
       // A message typed after the last step starts the next turn; reminders (background results among them) wait for it.
-      const rest = this.queued.filter((q) => !q.startsWith('<system-reminder>'));
-      this.queued = this.queued.filter((q) => q.startsWith('<system-reminder>'));
-      if (rest.length && reason !== 'aborted') this.send(rest.join('\n\n')).catch(() => {});
+      // Stopped: what the person typed waits for them (send now, or remove); stopped to send it now: it goes.
+      const rest = this.steering();
+      const now = this.sendNowAsked;
+      this.sendNowAsked = false;
+      const keep = reason === 'aborted' && !now;
+      if (!keep) this.queued = this.queued.filter((q) => q.startsWith('<system-reminder>'));
+      if (rest.length) this.steered();
+      if (rest.length && !keep) this.send(rest.join('\n\n')).catch(() => {});
       else this.lateBackground(reason !== 'aborted');
       // Linked notes that came as the turn ended: they may wake it, as one arriving while idle does.
       const late = [...this.lateLinked].filter(([note]) => this.queued.includes(note));
@@ -3535,7 +3726,7 @@ export class Session {
    * task_stop or deleting the session ends them.
    */
   abort(): void {
-    this.queued = this.queued.filter((q) => q.startsWith('<system-reminder>'));
+    // What the person typed meanwhile stays theirs: listed, to send now or remove (it was dropped unseen).
     this.abortCtl?.abort(new Error('interrupted by the user'));
     this.bg.abort(new Error('stopped by the user'));
     this.bg = new AbortController();

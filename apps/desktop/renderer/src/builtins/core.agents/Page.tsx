@@ -55,7 +55,7 @@ export function Working({ s, depth = 0 }: { s: SessionMeta; depth?: number }) {
         </div>
         {(agents.length > 0 || tasks.length > 0) && (
           <div className="ml-4 mt-2 space-y-1">
-            {agents.map((a) => <AgentRow key={a.name} a={a} />)}
+            {agents.map((a) => <AgentRow key={a.name} a={a} sessionId={s.id} />)}
             {tasks.map((t) => <div key={t.id} className="flex items-center gap-2 text-small text-hx-secondary"><Icon name={t.kind === 'shell' ? 'terminal' : t.kind === 'workflow' ? 'workflow' : 'eye'} size={13} /><span className="min-w-0 flex-1 truncate">{t.description}</span><span className="text-tiny text-hx-muted">{t.kind}</span></div>)}
           </div>
         )}

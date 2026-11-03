@@ -288,7 +288,8 @@ test('desktop app end to end: the agent platform', { timeout: 15 * 60_000 }, asy
       await page.keyboard.press('Control+Comma');
       await page.click('[data-settings-section="core.settings:models"]');
       await page.waitForSelector('[data-delegation]');
-      await page.locator('[data-delegation-model="claude-sonnet-5-5"] input').check();
+      await page.click('[data-delegation-model="claude-sonnet-5-5"]');
+      assert.ok(await page.locator('[data-delegation-model="claude-sonnet-5-5"] input').isChecked());
       await page.locator('[data-delegation] [role="switch"]').nth(1).click();
       await page.click('[data-save-delegation]');
       await page.waitForFunction(async () => { const r = await fetch('/api/me/settings'); const j = await r.json(); return Array.isArray(j.delegation?.allowedModels) && j.delegation.allowedModels.includes('claude-sonnet-5-5'); }, null, { timeout: 10_000 });

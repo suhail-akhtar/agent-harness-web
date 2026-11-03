@@ -5,7 +5,7 @@
  */
 
 // Relative (type-only) so the root type check and the tests see this repository's client types.
-import type { HarnessEvent, Item, TraceSpan, Usage } from '../../../../../packages/client/src/index.ts';
+import type { AgentActivityInfo, HarnessEvent, Item, LiveAgentInfo, TraceSpan, Usage } from '../../../../../packages/client/src/index.ts';
 
 export interface SubAgent {
   name: string;
@@ -31,7 +31,26 @@ export interface SubAgent {
   /** In the swarm's tree: the agent that started it (absent: the conversation's own) and how deep it is. */
   parent?: string;
   depth?: number;
+  /** While it works: waiting on its model (since, its last output, retries) or running a tool. */
+  activity?: AgentActivityInfo;
 }
+
+/** A sub-agent's model quiet this long is shown as stalled (the server tells its lead at the same mark). */
+export const STALL_MS = 150_000;
+
+/** What a sub-agent at work is doing, in words, and whether it looks stalled (its model quiet past STALL_MS). */
+export function activityLine(a: SubAgent, now = Date.now()): { text: string; stalled: boolean } | undefined {
+  const x = a.activity;
+  if (a.status !== 'running' || !x) return undefined;
+  if (x.doing === 'tool') return { text: `running ${x.tool ?? 'a tool'} · ${dur(now - x.since)}`, stalled: false };
+  if (x.lastOutputAt && now - x.lastOutputAt < 5000) return { text: 'writing', stalled: false };
+  const quiet = now - Math.max(x.since, x.lastOutputAt ?? 0);
+  const retry = x.retries ? ` · retry ${x.retries}${x.retryReason ? ` (${x.retryReason.slice(0, 60)})` : ''}` : '';
+  return quiet >= STALL_MS
+    ? { text: `no reply from ${a.model ?? 'its model'} for ${dur(quiet)}${retry}`, stalled: true }
+    : { text: `waiting on ${a.model ?? 'its model'} · ${dur(quiet)}${retry}`, stalled: false };
+}
+const dur = (ms: number) => (ms < 60_000 ? `${Math.max(0, Math.round(ms / 1000))}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`);
 
 /** The agents as the swarm's tree: each after the agent that started it, in the order they started. */
 export function asTree(agents: SubAgent[]): SubAgent[] {
@@ -53,6 +72,7 @@ export type Agents = Record<string, SubAgent>;
 const STARTED = /^Started (\S+) \(([^,()]+), ([^)]+)\)(?: in worktree (\S+))?(?: on computer ([^:]+?))?(?:: ([\s\S]*))?$/;
 
 const blank = (name: string, type = name.replace(/-\d+$/, '')): SubAgent => ({ name, type, status: 'running', cost: 0, calls: 0, tools: 0 });
+const working = (x: SubAgent): SubAgent => { if (x.status === 'running') return x; const { endedAt: _e, ms: _m, ...rest } = x; return { ...rest, status: 'running' }; };
 
 /** One live event into the agents' state (a new object when something changed). */
 export function foldAgent(a: Agents, e: HarnessEvent, now = Date.now()): Agents {
@@ -82,8 +102,18 @@ export function foldAgent(a: Agents, e: HarnessEvent, now = Date.now()): Agents 
       if (!m || m[1] !== name) return a;
       return { ...a, [name]: { ...cur, type: m[2]!, model: m[3]!, ...(m[4] ? { worktree: m[4] } : {}), ...(m[5] ? { machine: m[5] } : {}), ...(m[6] ? { description: m[6] } : {}), startedAt: cur.startedAt ?? now, status: 'running' } };
     }
-    case 'usage': return { ...a, [name]: { ...cur, cost: cur.cost + e.cost, calls: cur.calls + 1, model: cur.model ?? e.model } };
-    case 'tool_call': return { ...a, [name]: { ...cur, tools: cur.tools + 1, last: `${e.name}` } };
+    // A call it makes is the proof it works now (shown as done from the trace, it was not).
+    // The model of its latest call: one that failed over to another shows the one it works on now.
+    case 'usage': return { ...a, [name]: { ...working(cur), cost: cur.cost + e.cost, calls: cur.calls + 1, model: e.model ?? cur.model, activity: { doing: 'model', since: now, retries: 0 } } };
+    case 'tool_call': return { ...a, [name]: { ...working(cur), tools: cur.tools + 1, last: `${e.name}`, activity: { doing: 'tool', tool: e.name, since: now, retries: 0 } } };
+    case 'tool_result': return { ...a, [name]: { ...cur, activity: { doing: 'model', since: now, retries: 0 } } };
+    case 'retry': { const x = cur.activity ?? { doing: 'model' as const, since: cur.startedAt ?? now, retries: 0 }; return { ...a, [name]: { ...cur, activity: { ...x, retries: x.retries + 1, retryReason: e.reason.slice(0, 160) } } }; }
+    // Its model writes: kept to one change every few seconds (a reply streams many deltas).
+    case 'text_delta': case 'reasoning_delta': {
+      const x = cur.activity;
+      if (!x || x.doing !== 'model' || (x.lastOutputAt && now - x.lastOutputAt < 3000)) return a;
+      return { ...a, [name]: { ...cur, activity: { ...x, lastOutputAt: now } } };
+    }
     case 'turn_end': return { ...a, [name]: { ...cur, status: e.reason === 'done' ? 'done' : e.reason === 'aborted' ? 'stopped' : 'failed', endedAt: now } };
     case 'acceptance': {
       const prev = cur.accepted;
@@ -112,6 +142,22 @@ export function agentsFromItems(items: Item[], sessionModel?: string): Agents {
       ...(i.startedAt ? { startedAt: i.startedAt } : {}), ...(i.ms !== undefined ? { ms: i.ms } : {}),
       cost: 0, calls: 0, tools: 0, ...(wt ? { worktree: wt } : {}), ...(bg ? { background: true } : {}),
     };
+  }
+  return out;
+}
+
+/**
+ * The agents the server says are at work now: running, from when they started, wherever they sit in the
+ * swarm's tree. A window opened after they started (or reloaded) heard none of their live events, and the
+ * history and the trace alone would show them as done.
+ */
+export function withLive(a: Agents, live: LiveAgentInfo[] | undefined): Agents {
+  if (!live?.length) return a;
+  const out: Agents = { ...a };
+  for (const l of live) {
+    const cur = out[l.name] ?? blank(l.name, l.type);
+    const { endedAt: _e, ms: _m, ...rest } = cur;
+    out[l.name] = { ...rest, type: l.type, model: l.model, status: 'running', startedAt: l.startedAt, depth: l.depth, ...(l.parent !== 'main' ? { parent: l.parent } : {}), ...(l.description ? { description: cur.description ?? l.description } : {}), ...(l.worktree ? { worktree: l.worktree } : {}), ...(l.machine ? { machine: l.machine } : {}), ...(l.activity ? { activity: l.activity } : {}) };
   }
   return out;
 }
@@ -147,6 +193,32 @@ export function addModelUsage(byModel: Record<string, { usage: Usage; cost: numb
   const cur = byModel?.[e.model] ?? { usage: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0 }, cost: 0, requests: 0 };
   const u = cur.usage;
   return { ...(byModel ?? {}), [e.model]: { usage: { input: u.input + e.usage.input, cacheRead: u.cacheRead + e.usage.cacheRead, cacheWrite: u.cacheWrite + e.usage.cacheWrite, output: u.output + e.usage.output, reasoning: u.reasoning + e.usage.reasoning }, cost: cur.cost + e.cost, requests: cur.requests + 1 } };
+}
+
+/** A colour per model's company (fixed hues that read on light and dark), else one from its name. */
+const PROVIDER_HUE: Array<[RegExp, string]> = [[/^claude/, '#d97757'], [/^grok/, '#8b5cf6'], [/^deepseek/, '#3b82f6'], [/^gpt|^o\d/, '#10a37f'], [/^kimi/, '#f59e0b'], [/^glm/, '#ec4899']];
+export function modelColor(model?: string): string {
+  if (!model) return '#9ca3af';
+  for (const [re, c] of PROVIDER_HUE) if (re.test(model)) return c;
+  let h = 0; for (const ch of model) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return `hsl(${h} 55% 55%)`;
+}
+
+/**
+ * Agents still at work well past their finished siblings (more than twice the median, and a minute at
+ * least): the ones a run waits on.
+ */
+export function stragglers(agents: SubAgent[], now = Date.now()): Set<string> {
+  const out = new Set<string>();
+  const byParent = new Map<string, SubAgent[]>();
+  for (const a of agents) { const k = a.parent ?? 'main'; byParent.set(k, [...(byParent.get(k) ?? []), a]); }
+  for (const group of byParent.values()) {
+    const done = group.filter((a) => a.status === 'done').map((a) => agentMs(a, now) ?? 0).filter((ms) => ms > 0).sort((x, y) => x - y);
+    if (done.length < 2) continue;
+    const median = done[Math.floor(done.length / 2)]!;
+    for (const a of group) if (a.status === 'running' && (agentMs(a, now) ?? 0) > Math.max(2 * median, 60_000)) out.add(a.name);
+  }
+  return out;
 }
 
 /** How long an agent ran (or has run). */

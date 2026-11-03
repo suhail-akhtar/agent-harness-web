@@ -178,6 +178,10 @@ export class HarnessClient {
     /** Sends a message; attachments (new) need a server that accepts them. */
     send: (id: string, text: string, attachments?: Attachment[]) => this.post<{ state: string; images?: number; files?: string[] }>(`/api/sessions/${id}/messages`, { text, ...(attachments?.length ? { attachments } : {}) }),
     abort: (id: string) => this.post<{ ok: boolean }>(`/api/sessions/${id}/abort`),
+    /** Writes to one of the conversation's sub-agents at work: it sees it at its next step. */
+    messageAgent: (id: string, agent: string, text: string) => this.post<{ ok: boolean }>(`/api/sessions/${id}/agent_message`, { agent, text }),
+    /** What the person typed while the agent works: send it now (the current step stops), or take one back. */
+    steering: (id: string, b: { action: 'send_now' } | { action: 'remove'; index: number }) => this.post<{ result?: 'interrupted' | 'started' | 'nothing'; steering: string[] }>(`/api/sessions/${id}/steering`, b),
     /** The swarm's kill switch: every agent of the run stops; the conversation's own agent goes on. */
     stopAgents: (id: string) => this.post<{ stopped: number }>(`/api/sessions/${id}/stop_agents`),
     /** The run recorder: the record's check and its replay (the steps as they happened), or the bundle itself. */

@@ -36,6 +36,8 @@ export interface TaskService {
   addShell(s: { id: string; pid: string; log: string; exitFile: string; command: string; description?: string }): string;
   /** Starts a sub-agent in the background (main agent only): returns its id at once. */
   startAgent?(a: import('../agents/agents.ts').SubagentArgs): Promise<string>;
+  /** Starts work of the agent tool's in the background (a fan-out; main agent only): returns its task id at once; what it returns reaches the agent as a reminder. */
+  startWork?(description: string, work: (signal: AbortSignal) => Promise<string>): string;
   /** Continues a sub-agent the caller started, with its context intact. */
   sendMessage?(to: string, message: string, background: boolean, signal: AbortSignal): Promise<string>;
   /** Watches a task in the background (main agent only); fires as a reminder. */

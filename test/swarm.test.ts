@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { outcomeOf } from '../src/agents/agents.ts';
 import { applyUserSettings, cleanUserSettings, defaultSettings } from '../src/core/settings.ts';
 import type { HarnessEvent } from '../src/core/types.ts';
+import { ProviderError } from '../src/providers/types.ts';
 import { tempDir } from './helpers.ts';
 import { gate, OPERATOR, setupServer, waitFor } from './multi-helpers.ts';
 
@@ -58,6 +59,8 @@ test('each item of a fan-out is accepted on its own: done criteria and verificat
     assert.equal(outcomeOf('Did it.\n\n---\nDone criteria (run by the harness): 0 of 1 passed\n\nNOT ACCEPTED: treat this work as unfinished.'), 'not accepted');
     assert.equal(outcomeOf('Not started: this run has started 2 agents'), 'not started');
     assert.equal(outcomeOf('x\n\n(The agent stopped early: aborted.)'), 'stopped');
+    // No words back is not done (seen live: counted as done, its two files never written).
+    assert.equal(outcomeOf('The agent finished without a report: nothing says its task was done. Check what it was to produce before relying on it.'), 'no report');
   } finally { await c.t.close(); }
 });
 
@@ -128,12 +131,17 @@ test('the kill switch stops every agent of the run at once (the conversation\'s 
     const n = c.ends();
     await c.s.send('[[lead]] Go.');
     await waitFor(() => c.swarm().filter((e) => e.phase === 'start').length === 3, 'three at work');
+    // A window opened now hears none of their Started notices: the session's detail says who is at work.
+    await waitFor(async () => (await c.t.call(OPERATOR, 'GET', `/api/sessions/${c.s.meta.id}`)).body.agents?.length === 3, 'the detail lists them');
+    const live = (await c.t.call(OPERATOR, 'GET', `/api/sessions/${c.s.meta.id}`)).body.agents as Array<{ name: string; parent: string; depth: number; model: string; startedAt: number }>;
+    assert.ok(live.every((x) => x.parent === 'main' && x.depth === 1 && x.model && x.startedAt > 0), JSON.stringify(live));
     const stop = await c.t.call(OPERATOR, 'POST', `/api/sessions/${c.s.meta.id}/stop_agents`, {});
     assert.deepEqual([stop.status, stop.body.stopped], [200, 3]);
     await waitFor(() => c.ends() > n, 'the turn ends normally');
     const [fan, after] = c.results();
     assert.match(fan!, /^Fan-out of 3: 3 stopped\./);
     assert.equal(c.events.filter((e) => e.kind === 'turn_end' && e.agent && e.agent !== 'main' && e.reason === 'aborted').length, 3, 'each stopped agent ends for everyone watching');
+    assert.deepEqual((await c.t.call(OPERATOR, 'GET', `/api/sessions/${c.s.meta.id}`)).body.agents, [], 'and none is listed at work');
     assert.match(after!, /^Not started: this run's agents were stopped \(the person\); no more start in it\./);
     assert.equal(c.t.ds.byKey.k4, undefined);
     assert.ok(c.events.some((e) => e.kind === 'notice' && /Stopped 3 agents of this run \(the person\)/.test(e.text)));
@@ -142,6 +150,73 @@ test('the kill switch stops every agent of the run at once (the conversation\'s 
     c.t.ds.scripts.k5 = [{ text: 'Did it.' }];
     await c.turn('[[lead2]] Go again.');
     assert.match(c.results()[2]!, /^Did it\./);
+  } finally { await c.t.close(); }
+});
+
+test('a fan-out\'s time limit stops its stragglers and keeps what finished (seen live: 7 of 8 reports lost to one stalled provider)', async () => {
+  const before = process.env.HARNESS_FANOUT_MAX_MINUTES;
+  process.env.HARNESS_FANOUT_MAX_MINUTES = String(1.5 / 60); // a second and a half
+  const c = await conv();
+  try {
+    const held = gate();
+    c.t.ds.scripts.lead = [{ calls: [agentCall({ prompt: 'Work on {{item}}.', items: ['[[q1]] a', '[[q2]] b', '[[slow]] c'] })] }, { text: 'Two came back.' }];
+    c.t.ds.scripts.q1 = [{ text: 'Found alpha.' }];
+    c.t.ds.scripts.q2 = [{ text: 'Found beta.' }];
+    c.t.ds.scripts.slow = [{ text: 'never', wait: held.p }];
+    const t0 = Date.now();
+    await c.turn('[[lead]] Go.');
+    assert.ok(Date.now() - t0 < 20_000, 'the lead was not held to the tool ceiling');
+    const [table] = c.results();
+    assert.match(table!, /^Fan-out of 3: 2 done, 1 stopped\./);
+    assert.match(table!, /Its time limit \(2s\) stopped the agents still at work/);
+    assert.match(table!, /Found alpha\.[\s\S]*Found beta\./, 'the finished reports are in the table');
+    assert.deepEqual((await c.t.call(OPERATOR, 'GET', `/api/sessions/${c.s.meta.id}`)).body.agents, [], 'the straggler was stopped, not left at work');
+  } finally { if (before === undefined) delete process.env.HARNESS_FANOUT_MAX_MINUTES; else process.env.HARNESS_FANOUT_MAX_MINUTES = before; await c.t.close(); }
+});
+
+test('a sub-agent whose provider stalls twice goes on with the conversation\'s model, its context intact, and says so; the same company never takes over', async () => {
+  const stall = () => { throw new ProviderError('stream stalled for 180s (no reply yet)', 0, true); };
+  const c = await conv({ model: 'claude-sonnet-5-5', settings: { delegation: { allowedModels: ['deepseek-flash'] } } });
+  try {
+    c.t.an.scripts.lead = [{ calls: [agentCall({ prompt: '[[fo]] Look it up.', model: 'deepseek-flash' })] }, { text: 'Done.' }];
+    c.t.ds.scripts.fo = [{ calls: [{ name: 'glob', input: { pattern: '*' } }] }, stall, stall];
+    c.t.an.scripts.fo = [{ text: 'Finished on Claude.' }];
+    await c.turn('[[lead]] Go.');
+    assert.match(c.results()[0]!, /^Finished on Claude\./);
+    const note = c.events.find((e) => e.kind === 'notice' && /stalled 2 times/.test(e.text));
+    assert.ok(note && note.kind === 'notice', 'said so');
+    assert.match(note.text, /: deepseek-flash stalled 2 times \(stream stalled for 180s \(no reply yet\)\); it goes on with claude-sonnet-5-5\./);
+    assert.match(JSON.stringify(c.t.an.byKey.fo![0]!.messages), /glob/, 'Claude got the work so far (its context intact)');
+  } finally { await c.t.close(); }
+  // On the conversation's own company there is nowhere else to go: it retries as before, and finishes there.
+  const d = await conv();
+  try {
+    d.t.ds.scripts.lead = [{ calls: [agentCall({ prompt: '[[same]] Look it up.' })] }, { text: 'Done.' }];
+    d.t.ds.scripts.same = [stall, stall, { text: 'Finished on DeepSeek after all.' }];
+    await d.turn('[[lead]] Go.');
+    assert.match(d.results()[0]!, /^Finished on DeepSeek after all\./);
+    assert.ok(!d.events.some((e) => e.kind === 'notice' && /stalled 2 times/.test(e.text)));
+  } finally { await d.t.close(); }
+});
+
+test('a fan-out in the background returns at once; its table reaches the lead as a reminder when every item is done', async () => {
+  const c = await conv();
+  try {
+    const held = gate();
+    c.t.ds.scripts.lead = [{ calls: [agentCall({ prompt: 'Work on {{item}}.', items: ['[[b1]] a', '[[b2]] b'], run_in_background: true })] }, { text: 'Started; I keep going.' }];
+    c.t.ds.scripts.b1 = [{ text: 'One done.', wait: held.p }];
+    c.t.ds.scripts.b2 = [{ text: 'Two done.', wait: held.p }];
+    await c.turn('[[lead]] Go.');
+    const [started] = c.results();
+    assert.match(started!, /^Started fan-out (fan-out-\d+) of 2 in the background\. Keep working/);
+    const id = /fan-out-\d+/.exec(started!)![0];
+    assert.equal((await c.t.call(OPERATOR, 'GET', `/api/sessions/${c.s.meta.id}`)).body.tasks.find((x: { id: string }) => x.id === id)?.status, 'running', 'the lead\'s turn ended while it works');
+    held.open();
+    await waitFor(async () => (await c.t.call(OPERATOR, 'GET', `/api/sessions/${c.s.meta.id}`)).body.tasks.find((x: { id: string }) => x.id === id)?.status === 'completed', 'the fan-out finishes');
+    c.t.ds.scripts.next = [{ text: 'Read the table.' }];
+    await c.turn('[[next]] And?');
+    const sent = JSON.stringify(c.t.ds.byKey.next?.[0]?.messages ?? []);
+    assert.match(sent, new RegExp(`Background ${id} \\(the job \\(fan-out of 2\\)\\) finished\\. Its table:[\\s\\S]*Fan-out of 2: 2 done[\\s\\S]*One done[\\s\\S]*Two done`), 'the table reached the lead');
   } finally { await c.t.close(); }
 });
 

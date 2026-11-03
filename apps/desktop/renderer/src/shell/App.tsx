@@ -5,7 +5,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { Artifact, BlockActionsContext, Button, EmptyState, IconButton, RenderBoundary, ResizablePane, Toaster, Tooltip, toast } from '@harness/ui';
+import { Artifact, BlockActionsContext, Button, EmptyState, IconButton, RenderBoundary, ResizablePane, Toaster, Tooltip, cx, toast } from '@harness/ui';
 import { SIDE_PANEL_PANE, SPLIT_PANE } from '../state/layout';
 import { useApp, navigate, HOME, NARROW_PX } from '../state/app';
 import type { View } from '../registry/registry';
@@ -154,9 +154,10 @@ function SidePanel({ narrow }: { narrow: boolean }) {
   const panelDef = panel.kind === 'plugin' ? registry.panels.get(panel.panel) : undefined;
   const body = (
     <>
-      <div className="flex h-10 items-center gap-2 border-b border-hx-border-subtle px-3">
+      {/* At the window's top right (not narrow), the header keeps clear of the window's own buttons, as the top bar does. */}
+      <div data-side-panel-header className={cx('flex h-10 shrink-0 items-center gap-2 border-b border-hx-border-subtle px-3', !narrow && 'app-drag')} style={narrow ? undefined : { paddingRight: 'max(12px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 12px))' }}>
         <span className="min-w-0 flex-1 truncate text-body font-medium">{panel.kind === 'plugin' ? panelDef?.title ?? 'Panel' : panel.title}</span>
-        <IconButton icon="x" size="sm" label="Close the panel" onClick={() => useApp.setState({ panel: null })} />
+        <IconButton icon="x" size="sm" label="Close the panel" className="app-no-drag" onClick={() => useApp.setState({ panel: null })} />
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-2">
         {panel.kind === 'artifact' ? <Artifact kind={panel.artifact} source={panel.source} language={panel.language} title={panel.title} fill />

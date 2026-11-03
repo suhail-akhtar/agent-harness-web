@@ -355,13 +355,14 @@ export interface Acceptance {
   /** How much rides on it: high is verified on another provider; critical also runs two replicas and compares them. */
   stakes?: Stakes;
 }
-export interface SubagentArgs { description: string; prompt: string; type: string; model?: string; effort?: Effort; isolation?: 'worktree'; acceptance?: Acceptance; /** A fan-out's agents still to start, this one included (the governor asks once for all). */ batch?: number; /** One of the person's computers (a companion, by name) to work on (phase 7). */ machine?: string }
+export interface SubagentArgs { description: string; prompt: string; type: string; model?: string; effort?: Effort; isolation?: 'worktree'; acceptance?: Acceptance; /** A fan-out's agents still to start, this one included (the governor asks once for all). */ batch?: number; /** One of the person's computers (a companion, by name) to work on (phase 7). */ machine?: string; /** Its own stop, in place of the turn's (a fan-out's time limit, a background fan-out's stop). */ signal?: AbortSignal }
 
 /** How the harness found an agent's work, read from its report (what fan-out tables and replicas show). */
 export function outcomeOf(report: string): string {
   if (/^Not started: /.test(report)) return 'not started';
   if (/^Stopped: /.test(report)) return 'stopped';
   if (/^Failed: /.test(report)) return 'failed';
+  if (/^The agent finished without a report/.test(report)) return 'no report';
   if (/BLOCKED by the agent/.test(report)) return 'blocked';
   if (/^UNKNOWN at critical stakes/.test(report)) return 'unknown';
   if (/NOT ACCEPTED/.test(report)) return 'not accepted';
@@ -381,7 +382,25 @@ const MACHINE_LOST = /is offline: its companion is not running|The companion on 
  * charter), checked and verified on its own; back comes one table (each item's outcome and its fields) and each
  * item's report, cut.
  */
-async function fanOut(args: SubagentArgs, items: string[], fields: string[], run: (a: SubagentArgs) => Promise<string>, signal: AbortSignal, models: string[] = [], machines: string[] = []): Promise<string> {
+async function fanOut(args: SubagentArgs, items: string[], fields: string[], run: (a: SubagentArgs) => Promise<string>, outer: AbortSignal, models: string[] = [], machines: string[] = [], limitMs = fanOutLimitMs(false)): Promise<string> {
+  // Its own time limit, under the tool's ceiling: a straggler (a provider that stalls) stops there and the
+  // table comes back with what finished, never lost with it (seen live: 7 of 8 reports gone at 30 minutes).
+  const limit = new AbortController();
+  const limitLabel = limitMs < 60_000 ? `${Math.round(limitMs / 1000)}s` : `${Math.round(limitMs / 60_000)} min`;
+  const timer = setTimeout(() => limit.abort(new Error(`stopped by the fan-out's time limit (${limitLabel})`)), limitMs);
+  const signal = AbortSignal.any([outer, limit.signal]);
+  try { return await fanOutWithin(args, items, fields, run, signal, models, machines, () => (limit.signal.aborted ? limitLabel : undefined)); } finally { clearTimeout(timer); }
+}
+
+/** A fan-out's time limit: under the tool ceiling in a turn (HARNESS_TOOL_MAX_MINUTES); longer in the background. */
+export function fanOutLimitMs(background: boolean): number {
+  const set = Number(process.env.HARNESS_FANOUT_MAX_MINUTES);
+  const tool = Number(process.env.HARNESS_TOOL_MAX_MINUTES ?? 30) * 60_000;
+  if (Number.isFinite(set) && set > 0) return background ? set * 60_000 : Math.min(set * 60_000, tool * 0.9);
+  return background ? 60 * 60_000 : Math.min(25 * 60_000, tool * 0.9);
+}
+
+async function fanOutWithin(args: SubagentArgs, items: string[], fields: string[], run: (a: SubagentArgs) => Promise<string>, signal: AbortSignal, models: string[], machines: string[], timedOut: () => string | undefined): Promise<string> {
   const ask = fields.length ? `\n\nEnd your report with one line of JSON and nothing after it, with these fields: ${JSON.stringify(Object.fromEntries(fields.map((f) => [f, '...'])))}` : '';
   const brief = (item: string) => `${args.prompt.includes('{{item}}') ? args.prompt.split('{{item}}').join(item) : `${args.prompt}\n\nThe item: ${item}`}${ask}`;
   const reports: string[] = new Array(items.length).fill('');
@@ -399,7 +418,7 @@ async function fanOut(args: SubagentArgs, items: string[], fields: string[], run
       const tried: string[] = [];
       for (let machine = machines.length ? machines[i % machines.length] : args.machine; ;) {
         if (machine) tried.push(machine);
-        try { reports[i] = await run({ ...args, ...(model ? { model } : {}), ...(machine ? { machine } : {}), prompt: brief(items[i]!), description: `${args.description}: ${items[i]!.slice(0, 40)}`, batch: items.length - i }); } catch (e) {
+        try { reports[i] = await run({ ...args, ...(model ? { model } : {}), ...(machine ? { machine } : {}), prompt: brief(items[i]!), description: `${args.description}: ${items[i]!.slice(0, 40)}`, batch: items.length - i, signal }); } catch (e) {
           // Refused by the governor, stopped, or failed: said as such, never taken for a report.
           const m = (e as Error).message;
           reports[i] = /^Not started: /.test(m) ? m : /stopped by|abort/i.test(m) ? `Stopped: ${m}` : `Failed: ${m}`;
@@ -424,8 +443,10 @@ async function fanOut(args: SubagentArgs, items: string[], fields: string[], run
   const count = (o: string) => rows.filter((r) => r.outcome === o).length;
   const outcomes = [...new Set(rows.map((r) => r.outcome))];
   const missing = fields.length ? rows.filter((r) => r.values.every((v) => v === '?') && r.outcome !== 'not started').length : 0;
+  const late = timedOut();
   return [
     `Fan-out of ${items.length}: ${outcomes.map((o) => `${count(o)} ${o}`).join(', ')}.${missing ? ` ${missing} gave no fields (shown as ?).` : ''}`,
+    ...(late ? [`Its time limit (${late}) stopped the agents still at work: what they wrote to files is there; send_message continues one by its id, with its context.`] : []),
     '', `| # | item |${models.length || machines.length ? ' model |' : ''} outcome |${fields.map((f) => ` ${cell(f)} |`).join('')}`, `|---|---|${models.length || machines.length ? '---|' : ''}---|${fields.map(() => '---|').join('')}`,
     ...rows.map((r, i) => `| ${i + 1} | ${cell(r.item)} |${models.length || machines.length ? ` ${r.model} |` : ''} ${r.outcome} |${r.values.map((v) => ` ${v} |`).join('')}`),
     '', ...rows.map((r, i) => `### ${i + 1}. ${cell(r.item)} (${r.outcome}${r.id ? `, ${r.id}` : ''})\n${r.words.trim().slice(0, Math.max(300, Math.floor(12_000 / items.length)))}`),
@@ -523,8 +544,19 @@ export function makeAgentTool(agents: AgentDef[], opts: { catalogue?: string; is
       const machines = (Array.isArray(input.machines) ? input.machines : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 16);
       // Computers with no items: the same brief on each of them (seen live: "machines" alone ran once, in the
       // conversation's own folder, and found nothing).
-      if (machines.length && !items.length) return { content: await fanOut(args, machines, (Array.isArray(input.fields) ? input.fields : []).map(String).filter(Boolean).slice(0, 12), ctx.runSubagent, ctx.signal, models, machines) };
-      if (items.length) return { content: await fanOut(args, items, (Array.isArray(input.fields) ? input.fields : []).map(String).filter(Boolean).slice(0, 12), ctx.runSubagent, ctx.signal, models, machines) };
+      const fields = (Array.isArray(input.fields) ? input.fields : []).map(String).filter(Boolean).slice(0, 12);
+      const over = machines.length && !items.length ? machines : items;
+      if (over.length) {
+        // In the background when asked (seen live: a background fan-out held its lead for 30 minutes): the
+        // table arrives as a reminder, and the lead keeps working meanwhile.
+        const startWork = ctx.services?.tasks?.startWork;
+        const runSub = ctx.runSubagent;
+        if (background && startWork) {
+          const id = startWork(`${args.description} (fan-out of ${over.length})`, (sig) => fanOut(args, over, fields, runSub, sig, models, machines, fanOutLimitMs(true)));
+          return { content: `Started fan-out ${id} of ${over.length} in the background. Keep working; its table reaches you as a reminder when every item is done (or its time limit, ${Math.round(fanOutLimitMs(true) / 60_000)} min, stops the rest). task_stop ${id} stops it.` };
+        }
+        return { content: await fanOut(args, over, fields, ctx.runSubagent, ctx.signal, models, machines) };
+      }
       try {
         if (background && start) {
           const id = await start(args);

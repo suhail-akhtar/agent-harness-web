@@ -42,7 +42,9 @@ export class DeepSeekProvider implements Provider {
     const calls: { id: string; name: string; args: string }[] = [];
     let finish: string | null = null;
     let usage: Record<string, number> | undefined;
-    for await (const ev of readSse(res, req.signal)) {
+    // DeepSeek sends ": keep-alive" comments while the request waits in its queue (api-docs.deepseek.com,
+    // "Rate Limit"): a reply that never starts is a stall, retried, not a stream.
+    for await (const ev of readSse(res, req.signal, { keepAliveIsIdle: true })) {
       if (ev.data === '[DONE]') break;
       let chunk: { choices?: { delta?: { content?: string | null; reasoning_content?: string | null; tool_calls?: { index: number; id?: string; function?: { name?: string; arguments?: string } }[] }; finish_reason?: string | null }[]; usage?: Record<string, number>; error?: { message?: string } };
       try { chunk = JSON.parse(ev.data); } catch { continue; }

@@ -36,7 +36,7 @@ export const runScriptTool: Tool = {
   spec: {
     name: 'run_script',
     description: `Run a short JavaScript (async function body) that calls tools and returns only what you need, instead of making many tool calls whose full output fills the context. Use it for loops and filtering: reading or grepping many files and summarising, fetching several pages and extracting facts, calling a service repeatedly.
-In the script: \`await tools.<name>({...input})\` returns the tool's text output (it throws on an error); \`tools.call(name, input)\` for any name; \`console.log(...)\` and the return value are what you get back. No require, files, network or processes except through tools. Example:
+In the script: \`await tools.<name>({...input})\` returns the tool's text output (it throws on an error); \`tools.call(name, input)\` for any name; \`console.log(...)\` and the return value are what you get back. No require, files, network or processes except through tools. Not agent (its items fan out), ask_user or workflow. Example:
 const files = (await tools.glob({ pattern: "src/**/*.ts" })).split("\\n");
 let n = 0; for (const f of files) if ((await tools.read({ path: f })).includes("TODO")) n++;
 return \`\${n} of \${files.length} files have TODOs\`;`,
