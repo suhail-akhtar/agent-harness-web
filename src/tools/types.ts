@@ -199,6 +199,11 @@ export interface Tool {
    * plugin tool every turn needs inline, true defers a rarely used core tool.
    */
   defer?: boolean;
+  /**
+   * Deferred in this group whatever its size (a core group that one call loads: "skills", the scripts and making of
+   * skills, loads with any skill).
+   */
+  deferGroup?: string;
 }
 
 export type { ToolOutcome };

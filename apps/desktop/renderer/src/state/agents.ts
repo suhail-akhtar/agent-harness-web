@@ -21,6 +21,8 @@ export interface SubAgent {
   calls: number;
   tools: number;
   worktree?: string;
+  /** The person's computer it works on (placed there). */
+  machine?: string;
   background?: boolean;
   /** Its last tool call, as a line. */
   last?: string;
@@ -48,7 +50,7 @@ export interface ModelCost { model: string; cost: number; requests: number; inpu
 
 export type Agents = Record<string, SubAgent>;
 
-const STARTED = /^Started (\S+) \(([^,()]+), ([^)]+)\)(?: in worktree (\S+))?(?:: ([\s\S]*))?$/;
+const STARTED = /^Started (\S+) \(([^,()]+), ([^)]+)\)(?: in worktree (\S+))?(?: on computer ([^:]+?))?(?:: ([\s\S]*))?$/;
 
 const blank = (name: string, type = name.replace(/-\d+$/, '')): SubAgent => ({ name, type, status: 'running', cost: 0, calls: 0, tools: 0 });
 
@@ -78,7 +80,7 @@ export function foldAgent(a: Agents, e: HarnessEvent, now = Date.now()): Agents 
     case 'notice': {
       const m = STARTED.exec(e.text);
       if (!m || m[1] !== name) return a;
-      return { ...a, [name]: { ...cur, type: m[2]!, model: m[3]!, ...(m[4] ? { worktree: m[4] } : {}), ...(m[5] ? { description: m[5] } : {}), startedAt: cur.startedAt ?? now, status: 'running' } };
+      return { ...a, [name]: { ...cur, type: m[2]!, model: m[3]!, ...(m[4] ? { worktree: m[4] } : {}), ...(m[5] ? { machine: m[5] } : {}), ...(m[6] ? { description: m[6] } : {}), startedAt: cur.startedAt ?? now, status: 'running' } };
     }
     case 'usage': return { ...a, [name]: { ...cur, cost: cur.cost + e.cost, calls: cur.calls + 1, model: cur.model ?? e.model } };
     case 'tool_call': return { ...a, [name]: { ...cur, tools: cur.tools + 1, last: `${e.name}` } };

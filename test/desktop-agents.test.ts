@@ -63,8 +63,10 @@ test('the base prefix (system prompt and tool definitions of a plain session) st
     // chat's live task line), 4,165 with the schedule tool's routines, workflows and watches and
     // 4,410 with the agent tool's acceptance (done_when, may_change_tests, verify, max_fix_rounds) and
     // 4,463 with stakes and exit / expect_not checks (docs/swarm/SWARM.md, phase 1) and 4,532 with
-    // the fan-out's items and fields (phase 1c); the budget leaves a little room, not a lot.
-    assert.ok(tokens <= 4575, `base prefix ~${tokens} tokens (budget 4575)`);
+    // the fan-out's items and fields (phase 1c), 4,889 with skills (skill_script, check_skill, save_skill:
+    // inline here, since DeepSeek takes no deferred tools; behind the skill tool on models that do); the
+    // budget leaves a little room, not a lot.
+    assert.ok(tokens <= 4930, `base prefix ~${tokens} tokens (budget 4930)`);
     // A desktop session's additions are bounded too.
     const d = await t.harness.sessions.create({ model: 'deepseek-flash', mode: 'bypass', runtime: { kind: 'local', network: 'none', path: await tempDir() }, client: { kind: 'desktop', version: '1', renderers: ['mermaid'], tools: ['desktop_command', 'desktop_describe', 'desktop_notify', 'desktop_open'] } });
     const dev = record(d);

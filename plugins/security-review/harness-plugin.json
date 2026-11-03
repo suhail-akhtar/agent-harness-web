@@ -33,6 +33,44 @@
     "displayName": "Security review",
     "icon": "shield",
     "category": "Engineering",
-    "trust": "declarative"
+    "trust": "declarative",
+    "contributes": {
+      "navItems": [
+        {
+          "id": "security-review",
+          "title": "Security review",
+          "icon": "shield",
+          "view": "prompts",
+          "placement": "more",
+          "order": 41
+        }
+      ],
+      "views": [
+        {
+          "id": "prompts",
+          "title": "Security review",
+          "icon": "shield",
+          "kind": "prompt-board",
+          "description": "A review of your own code where a finding counts only when its reproducer fires, and a fix only when it no longer does and the tests pass.",
+          "prompts": [
+            {
+              "title": "Review this project for security flaws",
+              "icon": "shield",
+              "prompt": "Is this project safe? Find the real security problems and fix them."
+            },
+            {
+              "title": "Scan the code",
+              "icon": "search",
+              "prompt": "What in this code could an attacker use against us?"
+            },
+            {
+              "title": "Find variants of past fixes",
+              "icon": "git-branch",
+              "prompt": "We fixed security bugs here before. Are there more like them?"
+            }
+          ]
+        }
+      ]
+    }
   }
 }

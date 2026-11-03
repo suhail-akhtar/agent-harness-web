@@ -51,6 +51,7 @@ export function AgentRow({ a }: { a: SubAgent }) {
           <span>{a.type}</span>
           {a.model && <span data-subagent-model className="rounded bg-hx-pill px-1">{a.model}</span>}
           {a.worktree && <span className="inline-flex items-center gap-0.5" title="Works in its own git worktree"><Icon name="git-branch" size={11} />{a.worktree}</span>}
+          {a.machine && <span data-subagent-machine={a.machine} className="inline-flex items-center gap-0.5" title="Works on this computer of yours, as its policy allows"><Icon name="monitor" size={11} />{a.machine}</span>}
           {ms !== undefined && <span>{duration(ms)}</span>}
           {a.cost > 0 && <span data-subagent-cost>{money(a.cost)}</span>}
           {a.accepted?.checks && <span data-subagent-checks={a.accepted.checks.passed === a.accepted.checks.total ? 'pass' : 'fail'} className={cx('rounded px-1', a.accepted.checks.passed === a.accepted.checks.total ? 'bg-hx-success-soft text-hx-success' : 'bg-hx-warning-soft text-hx-warning')} title="Done criteria, run by the harness">checks {a.accepted.checks.passed}/{a.accepted.checks.total}</span>}

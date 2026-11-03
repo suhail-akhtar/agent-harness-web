@@ -163,17 +163,17 @@ async function skillNotes(s: Skill, files: string[]): Promise<string> {
 export function makeSkillScriptTool(skills: Skill[]): Tool {
   const byName = new Map(skills.filter((s) => s.dir).map((s) => [s.name, s]));
   return {
-    kind: 'exec', parallelSafe: false, remoteable: false,
+    kind: 'exec', parallelSafe: false, remoteable: false, deferGroup: 'skills',
     spec: {
       name: 'skill_script',
-      description: 'Run a script of a skill (its scripts/ or tests/ folder, as the skill says) on the workspace: the exact, repeatable part of the skill\'s work. args are passed to the script as they are.',
+      description: 'Run a script of a skill (scripts/ or tests/, e.g. scripts/convert.py) on the workspace, as the skill says. args go to it as they are; paths are relative to the workspace.',
       input_schema: {
         type: 'object',
         properties: {
           skill: { type: 'string', enum: [...byName.keys()] },
-          script: { type: 'string', description: 'The script, e.g. scripts/convert.py' },
-          args: { type: 'array', items: { type: 'string' }, description: 'Its arguments (paths are relative to the workspace)' },
-          timeout_ms: { type: 'number', description: 'Default 120000' },
+          script: { type: 'string' },
+          args: { type: 'array', items: { type: 'string' } },
+          timeout_ms: { type: 'number' },
         },
         required: ['skill', 'script'],
       },

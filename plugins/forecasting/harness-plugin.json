@@ -2,7 +2,7 @@
   "name": "forecasting",
   "version": "1.0.0",
   "description": "A forecasting ledger: live yes/no questions forecast by several models (outside view first), aggregated in code, kept until they resolve, and scored, so skill is shown by resolved questions, not claimed.",
-  "icon": "trending-up",
+  "icon": "chart",
   "category": "Productivity",
   "tags": [
     "forecasting",
@@ -29,8 +29,46 @@
     "apiVersion": 1,
     "guide": "GUIDE.md",
     "displayName": "Forecasting",
-    "icon": "trending-up",
+    "icon": "chart",
     "category": "Knowledge",
-    "trust": "declarative"
+    "trust": "declarative",
+    "contributes": {
+      "navItems": [
+        {
+          "id": "forecasting",
+          "title": "Forecasting",
+          "icon": "chart",
+          "view": "prompts",
+          "placement": "more",
+          "order": 44
+        }
+      ],
+      "views": [
+        {
+          "id": "prompts",
+          "title": "Forecasting",
+          "icon": "chart",
+          "kind": "prompt-board",
+          "description": "A forecasting ledger: forecasters on several models, the aggregate computed in code, live questions only, scored when they resolve.",
+          "prompts": [
+            {
+              "title": "Forecast a question",
+              "icon": "chart",
+              "prompt": "How likely is it that "
+            },
+            {
+              "title": "Resolve a forecast",
+              "icon": "check",
+              "prompt": "This question has resolved: "
+            },
+            {
+              "title": "How good are the forecasts?",
+              "icon": "chart",
+              "prompt": "How good have our forecasts been?"
+            }
+          ]
+        }
+      ]
+    }
   }
 }

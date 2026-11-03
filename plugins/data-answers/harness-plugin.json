@@ -33,6 +33,39 @@
     "displayName": "Data answers",
     "icon": "database",
     "category": "Knowledge",
-    "trust": "declarative"
+    "trust": "declarative",
+    "contributes": {
+      "navItems": [
+        {
+          "id": "data-answers",
+          "title": "Data answers",
+          "icon": "database",
+          "view": "prompts",
+          "placement": "more",
+          "order": 43
+        }
+      ],
+      "views": [
+        {
+          "id": "prompts",
+          "title": "Data answers",
+          "icon": "database",
+          "kind": "prompt-board",
+          "description": "Answers from your database: read-only SQL kept as cells, the database's own checks after every query, definitions you approve, and the figures recomputed by another model.",
+          "prompts": [
+            {
+              "title": "Ask a question of my data",
+              "icon": "database",
+              "prompt": "From our database: "
+            },
+            {
+              "title": "Draft the definitions",
+              "icon": "book",
+              "prompt": "What do the terms in our database mean? I want to agree them before we use them."
+            }
+          ]
+        }
+      ]
+    }
   }
 }

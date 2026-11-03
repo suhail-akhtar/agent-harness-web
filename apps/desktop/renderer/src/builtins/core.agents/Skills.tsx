@@ -22,18 +22,22 @@ export function YourSkills(): React.ReactElement {
   const [open, setOpen] = useState<{ name: string; skill: string; files: string[] } | null>(null);
   const reload = () => client.skills.list().then((l) => { setList(l); setError(''); }).catch((e: Error) => setError(e.message));
   useEffect(() => { void reload(); }, []);
+  const [dragging, setDragging] = useState(false);
+  // A Claude skill package (.skill, as Claude exports it and its skill-creator packs it), a .zip of one skill or many
+  // (a Claude Code plugin's skills/), or a SKILL.md. Packages are zips: the server reads them whatever the extension.
+  const importFiles = async (files: File[]) => {
+    for (const f of files) {
+      try {
+        const r = /\.md$/i.test(f.name) ? await client.skills.import({ text: await f.text() }) : await client.skills.import({ data: await toBase64(f) });
+        for (const s of r.skills) toast(s.ok ? `Imported ${s.name}${s.serversAdded?.length ? ` (its MCP servers ${s.serversAdded.join(', ')} were added, switched off)` : ''}` : `${s.name}: ${s.problems.join('; ')}`, { kind: s.ok ? 'success' : 'error' });
+      } catch (e) { toast(`${f.name}: ${(e as Error).message}`, { kind: 'error' }); }
+    }
+    void reload();
+  };
   const importFile = () => {
     const input = document.createElement('input');
-    input.type = 'file'; input.accept = '.skill,.zip,.md'; input.multiple = true;
-    input.onchange = async () => {
-      for (const f of Array.from(input.files ?? [])) {
-        try {
-          const r = /\.md$/i.test(f.name) ? await client.skills.import({ text: await f.text() }) : await client.skills.import({ data: await toBase64(f) });
-          for (const s of r.skills) toast(s.ok ? `Imported ${s.name}${s.serversAdded?.length ? ` (its MCP servers ${s.serversAdded.join(', ')} were added, switched off)` : ''}` : `${s.name}: ${s.problems.join('; ')}`, { kind: s.ok ? 'success' : 'error' });
-        } catch (e) { toast(`${f.name}: ${(e as Error).message}`, { kind: 'error' }); }
-      }
-      void reload();
-    };
+    input.type = 'file'; input.accept = '.skill,.SKILL,.zip,.ZIP,.md,.MD'; input.multiple = true;
+    input.onchange = () => void importFiles(Array.from(input.files ?? []));
     input.click();
   };
   const remove = async (name: string) => { try { await client.skills.remove(name); toast(`Removed ${name}`); void reload(); } catch (e) { toast((e as Error).message, { kind: 'error' }); } };
@@ -41,10 +45,16 @@ export function YourSkills(): React.ReactElement {
   const make = () => prefill('Use the skill-creator skill to make a skill for: ', true);
   return (
     <Page title="Your skills">
-      <div data-your-skills>
+      <div
+        data-your-skills
+        className={dragging ? 'rounded-lg border-2 border-dashed border-hx-accent' : undefined}
+        onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true); } }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => { e.preventDefault(); setDragging(false); void importFiles(Array.from(e.dataTransfer.files)); }}
+      >
         <div className="mb-4 flex flex-wrap items-center gap-2">
-          <p className="min-w-0 flex-1 text-body text-hx-secondary">Know-how an agent loads when the work needs it: instructions, and for exact work, scripts it runs, with their tests. Give a skill to an agent in the agent builder; every conversation of yours can use them.</p>
-          <Button icon="upload" variant="ghost" onClick={importFile} data-skills-import>Import</Button>
+          <p className="min-w-0 flex-1 text-body text-hx-secondary">Know-how an agent loads when the work needs it: instructions, and for exact work, scripts it runs, with their tests. Give a skill to an agent in the agent builder; every conversation of yours can use them. Import a Claude skill package (.skill), a .zip of one skill or many, or a SKILL.md: pick it, or drop it here.</p>
+          <Button icon="upload" variant="ghost" onClick={importFile} data-skills-import>Import .skill / .zip / SKILL.md</Button>
           <Button icon="sparkles" variant="primary" onClick={make} data-skills-make>Make a skill</Button>
         </div>
         {error && <Callout tone="danger" className="mb-4">{error}</Callout>}

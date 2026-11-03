@@ -13,7 +13,7 @@ import { GlobalEvents, sessionEvents, type Fetch } from './events.ts';
 import {
   isPending, PENDING_KINDS, type Approval, type FileTree, type SearchHit, type Attachment, type CatalogueEntry, type PluginReview, type PluginUpdateInfo, type PluginRevisionInfo, type Config, type Capabilities, type ContextBreakdown, type LiveProviderModels, type EffectiveSetting, type Effort, type FileContent, type FileEntry,
   type GitLogEntry, type GitStatus, type Health, type HarnessEvent, type HistoryPage, type McpBundle, type Me, type Mode, type ModelInfo, type PendingRequest, type PluginInfo, type SolutionImportInfo,
-  type ProviderInfo, type ProviderTest, type InboxItem, type Interruptions, type NoticingOverview, type NoticeDetector, type AgentDef, type AgentInfo, type AgentOptions, type AgentRecord, type SkillInfo, type SkillImportResult, type McpBuildDraft, type McpBuildRecord, type McpBuildSource, type McpBuildSpec, type McpImportResult, type McpServerConfig, type McpServerView, type McpTestResult, type McpToolPolicy, type Schedule, type ScheduleRun, type ScheduleStats, type WatchSpec, type SessionDetail, type SessionMeta, type SessionsPage, type TaskView, type VaultEntry, type VersionInfo, type WorkflowInfo, type WorkflowRunView,
+  type ProviderInfo, type ProviderTest, type InboxItem, type Interruptions, type NoticingOverview, type NoticeDetector, type AgentDef, type AgentInfo, type AgentOptions, type AgentRecord, type SkillInfo, type SkillImportResult, type CompanionInfo, type McpBuildDraft, type McpBuildRecord, type McpBuildSource, type McpBuildSpec, type McpImportResult, type McpServerConfig, type McpServerView, type McpTestResult, type McpToolPolicy, type Schedule, type ScheduleRun, type ScheduleStats, type WatchSpec, type SessionDetail, type SessionMeta, type SessionsPage, type TaskView, type VaultEntry, type VersionInfo, type WorkflowInfo, type WorkflowRunView,
   type ArtifactContent, type ArtifactMeta, type Proposal, type TraceSpan,
 } from './types.ts';
 
@@ -363,6 +363,15 @@ export class HarnessClient {
   };
 
   /** The person's own skills: kept, imported (.skill / .zip packages, SKILL.md), viewed, exported, removed. */
+  /** The person's computers (companions): each runs work on that machine, under the policy its owner set there. */
+  readonly companions = {
+    list: () => this.get<CompanionInfo[]>('/api/companions'),
+    /** A new one: its token is shown once, for `harness-companion --server <url> --token <token>`. */
+    create: (name: string) => this.post<{ id: string; token: string }>('/api/companions', { name }),
+    /** A new token; the old one stops working at once. */
+    rotate: (id: string) => this.post<{ id: string; token: string }>(`/api/companions/${encodeURIComponent(id)}/token`, {}),
+    remove: (id: string) => this.del<{ ok: boolean }>(`/api/companions/${encodeURIComponent(id)}`),
+  };
   readonly skills = {
     list: () => this.get<SkillInfo[]>('/api/me/skills'),
     /** A package (bytes, as base64) or a SKILL.md (text). */

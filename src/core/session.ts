@@ -25,7 +25,7 @@ import { clientSkills, makeSkillScriptTool, makeSkillTool, type Skill, skillsIn,
 import { BUILTIN_SKILLS_DIR, skillBuilderTools } from '../skills/builder.ts';
 import { sortTools } from '../tools/index.ts';
 import type { AskOutcome, FileStamp, ScheduleSpec, Tool, ToolServices } from '../tools/types.ts';
-import { loadedGroups, pluginGroups, sentSpecs, type ToolGroup } from '../tools/deferred.ts';
+import { loadedGroups, pluginGroups, sentSpecs, SKILLS_GROUP, type ToolGroup } from '../tools/deferred.ts';
 import { SpillStore } from '../tools/spill.ts';
 import type { ToolSpec } from '../providers/types.ts';
 import { MemoryStore, projectKey } from '../memory/store.ts';
@@ -1582,7 +1582,7 @@ export class Session {
     const mcp = [...server.status, ...project.status, ...user.status];
     for (const st of mcp.filter((x) => !x.ok)) this.emit({ kind: 'notice', level: 'warn', text: `MCP server ${st.name} (${st.scope}) is not available: ${st.error}` });
     // Plugin tools wait behind load_tools, one line per plugin, until the session uses them (the tools stay in the toolbox).
-    const groups = settings.efficiency.deferPluginTools ? pluginGroups(tools, (t) => reg.ownerOf(t), (p) => reg.plugins.find((x) => x.name === p)?.description) : [];
+    const groups = settings.efficiency.deferPluginTools ? pluginGroups(tools, (t) => reg.ownerOf(t), (p) => p === SKILLS_GROUP ? 'Skills: run the scripts of a skill (skill_script); check and keep a skill you made (check_skill, save_skill). Loaded with any skill.' : reg.plugins.find((x) => x.name === p)?.description) : [];
     // Loading one of a plugin's skills (its procedure for those tools) loads its tools too.
     for (const g of groups) { const own = skills.filter((s) => reg.ownerOf(s) === g.id).map((s) => s.name); if (own.length) g.skills = own; }
     const skillUses = new Map<string, { tools: string[]; mcpServers: string[] }>();
@@ -2236,7 +2236,7 @@ export class Session {
     // existing tests among it), the agents it starts must keep unchanged too, whatever their own brief says.
     const inherited = parent && parent !== this.agent ? [...this.subs.values()].find((x) => x.agent === parent)?.acceptance?.checks.filter((c) => 'unchanged' in c || 'protect' in c) : undefined;
     const acceptance = inherited?.length ? { maxFixRounds: 2, ...a.acceptance, checks: withProtection(a.acceptance?.checks ?? [], { mayChangeTests: true, inherited }) } : a.acceptance;
-    const base = { agent: a.type, description: a.description, prompt: a.prompt, signal: signal ?? this.abortCtl?.signal ?? new AbortController().signal, depth, parent, keep: true, tainted: (parent ?? this.agent)?.tainted, ...(a.effort ? { effort: a.effort } : {}), ...(host ? { host } : {}), ...(a.batch ? { batch: a.batch } : {}) };
+    const base = { agent: a.type, description: a.description, prompt: a.prompt, signal: signal ?? this.abortCtl?.signal ?? new AbortController().signal, depth, parent, keep: true, tainted: (parent ?? this.agent)?.tainted, ...(a.effort ? { effort: a.effort } : {}), ...(host ? { host } : {}), ...(a.machine ? { machine: a.machine } : {}), ...(a.batch ? { batch: a.batch } : {}) };
     if (acceptance?.stakes === 'critical') return this.runReplicas(a, base, acceptance);
     const r = await this.runAgent({ ...base, ...(a.model ? { model: a.model, delegated: true } : {}), ...(a.isolation ? { isolation: a.isolation } : {}), ...(acceptance ? { acceptance } : {}) });
     return `${r.report}\n\n(agent id: ${r.id})`;
@@ -2543,7 +2543,7 @@ export class Session {
    * Runs a named agent in a fresh context: a chat sub-agent, or a workflow's
    * agent node. One cache key per agent kind, so sibling runs share a prefix.
    */
-  async runAgent(a: { agent: string; prompt: string; signal: AbortSignal; label?: string; description?: string; model?: string; effort?: Effort; maxSteps?: number; /** Calls allowed per tool (a workflow step's toolBudget). */ toolBudget?: Record<string, number>; allowTodos?: boolean; /** A hook's verifier: no hooks of its own (they would start it again). */ noHooks?: boolean; /** 1 for a sub-agent of the main agent, 2 for one of its own, ... */ depth?: number; /** The agent that started it (it is tainted with it, and starts tainted when it is). */ parent?: Agent; /** Kept after it ends, for send_message. */ keep?: boolean; /** Starts tainted: its brief came from an agent that read untrusted content. */ tainted?: boolean; /** `model` was chosen by an agent or a workflow: only a model the person allowed (delegation). */ delegated?: boolean; /** The delegation was checked (and approved) already. */ approved?: boolean; /** Works in a fresh git worktree of the session's repository. */ isolation?: 'worktree'; /** Where its tools work (a worktree agent's sub-agents share its worktree). */ host?: ToolHost; /** Deferred tool groups it starts with loaded (a plugin's workflow: that plugin's). */ loadGroups?: string[]; /** What its work must meet before its report counts (done criteria, a verifier). */ acceptance?: Acceptance; /** A definition the harness runs that is not in the catalogue (the built-in verifier). */ def?: AgentDef; /** It checks another agent's work (only reads): not counted as at work in the folder. */ verifier?: boolean; /** Started in the background (the conversation's agent may work beside it). */ background?: boolean; /** Agents of the same fan-out still to start, this one included (one question to the person for all of them). */ batch?: number }): Promise<{ report: string; reason: string; cost: number; id: string; agent?: Agent; outcome?: Outcome; changes?: string }> {
+  async runAgent(a: { agent: string; prompt: string; signal: AbortSignal; label?: string; description?: string; model?: string; effort?: Effort; maxSteps?: number; /** Calls allowed per tool (a workflow step's toolBudget). */ toolBudget?: Record<string, number>; allowTodos?: boolean; /** A hook's verifier: no hooks of its own (they would start it again). */ noHooks?: boolean; /** 1 for a sub-agent of the main agent, 2 for one of its own, ... */ depth?: number; /** The agent that started it (it is tainted with it, and starts tainted when it is). */ parent?: Agent; /** Kept after it ends, for send_message. */ keep?: boolean; /** Starts tainted: its brief came from an agent that read untrusted content. */ tainted?: boolean; /** `model` was chosen by an agent or a workflow: only a model the person allowed (delegation). */ delegated?: boolean; /** The delegation was checked (and approved) already. */ approved?: boolean; /** Works in a fresh git worktree of the session's repository. */ isolation?: 'worktree'; /** Where its tools work (a worktree agent's sub-agents share its worktree). */ host?: ToolHost; /** The person's computer it was placed on (shown with it). */ machine?: string; /** Deferred tool groups it starts with loaded (a plugin's workflow: that plugin's). */ loadGroups?: string[]; /** What its work must meet before its report counts (done criteria, a verifier). */ acceptance?: Acceptance; /** A definition the harness runs that is not in the catalogue (the built-in verifier). */ def?: AgentDef; /** It checks another agent's work (only reads): not counted as at work in the folder. */ verifier?: boolean; /** Started in the background (the conversation's agent may work beside it). */ background?: boolean; /** Agents of the same fan-out still to start, this one included (one question to the person for all of them). */ batch?: number }): Promise<{ report: string; reason: string; cost: number; id: string; agent?: Agent; outcome?: Outcome; changes?: string }> {
     const sessionHost = await this.getHost();
     const settings = await this.getSettings(sessionHost);
     const tb = await this.getToolbox(sessionHost);
@@ -2620,7 +2620,8 @@ export class Session {
       system: SUBAGENT_PROMPT, tools, host, settings: capTurns(a.noHooks ? { ...settings, hooks: {} } : settings, def.maxTurns),
       // An agent type that names its tools gets them all (someone chose them); any other defers plugin groups like the main agent,
       // but for its own plugin's (a plugin's agent type, a plugin's workflow node), which it has from the start.
-      toolGroups: def.tools || model.deferTools === false ? [] : tb.groups.filter((g) => g.id !== this.deps.registry.ownerOf(def) && !a.loadGroups?.includes(g.id)).map((g) => ({ ...g, tools: g.tools.filter((n) => tools.some((t) => t.spec.name === n)) })).filter((g) => g.tools.length),
+      // An agent given skills starts with what they use (its skills are in its brief, not loaded by a call).
+      toolGroups: def.tools || model.deferTools === false ? [] : tb.groups.filter((g) => g.id !== this.deps.registry.ownerOf(def) && !a.loadGroups?.includes(g.id) && !(def.skills?.length && g.id === SKILLS_GROUP)).map((g) => ({ ...g, tools: g.tools.filter((n) => tools.some((t) => t.spec.name === n)) })).filter((g) => g.tools.length),
       spill: this.spillFor(host),
       cacheKey: `hw-${this.meta.id}-${def.name}`, maxSteps: Math.min(a.maxSteps ?? def.maxTurns ?? (a.allowTodos ? 150 : 60), settings.maxSteps), ...(a.toolBudget ? { toolBudget: a.toolBudget } : {}), readFiles: new Map<string, FileStamp>(),
       inProcessHooks: a.noHooks ? [] : this.deps.registry.hooks,
@@ -2651,7 +2652,7 @@ export class Session {
     const extra = start.feedback ? `\n\n<subagent_start_context>\n${start.feedback}\n</subagent_start_context>` : '';
     const where = isolated ? `\n\n<system-reminder>You work in your own git worktree (${isolated.w.dir}) on branch ${isolated.w.branch}. Commit your changes there when they are done.</system-reminder>` : '';
     sub.append({ role: 'user', content: [{ type: 'text', text: `${env}${def.prompt ? `\n\n<role>\n${def.prompt}\n</role>` : ''}${await this.skillBriefs(def, tb)}${teamBrief(def, tb.agents)}${extra}${where}\n\n<brief>\n${a.prompt}\n</brief>${acceptanceNote(a.acceptance)}` }] });
-    this.emit({ kind: 'notice', level: 'info', text: `Started ${name} (${def.name}, ${model.id})${isolated ? ` in worktree ${isolated.w.branch}` : ''}${a.description ? `: ${a.description}` : ''}`, agent: name });
+    this.emit({ kind: 'notice', level: 'info', text: `Started ${name} (${def.name}, ${model.id})${isolated ? ` in worktree ${isolated.w.branch}` : ''}${a.machine ? ` on computer ${a.machine}` : ''}${a.description ? `: ${a.description}` : ''}`, agent: name });
     // Done criteria and the change set start from the workspace as it is before the work (where the agent works).
     // At work in this folder (a verifier only reads): others' checks see it.
     if (!a.verifier) {

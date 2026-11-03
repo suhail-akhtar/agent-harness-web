@@ -33,6 +33,39 @@
     "displayName": "Investigations",
     "icon": "search",
     "category": "Knowledge",
-    "trust": "declarative"
+    "trust": "declarative",
+    "contributes": {
+      "navItems": [
+        {
+          "id": "investigations",
+          "title": "Investigations",
+          "icon": "search",
+          "view": "prompts",
+          "placement": "more",
+          "order": 42
+        }
+      ],
+      "views": [
+        {
+          "id": "prompts",
+          "title": "Investigations",
+          "icon": "search",
+          "kind": "prompt-board",
+          "description": "Investigations as co-pilot work: leads with their evidence in a ranked queue, each decided by you, and a coverage check before the report.",
+          "prompts": [
+            {
+              "title": "Start an investigation",
+              "icon": "search",
+              "prompt": "I need to find out what happened: "
+            },
+            {
+              "title": "Show the open leads",
+              "icon": "list",
+              "prompt": "What do we know so far, and what is still open?"
+            }
+          ]
+        }
+      ]
+    }
   }
 }

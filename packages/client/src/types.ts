@@ -15,7 +15,16 @@ export const MODES: readonly Mode[] = ['default', 'acceptEdits', 'auto', 'dontAs
 export interface ModelInfo { id: string; label: string; provider: string; contextWindow: number; compactAt: number; effort: Effort; efforts: Effort[]; available: boolean; vision?: boolean; notes?: string; /** The picker's group (newer servers). */ tier?: 'frontier' | 'balanced' | 'fast'; maxOutput?: number; /** The long edge (px) attached images are scaled to for this model (newer servers). */ imageMaxEdge?: number; /** USD per million tokens (newer servers). */ price?: { input: number; output: number } }
 /** What a provider offers now (GET /api/models/live); known: the harness has its spec and can run it. */
 export interface LiveProviderModels { id: string; label: string; error?: string; models: Array<{ id: string; name?: string; created?: number; known: boolean }> }
-export interface CompanionInfo { id: string; name: string; online: boolean; info: { platform: string; root: string } | null }
+export interface MachinePolicyInfo { swarm: boolean; kinds: string[]; maxJobs: number; sandboxRequired: boolean }
+export interface CompanionInfo {
+  id: string; name: string; online: boolean; info: { platform: string; root: string; version?: string; sandbox?: string; network?: 'none' | 'full'; policy?: MachinePolicyInfo; policySigned?: boolean } | null;
+  /** When its token stops working (a companion that polls gets a fresh one well before). */
+  expiresAt?: number;
+  /** Jobs it is running now. */
+  running?: number;
+  /** Its own key is pinned: every result must be signed with it. */
+  keyed?: boolean;
+}
 export interface Me { id?: string; name: string; role: 'admin' | 'member'; email?: string; spentToday?: number; accounts?: boolean }
 export interface Config {
   models: ModelInfo[];

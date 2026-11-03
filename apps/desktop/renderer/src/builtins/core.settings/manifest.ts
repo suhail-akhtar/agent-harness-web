@@ -19,6 +19,7 @@ export const ui = {
       { id: 'vault', title: 'Vault', icon: 'vault', group: 'integrations', order: 1, scope: 'account', component: 'Vault' },
       { id: 'schedules', title: 'Schedules', icon: 'clock', group: 'integrations', order: 2, scope: 'account', component: 'Schedules' },
       { id: 'mcp-servers', title: 'MCP servers', icon: 'plug', group: 'integrations', order: 3, scope: 'account', component: 'McpServers' },
+      { id: 'computers', title: 'Your computers', icon: 'monitor', group: 'integrations', order: 6, scope: 'account', component: 'Computers' },
       { id: 'mcp-access', title: 'Use your agents elsewhere', icon: 'share', group: 'integrations', order: 5, scope: 'app', component: 'McpAccess' },
       { id: 'mcp', title: 'MCP bundles', icon: 'box', group: 'integrations', order: 4, scope: 'operator', component: 'McpBundles' },
       { id: 'about', title: 'About', icon: 'info', group: 'admin', order: 99, scope: 'app', component: 'About' },

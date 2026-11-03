@@ -127,3 +127,14 @@ test('in the app: a .skill imported (its MCP server added, switched off), listed
     assert.equal((await t.call(OPERATOR, 'GET', '/api/me/skills/line-count')).status, 404);
   } finally { await t.close(); }
 });
+
+test('the skills tools wait behind the skill tool on models that defer: any skill loaded brings them, whatever their size', async () => {
+  const { groupsLoadedBy, pluginGroups, SKILLS_GROUP } = await import('../src/tools/deferred.ts');
+  const { skillBuilderTools } = await import('../src/skills/builder.ts');
+  const { makeSkillScriptTool } = await import('../src/skills/skills.ts');
+  const tools = [...skillBuilderTools(), makeSkillScriptTool([{ name: 'x', description: 'd', dir: BUILTIN_SKILLS_DIR, source: 'harness', load: async () => '' } as never])];
+  const groups = pluginGroups(tools, () => undefined, () => undefined);
+  assert.deepEqual(groups.map((g) => [g.id, g.tools]), [[SKILLS_GROUP, ['check_skill', 'save_skill', 'skill_script']]]);
+  assert.deepEqual(groupsLoadedBy('skill', { name: 'invoice-totals' }, groups), [SKILLS_GROUP]);
+  assert.deepEqual(groupsLoadedBy('skill_script', {}, groups), [SKILLS_GROUP], 'called by name, it loads too');
+});

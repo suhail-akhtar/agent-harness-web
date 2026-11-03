@@ -45,11 +45,11 @@ const show = (c: Awaited<ReturnType<typeof checkInWorkspace>>) => {
 
 export function skillBuilderTools(): Tool[] {
   const check: Tool = {
-    kind: 'exec', parallelSafe: false, remoteable: false, defer: true,
+    kind: 'exec', parallelSafe: false, remoteable: false, deferGroup: 'skills',
     spec: {
       name: 'check_skill',
-      description: 'Check a skill folder in the workspace (SKILL.md and its scripts/, references/, assets/, tests/): its frontmatter and description, the files its instructions point to, every script\'s syntax, its size, its mcp.json; then its tests/ scripts are run (each must exit 0). Fix what it lists before save_skill.',
-      input_schema: { type: 'object', properties: { path: { type: 'string', description: 'The skill folder, e.g. skills/invoice-totals' } }, required: ['path'] },
+      description: 'Check a skill folder (e.g. skills/<name>): SKILL.md, the files it names, the syntax of its scripts, mcp.json; then run its tests (each must exit 0). Fix what it lists before save_skill.',
+      input_schema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
     },
     summarize: (i) => `check the skill in ${str(i.path)}`,
     async run(input, ctx) {
@@ -58,11 +58,11 @@ export function skillBuilderTools(): Tool[] {
     },
   };
   const save: Tool = {
-    kind: 'edit', parallelSafe: false, remoteable: false, defer: true,
+    kind: 'edit', parallelSafe: false, remoteable: false, deferGroup: 'skills',
     persists: () => true,
     spec: {
       name: 'save_skill',
-      description: 'Keep a skill folder of the workspace in the person\'s own skill library (checked first, its tests run): it is then in all their conversations, and theirs to give their agents. Replaces one of the same name only with replace: true.',
+      description: 'Keep a skill folder in the person\'s skill library (checked and tested first), for all their conversations and agents. replace: true replaces one of the same name.',
       input_schema: { type: 'object', properties: { path: { type: 'string' }, replace: { type: 'boolean' } }, required: ['path'] },
     },
     summarize: (i) => `save the skill in ${str(i.path)}`,

@@ -55,16 +55,19 @@ export function pluginGroups(tools: Tool[], ownerOf: (t: Tool) => string | undef
   const groups = new Map<string, ToolGroup & { size: number }>();
   for (const t of tools) {
     if (t.defer === false) continue;
-    const owner = ownerOf(t) ?? (t.defer ? 'core' : undefined);
+    const owner = ownerOf(t) ?? t.deferGroup ?? (t.defer ? 'core' : undefined);
     if (!owner) continue;
     let g = groups.get(owner);
     if (!g) groups.set(owner, g = { id: owner, summary: groupSummary(describe(owner), owner), tools: [], size: 0 });
     g.tools.push(t.spec.name);
-    g.size += JSON.stringify(t.spec).length / 4;
+    g.size += t.deferGroup ? Infinity : JSON.stringify(t.spec).length / 4;
   }
   // A group whose schemas cost less than its load would (a step, and a cache miss) stays inline.
   return [...groups.values()].filter((g) => g.size >= minTokens).map(({ size: _size, ...g }) => ({ ...g, tools: g.tools.sort() })).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
+
+/** The core group of skill_script, check_skill and save_skill: loaded with the first skill a context loads. */
+export const SKILLS_GROUP = 'skills';
 
 /** Smallest group worth deferring, in schema tokens: below it the line in load_tools and a load cost about as much. */
 export const GROUP_MIN_TOKENS = 400;
@@ -82,7 +85,8 @@ export function groupsLoadedBy(name: string, input: Record<string, unknown> | un
   if (name === 'skill') {
     const skill = str(input?.name);
     const p = guideOf(skill);
-    return groups.filter((g) => g.id === p || g.skills?.includes(skill)).map((g) => g.id);
+    // Any skill brings what skills use: running their scripts, and making one (the "skills" group).
+    return groups.filter((g) => g.id === p || g.skills?.includes(skill) || g.id === SKILLS_GROUP).map((g) => g.id);
   }
   const own = groups.find((g) => g.tools.includes(name));
   return own ? [own.id] : [];
