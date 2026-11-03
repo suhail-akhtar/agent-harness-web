@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Skills as packages** (docs/SKILLS.md):
+  - **The format**: a skill can be instructions alone, or scripted, with tests, references, assets and MCP servers
+    (the Agent Skills layout). Its frontmatter can name the tools it needs (`allowed-tools`) and its MCP servers
+    (`mcp-servers`). Agents run its scripts with `skill_script`, on the workspace, wherever the session runs
+    commands.
+  - **Each person's library**: skills are kept per person, checked first and never replaced unless asked. Routes are
+    under `/api/me/skills`, and the desktop app has **Agents > Your skills**.
+  - **Import**: an Anthropic `.skill`, a `.zip` of one skill or many (such as a Claude Code plugin's `skills/`), or a
+    SKILL.md. Zips are read with limits on entries and size, and no path may leave the folder. A skill's MCP servers
+    join the person's switched off.
+  - **Made by asking**: the built-in `skill-creator` lays a skill out, writes its scripts and tests, and keeps it
+    with `check_skill` and `save_skill`. Its tests must pass before it is kept.
+  - **On agents**: an agent given skills starts with their instructions, sees only those skills, and gets each
+    skill's declared tools and MCP servers. If it has no `bash`, it still runs its skills' scripts.
 - **A swarm across the person's computers** (docs/swarm/SWARM.md, phase 7; live in docs/swarm/EVAL-MACHINES.md):
   - **Stop means stop on the machine**: a cancel job kills a job's processes there. A job the server no longer
     waits for is stopped at the next poll. With no word from the server for its lease (120 s), the companion stops

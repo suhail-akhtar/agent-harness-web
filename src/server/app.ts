@@ -58,6 +58,7 @@ import { type ExposedAgent, harnessMcpServer } from '../mcp/expose.ts';
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import type { AgentDef } from '../plugins/api.ts';
 import { skillsIn } from '../skills/skills.ts';
+import { readManifest, skillFiles, unpackSkills } from '../skills/package.ts';
 
 // The HTTP side: JSON API, an SSE stream per session, the built UI, and the
 // companion endpoints. Provider keys stay in this process.
@@ -755,8 +756,10 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
   /** The tools an agent can be given: not the ones that talk to the person or steer the conversation (an agent never gets those). */
   const delegableTools = () => [...harness.registry.tools.values()].filter((t) => !INTERACTIVE_TOOLS.includes(t.spec.name) || t.spec.name === 'agent' || t.spec.name === 'todo_write');
   /** The server's skills (operator plugins' folders), each name once: what an agent can be given. */
-  const serverSkills = async () => {
-    const m = new Map<string, { name: string; description: string }>();
+  const serverSkills = async (owner?: string) => {
+    const m = new Map<string, { name: string; description: string; source?: string }>();
+    // The person's own skills first (theirs to give their agents).
+    for (const s of await skillsIn(harness.skillStore.root(owner), 'user').catch(() => [])) m.set(s.name, { name: s.name, description: s.description, source: 'yours' });
     for (const sd of harness.registry.skillDirs) for (const s of await skillsIn(sd.dir, sd.source).catch(() => [])) if (!m.has(s.name)) m.set(s.name, { name: s.name, description: s.description });
     return [...m.values()].sort((a, b) => a.name.localeCompare(b.name));
   };
@@ -1660,9 +1663,58 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       return send(res, 200, {
         tools: delegableTools().map((t) => ({ name: t.spec.name, kind: t.kind, description: t.spec.description.split('\n')[0]!.slice(0, 200) })).sort((a, b) => a.name.localeCompare(b.name)),
         mcpServers: [...new Set([...registry.mcpServers.keys(), ...(await harness.userMcp.list(me.id)).filter((x) => x.enabled).map((x) => x.name)])].sort(),
-        skills: await serverSkills(),
+        skills: await serverSkills(me.id),
         models: registry.listModels().filter((m) => m.available).map((m) => ({ id: m.id, label: m.label, provider: m.provider, efforts: m.efforts })),
       });
+    }
+    // ---- the person's own skills: made by them or an agent (save_skill), or imported (.skill, .zip, SKILL.md) ----
+    if (p === '/api/me/skills' && method === 'GET') {
+      const out = [];
+      for (const name of await harness.skillStore.names(me.id)) {
+        const m = await readManifest(path.join(harness.skillStore.root(me.id), name)).catch(() => undefined);
+        if (m) out.push({ name: m.name, description: m.description, version: m.version, scripts: m.scripts, tests: m.tests, references: m.references, assets: m.assets, tools: m.tools, mcpServers: m.mcpServers, lines: m.lines });
+      }
+      return send(res, 200, out);
+    }
+    if (p === '/api/me/skills/import' && method === 'POST') {
+      // A package as base64 (data, with its file name), or a SKILL.md as text.
+      const b = await readJson(req, 80_000_000);
+      const data = typeof b.data === 'string' ? Buffer.from(b.data, 'base64') : typeof b.text === 'string' ? Buffer.from(b.text) : undefined;
+      if (!data?.length) throw new HttpError(400, 'Give the package as data (base64) or a SKILL.md as text.');
+      let found;
+      try { found = unpackSkills(data); } catch (e) { throw new HttpError(400, (e as Error).message); }
+      const results = [];
+      for (const sk of found) {
+        const report = await harness.skillStore.put(me.id, sk, { replace: b.replace === true });
+        const servers: string[] = [];
+        // Its MCP servers join the person's own, switched off: theirs to look at and switch on.
+        if (report.ok && report.manifest) {
+          const mine = new Set((await harness.userMcp.list(me.id)).map((x) => x.name));
+          for (const [n, cfg] of Object.entries(report.manifest.mcp)) {
+            if (mine.has(n)) continue;
+            try { await harness.userMcp.create(me.id, { name: n, ...cfg }, { source: `skill:${report.manifest.name}`, enabled: false }); servers.push(n); } catch { /* not a server config the store takes */ }
+          }
+        }
+        results.push({ name: sk.name, ok: report.ok, problems: report.problems, warnings: report.warnings, ...(report.manifest ? { scripts: report.manifest.scripts.length, tests: report.manifest.tests.length, tools: report.manifest.tools, mcpServers: report.manifest.mcpServers } : {}), ...(servers.length ? { serversAdded: servers } : {}) });
+      }
+      return send(res, results.some((r) => r.ok) ? 200 : 400, { skills: results });
+    }
+    {
+      const sm = /^\/api\/me\/skills\/([\w.-]{1,64})(\/export)?$/.exec(p);
+      if (sm) {
+        const name = sm[1]!;
+        if (!(await harness.skillStore.names(me.id)).includes(name)) throw new HttpError(404, `You have no skill named "${name}".`);
+        if (sm[2] && method === 'GET') {
+          const zip = await harness.skillStore.exportZip(me.id, name);
+          res.writeHead(200, { 'content-type': 'application/zip', 'content-disposition': `attachment; filename="${name}.skill"` });
+          res.end(zip); return;
+        }
+        if (!sm[2] && method === 'DELETE') return send(res, 200, { removed: await harness.skillStore.remove(me.id, name) });
+        if (!sm[2] && method === 'GET') {
+          const dir = path.join(harness.skillStore.root(me.id), name);
+          return send(res, 200, { manifest: await readManifest(dir), skill: await fs.readFile(path.join(dir, 'SKILL.md'), 'utf8'), files: await skillFiles(dir) });
+        }
+      }
     }
     if (p === '/api/me/agents' && method === 'GET') return send(res, 200, await harness.agentStore.list(me.id));
     if (p === '/api/me/agents' && method === 'POST') {
@@ -1695,7 +1747,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
           description: String(b.description ?? ''), model, provider: registry.provider(model),
           // The tools a delegated agent can use (not the ones that talk to the person or start sessions).
           tools: delegableTools().map((t) => ({ name: t.spec.name, description: t.spec.description })),
-          mcpServers: [...new Set([...registry.mcpServers.keys(), ...(await harness.userMcp.list(me.id)).filter((x) => x.enabled).map((x) => x.name)])], skills: await serverSkills(), taken,
+          mcpServers: [...new Set([...registry.mcpServers.keys(), ...(await harness.userMcp.list(me.id)).filter((x) => x.enabled).map((x) => x.name)])], skills: await serverSkills(me.id), taken,
           agents: [...BUILTIN_AGENTS, ...registry.agents.values(), ...(await harness.agentStore.list(me.id)).filter((x) => x.enabled)].map((x) => ({ name: x.name, description: x.description })),
         });
         o.spend?.add(me.id, r.costUsd);

@@ -122,7 +122,7 @@ test('registry: a plugin with a menu is a group (its items, another plugin\'s by
   assert.ok(top.includes('research:research'), 'a shipped plugin with one nav item stays a single item');
   assert.deepEqual(r.groups.find((g) => g.plugin === 'custom')!.items.map((e) => e.qid), ['acme-notes:menu', 'quick-links:links'], 'added plugins: one with several pages as an entry with them under it, one page as an entry');
   const agents = r.groups.find((g) => g.plugin === 'core.agents')!;
-  assert.deepEqual(agents.items.map((e) => e.qid), ['core.agents:agents', 'core.agents:mine', 'core.artifacts:library'], 'the Library of core.artifacts sits in the Agents module');
+  assert.deepEqual(agents.items.map((e) => e.qid), ['core.agents:agents', 'core.agents:mine', 'core.agents:skills', 'core.artifacts:library'], 'the Library of core.artifacts sits in the Agents module');
   assert.equal(r.navItems.find((n) => n.qid === 'core.artifacts:library')!.group, 'core.agents');
   assert.deepEqual(agents.home, { view: 'core.agents:home' });
   const ops = r.groups.find((g) => g.plugin === 'aiops')!;
@@ -149,7 +149,7 @@ test('registry: a plugin with a menu is a group (its items, another plugin\'s by
   // Switched off: the group goes; an item another plugin lent goes with its owner.
   const off = fullRegistry({ off: ['aiops', 'core.artifacts'] });
   assert.ok(!off.groups.some((x) => x.plugin === 'aiops'));
-  assert.deepEqual(off.groups.find((x) => x.plugin === 'core.agents')!.items.map((e) => e.qid), ['core.agents:agents', 'core.agents:mine']);
+  assert.deepEqual(off.groups.find((x) => x.plugin === 'core.agents')!.items.map((e) => e.qid), ['core.agents:agents', 'core.agents:mine', 'core.agents:skills']);
   assert.ok(!off.homes.has('aiops'));
   // Reconciled live: a page of a group switched off goes home.
   assert.equal(reconcile(r, off, { route: { view: 'aiops:alerts' }, panel: null, settingsSection: null, badges: { 'aiops.open': 2 } }).leaveView?.label, 'Operations');

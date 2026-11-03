@@ -5,15 +5,16 @@ export const meta = { name: 'core.agents', version: '0.1.0', description: 'Agent
 export const ui = {
   apiVersion: 1, displayName: 'Agents', icon: 'bot', trust: 'native', capabilities: [],
   // The Library (core.artifacts) sits in this module: what agents made, next to what they are doing.
-  menu: { title: 'Agents', icon: 'bot', order: 20, items: ['agents', 'mine', 'core.artifacts:library'] },
+  menu: { title: 'Agents', icon: 'bot', order: 20, items: ['agents', 'mine', 'skills', 'core.artifacts:library'] },
   home: 'home',
   guide: 'GUIDE.md',
   tools: ['agent', 'start_session', 'list_sessions', 'send_message', 'hand_off', 'dismiss_proposal', 'mark_chapter', 'workflow'],
   contributes: {
-    navItems: [{ id: 'agents', title: 'Working now', icon: 'activity', view: 'agents', order: 22, badge: 'core.agents.working' }, { id: 'mine', title: 'Your agents', icon: 'bot', view: 'mine', order: 23 }],
+    navItems: [{ id: 'agents', title: 'Working now', icon: 'activity', view: 'agents', order: 22, badge: 'core.agents.working' }, { id: 'mine', title: 'Your agents', icon: 'bot', view: 'mine', order: 23 }, { id: 'skills', title: 'Your skills', icon: 'book', view: 'skills', order: 24 }],
     views: [
       { id: 'home', title: 'Agents', icon: 'bot', description: 'Agents at work, proposals waiting, what they made lately, and ways to start.', kind: 'native', component: 'AgentsHome' },
       { id: 'agents', title: 'Agents', description: 'Everything working across conversations: sub-agents, background tasks, linked sessions under the one that started them, proposals, Stop.', kind: 'native', component: 'AgentsPage' },
+      { id: 'skills', title: 'Your skills', icon: 'book', description: 'Your skills: instructions and, for exact work, scripts with tests; import .skill, .zip or SKILL.md; make one with an agent.', kind: 'native', component: 'YourSkills' },
       { id: 'mine', title: 'Your agents', icon: 'bot', description: 'Your own agents (role, instructions, model, tools, MCP servers, skills, autonomy, limits): make, generate, import, chat with them.', kind: 'native', component: 'YourAgents' },
     ],
     panels: [{ id: 'agents', title: 'Agents', icon: 'bot', kind: 'native', component: 'AgentsPanel', where: 'session' }, { id: 'record', title: 'Run record', icon: 'shield', kind: 'native', component: 'RecordPanel', where: 'session' }],

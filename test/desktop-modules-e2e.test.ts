@@ -166,7 +166,7 @@ test('plugins as modules: groups, fold and reorder, the rail, homes, palette and
       const items = (g: string) => page.$$eval(`[data-group="${g}"] [data-nav]`, (els) => els.map((e) => e.getAttribute('data-nav')!));
       assert.deepEqual(await items('aiops'), ['aiops:incidents', 'aiops:alerts', 'aiops:services', 'aiops:topology', 'aiops:changes']);
       assert.deepEqual(await items('sdlc'), ['sdlc:delivery', 'sdlc:start', 'sdlc:quality']);
-      assert.deepEqual(await items('core.agents'), ['core.agents:agents', 'core.agents:mine', 'core.artifacts:library']);
+      assert.deepEqual(await items('core.agents'), ['core.agents:agents', 'core.agents:mine', 'core.agents:skills', 'core.artifacts:library']);
       assert.deepEqual(await items('core.dashboards'), ['core.dashboards:dashboards', 'core.dashboards:reports', 'core.dashboards:data']);
       assert.deepEqual(await items('custom'), ['field-notes:menu', 'field-notes:today', 'field-notes:guides', 'field-notes:safety'], 'an added plugin with a menu: an entry, its pages under it');
       await page.click('[data-nav="aiops:alerts"]');

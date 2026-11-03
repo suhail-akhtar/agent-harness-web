@@ -10,6 +10,7 @@ import { useData, type BuiltinPlugin } from '../../state/data';
 import { navigate, openPluginPanel, useApp } from '../../state/app';
 import { AgentsPanel } from './Panel';
 import { RecordPanel } from './Record';
+import { YourSkills } from './Skills';
 import { AgentsPage, watchLinkedNews } from './Page';
 import { ChapterDivider, LinkCard, ProposalCard } from './Cards';
 import { AgentsHome } from './Home';
@@ -21,7 +22,7 @@ export const coreAgents: BuiltinPlugin = {
   ...meta,
   ui,
   guide,
-  components: { AgentsHome, AgentsPanel, RecordPanel, AgentsPage, YourAgents, ProposalCard, LinkCard, ChapterDivider },
+  components: { AgentsHome, AgentsPanel, RecordPanel, YourSkills, AgentsPage, YourAgents, ProposalCard, LinkCard, ChapterDivider },
   handlers: {
     panel: () => {
       const r = useApp.getState().route;

@@ -13,7 +13,7 @@ import { GlobalEvents, sessionEvents, type Fetch } from './events.ts';
 import {
   isPending, PENDING_KINDS, type Approval, type FileTree, type SearchHit, type Attachment, type CatalogueEntry, type PluginReview, type PluginUpdateInfo, type PluginRevisionInfo, type Config, type Capabilities, type ContextBreakdown, type LiveProviderModels, type EffectiveSetting, type Effort, type FileContent, type FileEntry,
   type GitLogEntry, type GitStatus, type Health, type HarnessEvent, type HistoryPage, type McpBundle, type Me, type Mode, type ModelInfo, type PendingRequest, type PluginInfo, type SolutionImportInfo,
-  type ProviderInfo, type ProviderTest, type InboxItem, type Interruptions, type NoticingOverview, type NoticeDetector, type AgentDef, type AgentInfo, type AgentOptions, type AgentRecord, type McpBuildDraft, type McpBuildRecord, type McpBuildSource, type McpBuildSpec, type McpImportResult, type McpServerConfig, type McpServerView, type McpTestResult, type McpToolPolicy, type Schedule, type ScheduleRun, type ScheduleStats, type WatchSpec, type SessionDetail, type SessionMeta, type SessionsPage, type TaskView, type VaultEntry, type VersionInfo, type WorkflowInfo, type WorkflowRunView,
+  type ProviderInfo, type ProviderTest, type InboxItem, type Interruptions, type NoticingOverview, type NoticeDetector, type AgentDef, type AgentInfo, type AgentOptions, type AgentRecord, type SkillInfo, type SkillImportResult, type McpBuildDraft, type McpBuildRecord, type McpBuildSource, type McpBuildSpec, type McpImportResult, type McpServerConfig, type McpServerView, type McpTestResult, type McpToolPolicy, type Schedule, type ScheduleRun, type ScheduleStats, type WatchSpec, type SessionDetail, type SessionMeta, type SessionsPage, type TaskView, type VaultEntry, type VersionInfo, type WorkflowInfo, type WorkflowRunView,
   type ArtifactContent, type ArtifactMeta, type Proposal, type TraceSpan,
 } from './types.ts';
 
@@ -360,6 +360,16 @@ export class HarnessClient {
     import: (text: string, name?: string) => this.post<AgentRecord>('/api/me/agents/import', { text, ...(name ? { name } : {}) }),
     /** A draft from a description (not saved). */
     generate: (description: string, model?: string) => this.post<{ draft: AgentDef; costUsd: number; dropped: string[] }>('/api/me/agents/generate', { description, ...(model ? { model } : {}) }),
+  };
+
+  /** The person's own skills: kept, imported (.skill / .zip packages, SKILL.md), viewed, exported, removed. */
+  readonly skills = {
+    list: () => this.get<SkillInfo[]>('/api/me/skills'),
+    /** A package (bytes, as base64) or a SKILL.md (text). */
+    import: (b: { data?: string; text?: string; replace?: boolean }) => this.post<{ skills: SkillImportResult[] }>('/api/me/skills/import', b),
+    get: (name: string) => this.get<{ manifest: SkillInfo; skill: string; files: string[] }>(`/api/me/skills/${encodeURIComponent(name)}`),
+    remove: (name: string) => this.del<{ removed: boolean }>(`/api/me/skills/${encodeURIComponent(name)}`),
+    exportUrl: (name: string) => `/api/me/skills/${encodeURIComponent(name)}/export`,
   };
   /** The person's own MCP servers: connected by URL (or a command, for an administrator), signed in, their tools approved. */
   mcp = {

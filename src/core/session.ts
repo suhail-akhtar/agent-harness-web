@@ -21,7 +21,8 @@ import { cleanAllowEntry, defaultAllowHosts, DockerHost, dockerAvailable, docker
 import { chooseSandbox, detectOsSandbox, type LocalSandbox } from '../runtime/os-sandbox.ts';
 import type { ToolHost } from '../runtime/host.ts';
 import { LocalHost, run } from '../runtime/host.ts';
-import { clientSkills, makeSkillTool, type Skill, skillsIn, skillsListing, workspaceSkills } from '../skills/skills.ts';
+import { clientSkills, makeSkillScriptTool, makeSkillTool, type Skill, skillsIn, skillsListing, workspaceSkills } from '../skills/skills.ts';
+import { BUILTIN_SKILLS_DIR, skillBuilderTools } from '../skills/builder.ts';
 import { sortTools } from '../tools/index.ts';
 import type { AskOutcome, FileStamp, ScheduleSpec, Tool, ToolServices } from '../tools/types.ts';
 import { loadedGroups, pluginGroups, sentSpecs, type ToolGroup } from '../tools/deferred.ts';
@@ -55,6 +56,7 @@ import { acceptanceNote, type Baseline, blockedReason, changeSet, comparatorBrie
 import { byRecord, readScorecards } from '../agents/scorecard.ts';
 import { verifyClaims } from '../research/claims.ts';
 import { Recorder } from './recorder.ts';
+import { readManifest, SkillStore } from '../skills/package.ts';
 import { copyFileTool } from '../tools/machines.ts';
 import { sandboxedFolderHost } from '../runtime/local-sandbox.ts';
 import { CellStore, checkProvenance, compareFigures, figuresOf, openDatabase, runCell, semanticsStatus } from '../data/answers.ts';
@@ -262,6 +264,8 @@ export interface SessionDeps {
   dataDir: string; companions: CompanionHub; registry: Registry; mcp: McpManager;
   /** The person's own agents (src/agents/store.ts): in their conversations' catalogue of agents. */
   agentStore?: { active(owner: string | undefined): Promise<AgentDef[]> };
+  /** The person's own skills (src/skills/package.ts): in their conversations, and theirs to give their agents. */
+  skillStore?: SkillStore;
   /** People's own MCP servers: their approved tools, in their conversations (src/mcp/servers.ts). */
   userMcp?: { entries(owner: string | undefined): Promise<{ entries: McpEntry[]; status: McpStatus[] }> };
   /** Every trace span as it is written (OpenTelemetry export). */
@@ -330,6 +334,8 @@ interface Toolbox {
   /** Every MCP tool the session has (an agent limited to some servers gets only theirs). */
   mcpEntries: McpEntry[];
   skills: Skill[];
+  /** What each skill declares it uses (its allowed-tools and MCP servers): an agent given the skill gets them. */
+  skillUses: Map<string, { tools: string[]; mcpServers: string[] }>;
   mcp: McpStatus[];
   workflows: WorkflowDef[];
   /** Plugin tool groups whose schemas wait behind load_tools (efficiency.deferPluginTools; empty when off). */
@@ -1123,6 +1129,7 @@ export class Session {
       memory: main ? memory : memory?.reader(),
       sources: this.sources,
       search: this.deps.search,
+      ...(this.deps.skillStore ? { skills: { put: (sk: import('../skills/package.ts').PackagedSkill, replace?: boolean) => this.deps.skillStore!.put(this.meta.owner, sk, { replace }) } } : {}),
       // A judge with a clean context and no tools, of another family than the conversation's model where one is allowed.
       judge: async (brief, signal) => {
         const settings = await this.getSettings(await this.getHost());
@@ -1506,11 +1513,17 @@ export class Session {
     for (const sd of [...reg.skillDirs, ...clientSkillDirs(this.meta.client)]) for (const s of await skillsIn(sd.dir, sd.source)) if (!seen.has(s.name)) { seen.add(s.name); reg.claimLike(s, sd); skills.push(s); }
     // Skills for what the person's app draws (the diagram spec, for an app that renders `diagram`): listed only there.
     for (const s of await clientSkills(this.meta.client?.renderers ?? [])) if (!seen.has(s.name)) { seen.add(s.name); skills.push(s); }
+    // The person's own (made, saved by an agent, or imported), then the workspace's, then the harness's own.
+    if (this.deps.skillStore) for (const s of await skillsIn(this.deps.skillStore.root(this.meta.owner), 'user')) if (!seen.has(s.name)) { seen.add(s.name); skills.push(s); }
     for (const s of await workspaceSkills(host).catch(() => [])) if (!seen.has(s.name)) { seen.add(s.name); skills.push(s); }
+    for (const s of await skillsIn(BUILTIN_SKILLS_DIR, 'harness')) if (!seen.has(s.name)) { seen.add(s.name); skills.push(s); }
     // A desktop session's plugin guides (one per plugin of its index), in place of a plugin's plain skill of the same name.
     const guides = this.guideSkillsNow(() => tools);
     if (guides.length) { const g = new Set(guides.map((s) => s.name)); skills.splice(0, skills.length, ...skills.filter((s) => !g.has(s.name)), ...guides); }
     if (skills.length) tools.push(makeSkillTool(skills));
+    // Skills with scripts: run them with skill_script (and keep the person's own with save_skill, checked by check_skill).
+    if (skills.some((s) => s.dir)) tools.push(makeSkillScriptTool(skills));
+    if (this.deps.skillStore) tools.push(...skillBuilderTools());
 
     // Agents: built-in, plugins, the person's own, then the workspace's definitions (the nearest wins, as in Claude Code).
     const agents = new Map<string, AgentDef>();
@@ -1572,7 +1585,9 @@ export class Session {
     const groups = settings.efficiency.deferPluginTools ? pluginGroups(tools, (t) => reg.ownerOf(t), (p) => reg.plugins.find((x) => x.name === p)?.description) : [];
     // Loading one of a plugin's skills (its procedure for those tools) loads its tools too.
     for (const g of groups) { const own = skills.filter((s) => reg.ownerOf(s) === g.id).map((s) => s.name); if (own.length) g.skills = own; }
-    return { tools: sortTools(tools), agents: [...agents.values()], mcpEntries: entries, skills, mcp, workflows: [...workflows.values()], groups, agentOpts: { catalogue, isolation }, closeProject: project.close };
+    const skillUses = new Map<string, { tools: string[]; mcpServers: string[] }>();
+    for (const s of skills) if (s.dir) { const m = await readManifest(s.dir).catch(() => undefined); if (m && (m.tools.length || m.mcpServers.length)) skillUses.set(s.name, { tools: m.tools, mcpServers: m.mcpServers }); }
+    return { tools: sortTools(tools), agents: [...agents.values()], mcpEntries: entries, skills, skillUses, mcp, workflows: [...workflows.values()], groups, agentOpts: { catalogue, isolation }, closeProject: project.close };
   }
 
   /** The tool schemas this session's main agent sends now, all of them, and its groups (scripts/tool-schema-size.ts). */
@@ -1656,7 +1671,7 @@ export class Session {
   }
 
   /** The opening context. The main agent also gets its memory; sub-agents are briefed by it instead. */
-  private async preamble(host: ToolHost, main = true, reason: 'session_start' | 'compact' = 'session_start'): Promise<string> {
+  private async preamble(host: ToolHost, main = true, reason: 'session_start' | 'compact' = 'session_start', onlySkills?: string[]): Promise<string> {
     let branch: string | undefined;
     if (host.kind !== 'companion') {
       const r = await run('git', ['-C', host.root, 'rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: 5000 });
@@ -1671,7 +1686,7 @@ export class Session {
         fireHooks(this.settings, host, 'InstructionsLoaded', { file: f.source, scope: f.scope, reason, ...(f.importedBy ? { importedBy: f.importedBy } : {}) }, this.deps.registry.hooks, (m) => this.emit({ kind: 'notice', level: 'warn', text: m }));
       }
     }
-    return firstMessageText(await environmentBlock(host, { gitBranch: branch }), [instructions.text, memory, skillsListing(tb.skills)].filter(Boolean).join('\n\n'), '');
+    return firstMessageText(await environmentBlock(host, { gitBranch: branch }), [instructions.text, memory, skillsListing(onlySkills ? tb.skills.filter((s) => onlySkills.includes(s.name)) : tb.skills)].filter(Boolean).join('\n\n'), '');
   }
 
   private hooksFor(name: string, costSink?: (c: number) => void): AgentHooks {
@@ -1902,18 +1917,21 @@ export class Session {
    */
   private toolsFor(def: AgentDef, tb: Toolbox, keep: (t: Tool) => boolean): Tool[] {
     const clean = (s: string) => s.replace(/[^a-zA-Z0-9_-]/g, '_');
-    const servers = def.mcpServers ? new Set(def.mcpServers.map(clean)) : undefined;
+    // An agent given skills gets what they say they use: their tools, and their MCP servers (where it is limited to some).
+    const uses = (def.skills ?? []).map((n) => tb.skillUses.get(n)).filter((u): u is { tools: string[]; mcpServers: string[] } => !!u);
+    const servers = def.mcpServers ? new Set([...def.mcpServers, ...uses.flatMap((u) => u.mcpServers)].map(clean)) : undefined;
+    const allowed = def.tools ? [...def.tools, ...uses.flatMap((u) => u.tools)] : undefined;
     const denied = (n: string) => !!def.disallowedTools && toolMatches(def.disallowedTools, n);
     const tools = tb.tools.filter((t) => {
       const n = t.spec.name;
       if (denied(n)) return false;
-      if (def.skills && n === 'skill') return false;
+      if (def.skills && (n === 'skill' || n === 'skill_script')) return false;
       if (servers) {
         if (n === 'tool_search' || n === 'tool_call') return false;
         const srv = mcpServerOf(n);
         if (srv !== undefined) return servers.has(srv);
       }
-      return def.tools ? toolMatches(def.tools, n) : keep(t);
+      return allowed ? toolMatches(allowed, n) : keep(t);
     });
     if (servers) {
       const mine = tb.mcpEntries.filter((e) => servers.has(clean(e.server)) && !denied(e.qualified));
@@ -1923,6 +1941,7 @@ export class Session {
     if (def.skills) {
       const mine = tb.skills.filter((s) => def.skills!.includes(s.name));
       if (mine.length && !denied('skill')) tools.push(makeSkillTool(mine));
+      if (mine.some((s) => s.dir) && !denied('skill_script')) tools.push(makeSkillScriptTool(mine));
     }
     // A team lead hands work to its members only (whatever its tool list says about the agent tool).
     if (def.team) {
@@ -2624,7 +2643,8 @@ export class Session {
     entry = { agent: sub, owner: a.parent?.cfg.name ?? 'main', running: true, queue: [], cost, parent: a.parent, def, ...(a.acceptance ? { acceptance: a.acceptance } : {}) };
     if (a.keep) this.subs.set(name, entry);
     this.agentSignals.set(name, a.signal);
-    const env = await this.preamble(host, false);
+    // An agent given skills sees only those (its skill tool reaches no others).
+    const env = await this.preamble(host, false, 'session_start', def.skills);
     // SubagentStart hooks can add context the sub-agent starts with.
     const start = a.noHooks ? { errors: [], feedback: '' } : await runHooks(settings, host, 'SubagentStart', { agent: name, type: def.name, description: a.description ?? '' }, def.name, a.signal, this.deps.registry.hooks, { ...this.hookRunners(), judge: this.hookJudge(settings) });
     for (const e of start.errors) this.emit({ kind: 'notice', level: 'warn', text: e, agent: name });

@@ -425,3 +425,8 @@ export type TraceSpan =
 
 /** The person's delegation setting (other models agents may use). */
 export interface Delegation { allowedModels?: string[] | '*'; maxCostUsd?: number; requireApproval?: boolean }
+
+/** One of the person's own skills: what it holds and declares. */
+export interface SkillInfo { name: string; description: string; version?: string; scripts: string[]; tests: string[]; references: string[]; assets: string[]; tools: string[]; mcpServers: string[]; lines: number }
+/** What came of importing one skill of a package. */
+export interface SkillImportResult { name: string; ok: boolean; problems: string[]; warnings: string[]; scripts?: number; tests?: number; tools?: string[]; mcpServers?: string[]; serversAdded?: string[] }

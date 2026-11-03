@@ -386,6 +386,13 @@ Repository-defined commands (hooks, stdio MCP servers) run only in a sandboxed s
 - `explore`: read-only, low effort;
 - `general`.
 
+**Skills** are folders in the Agent Skills layout: `SKILL.md` (frontmatter `name`, `description`, and optionally `allowed-tools` and `mcp-servers`), with `scripts/`, `tests/`, `references/`, `assets/` and an `mcp.json` where the work needs them. A skill can be instructions alone, or exact work done by its scripts, with tests. Agents run a skill's scripts with `skill_script`, on the workspace, wherever the session runs commands. Each person has a library of their own (`/api/me/skills`; the desktop's **Agents > Your skills**):
+- **Import** an Anthropic `.skill`, a `.zip` of one skill or many (a Claude Code plugin's `skills/`), or a SKILL.md. Every skill is checked before it is kept. Its MCP servers join the person's servers switched off.
+- **Make** a skill by asking: the built-in `skill-creator` skill lays one out, writes it, and keeps it with `check_skill` and `save_skill`. A skill is kept only if its frontmatter, the files it names, its scripts' syntax and its tests all pass.
+- **Assign** a skill to an agent (`skills` in its definition). The agent starts with the skill's instructions and its tools, sees only its own skills, and gets the skill's declared tools and MCP servers. If the agent has no `bash`, it still runs the skill's scripts.
+
+[docs/SKILLS.md](docs/SKILLS.md) has the format and the checks.
+
 **MCP** works over stdio and streamable HTTP (with sessions and SSE responses), with paged `tools/list` and `tools/call`. Tools marked `readOnlyHint` run freely. Every other MCP tool is classed as *external*: it asks for approval even in a sandbox, because the sandbox does not contain another service. Allow a whole server with a rule like `mcp__github__*`.
 
 **Hooks** (shell or in-process): `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`. Exit code 2 (or `{block: true}`) blocks. A `Stop` hook can send the agent back to work, for example "the tests still fail".

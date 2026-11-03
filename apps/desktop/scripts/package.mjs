@@ -76,7 +76,8 @@ copy(path.join(desktop, 'dist'), path.join(stage, 'dist'), (p) => !p.endsWith('.
 fs.writeFileSync(path.join(stage, 'package.json'), JSON.stringify({ name: 'harness-desktop', productName: product.name, version: pkg.version, description: product.description ?? pkg.description, author: pkg.author, main: 'dist/main.cjs' }, null, 2));
 
 step('staging the engine');
-const skip = (p) => !/[\\/](\.harness-data|test|tests|__tests__)([\\/]|$)/.test(path.relative(repo, p)) && !p.endsWith('.map');
+// A skill's own tests/ ship with it (check_skill runs them); other test folders do not.
+const skip = (p) => { const r = path.relative(repo, p); return !/[\\/](\.harness-data|test|__tests__)([\\/]|$)/.test(r) && (!/[\\/]tests([\\/]|$)/.test(r) || /[\\/](skills|builtin)[\\/][^\\/]+[\\/]tests([\\/]|$)/.test(r)) && !p.endsWith('.map'); };
 copy(path.join(repo, 'src'), path.join(engine, 'src'), skip);
 copy(path.join(repo, 'plugins'), path.join(engine, 'plugins'), skip);
 // The solutions this edition ships (solutions/<name>/plugins); the others are installed as bundles.

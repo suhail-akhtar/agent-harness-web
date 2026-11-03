@@ -7,6 +7,19 @@ import { within } from '../tools/paths.ts';
 import { switchedOff } from '../kernel/registry.ts';
 import { parseFrontmatter } from '../util/frontmatter.ts';
 import { fileURLToPath } from 'node:url';
+import { readManifest, SCRIPT_KINDS, skillFiles } from './package.ts';
+import { bashTool } from '../tools/exec.ts';
+import type { ToolContext } from '../tools/types.ts';
+
+/**
+ * A skill's command, run as the agent's bash would run it. An agent may be given a skill's scripts without bash: then
+ * the command runs through the bash tool itself on the same host (and sandbox), under the calling tool's permission.
+ */
+export async function skillShell(ctx: ToolContext, input: Record<string, unknown>): Promise<{ content: string; is_error?: boolean }> {
+  if (ctx.callTool && (ctx.toolNames?.() ?? []).includes('bash')) return ctx.callTool('bash', input);
+  const r = await bashTool.run(input, ctx);
+  return { content: r.content, ...(r.is_error ? { is_error: true } : {}) };
+}
 
 // Skills are folders of instructions (SKILL.md + any files it references) that
 // the agent loads only when a task needs them: the context carries one line per
@@ -22,6 +35,8 @@ export interface Skill {
   /** Returns SKILL.md's body, or another file in the skill's folder. */
   load(file?: string): Promise<string>;
   files(): Promise<string[]>;
+  /** Its folder on this server (absent for a skill read through a companion). */
+  dir?: string;
 }
 
 const MAX_FILE = 100_000;
@@ -35,7 +50,7 @@ async function fromDir(dir: string, source: string): Promise<Skill | undefined> 
   if (!/^[a-z0-9][a-z0-9_.-]{0,63}$/i.test(name) || !description) return undefined;
   const real = await fs.realpath(dir);
   return {
-    name, description: description.slice(0, 400), source,
+    name, description: description.slice(0, 400), source, dir: real,
     async load(file) {
       if (!file || file === 'SKILL.md') return body;
       const target = await fs.realpath(path.resolve(real, file)).catch(() => '');
@@ -126,6 +141,72 @@ export function skillsListing(skills: Skill[]): string {
   return `<skills>\nSkills hold instructions for particular kinds of work. When a task matches one, load it with the skill tool before starting.\n${listed.map((s) => `- ${s.name}: ${s.description}`).join('\n')}\n</skills>`;
 }
 
+/** What follows a loaded skill: its scripts (to run with skill_script), what it uses, its other files. */
+async function skillNotes(s: Skill, files: string[]): Promise<string> {
+  const m = s.dir ? await readManifest(s.dir).catch(() => undefined) : undefined;
+  const scripts = m?.scripts ?? [];
+  const rest = files.filter((f) => !scripts.includes(f));
+  return [
+    scripts.length ? `\nScripts of this skill: run them with skill_script (skill "${s.name}", the script, its args): ${scripts.join(', ')}. They do the exact work; read a script with file=... only to see its options.` : '',
+    m?.tools.length ? `\nIt uses the tools: ${m.tools.join(', ')}.` : '',
+    m?.mcpServers.length ? `\nIt uses the MCP servers: ${m.mcpServers.join(', ')}.` : '',
+    rest.length ? `\nFiles in this skill (load with file=...): ${rest.join(', ')}` : '',
+  ].join('');
+}
+
+/**
+ * Runs a script of a skill (scripts/ or tests/) where this session runs commands: the skill's folder is put into the
+ * workspace (.harness/skills-run/<name>/, refreshed each time) and the script runs from the workspace, with the
+ * interpreter its extension names, through the bash tool (so it is asked about, sandboxed and recorded like any
+ * command). SKILL_DIR names the skill's folder there.
+ */
+export function makeSkillScriptTool(skills: Skill[]): Tool {
+  const byName = new Map(skills.filter((s) => s.dir).map((s) => [s.name, s]));
+  return {
+    kind: 'exec', parallelSafe: false, remoteable: false,
+    spec: {
+      name: 'skill_script',
+      description: 'Run a script of a skill (its scripts/ or tests/ folder, as the skill says) on the workspace: the exact, repeatable part of the skill\'s work. args are passed to the script as they are.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          skill: { type: 'string', enum: [...byName.keys()] },
+          script: { type: 'string', description: 'The script, e.g. scripts/convert.py' },
+          args: { type: 'array', items: { type: 'string' }, description: 'Its arguments (paths are relative to the workspace)' },
+          timeout_ms: { type: 'number', description: 'Default 120000' },
+        },
+        required: ['skill', 'script'],
+      },
+    },
+    summarize: (i) => `${str(i.skill)}: ${str(i.script)} ${Array.isArray(i.args) ? i.args.join(' ') : ''}`.trim(),
+    async run(input, ctx) {
+      const s = byName.get(str(input.skill));
+      if (!s?.dir) return { content: `No skill named "${str(input.skill)}" with scripts here.`, is_error: true };
+      const rel = str(input.script).replace(/\\/g, '/');
+      const kind = SCRIPT_KINDS[path.extname(rel)];
+      if (!/^(scripts|tests)\/[^]+$/.test(rel) || rel.includes('..') || !kind) return { content: `${rel}: a script in scripts/ or tests/ of the skill (.py, .mjs, .js, .cjs, .ts, .sh, .ps1).`, is_error: true };
+      const files = await skillFiles(s.dir);
+      if (!files.includes(rel)) return { content: `${rel} is not in the skill ${s.name}: ${files.filter((f) => /^(scripts|tests)\//.test(f)).join(', ') || 'it has no scripts'}`, is_error: true };
+      // The skill's folder where the session runs commands.
+      const at = `.harness/skills-run/${s.name}`;
+      for (const f of files) {
+        const data = await fs.readFile(path.join(s.dir, ...f.split('/')));
+        if (ctx.host.kind === 'companion') { if (!ctx.host.pushFile) return { content: 'This computer cannot receive the skill\'s files.', is_error: true }; await ctx.host.pushFile(`${at}/${f}`, data, ctx.signal); continue; }
+        const real = path.join(ctx.host.root, ...at.split('/'), ...f.split('/'));
+        await fs.mkdir(path.dirname(real), { recursive: true });
+        await fs.writeFile(real, data);
+      }
+      const q = (x: string) => `'${x.replace(/'/g, `'\\''`)}'`;
+      const args = (Array.isArray(input.args) ? input.args : []).map((a) => q(String(a))).join(' ');
+      // The first interpreter of its kind this host has (python3, else python).
+      const run = kind.run.length > 1 && kind.run[0] === 'python3' ? `"$(command -v python3 || command -v python)"` : kind.run.map(q).join(' ');
+      const command = `SKILL_DIR=${q(at)} ${run} ${q(`${at}/${rel}`)} ${args}`.trim();
+      const r = await skillShell(ctx, { command, ...(input.timeout_ms ? { timeout_ms: Number(input.timeout_ms) } : {}), description: `${s.name}: ${rel}` });
+      return { content: r.content, ...(r.is_error ? { is_error: true } : {}) };
+    },
+  };
+}
+
 export function makeSkillTool(skills: Skill[]): Tool {
   const byName = new Map(skills.map((s) => [s.name, s]));
   return {
@@ -149,7 +230,7 @@ export function makeSkillTool(skills: Skill[]): Tool {
       const text = await s.load(str(input.file) || undefined);
       if (input.file) return { content: text.length > MAX_FILE ? text.slice(0, MAX_FILE) + '\n[truncated]' : text };
       const files = await s.files();
-      return { content: `<skill name="${s.name}">\n${text}\n</skill>${files.length ? `\nFiles in this skill (load with file=...): ${files.join(', ')}` : ''}` };
+      return { content: `<skill name="${s.name}">\n${text}\n</skill>${await skillNotes(s, files)}` };
     },
   };
 }

@@ -30,6 +30,8 @@ export interface ScheduleSpec {
 }
 
 export interface ToolServices {
+  /** The person's own skill library: a skill kept (checked first) for all their conversations and agents. */
+  skills?: { put(s: import('../skills/package.ts').PackagedSkill, replace?: boolean): Promise<import('../skills/package.ts').CheckReport> };
   /** The calling agent is one of a swarm (a sub-agent), not the conversation's own: its work on a computer is swarm work. */
   swarmAgent?: boolean;
   memory?: import('../memory/store.ts').MemoryStore;
