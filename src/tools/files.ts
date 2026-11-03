@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { run } from '../runtime/host.ts';
 import { display, globMatcher, PathError, resolveIn, walk } from './paths.ts';
-import type { Tool, ToolContext, ToolOutcome } from './types.ts';
+import type { FileStamp, Tool, ToolContext, ToolOutcome } from './types.ts';
 import { bool, clip, num, str } from './types.ts';
 
 // File tools. Their descriptions are part of every prompt, so they say what
@@ -73,7 +73,7 @@ export const readTool: Tool = {
     }
     const end = offset + slice.length - 1;
     if (end < all.length) note = `\n[lines ${offset}-${end} of ${all.length}; read more with offset=${end + 1}]`;
-    ctx.readFiles.set(p, { mtimeMs: st.mtimeMs, size: st.size });
+    ctx.readFiles.set(p, stamp(ctx.readFiles.get(p), st, [offset, end], all.length));
     if (all.length === 0 || (all.length === 1 && all[0] === '')) return { content: `${str(input.path)} is empty.`, display: { type: 'file', path: str(input.path), lines: 0 } };
     return { content: body + note, display: { type: 'file', path: str(input.path), lines: slice.length } };
   },
@@ -91,18 +91,40 @@ async function nearby(ctx: ToolContext, p: string): Promise<string> {
   return '';
 }
 
-async function stale(ctx: ToolContext, p: string): Promise<string | undefined> {
+/** What a read leaves known of a file: the windows read of this version, merged with earlier ones of the same version. */
+function stamp(prev: FileStamp | undefined, st: { mtimeMs: number; size: number }, window: [number, number], lines: number): FileStamp {
+  const same = prev && prev.mtimeMs === st.mtimeMs && prev.size === st.size;
+  if (same && !prev.partial) return prev;
+  const seen = [...(same ? prev.partial!.seen : []), window].sort((a, b) => a[0] - b[0]);
+  const merged: [number, number][] = [];
+  for (const [a, b] of seen) {
+    const last = merged.at(-1);
+    if (last && a <= last[1] + 1) last[1] = Math.max(last[1], b);
+    else merged.push([a, b]);
+  }
+  const whole = lines === 0 || (merged.length === 1 && merged[0]![0] <= 1 && merged[0]![1] >= lines);
+  return { mtimeMs: st.mtimeMs, size: st.size, ...(whole ? {} : { partial: { lines, seen: merged } }) };
+}
+
+/** Why the file may not be changed now. `whole`: the change replaces all of it (write), so all of it must have been read. */
+async function stale(ctx: ToolContext, p: string, whole = false): Promise<string | undefined> {
   let st;
   try { st = await fs.stat(p); } catch { return undefined; }
   const seen = ctx.readFiles.get(p);
   if (!seen) return 'You must read this file before changing it (read it first, then retry).';
   if (st.mtimeMs !== seen.mtimeMs || st.size !== seen.size) return 'The file changed since you last read it. Read it again, then retry.';
+  if (whole && seen.partial) {
+    const read = seen.partial.seen.map(([a, b]) => (a === b ? `${a}` : `${a}-${b}`)).join(', ');
+    return `You have read only line(s) ${read} of its ${seen.partial.lines}, and write replaces the whole file: what you have not read would be lost. Use edit to change part of it, or read the rest, then retry.`;
+  }
   return undefined;
 }
 
-async function remember(ctx: ToolContext, p: string) {
+/** After a change: the new version is known whole (written), or - an edit of a file only partly read - the lines its result shows. */
+async function remember(ctx: ToolContext, p: string, shown?: { window: [number, number]; lines: number }) {
   const st = await fs.stat(p);
-  ctx.readFiles.set(p, { mtimeMs: st.mtimeMs, size: st.size });
+  const partly = shown && ctx.readFiles.get(p)?.partial;
+  ctx.readFiles.set(p, partly ? stamp(undefined, st, shown.window, shown.lines) : { mtimeMs: st.mtimeMs, size: st.size });
 }
 
 export const writeTool: Tool = {
@@ -121,7 +143,7 @@ export const writeTool: Tool = {
   async run(input, ctx) {
     const p = await resolveIn(ctx.host, str(input.path));
     if (typeof input.content !== 'string') return fail('content must be a string.');
-    const problem = await stale(ctx, p);
+    const problem = await stale(ctx, p, true);
     if (problem) return fail(problem);
     let before = '';
     try { before = await fs.readFile(p, 'utf8'); } catch { /* new file */ }
@@ -168,7 +190,6 @@ export const editTool: Tool = {
     const after = bool(input.replace_all) ? before.split(oldS).join(newS) : before.replace(oldS, () => newS);
     await ctx.beforeWrite?.(p);
     await fs.writeFile(p, after);
-    await remember(ctx, p);
     // Echo the changed region with line numbers so the model can verify
     // without spending a read.
     const idx = after.indexOf(newS);
@@ -177,6 +198,8 @@ export const editTool: Tool = {
     const from = Math.max(1, line - 2);
     const to = Math.min(lines.length, line + newS.split('\n').length + 1);
     const snippet = numbered(lines.slice(from - 1, to), from);
+    const total = lines.length > 1 && lines.at(-1) === '' ? lines.length - 1 : lines.length;
+    await remember(ctx, p, { window: [from, Math.min(to, total)], lines: total });
     return {
       content: `Edited ${str(input.path)}${count > 1 ? ` (${count} replacements)` : ''}. Now:\n${clip(snippet, 4000)}`,
       display: { type: 'diff', path: str(input.path), before: before.slice(0, 200_000), after: after.slice(0, 200_000) },

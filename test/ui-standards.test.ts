@@ -21,6 +21,7 @@ const OWN_TITLE: Record<string, string> = {
 /** Where a raw form control stays, and why. */
 const RAW_CONTROL: Record<string, string> = {
   'builtins/core.chat/Composer.tsx': "the composer's growing text box and its inline chip choices",
+  'builtins/core.settings/server-sections.tsx': "the delegation models' toggle chips (a visually hidden checkbox in each chip's label)",
 };
 
 test('ui standards: pages use Page, not a hand-made scroll column with its own title row', () => {

@@ -31,6 +31,7 @@ import { SpillStore } from '../tools/spill.ts';
 import type { ToolSpec } from '../providers/types.ts';
 import { MemoryStore, projectKey } from '../memory/store.ts';
 import { neutralizeTags, sanitizeUntrusted, stripInvisible } from './untrusted.ts';
+import { namedDestinations } from './provenance.ts';
 import { SourceStore } from '../research/sources.ts';
 import { cloneRepository, publish, PublishError, shq } from '../git/publish.ts';
 import { createWorktree, removeWorktree, type Worktree, WorktreeError, worktreeWritable } from '../git/worktree.ts';
@@ -168,6 +169,10 @@ export interface SessionMeta {
   chapters?: { index: number; title: string; summary?: string; at: number; turn: number }[];
   /** Turns started without a message from the person (a linked report, another session's message), since the last one. */
   autoContinues?: number;
+  /** Addresses, hosts, accounts and numbers the person named in their own messages and answers (provenance.ts), newest last. */
+  namedDestinations?: string[];
+  /** The network its commands really have (the host's), once it has one: `runtime.network` is what was asked (and what a session made like this one asks). */
+  effectiveNetwork?: 'none' | 'full' | 'allowlist';
   /** The provider cache key (a fork child shares its parent's, so the cached prefix serves both). */
   cacheKey?: string;
   /** Providers the person allowed this session to delegate to (delegation.requireApproval). */
@@ -860,6 +865,13 @@ export class Session {
       if (want !== 'off') this.emit({ kind: 'notice', level: choice.kind === 'off' ? 'warn' : 'info', text: `Commands run in: ${choice.why}.` });
     }
     else this.host = this.deps.companions.host(r.companionId ?? '', this.meta.id);
+    // What was asked is kept (a sandbox chosen later applies it); what commands really have is recorded beside it,
+    // and said when it is more than asked: an unsandboxed folder has the machine's network whatever the session says.
+    if (this.meta.effectiveNetwork !== this.host.networkPolicy) {
+      this.meta.effectiveNetwork = this.host.networkPolicy;
+      this.scheduleSave();
+      if (r.network !== 'full' && this.host.networkPolicy === 'full') this.emit({ kind: 'notice', level: 'info', text: `This session is set to ${r.network === 'none' ? 'no network' : 'an allowlisted network'}, but its commands are not sandboxed: they have this machine's full network access.` });
+    }
     if (this.host.kind !== 'companion') this.checkpoints = new Checkpoints(this.dir, this.workspace);
     // A companion's files are on the user's computer: checkpoints read and restore them through it.
     else if (this.host.readFile && this.host.pushFile && this.host.removeFile) this.checkpoints = new Checkpoints(this.dir, companionFiles(this.host, path.join(this.deps.dataDir, 'mirrors', this.meta.id)));
@@ -1387,6 +1399,22 @@ export class Session {
     return `Chapter ${index}: ${t}`;
   }
 
+  private named?: Set<string>;
+
+  /**
+   * What the person wrote themselves (a message, an answer, a scheduled task's prompt): the destinations
+   * it names are theirs, for the untrusted-content guard. Never the agent's text, a brief or outside content.
+   */
+  notePersonText(text: string): void {
+    const list = (this.meta.namedDestinations ??= []);
+    const fresh = namedDestinations(text).filter((d) => !list.includes(d));
+    if (!fresh.length) return;
+    list.push(...fresh);
+    if (list.length > 500) list.splice(0, list.length - 500);
+    this.named = undefined;
+    this.scheduleSave();
+  }
+
   /** A note for the agent's next step (a reminder), whether or not a turn runs now. */
   queueNote(note: string): void {
     this.queued.push(note);
@@ -1413,12 +1441,25 @@ export class Session {
     return why;
   }
 
-  private async autoWake(text: string, caps?: () => string | undefined): Promise<string> {
-    const settings = await this.getSettings(await this.getHost()).catch(() => undefined);
-    const ls = settings?.linkedSessions;
-    if (ls?.autoContinue === false) return 'auto-continue is off (linkedSessions.autoContinue)';
-    const max = ls?.maxAutoContinues ?? Math.max(0, Number(process.env.HARNESS_LINKED_MAX_AUTO ?? 5) || 0);
-    if ((this.meta.autoContinues ?? 0) >= max) return `it already continued ${max} time(s) without a message from the person (linkedSessions.maxAutoContinues)`;
+  /**
+   * Starts a turn without the person, if allowed. Linked reports and messages: linkedSessions
+   * (autoContinue, maxAutoContinues 5). Background results: HARNESS_BACKGROUND_WAKE=0 turns it
+   * off, HARNESS_BACKGROUND_MAX_WAKES (20) bounds it. Both count the same turns since the
+   * person's last message, and both stop at the account's caps.
+   */
+  private async autoWake(text: string, caps?: () => string | undefined, kind: 'linked' | 'background' = 'linked'): Promise<string> {
+    let max: number;
+    if (kind === 'background') {
+      if (process.env.HARNESS_BACKGROUND_WAKE === '0') return 'waking for background results is off (HARNESS_BACKGROUND_WAKE=0)';
+      max = Math.max(0, Number(process.env.HARNESS_BACKGROUND_MAX_WAKES ?? 20) || 0);
+      if ((this.meta.autoContinues ?? 0) >= max) return `it already continued ${max} time(s) without a message from the person (HARNESS_BACKGROUND_MAX_WAKES)`;
+    } else {
+      const settings = await this.getSettings(await this.getHost()).catch(() => undefined);
+      const ls = settings?.linkedSessions;
+      if (ls?.autoContinue === false) return 'auto-continue is off (linkedSessions.autoContinue)';
+      max = ls?.maxAutoContinues ?? Math.max(0, Number(process.env.HARNESS_LINKED_MAX_AUTO ?? 5) || 0);
+      if ((this.meta.autoContinues ?? 0) >= max) return `it already continued ${max} time(s) without a message from the person (linkedSessions.maxAutoContinues)`;
+    }
     const cap = caps?.() ?? this.deps.mayRun?.(this.meta.owner) ?? this.deps.spend?.over(this.meta.owner);
     if (cap) return cap;
     if (this.status !== 'idle') return 'queued';
@@ -1748,6 +1789,7 @@ export class Session {
       setTodos: (t) => { this.meta.todos = t; this.scheduleSave(); },
       preamble: async () => this.preamble(await this.getHost(), name === 'main', 'compact'),
       latestUserPrompt: () => this.latestPrompt,
+      namedDestinations: () => (this.named ??= new Set(this.meta.namedDestinations ?? [])),
     };
   }
 
@@ -1939,7 +1981,9 @@ export class Session {
     // An agent given skills gets what they say they use: their tools, and their MCP servers (where it is limited to some).
     const uses = (def.skills ?? []).map((n) => tb.skillUses.get(n)).filter((u): u is { tools: string[]; mcpServers: string[] } => !!u);
     const servers = def.mcpServers ? new Set([...def.mcpServers, ...uses.flatMap((u) => u.mcpServers)].map(clean)) : undefined;
-    const allowed = def.tools ? [...def.tools, ...uses.flatMap((u) => u.tools)] : undefined;
+    // An agent that may write may also edit: an edit changes less, under the same permission, and without it
+    // "add to the notes" means rewriting the whole file (in watch_opus a researcher wiped the notes that way).
+    const allowed = def.tools ? [...def.tools, ...uses.flatMap((u) => u.tools), ...(def.tools.includes('write') ? ['edit'] : [])] : undefined;
     const denied = (n: string) => !!def.disallowedTools && toolMatches(def.disallowedTools, n);
     const tools = tb.tools.filter((t) => {
       const n = t.spec.name;
@@ -2512,9 +2556,9 @@ export class Session {
 
   /**
    * Background work has a result for the main agent. It goes in as a reminder at
-   * its next step; an idle session is not woken (that would spend without the
-   * user): the user is told, and the agent sees it with their next message -
-   * unless the operator set HARNESS_BACKGROUND_WAKE=1, which starts a turn.
+   * its next step; an idle session is woken with it (a turn starts), within the
+   * limits autoWake checks. Not woken: the user is told, and the agent sees it with
+   * their next message.
    */
   private deliver(headline: string, body: string, wake = true): void {
     // The body (a report, a shell's output) is data, not the harness speaking: hidden text is
@@ -2527,11 +2571,17 @@ export class Session {
     const idle = this.status === 'idle' || !this.abortCtl;
     // A turn that ends before its next step leaves it unread: lateBackground handles it then.
     if (!idle && wake) this.lateResults.add(reminder);
-    const waking = idle && wake && process.env.HARNESS_BACKGROUND_WAKE === '1';
-    this.emit({ kind: 'notice', level: 'info', text: idle && !waking ? `${headline} The agent sees the result with your next message.` : headline });
+    this.emit({ kind: 'notice', level: 'info', text: idle && !wake ? `${headline} The agent sees the result with your next message.` : headline });
     if (!idle) return;
     fireHooks(this.settings, this.host, 'Notification', { type: 'background', session: this.meta.id, title: this.meta.title, message: headline }, this.deps.registry.hooks, (m) => this.emit({ kind: 'notice', level: 'warn', text: m }));
-    if (waking && this.status === 'idle') this.send('Background work finished: continue with its results.').catch(() => {});
+    if (wake && this.status === 'idle') this.wakeForBackground();
+  }
+
+  /** An idle session with unread background results: a turn starts with them, or the user is told why not. */
+  private wakeForBackground(): void {
+    void this.autoWake('Background work finished: continue with its results.', undefined, 'background').then((why) => {
+      if (why !== 'woken' && why !== 'queued') this.emit({ kind: 'notice', level: 'info', text: `Not continuing on its own (${why}). The agent sees the result with your next message.` });
+    });
   }
 
   /** A shell bash started in the background: its log and exit code are files beside each other in the workspace. */
@@ -3441,6 +3491,7 @@ export class Session {
     // A form's answer must fit its schema, whoever sends it (throws FormAnswerError; the question stays open).
     if (p.event.kind === 'question' && p.event.form && r.answer !== undefined) r = { ...r, answer: this.formAnswer(requestId, r.answer) };
     this.pending.delete(requestId);
+    if (p.event.kind === 'question' && typeof r.answer === 'string') this.notePersonText(r.answer);
     this.emit({ kind: 'request_resolved', requestId, decision: r.decision, ...(p.event.kind === 'question' && typeof r.answer === 'string' ? { answer: r.answer.slice(0, 2000) } : {}) });
     if (this.pending.size === 0 && this.status === 'waiting') {
       // Background work asked while no turn ran: the session is idle again, and what the user typed meanwhile starts a turn.
@@ -3449,7 +3500,7 @@ export class Session {
         const typed = this.queued.filter((q) => !q.startsWith('<system-reminder>'));
         if (typed.length) {
           this.queued = this.queued.filter((q) => q.startsWith('<system-reminder>'));
-          this.send(typed.join('\n\n')).catch(() => {});
+          this.send(typed.join('\n\n'), { origin: 'person' }).catch(() => {});
         }
       } else this.setStatus('running');
     }
@@ -3563,11 +3614,12 @@ export class Session {
    * Starts a turn, or queues the text for the running one. `images` go to the model with the
    * message; they need a turn of their own (a queued message is text), so a busy session refuses them.
    */
-  async send(text: string, opts: { images?: ImageBlock[]; /** person: typed by the person (resets the count of turns started without one); auto: a linked report or message woke it; link: a linked session's first brief. */ origin?: 'person' | 'auto' | 'link' } = {}): Promise<'started' | 'queued'> {
+  async send(text: string, opts: { images?: ImageBlock[]; /** person: typed by the person (resets the count of turns started without one); auto: a linked report or message woke it; link: a linked session's first brief. */ origin?: 'person' | 'auto' | 'link'; /** The text holds outside content (a trigger's payload): what it names is not the person's. */ carriesOutside?: boolean } = {}): Promise<'started' | 'queued'> {
     const t = text.trim();
     if (!t) throw new Error('empty message');
     if (opts.origin === 'person' && this.meta.autoContinues) { this.meta.autoContinues = 0; this.scheduleSave(); }
     const fromPerson = opts.origin !== 'auto' && opts.origin !== 'link';
+    if (fromPerson && !opts.carriesOutside) this.notePersonText(t);
     // Only background work waiting for an answer: no turn runs, so this message starts one.
     const bgOnly = this.status === 'waiting' && !this.abortCtl && [...this.pending.values()].every((p) => p.background);
     if (this.status !== 'idle' && !bgOnly) {
@@ -3695,7 +3747,7 @@ export class Session {
       const keep = reason === 'aborted' && !now;
       if (!keep) this.queued = this.queued.filter((q) => q.startsWith('<system-reminder>'));
       if (rest.length) this.steered();
-      if (rest.length && !keep) this.send(rest.join('\n\n')).catch(() => {});
+      if (rest.length && !keep) this.send(rest.join('\n\n'), { origin: 'person' }).catch(() => {});
       else this.lateBackground(reason !== 'aborted');
       // Linked notes that came as the turn ended: they may wake it, as one arriving while idle does.
       const late = [...this.lateLinked].filter(([note]) => this.queued.includes(note));
@@ -3715,8 +3767,7 @@ export class Session {
     const left = this.queued.filter((q) => this.lateResults.has(q));
     this.lateResults.clear();
     if (!left.length) return;
-    const waking = wake && process.env.HARNESS_BACKGROUND_WAKE === '1';
-    if (waking) this.send('Background work finished: continue with its results.').catch(() => {});
+    if (wake && this.status === 'idle') this.wakeForBackground();
     else this.emit({ kind: 'notice', level: 'info', text: 'Background results arrived as the agent finished; it sees them with your next message.' });
   }
 

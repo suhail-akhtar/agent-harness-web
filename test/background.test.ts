@@ -106,19 +106,24 @@ test('a background sub-agent returns at once; the main agent works on, and gets 
   } finally { await t.close(); }
 });
 
-test('a result that arrives while the session is idle waits for the user (or, opted in, starts a turn)', async () => {
-  for (const wake of [false, true]) {
+test('a result that arrives while the session is idle starts a turn (or, turned off or at its limit, waits for the user)', async () => {
+  const cases: { wake: boolean; env: Record<string, string>; why?: RegExp }[] = [
+    { wake: true, env: {} },
+    { wake: false, env: { HARNESS_BACKGROUND_WAKE: '0' }, why: /Not continuing on its own \(waking for background results is off/ },
+    { wake: false, env: { HARNESS_BACKGROUND_MAX_WAKES: '0' }, why: /Not continuing on its own \(it already continued 0 time\(s\)/ },
+  ];
+  for (const { wake, env, why } of cases) {
     const g = gate();
     const t = await setup({
       main: [{ calls: [bgAgent('count')] }, { text: 'It is running.' }, { text: 'It found 42.' }],
       general: [{ wait: g.p, text: 'found: 42' }],
-    }, { env: wake ? { HARNESS_BACKGROUND_WAKE: '1' } : {} });
+    }, { env });
     try {
       await t.turn('go');
       assert.equal(t.s.status, 'idle');
       g.open();
       if (!wake) {
-        await t.waitFor(() => t.notices().some((n) => /general-1 \(dig\) finished.*sees the result with your next message/.test(n)), 'the notice');
+        await t.waitFor(() => t.notices().some((n) => why!.test(n)), 'the notice');
         await new Promise((r) => setTimeout(r, 100));
         assert.equal(t.p.requests.main!.length, 2, 'nothing is spent without the user');
         await t.turn('what did it find?');

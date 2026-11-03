@@ -975,7 +975,9 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
         return { sessionId: session.meta.id, result: 'started', finished };
       }
       try {
-        await session.send(`(${s.watch ? 'Watched' : s.triggerHash ? 'Triggered' : 'Scheduled'} task "${s.title}", run ${s.runs + 1}${s.watch && outside?.trim() ? ': what it watches changed' : ''}. Nobody is watching: if, when you finish, nothing needs the person's attention, end your reply with ${NOTHING_TO_REPORT}; if you could not do the task (a step was refused, something failed), say what stopped you instead.)\n\n${s.prompt}${extra}`);
+        // A task the person set up: its prompt is theirs (one an agent set up is the agent's text; what a trigger or a watch brings is outside content).
+        if (!s.createdBy && !s.plugin) session.notePersonText(s.prompt);
+        await session.send(`(${s.watch ? 'Watched' : s.triggerHash ? 'Triggered' : 'Scheduled'} task "${s.title}", run ${s.runs + 1}${s.watch && outside?.trim() ? ': what it watches changed' : ''}. Nobody is watching: if, when you finish, nothing needs the person's attention, end your reply with ${NOTHING_TO_REPORT}; if you could not do the task (a step was refused, something failed), say what stopped you instead.)\n\n${s.prompt}${extra}`, { carriesOutside: true });
       } catch (e) {
         session.capNextTurn(undefined);
         session.endUnattended();

@@ -148,7 +148,7 @@ export function createBridge(o: { registry: Registry; dataDir: string; sessions:
           await s.startWorkflow(st.workflow.name, input);
         } else if (st.prompt?.trim()) {
           const prompt = clean(plugin, st.prompt);
-          await s.send(st.untrusted ? `${clean(plugin, st.instructions?.trim() ?? '') || `This request arrived through ${source(plugin)}. Handle it as the user's request, within your rules.`}\n\n${fenceOutside(prompt, source(plugin))}` : prompt);
+          await s.send(st.untrusted ? `${clean(plugin, st.instructions?.trim() ?? '') || `This request arrived through ${source(plugin)}. Handle it as the user's request, within your rules.`}\n\n${fenceOutside(prompt, source(plugin))}` : prompt, { carriesOutside: !!st.untrusted });
         }
         return { id: s.meta.id };
       },
@@ -163,7 +163,7 @@ export function createBridge(o: { registry: Registry; dataDir: string; sessions:
         if (!String(text ?? '').trim()) throw new Error('empty message');
         text = clean(plugin, String(text));
         if (so?.untrusted) s.markUntrusted();
-        await s.send(so?.untrusted ? `A note from ${source(plugin)} (outside data):\n${fenceOutside(text, source(plugin))}` : text);
+        await s.send(so?.untrusted ? `A note from ${source(plugin)} (outside data):\n${fenceOutside(text, source(plugin))}` : text, { carriesOutside: !!so?.untrusted });
         await audit({ plugin, action: 'send', session: id, untrusted: !!so?.untrusted, chars: text.length });
       },
       async respond(id, requestId, d) {

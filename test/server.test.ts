@@ -64,8 +64,10 @@ test('accounts: tokens, roles, and members kept to what they own', async () => {
   assert.equal(local.status, 403);
   assert.equal((await t.call(alice.token, 'GET', '/api/config')).body.runtimes && ((await t.call(alice.token, 'GET', '/api/config')).body.runtimes as { local: boolean }).local, false);
   assert.equal((await t.call(alice.token, 'POST', '/api/plugins/install', { name: 'x' })).status, 403);
-  const made = await t.call(OPERATOR, 'POST', '/api/sessions', { runtime: 'local', path: t.work, model: 'deepseek-flash' });
+  const made = await t.call(OPERATOR, 'POST', '/api/sessions', { runtime: 'local', path: t.work, model: 'deepseek-flash', network: 'none' });
   assert.equal(made.status, 201);
+  // Unsandboxed, its commands have the machine's network whatever was asked: it is recorded as it is.
+  if (!process.env.HARNESS_LOCAL_SANDBOX || process.env.HARNESS_LOCAL_SANDBOX === 'off') assert.equal((made.body as { runtime: { network: string } }).runtime.network, 'full');
 
   // Companions too.
   const cmp = (await t.call(alice.token, 'POST', '/api/companions', { name: 'laptop' })).body as { id: string };

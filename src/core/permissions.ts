@@ -2,6 +2,7 @@ import type { PermissionMode } from './types.ts';
 import type { Tool } from '../tools/types.ts';
 import { globMatcher } from '../tools/paths.ts';
 import { vaultGlob } from '../vault/store.ts';
+import { callDestinations, isNamed, showDestination, type Destination } from './provenance.ts';
 
 // Permissions are enforced here, in code, on every call - never by the prompt.
 // Order: deny rules > ask rules > allow rules > the mode's default.
@@ -37,6 +38,20 @@ export interface PermissionContext {
   hostKind?: string;
   /** What commands can reach: 'full' means a command can send data anywhere. */
   network?: 'none' | 'allowlist' | 'full';
+  /** The destinations the person named in their own messages (provenance.ts): a way out to only these is not the guard's to ask about. */
+  named?: ReadonlySet<Destination>;
+}
+
+/**
+ * Where a call that sends data out goes, for the untrusted-content guard: `traced` when it has
+ * destinations and the person named every one; `unnamed`, those they did not. Commands are not
+ * traced (a command can reach anything, whatever host its call names).
+ */
+function destinationsOf(tool: Tool, input: Record<string, unknown>, ctx: PermissionContext): { traced: boolean; unnamed: Destination[] } {
+  if ((tool.kindsFor?.(input, { hostKind: ctx.hostKind }) ?? [tool.kind]).includes('exec')) return { traced: false, unnamed: [] };
+  const all = callDestinations(input);
+  const unnamed = all.filter((d) => !isNamed(d, ctx.named ?? new Set()));
+  return { traced: all.length > 0 && unnamed.length === 0, unnamed };
 }
 
 /**
@@ -154,26 +169,38 @@ export function decide(tool: Tool, input: Record<string, unknown>, ctx: Permissi
   // Asked every time (administrator rights): whatever the mode and the rules say.
   const always = tool.alwaysAsk?.(input);
   if (always) return mode === 'dontAsk' ? { action: 'deny', reason: `${always}, which is asked every time, and this session never asks` } : { action: 'ask', reason: always, always: true };
+  // After untrusted content, every way out of the session is the guard's (below) - unless the person named
+  // every place it goes. And the floor, in bypass too: a message or payment (an action on another system) to an
+  // address, account or number the person never named. The person answers, as for the guard.
+  const out = !!ctx.tainted && process.env.HARNESS_TAINT_GUARD !== 'off' && sendsOut(tool, input, ctx.network, ctx.hostKind);
+  const dest = out ? destinationsOf(tool, input, ctx) : { traced: false, unnamed: [] };
+  const kinds = tool.kindsFor?.(input, { hostKind: ctx.hostKind }) ?? [tool.kind];
+  const operatorAllows = (rules.operatorAllow ?? []).some((r) => ruleMatches(r, tool, input));
+  const unnamedParty = dest.unnamed.filter((d) => /^(?:email|iban|phone):/.test(d));
+  if (out && mode === 'bypass' && unnamedParty.length && kinds.includes('external') && process.env.HARNESS_DESTINATION_FLOOR !== 'off' && !operatorAllows) {
+    return { action: 'ask', reason: `the agent has read untrusted content in this session, and this call sends to ${unnamedParty.map(showDestination).join(', ')}, which you never named (asked even in bypass mode)`, guard: true };
+  }
   if (rules.ask.some((r) => ruleMatches(r, tool, input))) return mode === 'bypass' ? { action: 'allow', reason: 'bypass mode' } : dontAsk({ action: 'ask', reason: 'matches an ask rule' }, mode);
   // After untrusted content, a call that sends data out or outlives the session is
   // confirmed even when an allow rule covers it: the rule may come from the
   // repository, or from a click made before the content arrived. Only the
   // operator's rules hold.
-  const guarded = !!ctx.tainted && mode !== 'bypass' && (!!tool.persists?.(input) || (process.env.HARNESS_TAINT_GUARD !== 'off' && sendsOut(tool, input, ctx.network, ctx.hostKind)));
+  const guarded = !!ctx.tainted && mode !== 'bypass' && (!!tool.persists?.(input) || (out && !dest.traced));
   const matched = rules.allow.filter((r) => ruleMatches(r, tool, input));
-  const leaves = (tool.kindsFor?.(input, { hostKind: ctx.hostKind }) ?? [tool.kind]).some((k) => k === 'external' || k === 'network');
+  const leaves = kinds.some((k) => k === 'external' || k === 'network');
   const onlyProject = matched.length > 0 && matched.every((r) => rules.projectAllow?.includes(r));
-  if (matched.length && !(onlyProject && leaves) && (!guarded || (rules.operatorAllow ?? []).some((r) => ruleMatches(r, tool, input)))) return { action: 'allow', reason: 'allowed by a rule' };
+  if (matched.length && !(onlyProject && leaves) && (!guarded || operatorAllows)) return { action: 'allow', reason: 'allowed by a rule' };
   // Anything that outlives the session (memory) is confirmed once untrusted
   // content is in the context: a page must not be able to plant instructions
   // for every future session.
   if (ctx.tainted && tool.persists?.(input) && mode !== 'bypass') return dontAsk({ action: 'ask', reason: 'this is saved for future sessions, and the agent has read untrusted content (web pages or service results) in this session', guard: true }, mode);
   // After untrusted content, every way out is confirmed, whatever the mode would
   // otherwise allow: the content may be steering the agent to leak what it can read.
-  if (ctx.tainted && mode !== 'bypass' && process.env.HARNESS_TAINT_GUARD !== 'off' && sendsOut(tool, input, ctx.network, ctx.hostKind)) {
+  if (out && mode !== 'bypass' && !dest.traced) {
     const d = decideKindsOf(tool, input, ctx);
     if (d.action === 'deny') return d;
-    return dontAsk({ action: 'ask', reason: 'the agent has read untrusted content (web pages or service results) in this session, and this call can send data out of it', guard: true }, mode);
+    const where = dest.unnamed.length ? `, to ${dest.unnamed.map(showDestination).join(', ')}, which you never named` : '';
+    return dontAsk({ action: 'ask', reason: `the agent has read untrusted content (web pages or service results) in this session, and this call can send data out of it${where}`, guard: true }, mode);
   }
 
   return dontAsk(decideKindsOf(tool, input, ctx), mode);

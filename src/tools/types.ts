@@ -13,7 +13,8 @@ export type ToolKind = 'read' | 'edit' | 'exec' | 'network' | 'external' | 'meta
 /** What the person did with a question (ask_user). */
 export type AskOutcome = { answered: string; note?: string } | { replied: string } | { skipped: true; note?: string };
 
-export interface FileStamp { mtimeMs: number; size: number }
+/** A file as last read. `partial`: the reads so far did not cover it all (the windows seen, and its line count). */
+export interface FileStamp { mtimeMs: number; size: number; partial?: { lines: number; seen: [number, number][] } }
 
 /** Harness services a tool may use; absent ones are turned off. */
 /** A schedule the agent sets up (the schedule tool). */

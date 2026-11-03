@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- **What the watch_opus run showed, fixed.** That project began in this harness, then moved to Claude Code for four
+  days of autonomous research. Its sessions and the trust-layer research it produced showed these defects:
+  - **Background results wake the agent** (on by default; it was opt-in): a finished background agent, workflow,
+    shell or monitor starts a turn, as Claude Code does. It stops after 20 such turns without a message from the
+    person (`HARNESS_BACKGROUND_MAX_WAKES`) or at the account's caps, and then says why it is waiting.
+    `HARNESS_BACKGROUND_WAKE=0` turns it off. There, the agent said "E3b is running now" and sat idle until asked.
+  - **`write` cannot replace what was not read**: a whole-file write needs every line read, and an `edit` shows only
+    the lines around its change. **Agents that may write may also edit**: 16 agents had `write` but not `edit`,
+    including research's `researcher`. There, a researcher told to add to its notes read 3 lines and rewrote the file
+    without the rest.
+  - **The network is recorded as it is**: a server folder without a sandbox was recorded as "no network" while its
+    commands had the machine's full network. It is now recorded as full. The network commands really have is kept
+    beside what was asked (`effectiveNetwork`; `effective` on `GET /api/sessions/:id/network`), and a difference is
+    said once.
+  - **`desktop_open {target: "folder"}`** shows a workspace folder or file in the file manager. There, the agent could
+    not open a folder.
+  - **Where data goes, and whether the person said so** (`src/core/provenance.ts`). After untrusted content, a call
+    whose every destination the person named in their own messages or answers is no longer the guard's question. A
+    destination is an address, link or host, IBAN or phone number, from typed destination fields and whole values,
+    matched exactly. The guard's question names the destinations the person never named. In bypass, a message or
+    payment to someone the person never named is asked (`HARNESS_DESTINATION_FLOOR=off`). Nothing from a page, a
+    tool's output, a sub-agent's brief, a trigger's payload or a noticed finding counts as named. Commands are never
+    traced.
+    This is the research's E5 envelope (AgentDojo attacks from about 9% to about 2.4% at almost no cost to normal
+    work), rebuilt without the bugs an audit of its code found: substring matches (`ob@company.com` passed for
+    `bob@company.com`), a 14-ending domain list, lowercase IBANs and laundering through tool output.
+
 - **A swarm that holds up when a provider stalls, and that the person and the lead can see into and talk to.** From a
   live run (8 researchers on Sonnet 5.5, Grok 4.7 and DeepSeek Flash; DeepSeek under load: 9 of 40 calls retried, one
   of 11 minutes, which held the whole fan-out and lost 7 finished reports at the 30-minute tool ceiling):

@@ -95,7 +95,8 @@ export type OpenTarget =
   | { target: 'panel'; panel: string; params?: Record<string, string> }
   | { target: 'file'; path: string }
   | { target: 'artifact'; id: string }
-  | { target: 'url'; url: string };
+  | { target: 'url'; url: string }
+  | { target: 'folder'; path: string };
 
 /** Reads desktop_open's input into what to open, or the reason it cannot be (a view or panel resolved against the registry; only http(s) URLs). */
 export function resolveOpen(r: Registry, input: Record<string, unknown>): OpenTarget | { error: string } {
@@ -138,6 +139,12 @@ export function resolveOpen(r: Registry, input: Record<string, unknown>): OpenTa
       if (u.protocol !== 'http:' && u.protocol !== 'https:') return { error: 'Only http(s) URLs are opened (in the system browser).' };
       return { target: 'url', url: u.toString() };
     }
-    default: return { error: 'target is view, panel, file, artifact or url' };
+    case 'folder': {
+      // The server's tool resolved it inside the conversation's workspace: an absolute path on this computer.
+      const p = str('path');
+      if (!/^(?:[a-zA-Z]:[\\/]|\/)/.test(p)) return { error: 'desktop_open folder needs a folder or file of this conversation\'s workspace (path)' };
+      return { target: 'folder', path: p };
+    }
+    default: return { error: 'target is view, panel, file, artifact, url or folder' };
   }
 }

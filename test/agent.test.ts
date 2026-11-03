@@ -98,6 +98,34 @@ test('edit refuses a file that was not read, and one that changed since it was r
   assert.equal(await fs.readFile(path.join(h.root, 'f.txt'), 'utf8'), 'two\n');
 });
 
+test('write refuses to replace a file only partly read (what was not read would be lost); edit may change it', async () => {
+  // The watch_opus case: notes read 3 lines in, then "appended" with write, wiping the rest.
+  const h = await makeAgent([
+    { calls: [{ name: 'read', input: { path: 'notes.md', limit: 3 } }] },
+    { calls: [{ name: 'write', input: { path: 'notes.md', content: 'line 1\nnew finding\n' } }] },
+    { calls: [{ name: 'edit', input: { path: 'notes.md', old_string: 'line 2', new_string: 'line two' } }] },
+    { calls: [{ name: 'write', input: { path: 'notes.md', content: 'all new\n' } }] },
+    { calls: [{ name: 'read', input: { path: 'notes.md', offset: 5 } }] },
+    { calls: [{ name: 'write', input: { path: 'notes.md', content: 'all new\n' } }] },
+    { text: 'ok' },
+  ]);
+  const notes = Array.from({ length: 10 }, (_, i) => `line ${i + 1}`).join('\n') + '\n';
+  await fs.writeFile(path.join(h.root, 'notes.md'), notes);
+  h.agent.append({ role: 'user', content: [{ type: 'text', text: 'go' }] });
+  await h.agent.run(ac());
+  const refused = results(h.agent.messages[4])[0]!;
+  assert.ok(refused.is_error);
+  assert.match(refused.content, /read only line\(s\) 1-3 of its 10.*would be lost/);
+  assert.ok(!results(h.agent.messages[6])[0]!.is_error, 'edit needs only the text it changes');
+  // An edit shows the lines around its change (1-4 here), not the whole file: write is still refused.
+  const second = results(h.agent.messages[8])[0]!;
+  assert.ok(second.is_error);
+  assert.match(second.content, /read only line\(s\) 1-4 of its 10/);
+  // Reading the rest covers it.
+  assert.ok(!results(h.agent.messages[12])[0]!.is_error, results(h.agent.messages[12])[0]!.content);
+  assert.equal(await fs.readFile(path.join(h.root, 'notes.md'), 'utf8'), 'all new\n');
+});
+
 test('default mode asks before edits; a denial returns the user feedback', async () => {
   const h = await makeAgent([
     { calls: [{ name: 'write', input: { path: 'a.txt', content: 'x' } }] },

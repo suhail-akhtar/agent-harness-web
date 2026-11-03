@@ -100,6 +100,7 @@ test('where it runs: its tools and deny list (globs), only its MCP servers and s
     await add({ name: 'reader', description: 'Reads files and reports what they say.', prompt: 'You only read.', tools: ['read', 'glob', 'mcp__beta__*'], mcpServers: ['alpha'], skills: ['release-style'] });
     await add({ name: 'no-shell', description: 'Does everything but run commands.', prompt: 'No shell.', disallowedTools: ['bash', 'run_*'] });
     await add({ name: 'planner', description: 'Plans changes without making them.', prompt: 'Plan.', permissionMode: 'plan' });
+    await add({ name: 'noter', description: 'Keeps notes on what it finds.', prompt: 'Note it.', tools: ['read', 'write'] });
     await add({ name: 'short', description: 'Gives up quickly when stuck.', prompt: 'Short.', maxTurns: 2 });
     await add({ name: 'thrifty', description: 'Stops at a small spend limit.', prompt: 'Cheap.', maxCostUsd: 0.000001 });
     await add({ name: 'slow', description: 'Long research that runs in the background.', prompt: 'Slow.', background: true });
@@ -110,12 +111,13 @@ test('where it runs: its tools and deny list (globs), only its MCP servers and s
     const ev = record(s);
     const call = (type: string, key: string) => ({ name: 'agent', input: { description: type, type, prompt: `[[${key}]] go` } });
     t.ds.scripts.m = [
-      { calls: [call('reader', 'r'), call('no-shell', 'n'), call('planner', 'p')] },
+      { calls: [call('reader', 'r'), call('no-shell', 'n'), call('planner', 'p'), call('noter', 'o')] },
       { calls: [call('short', 's'), call('thrifty', 't'), call('slow', 'w')] },
       { text: 'all done' },
     ];
     t.ds.scripts.r = [{ text: 'read it' }];
     t.ds.scripts.n = [{ text: 'no shell here' }];
+    t.ds.scripts.o = [{ text: 'noted' }];
     t.ds.scripts.p = [{ calls: [{ name: 'write', input: { path: 'plan.txt', content: 'x' } }] }, { text: 'planned' }];
     t.ds.scripts.s = [{ calls: [{ name: 'glob', input: { pattern: '*' } }] }, { calls: [{ name: 'glob', input: { pattern: '*' } }] }, { calls: [{ name: 'glob', input: { pattern: '*' } }] }, { text: 'never reached' }];
     t.ds.scripts.t = [{ calls: [{ name: 'glob', input: { pattern: '*' } }] }, { text: 'never reached' }];
@@ -131,7 +133,10 @@ test('where it runs: its tools and deny list (globs), only its MCP servers and s
     // reader: read and glob; alpha's tools (its server), not beta's (not its server, though its list names them); only its skill, loaded up front.
     const rq = t.ds.byKey.r![0]!;
     const rt = toolNames(rq);
-    assert.ok(rt.includes('read') && rt.includes('glob') && !rt.includes('bash') && !rt.includes('write'));
+    assert.ok(rt.includes('read') && rt.includes('glob') && !rt.includes('bash') && !rt.includes('write') && !rt.includes('edit'));
+    // noter: may write, so may edit (adding to notes without rewriting them).
+    const ot = toolNames(t.ds.byKey.o![0]!);
+    assert.ok(ot.includes('write') && ot.includes('edit') && !ot.includes('bash'), ot.join(','));
     assert.ok(rt.some((n) => n.startsWith('mcp__alpha__')) && !rt.some((n) => n.startsWith('mcp__beta__')), rt.join(','));
     assert.deepEqual((rq.tools.find((x) => x.name === 'skill')!.input_schema.properties as { name: { enum: string[] } }).name.enum, ['release-style']);
     assert.match(JSON.stringify(rq.messages), /<role>\\nYou only read\.\\n<\/role>[\s\S]*<skill name=\\"release-style\\">\\nWrite notes as bullet points/);

@@ -377,7 +377,9 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     // server folder in an OS sandbox (bubblewrap, Seatbelt), where the proxy runs as a local process.
     const proxied = kind === 'docker' || sandbox === 'docker';
     const fenced = proxied || (kind === 'local' && (sandbox ?? process.env.HARNESS_LOCAL_SANDBOX ?? 'off') !== 'off');
-    const runtime: SessionMeta['runtime'] = { kind, network: b.network === 'full' ? 'full' : b.network === 'allowlist' && fenced ? 'allowlist' : 'none', ...(sandbox ? { sandbox } : {}) };
+    // A server folder without a sandbox cannot be kept off the network: it is recorded as it is (full), not as asked.
+    const network = kind === 'local' && !fenced ? 'full' : b.network === 'full' ? 'full' : b.network === 'allowlist' && fenced ? 'allowlist' : 'none';
+    const runtime: SessionMeta['runtime'] = { kind, network, ...(sandbox ? { sandbox } : {}) };
     if (proxied) capped('sandboxes', me.id);
     if (typeof b.setup === 'string' && b.setup.trim()) {
       if (!proxied) throw new HttpError(400, 'A setup script runs in a Docker sandbox: choose the Docker runtime (or the Docker sandbox for a server folder).');
@@ -1905,7 +1907,8 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
           if (over) throw new HttpError(429, over);
           if (s.status === 'idle') capped('running', s.meta.owner);
           harness.noticer.expect(s.meta.id, item.action.prompt);
-          await s.send(item.action.prompt, { origin: 'person' });
+          // Accepted by the person, written by the noticer: what it names is not the person's.
+          await s.send(item.action.prompt, { origin: 'person', carriesOutside: true });
         }
         return send(res, 200, await harness.inbox.act(item.id, 'done'));
       }
@@ -2062,7 +2065,7 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       }
       if (action === 'trace' && method === 'GET') return send(res, 200, await s.readTrace());
       if (action === 'sources' && method === 'GET') return send(res, 200, await s.sources.list());
-      if (action === 'network' && method === 'GET') return send(res, 200, { network: s.meta.runtime.network, hosts: await s.allowHosts() });
+      if (action === 'network' && method === 'GET') return send(res, 200, { network: s.meta.runtime.network, ...(s.meta.effectiveNetwork && s.meta.effectiveNetwork !== s.meta.runtime.network ? { effective: s.meta.effectiveNetwork } : {}), hosts: await s.allowHosts() });
       if (action === 'network' && method === 'PUT') {
         const b = await readJson(req);
         if (!Array.isArray(b.hosts)) throw new HttpError(400, 'hosts must be a list');

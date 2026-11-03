@@ -56,6 +56,10 @@ export const handleClientCall: ClientCallHandler = async (sessionId, tool, input
           await desktop.openExternal(t.url).catch((e: Error) => { throw new Error(`The system browser did not open it: ${e.message}`); });
           return { result: `Opened ${t.url} in the system browser.` };
         }
+        case 'folder': {
+          await desktop.showItem(t.path).catch((e: Error) => { throw new Error(`The file manager did not open it: ${e.message}`); });
+          return { result: `Showed ${t.path} in the file manager.` };
+        }
       }
       break;
     }

@@ -65,6 +65,8 @@ export interface AgentHooks {
   preamble(): Promise<string>;
   /** The user's most recent message, carried verbatim across a compaction. */
   latestUserPrompt(): string;
+  /** The destinations the person named in their own messages in this conversation (a sub-agent's too: never its brief). */
+  namedDestinations?(): ReadonlySet<string>;
 }
 
 export interface AgentConfig {
@@ -797,7 +799,7 @@ export class Agent {
     // An allowlist sandbox whose proxy holds credentials that can write (a gist, an issue) is,
     // for the untrusted-content guard, a way out like open network; read-only ones are not.
     const net = this.cfg.host.networkPolicy === 'allowlist' && this.cfg.host.credentialEnv?.().some((c) => c.writes) ? 'full' : this.cfg.host.networkPolicy;
-    const decision = decide(tool, input, { mode: this.hooks.getMode(), rules: this.hooks.rules(), sandboxed: this.cfg.host.sandboxed, tainted: this.tainted, network: net, hostKind: this.cfg.host.kind });
+    const decision = decide(tool, input, { mode: this.hooks.getMode(), rules: this.hooks.rules(), sandboxed: this.cfg.host.sandboxed, tainted: this.tainted, network: net, hostKind: this.cfg.host.kind, named: this.hooks.namedDestinations?.() });
     if (decision.action === 'deny') return finish(`Permission denied: ${decision.reason}.`, true, undefined, undefined, name);
 
     // PreToolUse runs before anyone is asked: a hook that blocks spares the person a
@@ -824,7 +826,8 @@ export class Agent {
       for (const e of ph.errors) this.hooks.emit({ kind: 'notice', level: 'warn', text: e, agent });
       if (ph.decision === 'deny' || ph.blocked) return finish(`A PermissionRequest hook denied this call${ph.feedback ? `: ${ph.feedback}` : '.'}`, true, undefined, undefined, name);
       if (ph.decision !== 'allow' || decision.always) {
-        const answer = await this.hooks.requestPermission(tool, input, autoNo ? `${tool.summarize(input)} (auto mode's check: ${autoNo})` : decision.always ? `${tool.summarize(input)} (${decision.reason})` : tool.summarize(input), decision.always ? '' : suggestRule(tool, input), agent);
+        // The guard's and the always-asked questions say why: the person decides on the reason, not only the call.
+        const answer = await this.hooks.requestPermission(tool, input, autoNo ? `${tool.summarize(input)} (auto mode's check: ${autoNo})` : decision.always || decision.guard ? `${tool.summarize(input)} (${decision.reason})` : tool.summarize(input), decision.always ? '' : suggestRule(tool, input), agent);
         if (!answer.allow) return finish(`The user denied this call.${answer.feedback ? ` They said: ${answer.feedback}` : ' Do not retry it unchanged; ask or take another approach.'}`, true, undefined, undefined, name);
       }
     }

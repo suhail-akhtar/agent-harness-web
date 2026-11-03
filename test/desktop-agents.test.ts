@@ -324,3 +324,25 @@ test('a question answered from the app: suggested answers with their description
     assert.equal(rs[2], 'The user answered: {"entries":["updater"]}\nTheir note: not the tunnel');
   } finally { await t.close(); }
 });
+
+test('desktop_open folder: a folder or file of the workspace, resolved on the server to its path on this computer; nothing outside it, and not a sandbox', async () => {
+  const { desktopOpenTool } = await import('../src/tools/desktop.ts');
+  const { LocalHost } = await import('../src/runtime/host.ts');
+  const root = await tempDir();
+  await fs.mkdir(path.join(root, 'research'));
+  const sent: Record<string, unknown>[] = [];
+  const client = { call: async (_t: string, input: Record<string, unknown>) => { sent.push(input); return { ok: true, result: 'shown' }; }, command: () => ({ error: 'none' }), firstParty: () => true };
+  const ctx = (host: unknown) => ({ host, signal: AbortSignal.timeout(5000), readFiles: new Map(), todos: [], setTodos() {}, emit() {}, services: { client } }) as never;
+  const local = new LocalHost(root);
+  const run = (input: Record<string, unknown>, host: unknown = local) => desktopOpenTool.run(input, ctx(host));
+  assert.equal((await run({ target: 'folder', path: 'research' })).content, 'shown');
+  assert.deepEqual(sent.at(-1), { target: 'folder', path: await fs.realpath(path.join(root, 'research')).catch(() => path.join(root, 'research')) });
+  await run({ target: 'folder' });
+  assert.equal(path.resolve(String(sent.at(-1)!.path)), path.resolve(root), 'no path: the workspace');
+  const outside = await run({ target: 'folder', path: '../..' });
+  assert.ok(outside.is_error && /outside the workspace/.test(outside.content));
+  assert.ok((await run({ target: 'folder', path: 'missing' })).is_error);
+  const sandbox = await run({ target: 'folder', path: 'research' }, { ...local, kind: 'docker' });
+  assert.ok(sandbox.is_error && /in a sandbox/.test(sandbox.content));
+  assert.equal(sent.length, 2, 'refusals reach no app');
+});

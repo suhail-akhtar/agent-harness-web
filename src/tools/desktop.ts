@@ -1,6 +1,8 @@
+import fs from 'node:fs/promises';
 import type { JsonSchema } from '../../packages/plugin-ui/src/manifest.ts';
 import { commandArgsProblems, type DesktopTool } from '../core/client.ts';
 import { fenceOutside } from '../core/untrusted.ts';
+import { resolveIn } from './paths.ts';
 import type { Tool, ToolContext, ToolOutcome } from './types.ts';
 import { clip, str } from './types.ts';
 
@@ -61,11 +63,11 @@ export const desktopOpenTool: Tool = {
   sendsOut: (i) => str(i.target) === 'url',
   spec: {
     name: 'desktop_open',
-    description: 'Show something in the desktop app: a view or panel (id), a workspace file (path), an artifact (id) or a URL (url).',
+    description: 'Show something in the desktop app: a view or panel (id), a workspace file (path), an artifact (id) or a URL (url); or a workspace folder or file in the system file manager (target folder, path; default the workspace).',
     input_schema: {
       type: 'object',
       properties: {
-        target: { type: 'string', enum: ['view', 'panel', 'file', 'artifact', 'url'] },
+        target: { type: 'string', enum: ['view', 'panel', 'file', 'artifact', 'url', 'folder'] },
         id: { type: 'string' }, path: { type: 'string' }, url: { type: 'string' },
         params: { type: 'object' },
       },
@@ -75,6 +77,14 @@ export const desktopOpenTool: Tool = {
   summarize: (i) => `open ${str(i.target)} ${str(i.id) || str(i.path) || str(i.url)}`,
   async run(input, ctx) {
     const target = str(input.target);
+    if (target === 'folder') {
+      // Shown in the file manager of the computer the app runs on: only a folder of this session's, on that computer.
+      if (ctx.host.kind !== 'local') return { content: `This conversation's files are ${ctx.host.kind === 'docker' ? 'in a sandbox' : 'on another computer'}, not in a folder the app can show.`, is_error: true };
+      let p: string;
+      try { p = await resolveIn(ctx.host, str(input.path).trim() || '.'); } catch (e) { return { content: (e as Error).message, is_error: true }; }
+      if (!await fs.stat(p).then(() => true, () => false)) return { content: `${str(input.path) || '.'} does not exist.`, is_error: true };
+      return forward('desktop_open', { target, path: p }, ctx);
+    }
     const need = target === 'url' ? 'url' : target === 'file' ? 'path' : 'id';
     const value = str(input[need]).trim();
     if (!value || value.length > 2000) return { content: `desktop_open ${target} needs ${need}`, is_error: true };

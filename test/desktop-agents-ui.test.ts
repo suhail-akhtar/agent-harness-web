@@ -171,6 +171,10 @@ test('desktop_open: views and panels resolved against the registry (full or shor
   assert.deepEqual(resolveOpen(r, { target: 'url', url: 'https://example.com/a?b=1' }), { target: 'url', url: 'https://example.com/a?b=1' });
   for (const url of ['javascript:alert(1)', 'file:///etc/passwd', 'harness://app/api/sessions', 'mailto:a@b.c', 'not a url']) assert.ok('error' in resolveOpen(r, { target: 'url', url }), url);
   assert.ok('error' in resolveOpen(r, { target: 'shell' }));
+  // folder: the server's tool sends an absolute path in the workspace; a relative one is not taken.
+  assert.deepEqual(resolveOpen(r, { target: 'folder', path: 'C:\\work\\notes' }), { target: 'folder', path: 'C:\\work\\notes' });
+  assert.deepEqual(resolveOpen(r, { target: 'folder', path: '/home/a/work' }), { target: 'folder', path: '/home/a/work' });
+  assert.ok('error' in resolveOpen(r, { target: 'folder', path: 'notes' }));
 });
 
 test('workflow graph: layers from the start, side by side, loops drawn back around; node state from the history', () => {
