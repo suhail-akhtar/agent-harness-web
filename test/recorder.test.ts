@@ -70,7 +70,18 @@ test('in a conversation: recorded when the settings say so, exported, verified a
     assert.equal(bundle.format, 'harness-record/1');
     assert.ok(bundle.lines.length >= 4);
     const v = (await t.call(OPERATOR, 'GET', `/api/sessions/${s.meta.id}/record?view=verify`)).body;
-    assert.deepEqual([v.ok, v.problems], [true, []]);
+    assert.deepEqual([v.ok, v.problems, v.signed], [true, [], true]);
+    // Signed by this server: checked against its published key; a changed bundle, or another key, fails.
+    const { verifySignedBundle } = await import('../src/core/recorder.ts');
+    const key = (await t.call(OPERATOR, 'GET', '/api/record-key')).body as { publicKey: string };
+    const signed = bundle as Bundle & { signature: { publicKey: string; value: string } };
+    assert.deepEqual([verifySignedBundle(signed, key.publicKey).ok, verifySignedBundle(signed, key.publicKey).signed], [true, true]);
+    const cut = JSON.parse(JSON.stringify(signed)); cut.lines.pop();
+    assert.match(verifySignedBundle(cut, key.publicKey).problems.join('\n'), /its signature does not match it/, 'a line removed from the end, the chain still whole: the signature catches it');
+    const { generateKeyPairSync } = await import('node:crypto');
+    const other = generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'pem' }).toString();
+    assert.match(verifySignedBundle(signed, other).problems.join('\n'), /signed by another key than the one trusted/);
+    assert.deepEqual(verifySignedBundle({ ...signed, signature: undefined } as never).problems.at(-1), 'not signed');
     const r = (await t.call(OPERATOR, 'GET', `/api/sessions/${s.meta.id}/record?view=replay`)).body as { steps: { what: string }[] };
     assert.ok(r.steps.some((x) => /^asked: \[\[lead\]\] When does the export run\?/.test(x.what)) && r.steps.some((x) => /^read returned: .*the export runs at 03:00/.test(x.what)), JSON.stringify(r.steps));
     // A session without the setting is not recorded.

@@ -77,6 +77,8 @@ interface Live {
 }
 
 const hash = (t: string) => crypto.createHash('sha256').update(t).digest('hex');
+/** What a call is, for the machine's journal (done once): the session, its kind, and what it does. */
+const opKey = (...parts: string[]) => crypto.createHash('sha256').update(parts.join('\u0000')).digest('hex').slice(0, 32);
 
 export class CompanionHub {
   private file: string;
@@ -150,8 +152,8 @@ export class CompanionHub {
   }
 
   /** Writes a file the server made (an export, a saved render) into the companion folder. */
-  async push(id: string, sessionId: string, rel: string, data: Buffer, signal?: AbortSignal): Promise<void> {
-    await this.dispatch(id, { kind: 'push', sessionId, path: rel, data: data.toString('base64') }, signal, 5 * 60_000);
+  async push(id: string, sessionId: string, rel: string, data: Buffer, signal?: AbortSignal, swarm = false): Promise<void> {
+    await this.dispatch(id, { kind: 'push', sessionId, path: rel, data: data.toString('base64'), ...(swarm ? { swarm: true } : {}), opKey: opKey(sessionId, 'push', rel, crypto.createHash('sha256').update(data).digest('hex')) }, signal, 5 * 60_000);
   }
 
   async load(): Promise<void> {
@@ -362,10 +364,10 @@ export class CompanionHub {
         return hub.dispatch<ExecResult>(id, { kind: 'exec', sessionId, command, timeoutMs: opts.timeoutMs, stdin: opts.stdin, ...swarm }, opts.signal, opts.timeoutMs + 30_000);
       },
       remoteTool(name: string, input: Record<string, unknown>, signal: AbortSignal): Promise<ToolOutcome> {
-        return hub.dispatch<ToolOutcome>(id, { kind: 'tool', sessionId, name, input, ...swarm }, signal);
+        return hub.dispatch<ToolOutcome>(id, { kind: 'tool', sessionId, name, input, ...swarm, opKey: opKey(sessionId, 'tool', name, JSON.stringify(input)) }, signal);
       },
       mirror: (signal?: AbortSignal) => hub.mirror(id, sessionId, signal),
-      pushFile: (rel: string, data: Buffer, signal?: AbortSignal) => hub.push(id, sessionId, rel, data, signal),
+      pushFile: (rel: string, data: Buffer, signal?: AbortSignal) => hub.push(id, sessionId, rel, data, signal, o.swarm === true),
       get trustProject() { return l.info.trustProject === true; },
       get desktop() { return l.info.desktop === true; },
       desktopAction: (request: DesktopRequest, signal?: AbortSignal) => hub.dispatch<DesktopResult>(id, { kind: 'desktop', sessionId, request }, signal, request.timeoutMs + 30_000),

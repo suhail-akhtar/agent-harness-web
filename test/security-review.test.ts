@@ -39,7 +39,8 @@ async function setup() {
   const host = new LocalHost(dir);
   const ctx = { host, signal: new AbortController().signal, services: {} } as unknown as ToolContext;
   const tool = (name: string, input: Record<string, unknown>) => h.registry.tools.get(name)!.run(input, ctx);
-  const mandate = (m: unknown) => fs.mkdir(path.join(dir, '.harness'), { recursive: true }).then(() => fs.writeFile(path.join(dir, '.harness', 'security-mandate.json'), JSON.stringify(m)));
+  // Reproducers run plainly here (fast), unless a test asks for isolation.
+  const mandate = (m: Record<string, unknown>) => fs.mkdir(path.join(dir, '.harness'), { recursive: true }).then(() => fs.writeFile(path.join(dir, '.harness', 'security-mandate.json'), JSON.stringify({ isolate: 'off', ...m })));
   return { h, dir, host, tool, mandate };
 }
 
@@ -123,5 +124,35 @@ test('variant analysis: a flaw fixed once, still in another file under other nam
     assert.equal(r.is_error ?? false, false, r.content);
     assert.match(r.content, /src\/download\.mjs:4 \(the same shape\): return fs\.readFileSync\(path\.join\(base, 'static', file\), 'utf8'\);\n {2}like src\/files\.mjs before [0-9a-f]+ Fix path traversal in serve/);
     assert.doesNotMatch(r.content, /src\/files\.mjs:\d/, 'the fixed file itself is not a candidate');
+  } finally { await t.h.close(); }
+});
+
+test('code scanning: the built-in rules flag the planted flaws as candidates (Semgrep where installed), only inside the mandate', async () => {
+  const t = await setup();
+  try {
+    await t.mandate({ scope: ['src/**'], authorizedBy: 'Sam', from: today, until: today });
+    await fs.writeFile(path.join(t.dir, 'src', 'ops.mjs'), "import { execSync } from 'node:child_process';\nexport const ping = (host) => execSync(`ping -c 1 ${host}`);\nexport const find = (db, name) => db.prepare(\"SELECT * FROM users WHERE name = '\" + name + \"'\").all();\nconst API_KEY = 'sk-live-abcdef123456';\n");
+    await fs.writeFile(path.join(t.dir, 'lib-out-of-scope.mjs'), "eval(process.argv[2]);\n");
+    const r = (await t.tool('scan_code', {})).content;
+    assert.match(r, /by (built-in rules|Semgrep)/);
+    if (/built-in rules/.test(r)) {
+      assert.match(r, /\[high\] command-injection: src\/ops\.mjs:2/);
+      assert.match(r, /\[high\] sql-injection: src\/ops\.mjs:3/);
+      assert.match(r, /\[medium\] path-traversal: src\/files\.mjs:3/);
+      assert.match(r, /\[medium\] hard-coded-secret: src\/ops\.mjs:4/);
+    }
+    assert.doesNotMatch(r, /lib-out-of-scope/, 'only the mandate\'s scope');
+  } finally { await t.h.close(); }
+});
+
+test('isolated: with Docker, a reproducer runs in a fresh container with no network and only this folder (said in the result and the ledger)', { skip: !(await (async () => { try { const { execFileSync } = await import('node:child_process'); return /ok/.test(execFileSync('docker', ['image', 'inspect', 'harness-sandbox:latest', '--format', 'ok'], { encoding: 'utf8', stdio: 'pipe' })); } catch { return false; } })()) && 'no Docker or no harness-sandbox image' }, async () => {
+  const t = await setup();
+  try {
+    await t.mandate({ scope: ['src/**'], authorizedBy: 'Sam', from: today, until: today, isolate: 'auto' });
+    // The reproducer also tries the network: inside the container there is none.
+    await fs.writeFile(path.join(t.dir, 'security', 'repro', 'net.mjs'), "import { serve } from '../../src/files.mjs';\nconsole.log(serve('.', '../secret.env'));\ntry { await fetch('https://example.com', { signal: AbortSignal.timeout(3000) }); console.log('NET-OPEN'); } catch { console.log('net-closed'); }\n");
+    const r = await t.tool('confirm_finding', { id: 'F1', title: 'path traversal in serve', file: 'src/files.mjs', reproducer: 'node security/repro/net.mjs', marker: 'sk-live-7f3a9' });
+    assert.match(r.content, /^F1 CONFIRMED: the reproducer fired \(run in a container with no network\)[\s\S]*net-closed/);
+    assert.doesNotMatch(r.content, /NET-OPEN/);
   } finally { await t.h.close(); }
 });

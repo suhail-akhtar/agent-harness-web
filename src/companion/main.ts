@@ -68,6 +68,8 @@ else console.log('desktop control: off (start with --allow-desktop to let the ag
 const handle = createCompanionHandler(dir, {
   allowHooks, trustProject, allowDesktop, host: sandbox.host, log: (m) => console.log(`[${new Date().toLocaleTimeString()}] ${m}`),
   policy: readPolicy,
+  // Results of calls that change something, until the server has them (a call repeated meanwhile is done once).
+  journal: path.join(path.dirname(policyFile), 'journal.json'),
   // Who asked what, where, and what came of it: kept on this machine, outside the folder.
   audit: (e) => { try { fs.mkdirSync(path.dirname(auditFile), { recursive: true, mode: 0o700 }); fs.appendFileSync(auditFile, `${JSON.stringify(e)}\n`, { mode: 0o600 }); } catch { /* the log is best effort */ } },
 });
@@ -106,6 +108,8 @@ async function run(job: CompanionJob): Promise<void> {
   for (let i = 0; i < 3; i++) {
     try {
       const res = await post('/api/companion/result', { jobId: job.id, ok, value, signature: sign(key.privateKey, resultPayload(job.id, ok, value)) });
+      // The server has it: no replay of it from the journal from now on.
+      if (res.status === 200) handle.delivered(job.id);
       // Refused (too large, say): tell the server, so the job fails instead of waiting out its timeout.
       if (res.status >= 400 && res.status !== 404) { const v = { error: `the server refused this result (HTTP ${res.status})` }; await post('/api/companion/result', { jobId: job.id, ok: false, value: v, signature: sign(key.privateKey, resultPayload(job.id, false, v)) }); }
       return;

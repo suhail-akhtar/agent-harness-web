@@ -26,6 +26,15 @@
   removed.
 - **Research: a crawl frontier** (`crawl`): links followed to primary sources, robots.txt honoured, rate-limited,
   each page archived with its SHA-256.
+- **Done once across a computer dropping**: an agent's call that changes something is journaled on the companion
+  until the server has its result. Repeated meanwhile, it is not run twice.
+- **Files between computers** (`copy_file`): through the harness, hashed, and held to the receiving computer's policy.
+- **Work on a person's computer, checked on the server**: file checks read the server's copy of the folder (before,
+  they failed every check there). At stakes, the checks run again on the server in a sandbox, and a machine that lies
+  about its checks is caught.
+- **Security review: code scanning** (`scan_code`, Semgrep or built-in rules) and **isolated runs** of reproducers and
+  fix tests (a container with no network).
+- **Signed run records**: exported bundles carry the server's signature; GET /api/record-key gives its public key.
 - **Desktop: the run record beside a conversation** (Agents > Run record): whether it verifies, its steps, Export.
 - **Answers over the person's own data** (phase 2; live in docs/swarm/EVAL-DATA-ANSWERS.md): the data-answers
   plugin.

@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { run, scrubbedEnv, type ToolHost } from '../runtime/host.ts';
+import { LocalHost, run, scrubbedEnv, type ToolHost } from '../runtime/host.ts';
 
 // Acceptance for delegated work (docs/agents-mcp/COORDINATION.md, steps 1 and 5): the checks a lead attaches to a
 // task ("done criteria"), run by the harness outside the worker's control, and the change set and verdict format a
@@ -266,9 +266,21 @@ async function gitTree(root: string): Promise<string | undefined> {
   } finally { await fs.rm(index, { force: true }).catch(() => {}); }
 }
 
-export async function takeBaseline(host: ToolHost, checks: Check[], o: { changes: boolean }): Promise<Baseline> {
+/**
+ * Where file checks read a workspace: the folder itself on this server; on a person's computer (a companion), the
+ * server's copy of its folder, refreshed now (before, file checks there were "not run", and counted as failed: the
+ * test protection a run check adds made every check on a companion fail). Undefined where neither is possible.
+ */
+async function filesHost(host: ToolHost, signal?: AbortSignal): Promise<ToolHost | undefined> {
+  if (local(host)) return host;
+  if (!host.mirror) return undefined;
+  try { return new LocalHost(await host.mirror(signal)); } catch { return undefined; }
+}
+
+export async function takeBaseline(host0: ToolHost, checks: Check[], o: { changes: boolean }): Promise<Baseline> {
   const b: Baseline = { unchanged: new Map() };
-  if (!local(host)) return b;
+  const host = checks.some((c) => !('run' in c)) || o.changes ? await filesHost(host0) : undefined;
+  if (!host) return b;
   for (const c of checks) {
     if (!('unchanged' in c)) continue;
     const m = new Map<string, string>();
@@ -323,6 +335,8 @@ const tail = (s: string, n = 1500) => (s.length > n ? `...${s.slice(-n)}` : s);
 
 export async function runChecks(checks: Check[], ctx: RunContext): Promise<CheckResult[]> {
   const out: CheckResult[] = [];
+  // File checks read the workspace here: on a person's computer, its copy on the server (refreshed now).
+  const files = checks.some((c) => !('run' in c)) ? await filesHost(ctx.host, ctx.signal) : undefined;
   for (const c of checks) {
     const label = checkLabel(c);
     const push = (r: CheckResult) => out.push(c.hidden ? { ...r, hidden: true } : r);
@@ -342,11 +356,11 @@ export async function runChecks(checks: Check[], ctx: RunContext): Promise<Check
           else if (c.expect_not && new RegExp(c.expect_not, 'm').test(text)) push({ label, ok: false, detail: `its output matches /${c.expect_not}/, which it must not\n${tail(text)}` });
           else push({ label, ok: true, detail: tail(text, 300) });
         }
-      } else if (!local(ctx.host)) {
+      } else if (!files) {
         push({ label, ok: false, detail: 'not run: file checks need a workspace on the harness server (this one is on a companion)' });
       } else if ('protect' in c) {
         const before = ctx.baseline.protected ?? new Map<string, string>();
-        const now = await protectedFiles(ctx.host.root);
+        const now = await protectedFiles(files.root);
         const name = (k: string) => (k.endsWith('#tests') ? `${k.slice(0, -'#tests'.length)} (its test settings or scripts)` : k);
         const lines: Array<[string, string]> = [];
         const extended: string[] = [];
@@ -355,7 +369,7 @@ export async function runChecks(checks: Check[], ctx: RunContext): Promise<Check
           if (now.get(f) === h) continue;
           // New tests in an existing test file are fine; a changed or removed line, or an added skip or exit, is not.
           const old = ctx.baseline.protectedText?.get(f);
-          const cur = old === undefined ? undefined : await readText(ctx.host, f);
+          const cur = old === undefined ? undefined : await readText(files, f);
           const add = old !== undefined && cur !== undefined ? onlyAdded(old, cur) : { ok: false };
           if (add.ok) extended.push(f);
           else lines.push([f, `changed: ${name(f)}${add.why ? ` (${add.why})` : ''}`]);
@@ -368,15 +382,15 @@ export async function runChecks(checks: Check[], ctx: RunContext): Promise<Check
           ? { label, ok: false, detail: `${[...failed.slice(0, 20), ...notes].join('\n')}\n(The existing tests and their setup are not part of this task: restore them. Adding new tests is fine. If the task cannot be done without changing them, say so with BLOCKED.)` }
           : { label, ok: true, detail: notes.length ? notes.join('\n') : `${before.size} file(s) as they were` });
       } else if ('file' in c) {
-        const t = await readText(ctx.host, c.file);
-        const exists = t !== undefined || await fs.stat(path.join(ctx.host.root, ...c.file.split('/'))).then((s) => s.isFile(), () => false);
+        const t = await readText(files, c.file);
+        const exists = t !== undefined || await fs.stat(path.join(files.root, ...c.file.split('/'))).then((s) => s.isFile(), () => false);
         if (!exists) push({ label, ok: false, detail: `${c.file} does not exist` });
         else if (c.contains && !(t !== undefined && new RegExp(c.contains, 'm').test(t))) push({ label, ok: false, detail: `${c.file} does not match /${c.contains}/` });
         else push({ label, ok: true, detail: '' });
       } else if ('unchanged' in c) {
         const before = ctx.baseline.unchanged.get(c.unchanged) ?? new Map<string, string>();
         const now = new Map<string, string>();
-        for (const f of await matching(ctx.host, c.unchanged)) { try { now.set(f, hash(await fs.readFile(path.join(ctx.host.root, ...f.split('/'))))); } catch { /* gone */ } }
+        for (const f of await matching(files, c.unchanged)) { try { now.set(f, hash(await fs.readFile(path.join(files.root, ...f.split('/'))))); } catch { /* gone */ } }
         const lines: Array<[string, string]> = [
           ...[...before].filter(([f, h]) => now.has(f) && now.get(f) !== h).map(([f]): [string, string] => [f, `changed: ${f}`]),
           ...[...before.keys()].filter((f) => !now.has(f)).map((f): [string, string] => [f, `removed: ${f}`]),
@@ -388,8 +402,8 @@ export async function runChecks(checks: Check[], ctx: RunContext): Promise<Check
       } else {
         const re = new RegExp(c.absent, 'm');
         const hits: string[] = [];
-        for (const f of await matching(ctx.host, c.in ?? '**')) {
-          const t = await readText(ctx.host, f);
+        for (const f of await matching(files, c.in ?? '**')) {
+          const t = await readText(files, f);
           if (t === undefined || !re.test(t)) continue;
           t.split('\n').forEach((line, i) => { if (hits.length < 10 && new RegExp(c.absent).test(line)) hits.push(`${f}:${i + 1}: ${line.trim().slice(0, 160)}`); });
           if (hits.length >= 10) break;

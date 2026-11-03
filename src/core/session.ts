@@ -55,6 +55,8 @@ import { acceptanceNote, type Baseline, blockedReason, changeSet, comparatorBrie
 import { byRecord, readScorecards } from '../agents/scorecard.ts';
 import { verifyClaims } from '../research/claims.ts';
 import { Recorder } from './recorder.ts';
+import { copyFileTool } from '../tools/machines.ts';
+import { sandboxedFolderHost } from '../runtime/local-sandbox.ts';
 import { CellStore, checkProvenance, compareFigures, figuresOf, openDatabase, runCell, semanticsStatus } from '../data/answers.ts';
 import { ArtifactError, type ArtifactMeta, type ArtifactService, ArtifactStore, artifactTool } from './artifacts.ts';
 import { DATA_TOOLS, dataServiceFor, dataToolsFor } from '../data/tools.ts';
@@ -218,6 +220,8 @@ interface AccRun {
   since?: number; background?: boolean;
   /** Others changed its folder while it worked: it is held to its own changes. */
   shared?: boolean;
+  /** Work done on a person's computer at stakes: its checks run again on the server (phase 7, recommendation 3). */
+  server?: { ok: boolean; why: string };
 }
 
 /** Finished sub-agents kept per session for send_message (least recently used go first). */
@@ -1115,6 +1119,7 @@ export class Session {
     const cfg = this.deps.publish;
     const vault = this.vaultService(main);
     return {
+      ...(!main && caller !== 'harness' ? { swarmAgent: true } : {}),
       memory: main ? memory : memory?.reader(),
       sources: this.sources,
       search: this.deps.search,
@@ -1527,6 +1532,8 @@ export class Session {
     // The person's computers (their companions) agents may be placed on (phase 7): named in the tool only when there are some.
     const machines = this.machines().map((m) => m.name);
     tools.push(makeAgentTool([...agents.values()].filter((a) => a.modelInvocable !== false && a.name !== this.meta.agent), { catalogue, isolation, ...(machines.length ? { machines } : {}) }));
+    // Files between the person's computers (and this folder): only when there are computers.
+    if (machines.length) tools.push(copyFileTool({ machines, host: async (name, swarm) => { const h = this.machineHost(name, true); return swarm ? h.swarmHost?.() ?? h : h; } }));
     const linked = this.linkedOn(settings);
     tools.push(...TASK_TOOLS.filter((t) => t.spec.name !== 'send_message'), makeSendMessageTool(linked));
     // Only for sessions that use them, so every other session's prompt stays as it was.
@@ -2135,6 +2142,28 @@ export class Session {
   }
 
   /** The agent tool: a sub-agent of `parent`, under its signal (a background agent's children stop with it), kept for send_message. */
+  /**
+   * Work done on a person's computer, checked here (phase 7, recommendation 3): its folder copied to the server (the
+   * mirror) and its run, file and absent checks run again in a sandbox with no network. Passing here, the machine's
+   * own report is no longer all there is; without a sandbox here, or failing here, the work stays unverified.
+   */
+  private async serverRecheck(acc: AccRun, signal: AbortSignal): Promise<{ ok: boolean; why: string }> {
+    const checks = acc.acceptance.checks.filter((c) => 'run' in c || 'file' in c || 'absent' in c);
+    if (!checks.length) return { ok: false, why: 'none of its checks can run away from the machine (only run, file and absent checks do)' };
+    if (!acc.host.mirror) return { ok: false, why: 'its folder cannot be copied to the server' };
+    try {
+      const dir = await acc.host.mirror(signal);
+      const sb = await sandboxedFolderHost(dir, 'auto', 'none');
+      if (sb.kind === 'off') return { ok: false, why: 'no sandbox on the server to run code from another computer in, so its checks stay its own report' };
+      // Contained (a sandbox with no network, a copy of the folder): no question to ask about running them.
+      const r = await runChecks(checks, { host: sb.host, baseline: { unchanged: new Map() }, permit: async () => ({ allow: true }), signal, redact: (t) => this.redactor.redact(t) });
+      const bad = r.filter((x) => !x.ok);
+      return bad.length
+        ? { ok: false, why: `run again here (${sb.why}), ${bad.length} did not pass: ${bad.map((x) => `${x.label} (${x.detail.slice(0, 120)})`).join('; ')}` }
+        : { ok: true, why: `all ${r.length} passed again here, in ${sb.why}` };
+    } catch (err) { return { ok: false, why: `they could not run here: ${(err as Error).message.slice(0, 200)}` }; }
+  }
+
   /** A database file in the workspace (phase 2): read on this server, so not in a companion's folder. */
   private async databaseFile(db: string): Promise<string> {
     const host = await this.getHost();
@@ -2168,11 +2197,11 @@ export class Session {
   }
 
   /** A delegation placed on one of the person's computers: its host there, or why it cannot go (said to the agent). */
-  private machineHost(name: string): ToolHost {
+  private machineHost(name: string, quiet = false): ToolHost {
     const m = this.machines().find((x) => x.name === name || x.id === name);
     if (!m) throw new Error(`No computer named "${name}" is connected for you: ${this.machines().map((x) => x.name).join(', ') || 'none is'}.`);
     if (!m.online) throw new Error(`The computer "${m.name}" is offline: its companion is not running. Work elsewhere, or ask the person to start it.`);
-    this.emit({ kind: 'notice', level: 'info', text: `An agent works on ${m.name} (in its folder, under that computer's own policy).` });
+    if (!quiet) this.emit({ kind: 'notice', level: 'info', text: `An agent works on ${m.name} (in its folder, under that computer's own policy).` });
     return this.deps.companions.host(m.id, this.meta.id);
   }
 
@@ -2683,6 +2712,9 @@ export class Session {
         acc.shared ||= this.othersAt(name, acc.host.root, acc.since ?? 0, acc.background);
         const mine = acc.shared ? this.toolWrites(sub, acc.host.root) : undefined;
         const results = acc.acceptance.checks.length ? await runChecks(acc.acceptance.checks, { host: acc.host, baseline: acc.baseline, permit: (cmd) => this.permitCheck(cmd, name, e.parent, acc.host, signal), signal, redact: (t) => this.redactor.redact(t), ...(mine ? { mine } : {}) }) : [];
+        // At stakes, work done on a person's computer is checked again here, away from the machine that did it.
+        acc.server = acc.acceptance.stakes && acc.host.kind === 'companion' && results.length && results.every((r) => r.ok) ? await this.serverRecheck(acc, signal) : undefined;
+        if (acc.server) this.emit({ kind: 'notice', level: acc.server.ok ? 'info' : 'warn', text: `${name}'s checks on the server: ${acc.server.why}` });
         // What the work added that can game a check (a skipped test, an early exit): for the verifier and the lead.
         const changes = acc.baseline.tree || acc.baseline.files ? await changeSet(acc.host, acc.baseline) : undefined;
         const findings = changes ? tamperFindings(changes) : [];
@@ -2802,7 +2834,8 @@ export class Session {
       await r.agent.wrapUp(VERDICT_AGAIN, o.signal, VERDICT_ASK).catch(() => {});
       parsed = parseVerdict(this.lastText(r.agent));
     }
-    let verdict = finalVerdict(parsed, o.results, stakes ? { stakes, remote: o.acc.host.kind === 'companion' } : {});
+    // Its checks run again on the server and passing there: the work is no longer the machine's own report of itself.
+    let verdict = finalVerdict(parsed, o.results, stakes ? { stakes, remote: o.acc.host.kind === 'companion' && !o.acc.server?.ok } : {});
     // A change while other agents worked in the folder cannot be laid on the verifier.
     const touched = busyAtStart || this.othersAt(o.worker, o.acc.host.root, seq, o.acc.background, atStart) ? '(no changes)' : await changeSet(o.acc.host, guard);
     if (touched !== '(no changes)' && !touched.startsWith('(no record') && !touched.startsWith('(the change set is not available')) {

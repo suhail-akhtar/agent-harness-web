@@ -13,6 +13,9 @@
     then a reporter writes the report.
   - **The mandate** (`.harness/security-mandate.json`: scope, who authorized it, dates): written by the person.
     Swarm agents cannot write it.
+- **`scan_code`**: Semgrep where installed, else built-in rules. Each match is a candidate.
+- **Isolated runs**: reproducers and fix tests run in a fresh container of the sandbox image, with no network. The
+  mandate's "isolate" controls it (auto, docker, off).
 - **`fix_variants`**: variant analysis. It reads the repository's security-fix commits and lists the places in scope
   that still look like the code each fix removed: the same line, or the same call to a sink under other names. The
   lead runs it first.

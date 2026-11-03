@@ -37,12 +37,46 @@ async function mandate(api, host) {
 const globRe = (g) => new RegExp(`^${g.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*\/?/g, '\u0000').replace(/\*/g, '[^/]*').replace(/\u0000/g, '.*')}$`);
 const inScope = (m, file) => m.scope.some((g) => globRe(g).test(file.replace(/\\/g, '/').replace(/^\.\//, '')));
 
-/** Runs a reproducer where the workspace's commands run; it fires when it exits 0 and prints its marker. */
-async function fire(host, command, marker, signal) {
-  const r = await host.exec(command, { timeoutMs: 60_000, signal });
+/**
+ * Where a reproducer or a fix's tests run, isolated: the session's own sandbox when it has one; else, with Docker, a
+ * fresh container of the sandbox image with no network and only this folder mounted; else plainly, and said so. The
+ * mandate's "isolate": "off" runs them plainly; "docker" requires the container.
+ */
+async function isolation(host, m) {
+  if (host.sandboxed || m.isolate === 'off') return { how: host.sandboxed ? 'the session\'s sandbox' : 'not isolated (the mandate says so)' };
+  const docker = await host.exec('docker image inspect harness-sandbox:latest --format ok', { timeoutMs: 20_000 }).catch(() => ({ code: 1, stdout: '' }));
+  if (docker.code === 0 && /ok/.test(docker.stdout)) return { how: 'a container with no network', docker: true };
+  if (m.isolate === 'docker') return { how: '', refuse: 'the mandate requires isolation in a container ("isolate": "docker"), and Docker or the harness-sandbox image is not available' };
+  return { how: 'not isolated (no sandbox or Docker here)' };
+}
+const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
+async function runIsolated(host, iso, command, timeoutMs, signal) {
+  if (!iso.docker) return host.exec(command, { timeoutMs, signal });
+  const root = String(host.root).replace(/\\/g, '/');
+  // MSYS_NO_PATHCONV: Git Bash would turn /work into a Windows path.
+  return host.exec(`MSYS_NO_PATHCONV=1 docker run --rm --network none --memory 1g --cpus 2 -v ${shq(`${root}:/work`)} -w /work harness-sandbox:latest bash -lc ${shq(command)}`, { timeoutMs: timeoutMs + 60_000, signal });
+}
+
+/** Runs a reproducer, isolated; it fires when it exits 0 and prints its marker. */
+async function fire(host, command, marker, signal, iso = { how: 'not isolated' }) {
+  const r = await runIsolated(host, iso, command, 60_000, signal);
   const out = `${r.stdout}${r.stderr ? `\n[stderr]\n${r.stderr}` : ''}`.slice(0, 4000);
   return { fired: r.code === 0 && out.includes(marker), code: r.code, out };
 }
+
+// Code scanning (phase 4): Semgrep where it is installed; else the rules below, for the flaws a review looks for
+// first. Each match is a candidate for a hunter to prove or dismiss, never a finding.
+const RULES = [
+  { id: 'command-injection', sev: 'high', re: /\b(exec|execSync|spawn|spawnSync|execFile|execFileSync|system|popen|subprocess\.\w+)\s*\(.*(\$\{|`[^`]*\$\{|['"]\s*\+\s*\w|\w\s*\+\s*['"]|-c['"]\s*,\s*`)/ },
+  { id: 'sql-injection', sev: 'high', re: /\b(prepare|query|execute|exec|all|run|get|raw)\s*\(\s*(["'`]).*\b(SELECT|INSERT|UPDATE|DELETE)\b.*(\2\s*\+|\$\{|%s|\.format\()/i },
+  { id: 'path-traversal', sev: 'medium', re: /\b(readFile|readFileSync|createReadStream|sendFile|writeFile|writeFileSync|open)\w*\s*\(\s*path\.(join|resolve)\s*\(/ },
+  { id: 'code-eval', sev: 'high', re: /\beval\s*\(|\bnew Function\s*\(|\bexec\s*\(\s*compile\(/ },
+  { id: 'xss-sink', sev: 'medium', re: /\.innerHTML\s*=|\.outerHTML\s*=|dangerouslySetInnerHTML|document\.write\s*\(/ },
+  { id: 'unsafe-deserialization', sev: 'high', re: /pickle\.loads?\s*\(|yaml\.load\s*\((?![^)]*SafeLoader)|\bunserialize\s*\(|ObjectInputStream/ },
+  { id: 'hard-coded-secret', sev: 'medium', re: /(api[_-]?key|secret|passw(or)?d|token)\s*[:=]\s*['"][A-Za-z0-9_\-+/=]{12,}['"]|\bsk-(live|test)-[A-Za-z0-9]{6,}|\bAKIA[0-9A-Z]{16}\b|-----BEGIN (RSA |EC )?PRIVATE KEY/i },
+  { id: 'weak-hash', sev: 'low', re: /createHash\(\s*['"](md5|sha1)['"]\s*\)|hashlib\.(md5|sha1)\(/ },
+  { id: 'tls-off', sev: 'medium', re: /rejectUnauthorized\s*:\s*false|verify\s*=\s*False|NODE_TLS_REJECT_UNAUTHORIZED/ },
+];
 
 export default {
   name: 'security-review',
@@ -74,10 +108,12 @@ export default {
         // (seen live: a re-run after the patch erased a confirmed SQL injection from the ledger).
         const prev = ledger[id];
         if (prev?.confirmed) return { content: `${id} was confirmed already (its reproducer fired). To check a fix of it, use check_fix: it runs the reproducer again and the tests.`, is_error: true };
-        const r = await fire(ctx.host, String(input.reproducer), marker, ctx.signal);
-        ledger[id] = { id, title: String(input.title ?? ''), file, kind: String(input.kind ?? ''), reproducer: String(input.reproducer), marker, confirmed: r.fired, runs: [...(prev?.runs ?? []), { at: new Date().toISOString(), what: 'confirm', fired: r.fired, code: r.code, hash: crypto.createHash('sha256').update(r.out).digest('hex').slice(0, 16) }] };
+        const iso = await isolation(ctx.host, md.m);
+        if (iso.refuse) return { content: `Not run: ${iso.refuse}.`, is_error: true };
+        const r = await fire(ctx.host, String(input.reproducer), marker, ctx.signal, iso);
+        ledger[id] = { id, title: String(input.title ?? ''), file, kind: String(input.kind ?? ''), reproducer: String(input.reproducer), marker, confirmed: r.fired, runs: [...(prev?.runs ?? []), { at: new Date().toISOString(), what: 'confirm', fired: r.fired, code: r.code, isolated: iso.how, hash: crypto.createHash('sha256').update(r.out).digest('hex').slice(0, 16) }] };
         await writeLedger(api, root, ledger);
-        return { content: `${id} ${r.fired ? 'CONFIRMED' : 'UNCONFIRMED'}: the reproducer ${r.fired ? 'fired' : `did not fire (exit ${r.code}${r.code === 0 ? ', no marker in its output' : ''})`}.\n\n${r.out.slice(0, 1500)}`, is_error: !r.fired };
+        return { content: `${id} ${r.fired ? 'CONFIRMED' : 'UNCONFIRMED'}: the reproducer ${r.fired ? 'fired' : `did not fire (exit ${r.code}${r.code === 0 ? ', no marker in its output' : ''})`} (run in ${iso.how}).\n\n${r.out.slice(0, 1500)}`, is_error: !r.fired };
       },
     });
 
@@ -94,11 +130,13 @@ export default {
         const ledger = await readLedger(api, root);
         const f = ledger[String(input.id ?? '')];
         if (!f?.confirmed) return { content: `${input.id} is not a confirmed finding (confirm_finding first): a fix is checked against a reproducer that fired.`, is_error: true };
-        const r = await fire(ctx.host, f.reproducer, f.marker, ctx.signal);
-        const t = await ctx.host.exec(String(input.tests ?? ''), { timeoutMs: 600_000, signal: ctx.signal });
+        const iso = await isolation(ctx.host, md.m);
+        if (iso.refuse) return { content: `Not run: ${iso.refuse}.`, is_error: true };
+        const r = await fire(ctx.host, f.reproducer, f.marker, ctx.signal, iso);
+        const t = await runIsolated(ctx.host, iso, String(input.tests ?? ''), 600_000, ctx.signal);
         const fixed = !r.fired && t.code === 0;
         f.fixed = fixed;
-        f.runs.push({ at: new Date().toISOString(), what: 'fix', fired: r.fired, tests: t.code, hash: crypto.createHash('sha256').update(r.out).digest('hex').slice(0, 16) });
+        f.runs.push({ at: new Date().toISOString(), what: 'fix', fired: r.fired, tests: t.code, isolated: iso.how, hash: crypto.createHash('sha256').update(r.out).digest('hex').slice(0, 16) });
         await writeLedger(api, root, ledger);
         return { content: `${f.id} ${fixed ? 'FIXED' : 'NOT FIXED'}: the reproducer ${r.fired ? 'still fires' : 'no longer fires'}; the tests ${t.code === 0 ? 'pass' : `fail (exit ${t.code})`}.${t.code !== 0 ? `\n\n${`${t.stdout}${t.stderr}`.slice(-1500)}` : ''}`, is_error: !fixed };
       },
@@ -165,6 +203,44 @@ export default {
         }
         if (!hits.length) return `Read ${removed.length} line(s) removed by security fixes; nothing in scope looks like them now.`;
         return [`${hits.length} candidate(s) in scope that look like code a security fix removed (review each; prove it with confirm_finding, or dismiss it):`, ...hits.slice(0, 60).map((h) => `- ${h.file}:${h.line} (${h.how}): ${h.code}\n  like ${h.like.file} before ${h.like.commit}: ${h.like.code.slice(0, 160)}`), ...(hits.length > 60 ? [`(${hits.length - 60} more)`] : [])].join('\n');
+      },
+    });
+
+    api.registerTool({
+      name: 'scan_code',
+      description: 'Code scanning over the mandate\'s scope: Semgrep where it is installed (its own rules), else built-in rules for command and SQL injection, paths built from input, eval, HTML sinks, unsafe deserialization, secrets in code, weak hashes and TLS turned off. Each match is a candidate to review and prove with confirm_finding, never a finding.',
+      parameters: { type: 'object', properties: {} },
+      kind: 'read', parallelSafe: true,
+      summarize: () => 'scan the code in scope',
+      async run(_input, ctx) {
+        const md = await mandate(api, ctx.host);
+        if (!md.m) return { content: `Not run: ${md.why}.`, is_error: true };
+        const listed = await ctx.host.exec('git ls-files 2>/dev/null || find . -type f -not -path "*/node_modules/*" -not -path "*/.git/*"', { timeoutMs: 30_000, signal: ctx.signal });
+        const files = listed.stdout.split('\n').map((x) => x.trim().replace(/^\.\//, '')).filter((f) => f && inScope(md.m, f) && /\.(m?[jt]sx?|cjs|py|rb|go|php|java|cs|rs|sh|ya?ml|env|json)$/.test(f));
+        const hits = [];
+        let engine = 'built-in rules';
+        const semgrep = await ctx.host.exec('semgrep --version', { timeoutMs: 20_000, signal: ctx.signal }).catch(() => ({ code: 1 }));
+        if (semgrep.code === 0 && files.length) {
+          const r = await ctx.host.exec(`semgrep scan --config auto --json --quiet --metrics off ${files.map(shq).join(' ')}`, { timeoutMs: 600_000, signal: ctx.signal });
+          try {
+            for (const x of JSON.parse(r.stdout).results ?? []) hits.push({ file: x.path, line: x.start?.line, rule: x.check_id, sev: String(x.extra?.severity ?? '').toLowerCase(), code: String(x.extra?.lines ?? '').trim().slice(0, 200) });
+            engine = 'Semgrep';
+          } catch { /* the built-in rules instead */ }
+        }
+        if (engine !== 'Semgrep') {
+          const fs = await import('node:fs/promises');
+          for (const f of files) {
+            const text = await fs.readFile(await api.workspacePath(ctx.host, f), 'utf8').catch(() => '');
+            text.split('\n').forEach((line, i) => {
+              if (line.length > 2000) return;
+              for (const r of RULES) if (r.re.test(line)) hits.push({ file: f, line: i + 1, rule: r.id, sev: r.sev, code: line.trim().slice(0, 200) });
+            });
+          }
+        }
+        if (!hits.length) return `Scanned ${files.length} file(s) in scope with ${engine}: no candidates.`;
+        const rank = { high: 0, error: 0, medium: 1, warning: 1, low: 2, info: 2 };
+        hits.sort((a, b) => (rank[a.sev] ?? 3) - (rank[b.sev] ?? 3));
+        return [`${hits.length} candidate(s) in ${files.length} file(s), by ${engine} (review each; prove it with confirm_finding, or dismiss it):`, ...hits.slice(0, 80).map((h) => `- [${h.sev}] ${h.rule}: ${h.file}:${h.line}: ${h.code}`), ...(hits.length > 80 ? [`(${hits.length - 80} more)`] : [])].join('\n');
       },
     });
 

@@ -253,9 +253,21 @@ scheduling and failure recovery.
   with the server gone). Live (EVAL-MACHINES.md): two real companions, Haiku leading, Grok 4.7 on the office
   computer, 11 of 11 on the final run, after six fixes found by the runs before it.
 
-  Not built, on the research's own ranking: side effects done exactly once across a machine dropping (7: a
-  re-placed item starts again), artefacts between machines (9), patch-based acceptance away from the worker (3, in
-  full).
+  Then the rest of the research's list:
+  - **Done once (7)**: each call of an agent's that changes something carries a key of what it is (the session, the
+    tool, its input). The companion journals its result until the server has it. The same call again, while that
+    result never reached the server (the machine dropped, the server restarted), is answered from the journal instead
+    of run twice. A delivered result is never replayed, and checks and hooks always run fresh.
+  - **Files between computers (9)**: `copy_file`, through the harness and never machine to machine, with the file's
+    hash; what it carries counts as outside content; a swarm agent's copy is held to the receiving computer's policy.
+  - **Acceptance away from the worker (3)**:
+    - file checks (the test protection a run check adds, file, unchanged, absent) read the server's copy of the
+      computer's folder; before, they were "not run", which failed every check there;
+    - at stakes, the run, file and absent checks run again on the server, in a sandbox with no network;
+    - passing there, the work is accepted; failing there, or with no sandbox on the server, it stays UNVERIFIED with
+      the reason (a doctored companion that reported a failing check as passed is caught this way).
+  Not done: re-placement of an item that did half its work on a computer that dropped starts it again elsewhere (what
+  the first computer did stays there).
 - Phase 2, answers over the person's own data: built (2026-11-02). src/data/answers.ts and the data-answers plugin:
   - **`sql_query`**: one read-only SELECT. Each result is kept as a cell in the session's folder, where the agent
     cannot edit it.
@@ -285,7 +297,13 @@ scheduling and failure recovery.
 
   Then variant analysis: `fix_variants` reads the repository's security-fix commits, takes the code each removed, and
   lists the places in scope that still look like it (the same line, or the same call to a sink with other names),
-  each a candidate to prove; the lead runs it first. Not built: SAST triage, sanitizer-built containers.
+  each a candidate to prove; the lead runs it first. Then:
+  - **Code scanning**: `scan_code`, with Semgrep where it is installed, else built-in rules (command and SQL
+    injection, paths from input, eval, HTML sinks, unsafe deserialization, secrets, weak hashes, TLS off), each match a
+    candidate.
+  - **Isolated runs**: reproducers and a fix's tests run in a fresh container of the sandbox image, with no network
+    and only the folder, wherever the session is not sandboxed already. The mandate's "isolate" sets it (auto, docker
+    to require it, off), and the ledger records where each run ran.
 - Phase 5, the forecasting ledger: built, the forecasting plugin. Forecasters on several models, the aggregate in
   code, live questions only, Brier and log scores, calibration, and the extremizing factor refitted from resolved
   questions. Tests: test/forecasting.test.ts. Live (EVAL-FORECAST.md): three open questions, forecasters on Sonnet,
@@ -300,7 +318,9 @@ scheduling and failure recovery.
   Tests: test/recorder.test.ts. Live (EVAL-INVESTIGATION.md): planted logs, Haiku, 9 of 9, $0.02.
 
   The desktop app shows the record beside a conversation (Agents > Run record): whether it verifies, its steps,
-  Export. Not built: signing exported bundles with a key of the server's (they verify on their own by their chain).
+  Export. Exported bundles are signed by the server's record key (Ed25519, made once in its data directory). GET
+  /api/record-key gives its public half. A signed bundle verifies its chain, its contents and who produced it, and
+  the signature also catches a line cut from the end, which the chain alone does not.
 - The governor gains `maxChildren` (8 a sub-agent). Still open from research/control.md: a cap on agents at once
   below the first level, kinds of work compiled to tool, path and network policy, and writes to the control plane
   through a shell.

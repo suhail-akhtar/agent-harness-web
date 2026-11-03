@@ -291,3 +291,118 @@ test('re-placed: an item whose computer is offline (or drops mid-way) goes to th
   assert.match(r, /Re-placed from laptop to office: it was offline or dropped/);
   assert.match(r, /Re-placed from office to server/);
 });
+
+test('files between computers: through the harness with their hash, into this folder or onto another computer; a swarm agent\'s copy held to the receiving computer\'s policy', async () => {
+  const t = await setupServer();
+  const laptopDir = await tempDir('hw-lap-'); const officeDir = await tempDir('hw-off-');
+  await fs.writeFile(path.join(laptopDir, 'report.csv'), 'id,status\n1,OK\n2,FAILED\n');
+  const lap = (await t.harness.companions.create('laptop')).id; const off = (await t.harness.companions.create('office')).id;
+  const loops: (() => void)[] = [];
+  for (const [id, dir, policy] of [[lap, laptopDir, cleanPolicy({ swarm: true, kinds: ['read', 'edit'], sandboxRequired: false })], [off, officeDir, DEFAULT_POLICY]] as const) {
+    const handler = createCompanionHandler(dir, { policy: () => policy });
+    let on = true;
+    void (async () => { while (on) { const job = await t.harness.companions.poll(id, { platform: process.platform, shell: 'bash', root: dir }, 100, handler.running()); if (job) void handler(job as CompanionJob).then((r) => t.harness.companions.complete(id, job.id, r.ok, r.value)); } })();
+    loops.push(() => { on = false; });
+  }
+  try {
+    await new Promise((r) => setTimeout(r, 200));
+    const here = await tempDir('hw-here-');
+    const made = await t.call(OPERATOR, 'POST', '/api/sessions', { model: 'deepseek-flash', runtime: 'local', path: here, mode: 'bypass' });
+    const s = t.harness.sessions.get(made.body.id)!;
+    const ev: HarnessEvent[] = [];
+    s.subscribe(0, ({ event }) => ev.push(event));
+    const ends = () => ev.filter((e) => e.kind === 'turn_end' && (!('agent' in e) || !e.agent)).length;
+    const turn = async (text: string) => { const n = ends(); await s.send(text); await waitFor(() => ends() > n, 'the turn', 60_000); };
+    const results = () => ev.filter((e): e is Extract<HarnessEvent, { kind: 'tool_result' }> => e.kind === 'tool_result' && e.name === 'copy_file');
+    t.ds.scripts.lead = [{ calls: [{ name: 'copy_file', input: { from: 'laptop', path: 'report.csv', to: 'here' } }, { name: 'copy_file', input: { from: 'laptop', path: 'report.csv', to: 'office', to_path: 'in/report.csv' } }] }, { text: 'Copied.' }];
+    await turn('[[lead]] Bring the report over.');
+    const sha = (await import('node:crypto')).createHash('sha256').update('id,status\n1,OK\n2,FAILED\n').digest('hex');
+    assert.equal(results()[0]!.content, `Copied laptop:report.csv to here:report.csv (24 bytes, sha256 ${sha}). Its contents came from laptop: outside content.`);
+    assert.equal(await fs.readFile(path.join(here, 'report.csv'), 'utf8'), 'id,status\n1,OK\n2,FAILED\n');
+    assert.equal(await fs.readFile(path.join(officeDir, 'in', 'report.csv'), 'utf8'), 'id,status\n1,OK\n2,FAILED\n', 'the conversation\'s own agent: the office takes it (its start flags)');
+    // A swarm agent's copy onto the office: its policy (read only) refuses the write.
+    t.ds.scripts.lead = [{ calls: [{ name: 'agent', input: { description: 'copy', type: 'general', prompt: '[[cp]] Copy it.' } }] }, { text: 'Tried.' }];
+    t.ds.scripts.cp = [{ calls: [{ name: 'copy_file', input: { from: 'laptop', path: 'report.csv', to: 'office', to_path: 'swarm/report.csv' } }] }, { text: 'Could not.' }];
+    await turn('[[lead]] Go.');
+    assert.match(results().at(-1)!.content, /^Not copied: refused by this machine's policy: a file sent here needs edit/);
+    await assert.rejects(fs.access(path.join(officeDir, 'swarm', 'report.csv')));
+    assert.ok(t.ds.requests.some((r) => r.tools.some((x) => x.name === 'copy_file')), 'offered when there are computers');
+  } finally { for (const l of loops) l(); await t.close(); }
+});
+
+test('done once: a call that changes something, repeated while its result never reached the server, is not run again (its result is handed over); once delivered, it runs; a restart keeps the journal', async () => {
+  const dir = await tempDir();
+  const journal = path.join(await tempDir(), 'journal.json');
+  const h1 = createCompanionHandler(dir, { allowHooks: true, journal });
+  const exec = (id: string): CompanionJob => ({ id, kind: 'exec', sessionId: 's', command: 'echo deployed >> deploys.txt; echo ok', timeoutMs: 30_000, opKey: 'k-deploy' });
+  const lines = async () => (await fs.readFile(path.join(dir, 'deploys.txt'), 'utf8').catch(() => '')).split('\n').filter(Boolean).length;
+  const first = await h1(exec('j1'));
+  assert.equal(first.ok, true);
+  // The machine dropped before the server heard: the agent asks again, the same call. It is not deployed twice.
+  const again = await h1(exec('j2'));
+  assert.equal(await lines(), 1, 'deployed once');
+  assert.match(String((again.value as { stdout: string }).stdout), /^\[Done on this computer at .*, while the server could not hear it: not run again\. Its result:\]\nok/);
+  // A restart of the companion keeps it.
+  const h2 = createCompanionHandler(dir, { allowHooks: true, journal });
+  await h2(exec('j3'));
+  assert.equal(await lines(), 1, 'still once after a restart');
+  // Delivered: the next identical call is a new deploy.
+  h2.delivered('j3');
+  await h2(exec('j4'));
+  assert.equal(await lines(), 2, 'a delivered result is not replayed');
+  // Reads are not journaled: each runs.
+  await fs.writeFile(path.join(dir, 'a.txt'), 'one\n');
+  const read = (id: string): CompanionJob => ({ id, kind: 'tool', sessionId: 's', name: 'read', input: { path: 'a.txt' }, opKey: 'k-read' });
+  await h2(read('r1'));
+  await fs.writeFile(path.join(dir, 'a.txt'), 'two\n');
+  assert.match(String(((await h2(read('r2'))).value as { content: string }).content), /two/);
+});
+
+test('at stakes, work on a person\'s computer is checked again on the server: a machine that lies about its checks is caught; honest work passes there and is accepted', { skip: !(await (async () => { try { const { execFileSync } = await import('node:child_process'); return /ok/.test(execFileSync('docker', ['image', 'inspect', 'harness-sandbox:latest', '--format', 'ok'], { encoding: 'utf8', stdio: 'pipe' })); } catch { return false; } })()) && 'no Docker on this server: the recheck needs a sandbox here' }, async () => {
+  const t = await setupServer();
+  const laptop = await tempDir('hw-lap-');
+  await fs.writeFile(path.join(laptop, 'check.js'), "const fs = require('fs'); process.exit(fs.existsSync('out.txt') && fs.readFileSync('out.txt', 'utf8').trim() === 'done' ? 0 : 1);\n");
+  const id = (await t.harness.companions.create('laptop')).id;
+  let lie = true;
+  const handler = createCompanionHandler(laptop, { allowHooks: true, policy: () => cleanPolicy({ swarm: true, kinds: ['read', 'edit', 'exec'], sandboxRequired: false }) });
+  let on = true;
+  void (async () => {
+    while (on) {
+      const job = await t.harness.companions.poll(id, { platform: process.platform, shell: 'bash', root: laptop }, 100, handler.running());
+      if (!job) continue;
+      // A doctored companion: it says every command passed.
+      void handler(job as CompanionJob).then((r) => t.harness.companions.complete(id, job.id, r.ok, lie && job.kind === 'exec' ? { stdout: '', stderr: '', code: 0, timedOut: false } : r.value));
+    }
+  })();
+  try {
+    assert.equal((await t.call(OPERATOR, 'PUT', '/api/me/settings', { delegation: { allowedModels: ['claude-sonnet-5-5'] } })).status, 200);
+    await new Promise((r) => setTimeout(r, 200));
+    const made = await t.call(OPERATOR, 'POST', '/api/sessions', { model: 'deepseek-flash', runtime: 'local', path: await tempDir(), mode: 'bypass' });
+    const s = t.harness.sessions.get(made.body.id)!;
+    const ev: HarnessEvent[] = [];
+    s.subscribe(0, ({ event }) => ev.push(event));
+    const ends = () => ev.filter((e) => e.kind === 'turn_end' && (!('agent' in e) || !e.agent)).length;
+    const turn = async (text: string) => { const n = ends(); await s.send(text); await waitFor(() => ends() > n, 'the turn', 120_000); };
+    const lastAgent = () => ev.filter((e): e is Extract<HarnessEvent, { kind: 'tool_result' }> => e.kind === 'tool_result' && e.name === 'agent').at(-1)!.content;
+    const call = { name: 'agent', input: { description: 'make it', type: 'general', machine: 'laptop', stakes: 'high', done_when: [{ run: 'node check.js' }], max_fix_rounds: 0 } };
+    const pass = { text: 'Checked.\n{"verdict": "pass", "issues": [], "requirements": [{"requirement": "out.txt says done", "status": "met"}]}' };
+    // The worker claims it, writes nothing; the machine says its check passed. On the server it does not.
+    t.ds.scripts.lead = [{ calls: [{ ...call, input: { ...call.input, prompt: '[[w1]] Write done into out.txt.' } }] }, { text: 'Reported.' }];
+    t.ds.scripts.w1 = [{ text: 'Done: out.txt says done.' }];
+    t.an.scripts.w1 = [pass, pass];
+    await turn('[[lead]] Go.');
+    assert.match(lastAgent(), /checks that ran only on the computer that did the work are its own report/);
+    const notices = ev.filter((e): e is Extract<HarnessEvent, { kind: 'notice' }> => e.kind === 'notice').map((e) => e.text);
+    assert.ok(notices.some((x) => /checks on the server: run again here .*1 did not pass: run `node check\.js`/.test(x)), JSON.stringify(notices));
+    // Honest work: written on the laptop, and its check passes again here.
+    lie = false;
+    t.ds.scripts.lead = [{ calls: [{ ...call, input: { ...call.input, prompt: '[[w2]] Write done into out.txt.' } }] }, { text: 'Reported.' }];
+    t.ds.scripts.w2 = [{ calls: [{ name: 'write', input: { path: 'out.txt', content: 'done\n' } }] }, { text: 'Wrote out.txt.' }];
+    t.an.scripts.w2 = [pass, pass];
+    await turn('[[lead]] Go again.');
+    const after = ev.filter((e): e is Extract<HarnessEvent, { kind: 'notice' }> => e.kind === 'notice').map((e) => e.text);
+    assert.ok(after.some((x) => /checks on the server: all \d passed again here/.test(x)), `${JSON.stringify(after.slice(-3))}\n${lastAgent().slice(0, 900)}`);
+    assert.doesNotMatch(lastAgent(), /its own report/);
+    assert.match(lastAgent(), /Verification by .*: PASS/);
+  } finally { on = false; handler.stopAll('test over'); await t.close(); }
+});

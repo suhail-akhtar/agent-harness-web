@@ -18,7 +18,7 @@ import { allowedImages, dockerAvailable, dockerDefaults, imageExists, sessionIma
 import { COMPANION_RESULT_LIMIT } from '../runtime/companion.ts';
 import { cleanPolicy } from '../companion/handler.ts';
 import { cleanPublicKey, policyPayload, resultPayload, verify } from '../companion/sign.ts';
-import { replay, verifyBundle } from '../core/recorder.ts';
+import { recordKey, replay, signBundle, verifySignedBundle } from '../core/recorder.ts';
 import { BundleError, exportSession, importSession } from '../core/portable.ts';
 import { OUTPUT_STYLES } from '../core/prompt.ts';
 import { loadUserInstructions, loadUserSettings, saveUserInstructions, saveUserSettings } from '../core/settings.ts';
@@ -855,6 +855,8 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       const ok = companions.complete(id, String(body.jobId), body.ok === true, body.value);
       return send(res, ok ? 200 : 404, { ok });
     }
+    // The public half of the key this server signs run records with: what an exported bundle is checked against.
+    if (p === '/api/record-key' && method === 'GET') return send(res, 200, { alg: 'ed25519', publicKey: (await recordKey(harness.dataDir)).publicKey });
     if (p === '/companion.mjs') {
       try {
         const data = await fs.readFile(path.join(o.appRoot, 'dist', 'companion.mjs'));
@@ -1966,10 +1968,11 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
       if (action === 'record' && method === 'GET') {
         const r = await s.record();
         if (!r) throw new HttpError(404, 'This session is not recorded: the run recorder is on with "record": true in the settings, or HARNESS_RECORD=on.');
-        const bundle = await r.export(s.meta.id);
+        // Signed by this server (its record key): the chain shows nothing inside was changed, the signature who made it.
+        const bundle = signBundle(await r.export(s.meta.id), await recordKey(harness.dataDir));
         const view = url.searchParams.get('view');
-        if (view === 'verify') return send(res, 200, verifyBundle(bundle));
-        if (view === 'replay') return send(res, 200, { verify: verifyBundle(bundle), steps: replay(bundle) });
+        if (view === 'verify') return send(res, 200, verifySignedBundle(bundle));
+        if (view === 'replay') return send(res, 200, { verify: verifySignedBundle(bundle), steps: replay(bundle) });
         return send(res, 200, bundle);
       }
       if (action === 'export' && method === 'GET') {

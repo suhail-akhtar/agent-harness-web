@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { LocalHost, type ToolHost } from '../runtime/host.ts';
 import { toolByName } from '../tools/index.ts';
@@ -12,12 +13,14 @@ import { checkRequest, type DesktopExecutor, type DesktopRequest, systemDesktop 
 
 export type CompanionJob =
   /** `swarm`: a swarm agent's call (docs/swarm/SWARM.md, phase 7), held to this machine's policy for swarm work. */
-  | { id: string; kind: 'tool'; sessionId: string; name: string; input: Record<string, unknown>; swarm?: boolean }
-  | { id: string; kind: 'exec'; sessionId: string; command: string; timeoutMs: number; stdin?: string; swarm?: boolean }
+  /** `opKey`: what the call is (the session, the tool, its input): the same call again is done once (the journal). */
+  | { id: string; kind: 'tool'; sessionId: string; name: string; input: Record<string, unknown>; swarm?: boolean; opKey?: string }
+  | { id: string; kind: 'exec'; sessionId: string; command: string; timeoutMs: number; stdin?: string; swarm?: boolean; opKey?: string }
   /** Stop a job that is running here (its process tree is killed); a job that is not running is no-op. */
   | { id: string; kind: 'cancel'; sessionId: string; target: string; reason?: string }
   | { id: string; kind: 'pull'; sessionId: string; known: Record<string, [number, number]>; maxBytes: number; chunkBytes?: number }
-  | { id: string; kind: 'push'; sessionId: string; path: string; data: string }
+  /** `swarm`: a file a swarm agent sends here (copy_file): held to the policy as a write. */
+  | { id: string; kind: 'push'; sessionId: string; path: string; data: string; swarm?: boolean; opKey?: string }
   /** One file in the folder: its bytes (null when absent), or remove it - for checkpoints and project config. */
   | { id: string; kind: 'file'; sessionId: string; op: 'get' | 'delete'; path: string }
   /**
@@ -64,19 +67,22 @@ export function cleanPolicy(o: unknown): MachinePolicy {
 
 /** Why this machine refuses a swarm agent's job, by its policy (undefined: it runs). */
 export function policyRefusal(job: CompanionJob, policy: MachinePolicy, sandboxed: boolean): string | undefined {
-  if ((job.kind !== 'tool' && job.kind !== 'exec') || !job.swarm) return undefined;
+  if ((job.kind !== 'tool' && job.kind !== 'exec' && job.kind !== 'push') || !job.swarm) return undefined;
   const by = 'refused by this machine\'s policy';
   if (!policy.swarm) return `${by}: it does not take swarm work (its owner can allow it: harness-companion policy --swarm on)`;
   const tool = job.kind === 'tool' ? toolByName(job.name) : undefined;
-  const kinds: ToolKind[] = job.kind === 'exec' ? ['exec'] : tool?.kindsFor?.(job.input) ?? (tool ? [tool.kind] : ['exec']);
+  const kinds: ToolKind[] = job.kind === 'exec' ? ['exec'] : job.kind === 'push' ? ['edit'] : tool?.kindsFor?.(job.input) ?? (tool ? [tool.kind] : ['exec']);
   const off = kinds.filter((k) => !policy.kinds.includes(k));
-  if (off.length) return `${by}: ${job.kind === 'exec' ? 'a command' : job.name} needs ${off.join(', ')}, and swarm work here may only ${policy.kinds.join(', ')} (its owner can allow more: harness-companion policy --kinds ...)`;
+  if (off.length) return `${by}: ${job.kind === 'exec' ? 'a command' : job.kind === 'push' ? 'a file sent here' : job.name} needs ${off.join(', ')}, and swarm work here may only ${policy.kinds.join(', ')} (its owner can allow more: harness-companion policy --kinds ...)`;
   // Reading changes nothing; anything more from a swarm agent runs contained, or not at all.
   if (policy.sandboxRequired && !sandboxed && kinds.some((k) => k !== 'read')) return `${by}: swarm work beyond reading runs only in a sandbox here, and this companion has none (start it with --sandbox, or its owner sets --sandbox-required off)`;
   // A detached command outlives the job and its lease: not in swarm work.
   if (job.kind === 'tool' && job.input.run_in_background === true) return `${by}: background commands outlive the job; swarm work here runs commands in the foreground only`;
   return undefined;
 }
+
+/** How long a result waits in the journal for the server (24 hours). */
+const JOURNAL_MS = 24 * 60 * 60_000;
 
 /** A project MCP server running here: what it said and the server has not yet read. */
 interface McpRelay { child: import('node:child_process').ChildProcessWithoutNullStreams; inbox: Record<string, unknown>[]; held: number; waiters: (() => void)[]; closed?: string }
@@ -90,6 +96,8 @@ export function createCompanionHandler(dir: string, opts: {
   /** Where commands run: a sandboxed host for the folder (default: plain). */ host?: ToolHost;
   /** This machine's policy for swarm work, read for every job (an edit takes effect at the next one). Default: none. */
   policy?: () => MachinePolicy;
+  /** Where calls that change something are journaled with their results until the server has them (done once). */
+  journal?: string;
   /** A line per job for this machine's own audit log (who asked what, and what came of it). */
   audit?: (e: { at: string; job: string; kind: string; session: string; what: string; swarm: boolean; outcome: string }) => void;
 } = {}) {
@@ -260,8 +268,17 @@ export function createCompanionHandler(dir: string, opts: {
         swarmActive++;
       }
       try {
+        // Done once: the same call again, while its earlier result never reached the server, gets that result.
+        const key = effectKey(job);
+        const earlier = key ? journal().get(key) : undefined;
+        if (earlier && !earlier.delivered && Date.now() - earlier.at < JOURNAL_MS) {
+          record(job, `not run again: done at ${new Date(earlier.at).toISOString()}, its result handed over`);
+          earlier.jobs.push(job.id); saveJournal();
+          return { ok: earlier.ok, value: replayed(earlier.value, earlier.at) };
+        }
         const r = await run(job, c.signal);
         record(job, c.signal.aborted ? `stopped: ${(c.signal.reason as Error)?.message ?? 'cancelled'}` : r.ok ? ((r.value as { is_error?: boolean; code?: number })?.is_error ? 'error' : 'done') : `failed: ${(r.value as { error?: string })?.error ?? ''}`.slice(0, 200));
+        if (key && !c.signal.aborted) { journal().set(key, { at: Date.now(), ok: r.ok, value: r.value, delivered: false, jobs: [job.id] }); saveJournal(); }
         // A stopped job says so, whatever its tool returned on the way out.
         return c.signal.aborted ? { ok: false, value: { error: `stopped on this machine: ${(c.signal.reason as Error)?.message ?? 'cancelled'}` } } : r;
       } finally {
@@ -270,7 +287,49 @@ export function createCompanionHandler(dir: string, opts: {
     } finally { running.delete(job.id); }
   }
 
+  // ---- done once (phase 7, recommendation 7) ----
+  // A call that changes something (a write, a command) is journaled with its result, by what it is (opKey: the session,
+  // the tool and its input, from the server). Until the server has the result, the same call again is answered from
+  // the journal instead of being run twice: a deploy, a payment script, an email runs once although the machine
+  // dropped (or the server restarted) between doing it and saying so. A delivered result is not replayed: running the
+  // tests twice runs them twice.
+  type Entry = { at: number; ok: boolean; value: unknown; delivered: boolean; jobs: string[] };
+  let entries: Map<string, Entry> | undefined;
+  const journal = (): Map<string, Entry> => {
+    if (entries) return entries;
+    entries = new Map();
+    if (opts.journal) { try { for (const [k, v] of Object.entries(JSON.parse(readFileSync(opts.journal, 'utf8')) as Record<string, Entry>)) entries.set(k, v); } catch { /* none yet */ } }
+    return entries;
+  };
+  const saveJournal = () => {
+    if (!opts.journal || !entries) return;
+    const now = Date.now();
+    for (const [k, v] of entries) if (now - v.at > JOURNAL_MS) entries.delete(k);
+    while (entries.size > 500) entries.delete(entries.keys().next().value!);
+    try { mkdirSync(path.dirname(opts.journal), { recursive: true, mode: 0o700 }); writeFileSync(opts.journal, JSON.stringify(Object.fromEntries(entries)), { mode: 0o600 }); } catch { /* best effort */ }
+  };
+  // Only where the companion keeps a journal; only the agent's own calls carry a key (a check or a hook runs fresh).
+  const effectKey = (job: CompanionJob): string | undefined => {
+    if (!opts.journal) return undefined;
+    if (!('opKey' in job) || typeof job.opKey !== 'string' || !job.opKey) return undefined;
+    if (job.kind === 'exec' || job.kind === 'push') return job.opKey;
+    if (job.kind !== 'tool') return undefined;
+    const tool = toolByName(job.name);
+    const kinds = tool?.kindsFor?.(job.input) ?? (tool ? [tool.kind] : []);
+    return kinds.some((k) => k !== 'read' && k !== 'meta') ? job.opKey : undefined;
+  };
+  const replayed = (value: unknown, at: number): unknown => {
+    const note = `[Done on this computer at ${new Date(at).toISOString()}, while the server could not hear it: not run again. Its result:]\n`;
+    if (value && typeof value === 'object' && 'content' in (value as Record<string, unknown>)) return { ...(value as Record<string, unknown>), content: `${note}${String((value as { content: unknown }).content)}` };
+    if (value && typeof value === 'object' && 'stdout' in (value as Record<string, unknown>)) return { ...(value as Record<string, unknown>), stdout: `${note}${String((value as { stdout: unknown }).stdout)}`, replayed: true };
+    return value;
+  };
+
   return Object.assign(handle, {
+    /** The server has a job's result: its journal entry is no longer replayed (the next identical call runs). */
+    delivered(jobId: string) {
+      for (const v of journal().values()) if (v.jobs.includes(jobId) && !v.delivered) { v.delivered = true; saveJournal(); }
+    },
     /** The jobs running here now (reported with each poll, so the server can stop the ones it no longer knows). */
     running: () => [...running.keys()],
     /** Stops every job running here, and (with `fence`) takes no new work until `unfence`. */

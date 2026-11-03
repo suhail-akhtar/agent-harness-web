@@ -30,6 +30,8 @@ export interface ScheduleSpec {
 }
 
 export interface ToolServices {
+  /** The calling agent is one of a swarm (a sub-agent), not the conversation's own: its work on a computer is swarm work. */
+  swarmAgent?: boolean;
   memory?: import('../memory/store.ts').MemoryStore;
   sources?: import('../research/sources.ts').SourceStore;
   search?: import('../research/search.ts').SearchService;

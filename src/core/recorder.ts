@@ -112,3 +112,43 @@ export function replay(b: Bundle): { n: number; at: string; who: string; what: s
     return { n: l.n, at: new Date(l.at).toISOString(), who, what };
   });
 }
+
+// ---------- the server's signature on an exported bundle ----------
+
+/**
+ * The server's record-signing key (Ed25519), made once in its data directory (owner-only). A bundle it exports is
+ * signed over its session, its length and its head hash: the chain proves nothing was changed inside it, the
+ * signature that this server produced it (GET /api/record-key gives the public key to check against).
+ */
+export async function recordKey(dataDir: string): Promise<{ privateKey: string; publicKey: string }> {
+  const file = path.join(dataDir, 'record-signing-key.pem');
+  let privateKey = await fs.readFile(file, 'utf8').catch(() => '');
+  try { crypto.createPrivateKey(privateKey); } catch {
+    privateKey = crypto.generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+    await fs.mkdir(dataDir, { recursive: true });
+    await fs.writeFile(file, privateKey, { mode: 0o600, flag: 'wx' }).catch(async (e: NodeJS.ErrnoException) => { if (e.code === 'EEXIST') privateKey = await fs.readFile(file, 'utf8'); else throw e; });
+  }
+  return { privateKey, publicKey: crypto.createPublicKey(privateKey).export({ type: 'spki', format: 'pem' }).toString() };
+}
+
+const signedPart = (b: Bundle) => `harness-record/1\n${b.session}\n${b.lines.length}\n${b.lines.at(-1)?.hash ?? GENESIS}`;
+
+/** The bundle with the server's signature (and its public key) on it. */
+export function signBundle(b: Bundle, key: { privateKey: string; publicKey: string }): Bundle & { signature: { alg: 'ed25519'; publicKey: string; value: string } } {
+  return { ...b, signature: { alg: 'ed25519', publicKey: key.publicKey, value: crypto.sign(null, Buffer.from(signedPart(b)), crypto.createPrivateKey(key.privateKey)).toString('base64') } };
+}
+
+/**
+ * A signed bundle checked: its chain and contents (verifyBundle), and its signature, against `trusted` (the server's
+ * public key, as GET /api/record-key gives it) when one is given, else against the key it carries.
+ */
+export function verifySignedBundle(b: Bundle & { signature?: { publicKey?: string; value?: string } }, trusted?: string): VerifyResult & { signed: boolean; signer?: string } {
+  const v = verifyBundle(b);
+  const s = b.signature;
+  if (!s?.value || !s.publicKey) return { ...v, ok: false, signed: false, problems: [...v.problems, 'not signed'] };
+  const key = trusted ?? s.publicKey;
+  const norm = (k: string) => crypto.createPublicKey(k).export({ type: 'spki', format: 'pem' }).toString();
+  let good = false;
+  try { good = (!trusted || norm(trusted) === norm(s.publicKey)) && crypto.verify(null, Buffer.from(signedPart(b)), crypto.createPublicKey(key), Buffer.from(s.value, 'base64')); } catch { good = false; }
+  return { ...v, ok: v.ok && good, signed: good, ...(good ? { signer: crypto.createHash('sha256').update(norm(key)).digest('hex').slice(0, 16) } : {}), problems: good ? v.problems : [...v.problems, trusted && norm(trusted) !== norm(s.publicKey) ? 'signed by another key than the one trusted' : 'its signature does not match it'] };
+}
