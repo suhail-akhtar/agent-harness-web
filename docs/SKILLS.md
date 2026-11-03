@@ -136,3 +136,22 @@ An agent definition's `skills` (in the agent builder, or `skills:` in an agent f
 `scripts/live-skills.mjs` is the live run. A person asks for a skill in their own words, for reconciling a bank
 statement against invoices. Then an agent given that skill reconciles two real files with the skill's script, and its
 answer is held to the known result.
+
+Live results (2026-11-03). Each model made the skill and then used it as the agent, unless a second model is named.
+
+| Model | Checks | Cost | Skill made |
+|---|---|---|---|
+| Claude Haiku 5.5 | 10/10 | $0.02 | `scripts/run.py`, its test, 58 lines of SKILL.md |
+| Claude Sonnet 5.5, then Haiku 5.5 using it | 10/10 | $0.25 | `scripts/reconcile.py`, its test |
+| Claude Opus 5.5 | 10/10 | $0.57 | `scripts/reconcile.py`, its test, 72 lines |
+| DeepSeek Flash | 10/10 | $0.23 | `scripts/reconcile.py`, its test, 175 lines |
+| DeepSeek V4 Pro | 10/10 | $0.21 | `scripts/reconcile.py`, its test, 120 lines |
+| Kimi K3.1 Pro | 10/10 | $0.25 | `scripts/reconcile.py`, its test |
+| GLM-5.3 | 10/10 | $0.22 | `scripts/reconcile.py`, its test |
+
+What the runs found and fixed:
+- An agent without `bash` could not run its skill's scripts. Its `skill_script` went through the agent's own tools, so
+  the command was refused.
+- An agent given skills was still offered all of them.
+- On DeepSeek V4 Pro, the scaffold nested a skill inside its own folder.
+- The installer left out the `tests/` folders inside skills.

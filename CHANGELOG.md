@@ -16,6 +16,16 @@
     with `check_skill` and `save_skill`. Its tests must pass before it is kept.
   - **On agents**: an agent given skills starts with their instructions, sees only those skills, and gets each
     skill's declared tools and MCP servers. If it has no `bash`, it still runs its skills' scripts.
+  - **Live**: a person asks for a skill in their own words; an agent given that skill then reconciles two real files
+    with its script. 10/10 on each of Claude Haiku 5.5, Sonnet 5.5, Opus 5.5, DeepSeek Flash, DeepSeek V4 Pro, Kimi
+    K3.1 Pro and GLM-5.3 ($0.02 to $0.57 a run).
+- **Providers checked against their official docs**:
+  - **xAI**: a request's cost is the price xAI reports for it (`cost_in_usd_ticks`). Grok's long-context rate starts
+    at 200K tokens, not after.
+  - **Kimi**: the 1-hour share of cache writes comes from Kimi's TTL headers. Asking for a K2 model now says K2 is
+    closed to new accounts.
+  - **GLM**: a webp or gif image becomes a note, since the API takes only png and jpeg. FlashX is refused on a Coding
+    Plan endpoint. Flash and FlashX default to `reasoning_effort: max`, Z.ai's recommended setting.
 - **A swarm across the person's computers** (docs/swarm/SWARM.md, phase 7; live in docs/swarm/EVAL-MACHINES.md):
   - **Stop means stop on the machine**: a cancel job kills a job's processes there. A job the server no longer
     waits for is stopped at the next poll. With no word from the server for its lease (120 s), the companion stops
