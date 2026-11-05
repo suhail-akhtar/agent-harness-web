@@ -41,7 +41,7 @@ const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { retu
 const lines = (f) => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
 
 function api(state, method, p, body) {
-  return fetch(`http://127.0.0.1:${PORT}${p}`, { method, headers: { authorization: `Bearer ${state.token}`, 'content-type': 'application/json' }, signal: AbortSignal.timeout(30_000), ...(body ? { body: JSON.stringify(body) } : {}) })
+  return fetch(`http://127.0.0.1:${PORT}${p}`, { method, headers: { authorization: `Bearer ${state.token}`, 'content-type': 'application/json', 'x-harness': '1' }, signal: AbortSignal.timeout(30_000), ...(body ? { body: JSON.stringify(body) } : {}) })
     .then(async (r) => { const t = await r.text(); if (!r.ok) throw new Error(`${method} ${p}: ${r.status} ${t.slice(0, 300)}`); return t ? JSON.parse(t) : {}; });
 }
 

@@ -1261,6 +1261,7 @@ Global event topics added: `proposals` (`{type: added\|dismissed\|started\|expir
   |---|---|---|
   | `agent` / `workflow` with `run_in_background` | meta | Start a sub-agent / a workflow run detached; the run is recorded and in the runs list like any other. |
   | `send_message` | meta (like `agent`) | Continue a sub-agent you started, with its context intact: a finished one runs again and returns its new report (later, with `run_in_background`); a background one still working sees the message at its next step. |
+  | `tell_lead` | meta (sub-agents only) | Tell the agent that started you something it should know now, while you keep working: a wrong premise, a finding that changes the plan, a block. It sees it at its next step, as data, and the person sees it. At most 3 a run. Sub-agents talk through their lead: siblings have no direct channel, so the lead sees everything and agents cannot loop on each other. |
   | `task_list` | read | Background shells, sub-agents, workflow runs and monitors: id, kind, status, age, last line of output. |
   | `task_output` | read | A task's output (a shell's log, an agent's report or latest message, a run's steps), with `tail`, `offset` and a 30,000-character cap. |
   | `task_stop` | meta | Stop a task: a shell's whole process tree, an agent, a run, a monitor. Stopping what the agent itself started needs no approval. |
