@@ -228,7 +228,8 @@ test('the user\'s Stop stops background agents; a background agent\'s question o
     q.s.respond(ask.requestId, { decision: 'allow' });
     await q.waitFor(() => q.s.tasks.get('general-1')?.status === 'completed', 'the agent');
     await fs.access(path.join(q.ws, 'made.txt'));
-    assert.equal(q.s.status, 'idle');
+    // Its report wakes the session (a turn of its own), so idle is where it settles, not where it is at once.
+    await q.waitFor(() => q.s.status === 'idle' && !q.s.meta.running, 'the session to settle');
   } finally { await q.close(); }
 });
 

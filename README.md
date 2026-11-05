@@ -1426,7 +1426,7 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 | `HARNESS_CACHE_ATTRIBUTION` | on | Cache misses named by the prompt section that changed (trace, `cache_miss` events, session stats, eval results; `efficiency.cacheAttribution`). |
 | `HARNESS_PREFIX_TTL` | auto | Claude's stable prefix (tools + system) cache TTL: `5m`, `1h`, or `auto` (1 hour once a tool call ran past 4 minutes or requests were more than 5 minutes apart; `promptCaching.prefixTtl`). |
 | `HARNESS_TRUST_PROJECT` | off | Let repository hooks and stdio MCP servers run outside the sandbox. |
-| `HARNESS_AUTO_RESUME` | off | After a restart, interrupted turns start again and interrupted workflow runs pick up at their step, with nobody there. Each counts against `HARNESS_BACKGROUND_MAX_WAKES` and the account's caps. |
+| `HARNESS_AUTO_RESUME` | off | After a restart, interrupted turns start again and interrupted workflow runs pick up at their step, with nobody there. Work lost to an outage (no network, the provider down) tries again after 1, 2, 5, 10, 20 and then every 30 minutes. Each counts against `HARNESS_BACKGROUND_MAX_WAKES` and the account's caps. |
 | `HARNESS_GATES_ON_STOP` | off | Refuse to end a turn while a blocking quality gate fails. |
 | `HARNESS_BUNDLED_PLUGINS` | on | `off` skips the bundled `plugins/` (quality gates, SDLC, visual, documents, games3d, computer, devops, aiops, integrations). |
 | `HARNESS_INTEGRATIONS` | | The integrations plugin's configuration: channels, routing rules, approvers (JSON, `@<file>` or a file path; credentials only as Key Vault names `int-*`). See [Integrations](#integrations-pluginsintegrations). |

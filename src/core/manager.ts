@@ -38,7 +38,9 @@ export class SessionManager {
         // Mid-turn when the server stopped: close the turn out cleanly.
         const midTurn = await s.recoverInterrupted();
         const runs = await s.recoverRuns();
-        if (midTurn || runs.length) this.interrupted.push({ s, runs });
+        // Waiting to try again after an outage when the server stopped: the wait ends here.
+        if (s.meta.outageRun) runs.push(s.meta.outageRun);
+        if (midTurn || runs.length || s.meta.outageRetries) this.interrupted.push({ s, runs });
       } catch { /* not a session */ }
     }
     this.synced = Date.now();

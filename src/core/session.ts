@@ -28,7 +28,7 @@ import type { AskOutcome, FileStamp, ScheduleSpec, Tool, ToolServices } from '..
 import { str } from '../tools/types.ts';
 import { loadedGroups, pluginGroups, sentSpecs, SKILLS_GROUP, type ToolGroup } from '../tools/deferred.ts';
 import { SpillStore } from '../tools/spill.ts';
-import type { ToolSpec } from '../providers/types.ts';
+import { ProviderError, type ToolSpec } from '../providers/types.ts';
 import { MemoryStore, projectKey } from '../memory/store.ts';
 import { neutralizeTags, sanitizeUntrusted, stripInvisible } from './untrusted.ts';
 import { namedDestinations } from './provenance.ts';
@@ -169,6 +169,9 @@ export interface SessionMeta {
   chapters?: { index: number; title: string; summary?: string; at: number; turn: number }[];
   /** Turns started without a message from the person (a linked report, another session's message), since the last one. */
   autoContinues?: number;
+  /** Tries since work was lost to an outage (afterOutage), and the workflow run it was, if one: a restart carries on with them. */
+  outageRetries?: number;
+  outageRun?: string;
   /** Addresses, hosts, accounts and numbers the person named in their own messages and answers (provenance.ts), newest last. */
   namedDestinations?: string[];
   /** The network its commands really have (the host's), once it has one: `runtime.network` is what was asked (and what a session made like this one asks). */
@@ -194,6 +197,8 @@ export interface LiveAgent { name: string; type: string; model: string; startedA
 const stallNoteMs = () => Number(process.env.HARNESS_STALL_NOTE_S ?? 150) * 1000;
 /** At most this many messages from one sub-agent to its lead in one run (tell_lead): news, not a running commentary. */
 const TELL_LEAD_MAX = 3;
+/** Minutes before each try after an outage (afterOutage); the last repeats. */
+const OUTAGE_WAITS = [1, 2, 5, 10, 20, 30];
 const quietFor = (ms: number) => (ms < 90_000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60_000)} min`);
 
 /** "8 hours", "30 minutes", "45 seconds". */
@@ -802,6 +807,7 @@ export class Session {
    * so, and the session is idle again (and can be resumed).
    */
   private toolCutOff = false;
+  private outageTimer?: NodeJS.Timeout;
   async recoverInterrupted(): Promise<boolean> {
     if (!this.meta.running) return false;
     const ctx = this.history.slice(this.meta.contextStart);
@@ -3235,15 +3241,35 @@ export class Session {
       if (why !== 'woken') stopped(why);
       return;
     }
+    const [id, ...others] = runs;
+    await this.carryOnRun(id!);
+    // A session runs one at a time.
+    if (others.length) this.emit({ kind: 'notice', level: 'warn', text: `Also interrupted, and left for you to resume from the runs list: ${others.join(', ')}.` });
+  }
+
+  /** An interrupted run goes on with nobody there, as a wake; the agent hears how it ended. */
+  private async carryOnRun(id: string): Promise<void> {
+    const stopped = (why: string) => this.emit({ kind: 'notice', level: 'warn', text: `Not carrying on with the workflow run (${why}). Resume it from the runs list.` });
     const blocked = await this.wakeBlocked('background');
     if (blocked) return stopped(blocked);
     this.meta.autoContinues = (this.meta.autoContinues ?? 0) + 1;
-    const [id, ...others] = runs;
-    try {
-      await this.resumeRun(id!, (run) => this.deliver(`Workflow ${run.workflow} (${run.id}) carried on after a restart and ended: ${run.status}. Its steps:`, runSummary(run)));
-    } catch (e) { return stopped((e as Error).message); }
-    // A session runs one at a time.
-    if (others.length) this.emit({ kind: 'notice', level: 'warn', text: `Also interrupted, and left for you to resume from the runs list: ${others.join(', ')}.` });
+    await this.resumeRun(id, (run) => { if (run.status !== 'failed' || !this.meta.outageRun) this.deliver(`Workflow ${run.workflow} (${run.id}) carried on after a stop and ended: ${run.status}. Its steps:`, runSummary(run)); }).catch((e: Error) => stopped(e.message));
+  }
+
+  /**
+   * HARNESS_AUTO_RESUME=1: work lost to an outage tries again, later and later, with nobody there. A laptop's
+   * network drops and it sleeps, and a model call's own retries last about two minutes (seen live: a 14-minute
+   * drop ended a turn for good). Each try is a wake. Anything else ending the work clears it.
+   */
+  private afterOutage(lost: boolean, again: () => void): void {
+    clearTimeout(this.outageTimer);
+    if (!lost) { if (this.meta.outageRetries) { this.meta.outageRetries = 0; this.scheduleSave(); } return; }
+    if (process.env.HARNESS_AUTO_RESUME !== '1') return;
+    const n = this.meta.outageRetries = (this.meta.outageRetries ?? 0) + 1;
+    const minutes = OUTAGE_WAITS[Math.min(n, OUTAGE_WAITS.length) - 1]!;
+    this.emit({ kind: 'notice', level: 'warn', text: `Stopped by an outage. Trying again in ${minutes} minute${minutes === 1 ? '' : 's'} (try ${n}).` });
+    this.outageTimer = setTimeout(again, minutes * Number(process.env.HARNESS_OUTAGE_RETRY_MS ?? 60_000));
+    this.outageTimer.unref();
   }
 
   /** `bg`: the signal of a run started in the background (its approvals outlive the turn); `parent`: the agent that started it. */
@@ -3411,11 +3437,13 @@ export class Session {
     this.setStatus('running');
     this.meta.turns = (this.meta.turns ?? 0) + 1;
     this.ended = false;
+    let outage = false;
     try {
       await this.mainAgent();
       this.checkpoints?.begin(this.meta.turns, `workflow ${w.name}`);
       const runner = new WorkflowRunner(w, this.workflowHost(w), run);
       const done = await runner.execute(signal);
+      outage = done.status === 'failed' && !!done.current && /network error/i.test(done.error ?? '');
       if (!done.paused) this.emit({ kind: 'notice', level: done.status === 'succeeded' ? 'info' : 'warn', text: `Workflow ${w.name} ${done.status}${done.error ? `: ${done.error}` : ''} ($${done.cost.toFixed(4)}).` });
     } catch (err) {
       this.emit({ kind: 'notice', level: 'error', text: `Workflow ${w.name} could not run: ${(err as Error).message}` });
@@ -3424,6 +3452,8 @@ export class Session {
       for (const [id, p] of this.pending) if (!p.background) this.respond(id, { decision: 'deny', feedback: 'run ended' });
       this.emit({ kind: 'turn_end', reason: signal.aborted ? 'aborted' : 'done' });
       this.setStatus(this.pending.size ? 'waiting' : 'idle');
+      this.meta.outageRun = outage ? run.id : undefined;
+      this.afterOutage(outage, () => { if (this.status === 'idle' && this.meta.outageRun === run.id) void this.carryOnRun(run.id); });
       await this.saveMeta().catch(() => {});
     }
   }
@@ -3711,6 +3741,7 @@ export class Session {
     this.ended = false;
     await this.saveMeta().catch(() => {});
     let reason: TurnEndReason = 'done';
+    let outage = false;
     try {
       const agent = await this.mainAgent();
       const host = await this.getHost();
@@ -3762,6 +3793,7 @@ export class Session {
       if (signal.aborted) reason = 'aborted';
       else {
         reason = 'error';
+        outage = err instanceof ProviderError && err.retryable;
         this.emit({ kind: 'notice', level: 'error', text: (err as Error).message ?? String(err) });
         fireHooks(this.settings, this.host, 'StopFailure', { error: String((err as Error).message ?? err).slice(0, 4000) }, this.deps.registry.hooks, (m) => this.emit({ kind: 'notice', level: 'warn', text: m }));
       }
@@ -3772,6 +3804,12 @@ export class Session {
       for (const [id, p] of this.pending) if (!p.background) this.respond(id, { decision: 'deny', feedback: 'turn ended' });
       this.emit({ kind: 'turn_end', reason });
       this.setStatus(this.pending.size ? 'waiting' : 'idle');
+      this.afterOutage(outage, () => {
+        if (this.status !== 'idle' || !this.meta.outageRetries) return;
+        void this.autoWake('The connection to the model dropped and your turn stopped. Continue the task from where you left off.', undefined, 'background').then((why) => {
+          if (why !== 'woken' && why !== 'queued') this.emit({ kind: 'notice', level: 'warn', text: `Not trying again (${why}). Send "continue" to resume.` });
+        });
+      });
       await this.saveMeta().catch(() => {});
       // A message typed after the last step starts the next turn; reminders (background results among them) wait for it.
       // Stopped: what the person typed waits for them (send now, or remove); stopped to send it now: it goes.

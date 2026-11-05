@@ -171,6 +171,11 @@ async function supervise() {
   for (;;) {
     const now = Date.now();
     if (state.finishedAt) return;
+    // The machine slept (a closed lid: nothing here can hold that off). Past the end, the agents get their hour awake.
+    if (state.lastBeat && now - state.lastBeat > 120_000) {
+      log('machine-away', { from: state.lastBeat, to: now });
+      if (now >= state.endsAt) state.graceUntil = now + 60 * 60_000;
+    }
     state.lastBeat = now;
     if (now >= nextProbe) { nextProbe = now + 5 * 60_000; void probe(); }
 
@@ -205,7 +210,7 @@ async function supervise() {
     // After the end: time for the study's report, then stop.
     if (now >= state.endsAt) {
       const wrote = fs.existsSync(path.join(uptime, 'report.md')) && fs.statSync(path.join(uptime, 'report.md')).mtimeMs >= state.endsAt - 15 * 60_000;
-      if (wrote || finishing || now >= state.endsAt + 60 * 60_000) {
+      if (wrote || finishing || now >= (state.graceUntil ?? state.endsAt + 60 * 60_000)) {
         log('finish', { reportWritten: wrote });
         await sleep(wrote ? 5 * 60_000 : 0);
         const final = await heartbeat(state).catch(() => ({}));
@@ -218,6 +223,7 @@ async function supervise() {
         return;
       }
     }
+    state.lastBeat = Date.now();
     writeState(state);
     await sleep(15_000);
   }
@@ -325,13 +331,14 @@ async function report() {
   const kills = tl.filter((e) => e.kind === 'kill');
   check(kills.length >= Math.ceil(s.kills.length * 0.7), `${kills.length} of ${s.kills.length} planned kills happened (the rest fell while the machine was off)`);
   check(tl.filter((e) => e.kind === 'server-failed-to-start').length === 0, `the server came back every time (${tl.filter((e) => e.kind === 'server-up').length} restarts)`);
-  const breaks = tl.filter((e) => e.kind === 'supervisor-start').slice(1).map((e) => ({ from: e.lastBeat, to: e.t })).filter((b) => b.from);
+  const breaks = [...tl.filter((e) => e.kind === 'supervisor-start').slice(1).map((e) => ({ from: e.lastBeat, to: e.t })).filter((b) => b.from), ...tl.filter((e) => e.kind === 'machine-away').map((e) => ({ from: e.from, to: e.to }))];
+  const awayMs = breaks.reduce((n, b) => n + Math.max(0, Math.min(b.to, s.endsAt) - b.from), 0);
   out.push(`- Note: ${breaks.length} break(s) in supervision (machine off, asleep or restarted): ${breaks.map((b) => `${iso(b.from)} to ${iso(b.to)} UTC`).join('; ') || 'none'}`);
 
   out.push('', '## The uptime study');
   const services = Object.keys(SERVICES);
   const slots = new Set(rows.map((r) => Math.floor(r.t / 300_000)));
-  const expected = Math.floor((s.endsAt - s.startedAt) / 300_000);
+  const expected = Math.floor((s.endsAt - s.startedAt - awayMs) / 300_000);
   const coverage = slots.size / Math.max(1, expected);
   check(coverage >= 0.9, `${slots.size} of ${expected} five-minute slots measured (${(coverage * 100).toFixed(1)}%)`);
   const times = [...new Set(rows.map((r) => r.t))].sort((a, b) => a - b);
@@ -340,7 +347,10 @@ async function report() {
   const reportFile = path.join(uptime, 'report.md');
   const reportText = fs.existsSync(reportFile) ? fs.readFileSync(reportFile, 'utf8') : '';
   check(!!reportText, `report.md written${reportText ? ` (${reportText.length} characters)` : ''}`);
-  const named = gaps.filter((g) => { const d = new Date(g.from); const hh = String(d.getUTCHours()).padStart(2, '0'); const mm = String(d.getUTCMinutes()).padStart(2, '0'); return reportText.includes(`${hh}:${mm}`) || reportText.includes(`${hh}:${mm.slice(0, 1)}`); });
+  // A gap is named when a time in the report falls within 10 minutes of its start, in UTC or on the local clock.
+  const said = [...reportText.matchAll(/\b([01]?\d|2[0-3]):([0-5]\d)\b/g)].map((m) => Number(m[1]) * 60 + Number(m[2]));
+  const near = (a, b) => Math.min(Math.abs(a - b), 1440 - Math.abs(a - b)) <= 10;
+  const named = gaps.filter((g) => { const d = new Date(g.from); return said.some((m) => near(m, d.getUTCHours() * 60 + d.getUTCMinutes()) || near(m, d.getHours() * 60 + d.getMinutes())); });
   check(named.length === gaps.length, `its report names ${named.length} of the ${gaps.length} real gaps over 12 minutes in the data`);
   for (const g of gaps) out.push(`  - gap ${iso(g.from)} to ${iso(g.to)} UTC (${Math.round((g.to - g.from) / 60000)} min)`);
   // Nothing measured while nothing could have been: rows inside a break in supervision.
@@ -383,9 +393,9 @@ async function report() {
   out.push('', '## The schedule');
   const st = await fetch(`http://127.0.0.1:${PORT}/api/health`, { signal: AbortSignal.timeout(2000) }).then(() => true, () => false);
   const digests = fs.existsSync(path.join(uptime, 'digests.md')) ? fs.readFileSync(path.join(uptime, 'digests.md'), 'utf8') : '';
-  const sections = (digests.match(/^#{1,3} /gm) ?? []).length;
-  const wanted = Math.floor((end - s.startedAt) / (s.hours >= 24 ? 6 : 1 / 3) / 3_600_000);
-  check(sections >= wanted * 0.8, `digests.md has ${sections} sections for about ${wanted} runs due`);
+  const sections = (digests.match(/^## /gm) ?? []).length;
+  const wanted = Math.floor((s.endsAt - s.startedAt - awayMs) / (s.hours >= 24 ? 6 : 1 / 3) / 3_600_000);
+  check(sections >= wanted * 0.8, `digests.md has ${sections} sections for about ${wanted} runs due while the machine was awake`);
   out.push(st ? '- Note: the server was still up for this report.' : '');
 
   out.push('', '## Health');
