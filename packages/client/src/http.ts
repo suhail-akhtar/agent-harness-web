@@ -100,6 +100,21 @@ export class HarnessClient {
   patch<T>(p: string, b?: unknown) { return this.request<T>('PATCH', p, b ?? {}); }
   del<T>(p: string) { return this.request<T>('DELETE', p); }
 
+  /**
+   * An image from the web, fetched by the server because the person asked to see it. An interface never puts a
+   * remote address from model output in an <img> itself: that request would carry whatever the address holds.
+   */
+  async remoteImage(url: string): Promise<{ type: string; bytes: Uint8Array }> {
+    let res: Response;
+    try {
+      res = await this.fetch(`${this.base}/api/remote-image`, { method: 'POST', headers: { ...this.extra(), 'content-type': 'application/json', 'x-harness': '1' }, body: JSON.stringify({ url }) });
+    } catch (e) {
+      throw new ApiError(0, `The engine did not answer: ${(e as Error).message}`);
+    }
+    if (!res.ok) { const t = await res.text(); let msg = t; try { msg = (JSON.parse(t) as { error?: string }).error ?? t; } catch { /* text */ } throw new ApiError(res.status, msg || `HTTP ${res.status}`); }
+    return { type: (res.headers.get('content-type') ?? 'application/octet-stream').split(';')[0]!, bytes: new Uint8Array(await res.arrayBuffer()) };
+  }
+
   /** Calls a new endpoint; on 404 remembers it is missing and returns the fallback. */
   private async optional<T>(feature: string, call: () => Promise<T>, fallback: () => Promise<T> | T): Promise<T> {
     if (this.missing.has(feature)) return fallback();

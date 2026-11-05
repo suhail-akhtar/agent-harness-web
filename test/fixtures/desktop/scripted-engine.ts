@@ -9,6 +9,7 @@
 import path from 'node:path';
 import { createHarness } from '../../../src/kernel/harness.ts';
 import { createApp } from '../../../src/server/app.ts';
+import { images } from '../../../src/tools/web.ts';
 import { SpendLedger, UserStore } from '../../../src/server/users.ts';
 import type { Provider, ProviderRequest, ProviderResponse } from '../../../src/providers/types.ts';
 import type { Block } from '../../../src/core/types.ts';
@@ -70,6 +71,10 @@ const users = await new UserStore(DATA).load();
 const spend = await new SpendLedger(DATA).load();
 const harness = await createHarness({ dataDir: DATA, plugins: PLUGINS, search: null, spend, memory: 'off', log: (m) => console.log(m) });
 harness.registry.setProviderInstance('deepseek', new ScriptedProvider());
+// One address on the web that answers with an image (the test has no internet): every other address goes
+// through the real guard, so this computer's own addresses stay refused.
+const fetchImage = images.fetch;
+images.fetch = async (url, o) => (url === 'https://images.test/ok.png' ? { type: 'image/png', bytes: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAfbLI3wAAAABJRU5ErkJggg==', 'base64'), url } : fetchImage(url, o));
 const { server } = createApp({ harness, token: TOKEN, loopback: true, localRoots: ROOTS, uiDir: path.join(DATA, 'ui'), appRoot: path.resolve(import.meta.dirname, '..', '..', '..'), users, spend, messageRateLimit: 0, rateLimit: 0 });
 server.listen(PORT, '127.0.0.1', () => console.log(`scripted engine listening on http://127.0.0.1:${PORT} (plugins: ${harness.registry.plugins.map((p) => p.name).join(', ') || 'none'})`));
 const stop = () => { server.close(); void harness.close().finally(() => process.exit(0)); setTimeout(() => process.exit(0), 3000).unref(); };

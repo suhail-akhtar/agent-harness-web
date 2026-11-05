@@ -23,9 +23,10 @@ Its data comes from the plugin's own routes.
 ```
 
 Allowed: its own files (scripts, styles, images, fonts under the plugin folder), inline scripts and
-styles, `data:`/`blob:` images, images from `https:`. Not allowed: scripts or styles from the web
-(copy a library into the folder), `fetch`/`XMLHttpRequest`/`WebSocket` (no network: use routes),
-forms that post, nested frames.
+styles, `data:`/`blob:` images. Not allowed: scripts or styles from the web (copy a library into
+the folder), images from the web (an image request is a connection, and its address can carry data
+out: ship the image in the folder, or have a route return it), `fetch`/`XMLHttpRequest`/`WebSocket`
+(no network: use routes), forms that post, nested frames.
 
 ## The SDK
 

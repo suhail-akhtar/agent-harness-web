@@ -19,7 +19,9 @@ export const APP_CSP = [
   // KaTeX, Mermaid, ECharts and React style props write inline styles.
   `style-src 'self' ${APP_ORIGIN} 'unsafe-inline'`,
   `font-src 'self' ${APP_ORIGIN} data:`,
-  `img-src 'self' ${APP_ORIGIN} data: blob: https: http:`,
+  // No image from the web: model output chooses addresses, and a request to one carries what it holds out of the
+  // app. The person asks for one, the engine fetches it (POST /api/remote-image), and it is shown from a blob.
+  `img-src 'self' ${APP_ORIGIN} data: blob:`,
   `media-src 'self' ${APP_ORIGIN} data: blob:`,
   `connect-src 'self' ${APP_ORIGIN}`,
   // Plugin frames are served from harness://app/plugins/..., artifact previews from harness://preview/.
@@ -33,8 +35,8 @@ export const APP_CSP = [
 
 /**
  * A plugin's UI files: its scripts and the SDK may run, inside an opaque-origin sandbox, with no
- * connections at all (the SDK talks to the host by postMessage only), no forms that post anywhere,
- * and nothing from the app's API paths.
+ * connections at all (the SDK talks to the host by postMessage only; an image from the web would be
+ * one, so there is none), no forms that post anywhere, and nothing from the app's API paths.
  */
 export function pluginCsp(plugin: string): string {
   const own = `${APP_ORIGIN}/plugins/${encodeURIComponent(plugin)}/`;
@@ -43,7 +45,7 @@ export function pluginCsp(plugin: string): string {
     "default-src 'none'",
     `script-src 'unsafe-inline' ${own} ${sdk}`,
     `style-src 'unsafe-inline' ${own} ${sdk}`,
-    `img-src ${own} data: blob: https:`,
+    `img-src ${own} data: blob:`,
     `font-src ${own} data:`,
     `media-src ${own} data: blob:`,
     "connect-src 'none'",

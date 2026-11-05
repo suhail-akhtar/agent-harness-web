@@ -6,13 +6,50 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Icon } from '../icons.tsx';
 import { Portal } from '../components/overlay.tsx';
-import { safeHref, safeImageSrc } from './safe.ts';
+import { Button } from '../components/primitives.tsx';
+import { remoteImage, safeHref, safeImageSrc } from './safe.ts';
+
+/**
+ * How the host fetches an image from the web once the person asks for it: the address in, a local (blob: or
+ * data:) address out. Without one, remote images are named and never loaded.
+ */
+export type RemoteImageLoader = (url: string) => Promise<string>;
+let loadRemote: RemoteImageLoader | undefined;
+export function setRemoteImageLoader(l: RemoteImageLoader | undefined): void { loadRemote = l; }
+
+/** An image on the web: its address shown, loaded only when the person says so (safe.ts remoteImage). */
+function RemoteImage({ at, alt, className, thumb }: { at: NonNullable<ReturnType<typeof remoteImage>>; alt?: string; className?: string; thumb?: boolean }): React.ReactElement {
+  const [local, setLocal] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  if (local) return <ImageView src={local} alt={alt} className={className} thumb={thumb} />;
+  const load = () => {
+    if (!loadRemote || busy) return;
+    setBusy(true);
+    setError('');
+    loadRemote(at.url).then(setLocal, (e: Error) => setError(e.message || 'It did not load.')).finally(() => setBusy(false));
+  };
+  return (
+    <span data-remote-image={at.host} className={`my-2 inline-flex max-w-full flex-col gap-1 rounded-xl border border-hx-border-subtle bg-hx-pill px-3 py-2 align-top text-small ${className ?? ''}`}>
+      <span className="flex flex-wrap items-center gap-2">
+        <Icon name="image" size={14} />
+        <span className="min-w-0 flex-1">{alt ? `${alt}: an` : 'An'} image on <strong>{at.host}</strong>, not loaded</span>
+        {loadRemote && <Button size="sm" loading={busy} onClick={load} data-remote-image-load>Load image</Button>}
+      </span>
+      <span className="break-all text-hx-muted" data-remote-image-url>{at.url.length > 300 ? `${at.url.slice(0, 300)}…` : at.url}</span>
+      {at.carries && <span className="text-hx-warning" data-remote-image-carries>This address carries extra data. Loading it sends that data to {at.host}.</span>}
+      {error && <span className="text-hx-danger" role="alert">{error}</span>}
+    </span>
+  );
+}
 
 export function ImageView({ src, alt, className, thumb }: { src: string; alt?: string; className?: string; thumb?: boolean }): React.ReactElement | null {
   const safe = safeImageSrc(src);
+  const remote = remoteImage(src);
   const [open, setOpen] = useState(false);
   const [failed, setFailed] = useState(false);
   if (!safe) return <span className="text-small text-hx-muted">[image not shown: {alt || 'unsupported source'}]</span>;
+  if (remote) return <RemoteImage at={remote} alt={alt} className={className} thumb={thumb} />;
   if (failed) return <span className="inline-flex items-center gap-1 rounded bg-hx-pill px-1.5 py-0.5 text-small text-hx-muted"><Icon name="image" size={12} />{alt || 'image'} (did not load)</span>;
   return (
     <>

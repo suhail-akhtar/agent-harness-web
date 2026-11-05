@@ -26,6 +26,7 @@ import { McpbError } from '../mcp/mcpb.ts';
 import { VAULT_KINDS, type VaultActor, VaultError, type VaultKind, type VaultScope } from '../vault/store.ts';
 import { PathError, resolveIn, walk } from '../tools/paths.ts';
 import { view } from '../tools/tasks.ts';
+import { images } from '../tools/web.ts';
 import { BrowserSessions, isSsoAdmin, NOBODY_ALLOWED, type OidcClient, OidcError, refusal } from './oidc.ts';
 import { type ConcurrencyLimits, concurrencyLimits, concurrencyRefusal, RateLimiter, type Role, type SpendLedger, type UserStore } from './users.ts';
 import { UI_API_VERSION } from '../../packages/plugin-ui/src/manifest.ts';
@@ -956,6 +957,19 @@ export function createApp(o: AppOptions): { server: http.Server; handle(req: htt
     if (p.startsWith('/api/data/') && await dataRoutes(dataHttp, req, res, url, me)) return;
 
     if (p === '/api/me' && method === 'GET') return send(res, 200, { ...me, spentToday: o.spend?.spentToday(me.id) ?? 0, accounts: (o.users?.size ?? 0) > 0 });
+
+    // An image from the web the person asked to see (a click on its placeholder). Interfaces never load a remote
+    // image by themselves: its address is the model's, and can carry data out (tools/web.ts fetchPublicImage).
+    if (p === '/api/remote-image' && method === 'POST') {
+      limited(limiter, me);
+      const b = await readJson(req, 20_000);
+      if (typeof b.url !== 'string' || !b.url.trim()) throw new HttpError(400, 'url is required');
+      let image: Awaited<ReturnType<typeof images.fetch>>;
+      try { image = await images.fetch(b.url.trim(), { signal: AbortSignal.timeout(20_000) }); } catch (e) { throw new HttpError(422, `The image was not loaded: ${(e as Error).message}`); }
+      // Never an active page of this origin: sandboxed, not sniffed (an SVG is shown by an <img>, which runs nothing).
+      res.writeHead(200, { 'content-type': image.type, 'content-length': String(image.bytes.length), 'content-security-policy': "sandbox; default-src 'none'", 'x-content-type-options': 'nosniff', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' });
+      return void res.end(image.bytes);
+    }
 
     // ---- for desktop clients: version, the global event stream, waiting requests ----
     if (p === '/api/version' && method === 'GET') return send(res, 200, { version: await harnessVersion(o.appRoot), apiVersion: API_VERSION, uiApiVersion: UI_API_VERSION });

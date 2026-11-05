@@ -11,6 +11,8 @@ import { type CondFormat, type FilterSpec, formatValue, type QueryResult, type R
 import { cx } from '../../components/primitives.tsx';
 import { Icon } from '../../icons.tsx';
 import { clickFilters, visualOption } from './option.ts';
+import { ImageView } from '../Media.tsx';
+import { remoteImage, safeImageSrc } from '../safe.ts';
 
 let echartsP: Promise<typeof import('echarts')> | undefined;
 const loadECharts = () => (echartsP ??= import('echarts'));
@@ -456,7 +458,9 @@ function Narrative({ result, renderMarkdown }: VisualProps & { result: QueryResu
 
 function StaticVisual({ v, renderMarkdown, onButton }: VisualProps) {
   const o = v.options ?? {};
-  if (v.type === 'image') return o.url ? <img src={o.url} alt={o.alt ?? v.title ?? ''} className="h-full w-full object-contain" /> : <div className="p-2 text-small text-hx-muted">No image</div>;
+  // An image on the web is named, not loaded (Media.tsx): a dashboard's author is a model too.
+  if (v.type === 'image' && o.url && remoteImage(o.url)) return <div className="h-full overflow-auto p-1"><ImageView src={o.url} alt={o.alt ?? v.title ?? ''} /></div>;
+  if (v.type === 'image') return o.url && safeImageSrc(o.url) ? <img src={o.url} alt={o.alt ?? v.title ?? ''} className="h-full w-full object-contain" /> : <div className="p-2 text-small text-hx-muted">No image</div>;
   if (v.type === 'button') return <div className="flex h-full items-center justify-center p-1"><button type="button" data-bi-button className="w-full rounded-lg bg-hx-accent px-3 py-1.5 text-body font-medium text-hx-on-accent hover:bg-hx-accent-hover" onClick={() => onButton?.(o.button)}>{o.button?.label ?? 'Button'}</button></div>;
   return <div className="h-full overflow-auto px-2 py-1 text-body" data-bi-text>{renderMarkdown ? renderMarkdown(o.markdown ?? '') : o.markdown}</div>;
 }

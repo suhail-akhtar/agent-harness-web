@@ -63,8 +63,15 @@ test('scheme policies: the app, plugin frames and previews', () => {
   assert.match(APP_CSP, /form-action 'none'/);
   assert.match(APP_CSP, /object-src 'none'/);
   assert.doesNotMatch(APP_CSP, /'unsafe-eval'/, 'no eval for the app (wasm-unsafe-eval only)');
+  // Nothing in the window can load from the web by itself: an address in model output would carry data out.
+  for (const d of ['default-src', 'img-src', 'media-src', 'connect-src', 'font-src', 'script-src', 'style-src', 'frame-src', 'worker-src']) {
+    const rule = APP_CSP.split('; ').find((r) => r.startsWith(`${d} `));
+    assert.ok(rule, `the app's policy has ${d}`);
+    assert.doesNotMatch(rule!, /\bhttps?:(?!\/\/)|\*/, `${d} names no web source`);
+  }
   const p = pluginCsp('acme');
   assert.match(p, /connect-src 'none'/);
+  assert.doesNotMatch(p, /\bhttps?:(?!\/\/)|\*/, 'a plugin frame loads nothing from the web, images included');
   assert.match(p, /sandbox allow-scripts allow-forms/);
   assert.match(p, new RegExp(`script-src 'unsafe-inline' ${APP_ORIGIN}/plugins/acme/ ${APP_ORIGIN}/sdk/`));
   assert.doesNotMatch(p, /harness:\s|harness:;|'self'/, 'no scheme-wide source that would reach the API');

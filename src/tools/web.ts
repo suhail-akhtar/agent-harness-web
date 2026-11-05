@@ -85,6 +85,47 @@ export function publicFetch(url: string | URL, init: RequestInit = {}): Promise<
   return undiciFetch(url, { ...(init as object), dispatcher: pinnedAgent }) as unknown as Promise<Response>;
 }
 
+const IMAGE_MAX_BYTES = 15 * 1024 * 1024;
+const IMAGE_TYPES = /^image\/(png|jpe?g|gif|webp|avif|bmp|svg\+xml|x-icon|vnd\.microsoft\.icon)$/;
+
+/**
+ * An image from the web, for a person who asked to see it. The app never loads one by itself: a remote image
+ * in model output is a request to a host of the model's choosing, carrying whatever it put in the address.
+ * Guarded as web_fetch is: public addresses only at every hop, no cookies, an image type, a size cap.
+ */
+export async function fetchPublicImage(raw: string, o: { signal?: AbortSignal; fetch?: typeof publicFetch; check?: typeof assertPublicUrl } = {}): Promise<{ type: string; bytes: Buffer; url: string }> {
+  const check = o.check ?? assertPublicUrl;
+  const get = o.fetch ?? publicFetch;
+  let url = await check(raw);
+  let res: Response | undefined;
+  for (let hop = 0; hop < 6 && !res; hop++) {
+    const r = await get(url, { redirect: 'manual', signal: o.signal, headers: { 'user-agent': 'harness-web/0.1 (+image)', accept: 'image/*' } });
+    const to = r.status >= 300 && r.status < 400 ? r.headers.get('location') : null;
+    if (!to) { res = r; break; }
+    await r.body?.cancel().catch(() => {});
+    url = await check(new URL(to, url).toString());
+  }
+  if (!res) throw new Error('too many redirects');
+  const refuse = async (why: string): Promise<never> => { await res.body?.cancel().catch(() => {}); throw new Error(why); };
+  if (!res.ok) return refuse(`${url.hostname} answered ${res.status}`);
+  const type = (res.headers.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase();
+  if (!IMAGE_TYPES.test(type)) return refuse(`${url.hostname} did not send an image (${type || 'no content type'})`);
+  const reader = res.body?.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  while (reader) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size > IMAGE_MAX_BYTES) { await reader.cancel().catch(() => {}); throw new Error('the image is larger than 15 MB'); }
+    chunks.push(value);
+  }
+  return { type, bytes: Buffer.concat(chunks), url: url.toString() };
+}
+
+/** How the server gets an image a person asked for (replaceable in tests). */
+export const images = { fetch: fetchPublicImage };
+
 /**
  * Lowercases A-Z only. String.toLowerCase can change the length ("İ" becomes two
  * code units), and positions found in the lowered copy must hold in the page itself.

@@ -6,7 +6,7 @@
 import './index.css';
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import { setArtifactHost, toast } from '@harness/ui';
+import { setArtifactHost, setRemoteImageLoader, toast } from '@harness/ui';
 import { App } from './shell/App';
 // The resizable panes keep their sizes in the prefs (and are known to agents) from the start.
 import './state/layout';
@@ -76,6 +76,8 @@ async function boot() {
     openPanel: (a) => useApp.setState({ panel: { kind: 'artifact', title: a.title, artifact: a.kind, source: a.source, language: a.language } }),
     useRenderer: useArtifactRenderer,
   });
+  // An image on the web is fetched by the engine, on the person's click: the window itself cannot load one (policy.ts APP_CSP).
+  setRemoteImageLoader(async (url) => { const im = await client.remoteImage(url); return URL.createObjectURL(new Blob([im.bytes as BlobPart], { type: im.type })); });
   useData.getState().rebuild();
   reapplyTheme();
   theme.watchSystem(() => { if (useApp.getState().prefs.theme === 'system') reapplyTheme(); });
