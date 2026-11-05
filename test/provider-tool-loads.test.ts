@@ -63,3 +63,15 @@ test('Claude: refusal fallback on Opus 5.5 and Sonnet 5.5 (default), not on Haik
   assert.equal(body('claude-haiku-5-5').fallbacks, undefined);
   assert.equal(body('claude-opus-5-5', { HARNESS_ANTHROPIC_FALLBACK: 'off' }).fallbacks, undefined);
 });
+
+test('load_tools stays as it was: the shorter one sent after a load does not change the tool list, or the cache behind it', () => {
+  const full = { ...LOAD, description: 'widgets: count and paint; gadgets: spin' };
+  const short = { ...LOAD, description: 'gadgets: spin' };
+  for (const model of ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-fable-5-1']) {
+    const before = anthropicBody({ ...req(model, [full, READ], loaded.slice(0, 1)), loadTools: full }, false) as unknown as Body;
+    const after = anthropicBody({ ...req(model, [short, READ, WIDGET, OTHER], loaded), loadTools: full }, false) as unknown as Body;
+    const none = anthropicBody({ ...req(model, [READ, WIDGET, OTHER], loaded), loadTools: full }, false) as unknown as Body;
+    assert.deepEqual(after.tools, before.tools, `${model}: after a load`);
+    assert.deepEqual(none.tools, before.tools, `${model}: with nothing left to load`);
+  }
+});

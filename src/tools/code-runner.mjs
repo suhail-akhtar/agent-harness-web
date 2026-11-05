@@ -27,11 +27,29 @@ let size = 0;
 const MAX_OUT = 200_000;
 const text = (v, max = 4000) => (typeof v === 'string' ? v : '').slice(0, max);
 
+let dropped = 0;
+let returned;
+let lateNote;
+/** Set when the script has returned while tool calls it never awaited are still out: it ends when they are back. */
+let whenIdle;
+
 function finish(ok, error) {
   if (finished) return;
   finished = true;
+  // What was printed past the limit is counted, never dropped without a word; the return value is always kept.
+  if (dropped) lines.push(`[${dropped} more line(s) not kept: the script printed over ${MAX_OUT} characters]`);
+  if (returned !== undefined) lines.push(returned);
+  if (lateNote) lines.push(lateNote);
   out({ type: 'done', ok, output: lines.join('\n'), ...(ok ? {} : { error }) });
 }
+
+// A tool call that failed with nobody awaiting it: said, instead of ending the process with a stack on stderr
+// (or, after the script returned, not at all).
+process.on('unhandledRejection', (e) => {
+  let msg = 'a promise was rejected';
+  try { msg = typeof e?.stack === 'string' ? e.stack : String(e?.message ?? e); } catch { /* a value from the script */ }
+  finish(false, `a tool call failed and the script never awaited or caught it (a missing await?):\n${text(msg).split('\n').filter((l) => !/^\s+at /.test(l)).slice(0, 3).join('\n')}`);
+});
 
 // Host functions handed to the bootstrap. Each takes primitives only, never
 // throws into the context, and never returns an object.
@@ -48,14 +66,21 @@ const bridge = {
   log(s) {
     try {
       const line = text(s, MAX_OUT);
-      if (size < MAX_OUT) { lines.push(line); size += line.length + 1; }
+      if (size < MAX_OUT) { lines.push(line); size += line.length + 1; } else dropped++;
     } catch { /* ignore */ }
+  },
+  ret(s) {
+    try { returned = text(s, 20_000); } catch { /* ignore */ }
   },
   sleep(ms, resolve) {
     try { setTimeout(() => { try { resolve(); } catch { /* ignore */ } }, Math.min(Math.max(Number(typeof ms === 'number' ? ms : 0) || 0, 0), 30_000)); } catch { /* ignore */ }
   },
   done(ok, s) {
-    try { finish(ok === true, text(s)); } catch { /* ignore */ }
+    try {
+      // Returned with calls still out (never awaited): wait for them, so a failure among them is reported.
+      if (ok === true && pending.size) { const late = pending.size; whenIdle = () => setImmediate(() => { lateNote = `[the script returned before ${late} of its tool call(s) had finished: await them]`; finish(true); }); return; }
+      finish(ok === true, text(s) || 'the script threw an empty value');
+    } catch { /* ignore */ }
   },
 };
 
@@ -64,7 +89,7 @@ const bridge = {
 // only its own behaviour.
 const BOOTSTRAP = `(() => {
   'use strict';
-  const { call: hCall, log: hLog, sleep: hSleep, done: hDone } = globalThis.__bridge;
+  const { call: hCall, log: hLog, ret: hRet, sleep: hSleep, done: hDone } = globalThis.__bridge;
   delete globalThis.__bridge;
   const names = JSON.parse(globalThis.__names); delete globalThis.__names;
   const P = Promise, E = Error, S = String, stringify = JSON.stringify, apply = Reflect.apply;
@@ -84,7 +109,7 @@ const BOOTSTRAP = `(() => {
   define(globalThis, '__entry', { value: (fn) => {
     let p;
     try { p = typeof fn === 'function' ? fn() : fn; } catch (e) { hDone(false, errText(e)); return; }
-    try { apply(then, p, [(v) => { if (v !== undefined) hLog(fmt(v)); hDone(true, ''); }, (e) => hDone(false, errText(e))]); } catch (e) { hDone(false, errText(e)); }
+    try { apply(then, p, [(v) => { if (v !== undefined) hRet(fmt(v)); hDone(true, ''); }, (e) => hDone(false, errText(e))]); } catch (e) { hDone(false, errText(e)); }
   } });
 })()`;
 
@@ -103,11 +128,15 @@ function start(job) {
   ctx.__names = JSON.stringify(Array.isArray(job.tools) ? job.tools.filter((n) => typeof n === 'string') : []);
   try {
     vm.runInContext(BOOTSTRAP, ctx, { filename: 'bootstrap.js' });
-    vm.runInContext(`__entry(async () => {\n${text(job.code, 1_000_000)}\n})`, ctx, { timeout: job.timeoutMs, filename: 'script.js' });
+    // Just before the parent's own limit: what the script printed, and what it was waiting on, go back with the failure.
+    if (job.timeoutMs > 0) setTimeout(() => finish(false, `the script ran longer than ${job.timeoutMs / 1000}s${pending.size ? ` (still waiting on ${pending.size} tool call(s))` : ' (waiting on something that never finished)'}`), Math.max(0, job.timeoutMs - 500)).unref();
+    // lineOffset: the wrapper's own first line is not counted, so "script.js:2" is line 2 of what the model wrote.
+    vm.runInContext(`__entry(async () => {\n${text(job.code, 1_000_000)}\n})`, ctx, { timeout: job.timeoutMs, filename: 'script.js', lineOffset: -1 });
   } catch (e) {
     let msg = 'the script could not run';
     try { msg = typeof e?.stack === 'string' ? e.stack : String(e?.message); } catch { /* a value from the script */ }
-    finish(false, text(msg).split('\n').slice(0, 4).join('\n'));
+    // Where it is and what it is ("SyntaxError: ..." is the fifth line), without the frames of this runner.
+    finish(false, text(msg).split('\n').filter((l) => !/^\s+at /.test(l)).slice(0, 6).join('\n').trimEnd());
   }
 }
 
@@ -120,4 +149,5 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   if (!p) return;
   pending.delete(m.id);
   try { if (m.ok) p.resolve(text(m.content, 10_000_000)); else p.reject(text(m.content)); } catch { /* ignore */ }
+  if (whenIdle && !pending.size) whenIdle();
 });

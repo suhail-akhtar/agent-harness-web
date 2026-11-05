@@ -75,14 +75,25 @@ return \`\${n} of \${files.length} files have TODOs\`;`,
     child.stdin.on('error', () => {});
     const send = (m: unknown) => child.stdin.write(JSON.stringify(m) + '\n');
     let calls = 0;
+    let spoke = false;
+    const harness = 'This is a fault of the harness, not of the script: make the tool calls directly, and tell the user.';
     const done = new Promise<{ ok: boolean; output: string; error?: string }>((resolve) => {
       const timer = setTimeout(() => { child.kill('SIGKILL'); resolve({ ok: false, output: '', error: `the script ran longer than ${timeoutMs / 1000}s` }); }, timeoutMs);
       const onAbort = () => { child.kill('SIGKILL'); resolve({ ok: false, output: '', error: 'interrupted' }); };
       ctx.signal.addEventListener('abort', onAbort, { once: true });
-      child.on('exit', (code) => { clearTimeout(timer); ctx.signal.removeEventListener('abort', onAbort); resolve({ ok: false, output: '', error: `the script process exited (${code})${stderr ? `: ${stderr.trim().slice(0, 600)}` : ''}` }); });
+      // A runner that cannot be started is an answer, not an uncaught 'error' event in the server.
+      child.on('error', (e) => { clearTimeout(timer); ctx.signal.removeEventListener('abort', onAbort); resolve({ ok: false, output: '', error: `the script runner could not be started (${e.message}). ${harness}` }); });
+      // 'close', not 'exit': what the runner wrote before it ended (its done line, stderr) is read first.
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        ctx.signal.removeEventListener('abort', onAbort);
+        const why = stderr.trim().split('\n').filter((l) => !/^\s+at |^Node\.js v/.test(l)).join('\n').trim().slice(0, 600);
+        resolve({ ok: false, output: '', error: spoke ? `the script process ended before the script did (exit code ${code})${why ? `: ${why}` : ''}` : `the script runner did not start: it exited with code ${code} without running the script${why ? ` (${why})` : ''}. ${harness}` });
+      });
       readline.createInterface({ input: child.stdout }).on('line', async (line) => {
         let m: { type?: string; id?: number; name?: string; input?: Record<string, unknown>; ok?: boolean; output?: string; error?: string };
         try { m = JSON.parse(line); } catch { return; }
+        spoke = true;
         if (m.type === 'done') { clearTimeout(timer); ctx.signal.removeEventListener('abort', onAbort); child.kill(); resolve({ ok: !!m.ok, output: m.output ?? '', error: m.error }); return; }
         if (m.type !== 'call') return;
         if (++calls > MAX_CALLS) return send({ type: 'result', id: m.id, ok: false, content: `a script may make at most ${MAX_CALLS} tool calls` });
@@ -96,7 +107,7 @@ return \`\${n} of \${files.length} files have TODOs\`;`,
     send({ code: str(input.code), tools: names, timeoutMs });
     const r = await done;
     const body = await clipOrSpill(ctx, 'run_script', r.output.trim(), 20_000, 'print less, or summarise in the script');
-    if (!r.ok) return { content: `The script failed after ${calls} tool call(s): ${r.error}${body ? `\nOutput before it failed:\n${body}` : ''}`, is_error: true };
+    if (!r.ok) return { content: `The script failed after ${calls} tool call(s): ${r.error || 'it threw an empty value'}${body ? `\nOutput before it failed:\n${body}` : ''}`, is_error: true };
     return { content: `${body || '(the script printed nothing and returned nothing)'}\n[${calls} tool call(s) inside the script]` };
   },
 };

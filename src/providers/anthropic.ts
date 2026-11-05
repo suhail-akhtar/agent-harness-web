@@ -168,7 +168,7 @@ export const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
 export const fallbackOn = (model: string, env: NodeJS.ProcessEnv = process.env) => FALLBACK_MODELS.has(model) && env.HARNESS_ANTHROPIC_FALLBACK !== 'off';
 
 /** The tools on top and the additions to place, for a model with mid-conversation tool changes; undefined: the plain list. */
-export function midConversationTools(req: Pick<ProviderRequest, 'model' | 'tools' | 'messages' | 'allTools' | 'deferrable'>): { tools: Record<string, unknown>[]; additions: Map<number, string[]> } | undefined {
+export function midConversationTools(req: Pick<ProviderRequest, 'model' | 'tools' | 'messages' | 'allTools' | 'deferrable' | 'loadTools'>): { tools: Record<string, unknown>[]; additions: Map<number, string[]> } | undefined {
   if (!MID_TOOL_CHANGES.has(req.model.id) || !req.allTools?.length || !req.deferrable?.length) return undefined;
   const deferrable = new Set(req.deferrable);
   const sent = new Map(req.tools.map((t) => [t.name, t]));
@@ -176,13 +176,17 @@ export function midConversationTools(req: Pick<ProviderRequest, 'model' | 'tools
   const placed = new Set([...additions.values()].flat());
   // A group loaded some other way (its skill loaded it) has no load_tools result to place an addition after: listed plainly.
   const plain = new Set([...sent.keys()].filter((n) => deferrable.has(n) && !placed.has(n)));
-  const names = [...new Set([...req.allTools.map((t) => t.name), ...sent.keys()])];
-  const spec = (n: string) => sent.get(n) ?? req.allTools!.find((t) => t.name === n)!;
+  // load_tools is listed whole from first to last: the shorter one a request would send after a load changes the tool
+  // list, and with it the cache of the whole conversation (seen live: 130,000 tokens rewritten to remove 46). Loading a
+  // group again does nothing.
+  const load = req.loadTools;
+  const names = [...new Set([...req.allTools.map((t) => t.name), ...sent.keys(), ...(load ? [load.name] : [])])];
+  const spec = (n: string) => (n === load?.name ? load : sent.get(n) ?? req.allTools!.find((t) => t.name === n)!);
   return { tools: names.map((n) => ({ ...toAnthropicTool(spec(n)), ...(deferrable.has(n) && !plain.has(n) ? { defer_loading: true } : {}) })), additions };
 }
 
 /** The request body (without betas). Exported for tests: caching depends on its exact shape. */
-export function anthropicBody(req: Pick<ProviderRequest, 'model' | 'system' | 'tools' | 'messages' | 'effort' | 'compactAt' | 'compactKeep' | 'prefixTtl' | 'allTools' | 'deferrable' | 'effortLog'>, contextEditing: boolean, serverCompaction = false, env: NodeJS.ProcessEnv = process.env): Record<string, unknown> {
+export function anthropicBody(req: Pick<ProviderRequest, 'model' | 'system' | 'tools' | 'messages' | 'effort' | 'compactAt' | 'compactKeep' | 'prefixTtl' | 'allTools' | 'deferrable' | 'loadTools' | 'effortLog'>, contextEditing: boolean, serverCompaction = false, env: NodeJS.ProcessEnv = process.env): Record<string, unknown> {
   const mid = midConversationTools(req);
   // An effort changed between turns: the request keeps the effort the context began with, each change is a
   // system message where it happened, so the cached history stays (changing output_config.effort would not).
@@ -212,14 +216,17 @@ export function anthropicBody(req: Pick<ProviderRequest, 'model' | 'system' | 't
     ...(fallbackOn(req.model.id, env) ? { fallbacks: 'default' } : {}),
   };
   if (contextEditing) {
+    const trigger = Math.round((req.compactAt ?? req.model.compactAt) * 0.6);
     body.context_management = {
       edits: [{
         type: 'clear_tool_uses_20250919',
         // Clear well before compaction, in large batches, so each cache
         // reset buys back a lot of context.
-        trigger: { type: 'input_tokens', value: Math.round((req.compactAt ?? req.model.compactAt) * 0.6) },
+        trigger: { type: 'input_tokens', value: trigger },
         keep: { type: 'tool_uses', value: 6 },
-        clear_at_least: { type: 'input_tokens', value: 12_000 },
+        // Each clearing rewrites the cache of everything after it (seen live: 130,000 tokens rewritten to clear 3,000),
+        // so one is only worth it for a large part of the context.
+        clear_at_least: { type: 'input_tokens', value: Math.max(12_000, Math.round(trigger * 0.25)) },
         // As the harness's own clearing: the todo list, sub-agent reports and loaded skills stay.
         exclude_tools: ['todo_write', 'agent', 'skill'],
       }, ...(serverCompaction ? [{

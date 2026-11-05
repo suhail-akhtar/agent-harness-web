@@ -8,6 +8,7 @@ import { BrowserSessions, NOBODY_ALLOWED, OidcClient, oidcConfigFromEnv, refusal
 import { SpendLedger, UserStore } from './users.ts';
 import { ensureHome, harnessPaths, scheduleTmpCleanup } from '../util/home.ts';
 import { shippedPluginDirs } from '../plugins/shipped.ts';
+import { warmJobs } from '../runtime/winjob.ts';
 
 // The server process: configuration from the environment, then the app.
 
@@ -29,6 +30,7 @@ const PLUGIN_DIRS = [...(process.env.HARNESS_BUNDLED_PLUGINS === 'off' ? [] : sh
 const num = (v: string | undefined) => (v !== undefined && v !== '' && Number.isFinite(Number(v)) ? Number(v) : undefined);
 
 async function main() {
+  warmJobs();
   // A stronger sandbox runtime the operator asked for (gVisor, Kata) must be there: refuse to start rather than run sandboxes without it.
   if (process.env.HARNESS_SANDBOX_RUNTIME?.trim()) {
     try { await checkSandboxRuntime(sandboxRuntime()!); } catch (e) { console.error(`sandbox runtime: ${(e as Error).message}`); process.exit(1); }

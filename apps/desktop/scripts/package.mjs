@@ -116,6 +116,9 @@ const config = {
   ...(iconSrc && fs.existsSync(iconSrc) ? { icon: iconSrc } : {}),
   electronVersion: JSON.parse(fs.readFileSync(path.join(path.dirname(createRequire(import.meta.url).resolve('electron/package.json')), 'package.json'), 'utf8')).version,
   npmRebuild: false,
+  // What the binary refuses, whatever its environment says. runAsNode stays on: commands and run_script use this
+  // binary as their Node (runtime/host.ts nodeEnv).
+  electronFuses: { runAsNode: true, enableNodeOptionsEnvironmentVariable: false, enableNodeCliInspectArguments: false, enableEmbeddedAsarIntegrityValidation: true, onlyLoadAppFromAsar: true, grantFileProtocolExtraPrivileges: false },
   win: { target: ['dir'] },
   nsis: { oneClick: false, allowToChangeInstallationDirectory: true, perMachine: false },
   mac: { target: ['dir'], category: 'public.app-category.developer-tools' },

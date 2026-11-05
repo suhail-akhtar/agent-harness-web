@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { resolveShell } from '../runtime/host.ts';
 import { sandboxedFolderHost } from '../runtime/local-sandbox.ts';
+import { warmJobs } from '../runtime/winjob.ts';
 import type { LocalSandbox } from '../runtime/os-sandbox.ts';
 import { type CompanionJob, cleanPolicy, createCompanionHandler, DEFAULT_POLICY, type MachinePolicy } from './handler.ts';
 import { machineKey, policyPayload, resultPayload, sign } from './sign.ts';
@@ -65,6 +66,8 @@ const sandbox = await sandboxedFolderHost(dir, sandboxWant, network).catch((e: E
 console.log(`commands run: ${sandbox.why}${sandbox.kind !== 'off' ? `, network ${network}` : ''}`);
 if (allowDesktop) console.log('DESKTOP CONTROL IS ON (--allow-desktop): the agent can see this screen and use the mouse and keyboard, outside any sandbox. Each action is approved in the web app unless the session bypasses permissions. Stop the companion (Ctrl+C) to take it back.');
 else console.log('desktop control: off (start with --allow-desktop to let the agent see the screen and use the mouse and keyboard)');
+// Ready before the first command: started by that command on a busy machine, it can be too late to hold it.
+warmJobs();
 const handle = createCompanionHandler(dir, {
   allowHooks, trustProject, allowDesktop, host: sandbox.host, log: (m) => console.log(`[${new Date().toLocaleTimeString()}] ${m}`),
   policy: readPolicy,

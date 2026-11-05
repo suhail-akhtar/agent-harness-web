@@ -1,32 +1,9 @@
 import type { Tool, ToolContext, ToolOutcome } from './types.ts';
 import { clip, clipOrSpill, num, str } from './types.ts';
 import { runElevated } from '../runtime/elevate.ts';
+import { shellFileWrite } from './shell-guard.ts';
 
-/** Extensions of source code and documents: what tee and echo/printf may not write. */
-const SOURCE = '(?:[cm]?[jt]sx?|py|rb|go|rs|java|kt|cs|cpp|cc|c|h|hpp|php|swift|scala|sh|md|html?|css|scss|json|ya?ml|toml|sql|vue|svelte)';
-
-/**
- * Shell commands that write file CONTENT the file tools should write instead.
- * Those go through write/edit so they get a checkpoint (undo), a diff, the
- * stale-file check and edit permissions - a sandboxed shell would otherwise
- * be a way around "ask before edits". Build steps, installers, logs and redirects
- * to /tmp or /dev are not affected. Returns the offending pattern, if any.
- */
-export function shellFileWrite(cmd: string): string | undefined {
-  if (process.env.HARNESS_SHELL_WRITE_GUARD === 'off') return undefined;
-  const target = (t: string | undefined) => !!t && !/^['"]?\/(tmp|dev)\//.test(t) && !/^&?\d?$/.test(t);
-  let m = /\bcat\s+(?:<<-?\s*['"]?\w+['"]?\s*)?>>?\s*([^\s|&;<>]+)/.exec(cmd) ?? /\bcat\s*>>?\s*([^\s|&;<>]+)\s*<</.exec(cmd);
-  if (m && target(m[1])) return `cat > ${m[1]}`;
-  m = /<<-?\s*['"]?\w+['"]?\s*>>?\s*([^\s|&;<>]+)/.exec(cmd);
-  if (m && target(m[1])) return `heredoc > ${m[1]}`;
-  if (/\b(sed|perl)\s+(?:-[a-zA-Z]*i\b|-i\S*|--in-place)/.test(cmd)) return 'in-place sed/perl edit';
-  // tee and echo/printf count only when they write source or documents: `cmd | tee run.log` keeps a log, as `> run.log` does.
-  m = new RegExp(String.raw`\btee\s+(?:-a\s+)?([^\s|&;<>]+\.${SOURCE})\b`).exec(cmd);
-  if (m && target(m[1])) return `tee ${m[1]}`;
-  m = new RegExp(String.raw`\b(?:echo|printf)\b[^|;&]*?>>?\s*([^\s|&;<>]+\.${SOURCE})\b`).exec(cmd);
-  if (m && target(m[1])) return `echo/printf > ${m[1]}`;
-  return undefined;
-}
+export { shellFileWrite };
 
 const DEFAULT_TIMEOUT = 120_000;
 const MAX_TIMEOUT = 600_000;
@@ -73,7 +50,7 @@ export const bashTool: Tool = {
     const timeoutMs = Math.min(MAX_TIMEOUT, Math.max(1000, num(input.timeout_ms) ?? DEFAULT_TIMEOUT));
     const r = await ctx.host.exec(command, { timeoutMs, signal: ctx.signal, ...(secretEnv ? { secretEnv } : {}) });
     const parts: string[] = [];
-    if (r.timedOut) parts.push(`Timed out after ${timeoutMs / 1000}s (the command was killed).`);
+    if (r.timedOut) parts.push(`Timed out after ${timeoutMs / 1000}s (the command was killed). For something longer, pass timeout_ms (up to ${MAX_TIMEOUT}), or start it with run_in_background and wait with monitor; do not sleep to wait for a task.`);
     parts.push(`exit code: ${r.code ?? 'killed'}`);
     // Long output is kept whole in a session file where it can be (head and tail here), else clipped.
     if (r.stdout.trim()) parts.push(await clipOrSpill(ctx, 'bash', r.stdout.trimEnd(), MAX_OUTPUT, 'filter the output to see this part'));

@@ -39,6 +39,8 @@ export interface ProviderRequest {
    * loaded (Claude's mid-conversation tool changes). `tools` stays what is callable now.
    */
   allTools?: ToolSpec[];
+  /** load_tools listing every group: what a model that keeps one tool list shows from first to last. */
+  loadTools?: ToolSpec;
   deferrable?: string[];
   /**
    * Effort changes within this context: the effort the context began with and each change, before the message

@@ -1414,6 +1414,7 @@ export class Session {
    * it names are theirs, for the untrusted-content guard. Never the agent's text, a brief or outside content.
    */
   notePersonText(text: string): void {
+    this.sources.learn((text.slice(0, 100_000).match(/https?:\/\/[^\s<>"'`)\]]+/g) ?? []).map((u) => u.replace(/[.,;:!?]+$/, '')));
     const list = (this.meta.namedDestinations ??= []);
     const fresh = namedDestinations(text).filter((d) => !list.includes(d));
     if (!fresh.length) return;
@@ -1803,6 +1804,7 @@ export class Session {
       preamble: async () => this.preamble(await this.getHost(), name === 'main', 'compact'),
       latestUserPrompt: () => this.latestPrompt,
       namedDestinations: () => (this.named ??= new Set(this.meta.namedDestinations ?? [])),
+      seenUrl: (url) => this.sources.knows(url),
     };
   }
 

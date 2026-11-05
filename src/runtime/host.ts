@@ -161,21 +161,25 @@ async function killWindowsTree(pid: number, shell: string, tag?: string): Promis
   if (!tag || !/bash(\.exe)?$/i.test(shell)) return;
   // One grep over every process's environment (a grep per process took seconds, and the command ran on meanwhile).
   const script = `for f in $(grep -la 'HARNESS_RUN_TAG=${tag}' /proc/[0-9]*/environ 2>/dev/null); do cat "\${f%/environ}/winpid" 2>/dev/null; done`;
+  // How many it found and killed; -1 when the sweep itself did not finish (a busy machine): that is not "none left".
   const sweep = () => new Promise<number>((resolve) => {
     const p = spawn(shell, ['-c', script], { windowsHide: true, env: { ...process.env, HARNESS_RUN_TAG: '' } });
     let o = '';
-    const done = () => { const found = o.split(/\s+/).map(Number).filter((w) => w > 0 && w !== pid); for (const w of found) taskkill(w); resolve(found.length); };
+    let cut = false;
+    const done = () => { const found = o.split(/\s+/).map(Number).filter((w) => w > 0 && w !== pid); for (const w of found) taskkill(w); resolve(found.length || (cut ? -1 : 0)); };
     p.stdout.on('data', (d: Buffer) => { o += d; });
-    p.on('error', () => resolve(0));
+    p.on('error', () => resolve(-1));
     p.on('close', done);
-    setTimeout(() => { try { p.kill(); } catch { /* gone */ } }, 8000).unref();
+    setTimeout(() => { cut = true; try { p.kill(); } catch { /* gone */ } }, 15_000).unref();
   });
   // Swept again while a sweep still finds some: a busy machine may still be starting the command's processes when the
-  // stop comes (seen in tests). Once one finds none, the command is gone (most stops: one sweep, which keeps a full
-  // test run from paying three for every kill).
-  for (const wait of [0, 1500, 5000]) {
+  // stop comes (seen in tests). Once one finishes and finds none, the command is gone (most stops: one sweep, which
+  // keeps a full test run from paying three for every kill). A sweep that could not finish is tried again: stopping
+  // must not depend on the machine being idle (seen under load: it timed out, counted as "none left", and the
+  // command ran to its end).
+  for (const wait of [0, 1500, 5000, 10_000, 20_000]) {
     if (wait) await new Promise((r) => setTimeout(r, wait).unref());
-    if (!(await sweep())) break;
+    if ((await sweep()) === 0) break;
   }
 }
 
@@ -226,7 +230,8 @@ export function run(cmd: string, args: string[], opts: ExecOptions): Promise<Exe
     child.on('exit', (code) => {
       setTimeout(() => {
         if (done) return;
-        orphans = true;
+        // Not after our own kill: that is the kill finishing, not something the command left behind.
+        orphans = !timedOut && !opts.signal?.aborted;
         kill();
         setTimeout(() => { child.stdout.destroy(); child.stderr.destroy(); finish(code); }, 500);
       }, 1500);

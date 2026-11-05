@@ -41,7 +41,7 @@ while ($true) {
 }
 `;
 
-let helper: { p: ChildProcessByStdio<import('node:stream').Writable, import('node:stream').Readable, null>; ready: Promise<boolean>; waiters: Map<string, (ok: boolean) => void> } | undefined;
+let helper: { p: ChildProcessByStdio<import('node:stream').Writable, import('node:stream').Readable, null>; ready: Promise<boolean>; up: boolean; waiters: Map<string, (ok: boolean) => void> } | undefined;
 let n = 0;
 
 function start() {
@@ -52,20 +52,21 @@ function start() {
   let buf = '';
   let ready!: (ok: boolean) => void;
   // Timers that hold the process only while an answer is awaited (the helper itself never does).
-  const h = { p, ready: new Promise<boolean>((r) => { const t = setTimeout(() => r(false), 15_000); ready = (ok) => { clearTimeout(t); r(ok); }; }), waiters };
+  // `up` outlives the wait: a helper that took longer than this to start on a busy machine still serves later commands.
+  const h = { p, up: false, ready: new Promise<boolean>((r) => { const t = setTimeout(() => r(false), 45_000); ready = (ok) => { clearTimeout(t); r(ok); }; }), waiters };
   p.stdout.setEncoding('utf8');
   p.stdout.on('data', (d: string) => {
     buf += d;
     let i: number;
     while ((i = buf.indexOf('\n')) >= 0) {
       const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
-      if (line === 'ready') { ready(true); continue; }
+      if (line === 'ready') { h.up = true; ready(true); continue; }
       const [id, what] = line.split(' ');
       const w = id ? waiters.get(id) : undefined;
       if (w) { waiters.delete(id!); w(what === 'True' || what === 'killed'); }
     }
   });
-  const gone = () => { ready(false); for (const w of waiters.values()) w(false); waiters.clear(); if (helper === h) helper = undefined; };
+  const gone = () => { h.up = false; ready(false); for (const w of waiters.values()) w(false); waiters.clear(); if (helper === h) helper = undefined; };
   p.on('error', gone); p.on('exit', gone);
   p.stdin.on('error', () => {});
   p.unref(); (p.stdout as unknown as { unref?: () => void }).unref?.(); (p.stdin as unknown as { unref?: () => void }).unref?.();
@@ -73,19 +74,21 @@ function start() {
   return h;
 }
 
-/** A line to the helper and its answer (false after 5 s without one); the timer holds the process while it waits. */
-function send(h: NonNullable<typeof helper>, line: string, id: string): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
-    const t = setTimeout(() => { if (h.waiters.delete(id)) resolve(false); }, 5000);
+/** A line to the helper and its answer (undefined after 5 s without one: it may still act on it); the timer holds the process while it waits. */
+function send(h: NonNullable<typeof helper>, line: string, id: string): Promise<boolean | undefined> {
+  return new Promise<boolean | undefined>((resolve) => {
+    const t = setTimeout(() => { if (h.waiters.delete(id)) resolve(undefined); }, 5000);
     h.waiters.set(id, (ok) => { clearTimeout(t); resolve(ok); });
     h.p.stdin.write(`${line}\n`);
   });
 }
 
+const up = async (h: NonNullable<typeof helper>): Promise<boolean> => h.up || (await h.ready) || h.up;
+
 const ask = async (cmd: string, id: string): Promise<boolean> => {
   const h = start();
-  if (!h || !(await h.ready)) return false;
-  return send(h, `${cmd} ${id}`, id);
+  if (!h || !(await up(h))) return false;
+  return (await send(h, `${cmd} ${id}`, id)) === true;
 };
 
 /** Starts the helper ahead of the first command (compiling it takes a moment). */
@@ -94,10 +97,12 @@ export function warmJobs(): void { start(); }
 /** Puts a just-started process in a job of its own; the job's id, or undefined (no jobs here). */
 export async function assignJob(pid: number): Promise<string | undefined> {
   const h = start();
-  if (!h || !(await h.ready)) return undefined;
+  if (!h || !(await up(h))) return undefined;
   const id = `j${++n}`;
   const ok = await send(h, `A ${id} ${Math.floor(pid)}`, id);
-  return ok ? id : undefined;
+  // No answer in time on a busy machine: the helper still has the line and assigns when it reaches it, so the job
+  // keeps its id (a stop on a job that was never made does nothing).
+  return ok === false ? undefined : id;
 }
 
 /** Terminates every process in the job. */

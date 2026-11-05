@@ -40,6 +40,8 @@ export interface PermissionContext {
   network?: 'none' | 'allowlist' | 'full';
   /** The destinations the person named in their own messages (provenance.ts): a way out to only these is not the guard's to ask about. */
   named?: ReadonlySet<Destination>;
+  /** Is this exact URL one the session has seen (SourceStore.known)? It existed before the agent could put anything in it. */
+  seen?: (url: string) => boolean;
 }
 
 /**
@@ -49,7 +51,9 @@ export interface PermissionContext {
  */
 function destinationsOf(tool: Tool, input: Record<string, unknown>, ctx: PermissionContext): { traced: boolean; unnamed: Destination[] } {
   if ((tool.kindsFor?.(input, { hostKind: ctx.hostKind }) ?? [tool.kind]).includes('exec')) return { traced: false, unnamed: [] };
-  const all = callDestinations(input);
+  const url = tool.fetches?.(input);
+  if (url && ctx.seen?.(url)) return { traced: true, unnamed: [] };
+  const all = tool.destinations?.(input) ?? callDestinations(input);
   const unnamed = all.filter((d) => !isNamed(d, ctx.named ?? new Set()));
   return { traced: all.length > 0 && unnamed.length === 0, unnamed };
 }

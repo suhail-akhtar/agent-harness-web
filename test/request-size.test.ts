@@ -71,3 +71,20 @@ test('a 413 with no images: compacted, then sent again; if it is still too large
   h2.agent.append({ role: 'user', content: [{ type: 'text', text: 'go' }] });
   await assert.rejects(h2.agent.run(new AbortController().signal), /larger than .* accepts.*Start a new conversation/);
 });
+
+test('capImages across requests: what left stays out and one trim goes well under, so the cached history stops moving', () => {
+  const shot = (i: number): Message => ({ role: 'user', content: [{ type: 'tool_result', tool_use_id: `s${i}`, content: `shot ${i}`, images: [{ media_type: 'image/png', data: `${i}`.padEnd(100, 'x') }] } as never] });
+  const dropped = new Set<string>();
+  const sent: string[][] = [];
+  const msgs: Message[] = [];
+  for (let i = 0; i < 12; i++) {
+    msgs.push(shot(i));
+    sent.push(capImages(msgs, 500, dropped).map((m) => JSON.stringify(m)));
+  }
+  const changed = sent.filter((s, n) => n > 0 && s.slice(0, sent[n - 1]!.length).join() !== sent[n - 1]!.join()).length;
+  assert.equal(changed, 2, 'the old messages changed twice in 12 screenshots, not on every one past the limit');
+  assert.ok(JSON.stringify(sent.at(-1)).includes('shot 11'));
+  const sliding: string[][] = [];
+  for (let n = 1; n <= 12; n++) sliding.push(capImages(msgs.slice(0, n), 500).map((m) => JSON.stringify(m)));
+  assert.equal(sliding.filter((s, n) => n > 0 && s.slice(0, sliding[n - 1]!.length).join() !== sliding[n - 1]!.join()).length, 7, 'without the memory, every one past the limit');
+});

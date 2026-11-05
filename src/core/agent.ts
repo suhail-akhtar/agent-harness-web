@@ -67,6 +67,8 @@ export interface AgentHooks {
   latestUserPrompt(): string;
   /** The destinations the person named in their own messages in this conversation (a sub-agent's too: never its brief). */
   namedDestinations?(): ReadonlySet<string>;
+  /** Is this exact URL one the session has seen (SourceStore.known)? */
+  seenUrl?(url: string): boolean;
 }
 
 export interface AgentConfig {
@@ -198,6 +200,8 @@ export class Agent {
   /** Deferred tool groups loaded in this agent's life (sticky: a compaction does not unload them). */
   private loaded = new Set<string>();
   private loadTool?: Tool;
+  /** Images left out of requests so far (capImages): the choice stands, so the cached history does not move. */
+  private droppedImages = new Set<string>();
   /** The last request's hashed sections, and what this agent did since that moves the prefix (cache attribution). */
   private lastShape?: CacheShape;
   private missHint?: MissCause;
@@ -616,8 +620,11 @@ export class Agent {
     if (this.lastRequestAt && now - this.lastRequestAt > FIVE_MINUTES) this.longGaps = true;
     this.lastRequestAt = now;
     const ttl = this.prefixTtl();
-    // Cache attribution: the request's sections, hashed (from the context as kept: redaction is the same every time).
-    const shape = this.cfg.settings.efficiency?.cacheAttribution ? cacheShape({ model: this.cfg.model, tools, system: this.cfg.system, messages }, now) : undefined;
+    // Already clean when appended; this catches a value registered after its message was (it is hidden from then on).
+    // The oldest images are left out once the newest fill what a request may carry.
+    const sent = capImages(this.redact(messages), imageBudget(this.cfg.model.provider), this.droppedImages);
+    // Cache attribution: the request's sections, hashed as they are sent.
+    const shape = this.cfg.settings.efficiency?.cacheAttribution ? cacheShape({ model: this.cfg.model, tools, system: this.cfg.system, messages: sent }, now) : undefined;
     const req: ProviderRequest = {
       model: this.cfg.model,
       system: this.cfg.system,
@@ -625,10 +632,8 @@ export class Agent {
       ...(ttl ? { prefixTtl: ttl } : {}),
       ...(compaction || noTools ? { toolChoice: 'none' as const } : {}),
       ...(!compaction ? { effortLog: this.noteEffort(messages.length) } : {}),
-      ...(this.cfg.toolGroups?.length ? { allTools: this.specs, deferrable: this.cfg.toolGroups.flatMap((g) => g.tools) } : {}),
-      // Already clean when appended; this catches a value registered after its message was (it is hidden from then on).
-      // The oldest images are left out once the newest fill what a request may carry.
-      messages: capImages(this.redact(messages)),
+      ...(this.cfg.toolGroups?.length ? { allTools: this.specs, deferrable: this.cfg.toolGroups.flatMap((g) => g.tools), loadTools: this.loadTool?.spec } : {}),
+      messages: sent,
       effort: this.cfg.effort,
       cacheKey: this.cfg.cacheKey,
       compactAt: this.compactAt(),
@@ -672,7 +677,7 @@ export class Agent {
             this.hooks.emit({ kind: 'notice', level: 'warn', text: `The conversation is larger than ${this.cfg.model.provider} accepts in one request; compacting it, then going on.`, agent: this.cfg.name });
             await this.compact(signal);
             messages = this.messages;
-            req.messages = capImages(this.redact(this.messages));
+            req.messages = capImages(this.redact(this.messages), imageBudget(this.cfg.model.provider), this.droppedImages);
             continue;
           }
           throw new ProviderError(`The request is larger than ${this.cfg.model.provider} accepts, even without images${compactedForSize ? ' and after compacting' : ''}. Start a new conversation (the agent can carry on from a summary: ask it to write one first), or switch to a model with a larger request limit.`, 413, false);
@@ -799,7 +804,7 @@ export class Agent {
     // An allowlist sandbox whose proxy holds credentials that can write (a gist, an issue) is,
     // for the untrusted-content guard, a way out like open network; read-only ones are not.
     const net = this.cfg.host.networkPolicy === 'allowlist' && this.cfg.host.credentialEnv?.().some((c) => c.writes) ? 'full' : this.cfg.host.networkPolicy;
-    const decision = decide(tool, input, { mode: this.hooks.getMode(), rules: this.hooks.rules(), sandboxed: this.cfg.host.sandboxed, tainted: this.tainted, network: net, hostKind: this.cfg.host.kind, named: this.hooks.namedDestinations?.() });
+    const decision = decide(tool, input, { mode: this.hooks.getMode(), rules: this.hooks.rules(), sandboxed: this.cfg.host.sandboxed, tainted: this.tainted, network: net, hostKind: this.cfg.host.kind, named: this.hooks.namedDestinations?.(), seen: this.hooks.seenUrl });
     if (decision.action === 'deny') return finish(`Permission denied: ${decision.reason}.`, true, undefined, undefined, name);
 
     // PreToolUse runs before anyone is asked: a hook that blocks spares the person a
@@ -827,7 +832,7 @@ export class Agent {
       if (ph.decision === 'deny' || ph.blocked) return finish(`A PermissionRequest hook denied this call${ph.feedback ? `: ${ph.feedback}` : '.'}`, true, undefined, undefined, name);
       if (ph.decision !== 'allow' || decision.always) {
         // The guard's and the always-asked questions say why: the person decides on the reason, not only the call.
-        const answer = await this.hooks.requestPermission(tool, input, autoNo ? `${tool.summarize(input)} (auto mode's check: ${autoNo})` : decision.always || decision.guard ? `${tool.summarize(input)} (${decision.reason})` : tool.summarize(input), decision.always ? '' : suggestRule(tool, input), agent);
+        const answer = await this.hooks.requestPermission(tool, input, autoNo ? `${tool.summarize(input)} (auto mode's check: ${autoNo})` : decision.always || decision.guard ? `${tool.summarize(input)} (${decision.reason})` : tool.summarize(input), decision.always || decision.guard ? '' : suggestRule(tool, input), agent);
         if (!answer.allow) return finish(`The user denied this call.${answer.feedback ? ` They said: ${answer.feedback}` : ' Do not retry it unchanged; ask or take another approach.'}`, true, undefined, undefined, name);
       }
     }
@@ -957,6 +962,7 @@ export class Agent {
     return {
       host: this.cfg.host,
       signal,
+      tainted: () => this.tainted,
       readFiles: this.cfg.readFiles,
       todos: this.hooks.todos(),
       setTodos: (t) => { this.hooks.setTodos(t); this.hooks.emit({ kind: 'todos', todos: t }); },
@@ -1269,24 +1275,36 @@ function stripImages(messages: Message[], note = IMAGE_REJECTED): Message[] {
 /**
  * Image bytes a request may carry (base64): providers refuse request bodies past their own limit (DeepSeek
  * answers 413 "length limit exceeded"), and a few full-size screenshots reach it. The newest images are kept
- * up to it, older ones become a note. HARNESS_REQUEST_IMAGE_BYTES changes it.
+ * up to it, older ones become a note. Claude takes far larger requests, and every image left out rewrites the
+ * cache of all that follows it. HARNESS_REQUEST_IMAGE_BYTES changes it. A 413 still falls back (callModel).
  */
-const IMAGE_BYTES = Number(process.env.HARNESS_REQUEST_IMAGE_BYTES) > 0 ? Number(process.env.HARNESS_REQUEST_IMAGE_BYTES) : 6_000_000;
+const imageBudget = (provider: string): number => (Number(process.env.HARNESS_REQUEST_IMAGE_BYTES) > 0 ? Number(process.env.HARNESS_REQUEST_IMAGE_BYTES) : provider === 'anthropic' ? 24_000_000 : 6_000_000);
 
-/** The messages with the oldest images left out (as a note) once the newest fill the budget; the same array when nothing is over. */
-export function capImages(messages: Message[], budget = IMAGE_BYTES): Message[] {
-  let used = 0, over = false;
-  const keep = new Set<object>();
-  for (let i = messages.length - 1; i >= 0; i--) {
-    for (const b of [...messages[i]!.content].reverse()) {
-      const imgs = b.type === 'image' ? [b] : b.type === 'tool_result' ? b.images ?? [] : [];
-      for (const im of imgs) {
-        const size = (im as { data?: string }).data?.length ?? 0;
-        if (!over && used + size <= budget) { used += size; keep.add(im); } else over = true;
-      }
+const imageSize = (im: object) => (im as { data?: string }).data?.length ?? 0;
+const imageKey = (im: object) => `${imageSize(im)}:${(im as { data?: string }).data?.slice(-64) ?? ''}`;
+
+/**
+ * The messages with the oldest images left out (as a note) once they are over the budget; the same array when
+ * nothing is. With `dropped` (an agent's, across its requests) the choice stands: what left stays out, and one
+ * trim goes down to half the budget. Leaving out one more image on each new screenshot edits the old messages every
+ * time, which rewrote about 130,000 cached tokens per request to save a few thousand (seen live: 42% of a session's bill).
+ */
+export function capImages(messages: Message[], budget = imageBudget(''), dropped?: Set<string>): Message[] {
+  const all = messages.flatMap((m) => m.content.flatMap((b): object[] => (b.type === 'image' ? [b] : b.type === 'tool_result' ? b.images ?? [] : [])));
+  const gone = new Set<object>(all.filter((im) => dropped?.has(imageKey(im))));
+  let used = all.reduce((n, im) => n + (gone.has(im) ? 0 : imageSize(im)), 0);
+  if (used > budget) {
+    const target = dropped ? budget / 2 : budget;
+    for (const im of all) {
+      if (used <= target) break;
+      if (gone.has(im)) continue;
+      gone.add(im);
+      used -= imageSize(im);
+      dropped?.add(imageKey(im));
     }
   }
-  if (!over) return messages;
+  if (!gone.size) return messages;
+  const keep = { has: (im: object) => !gone.has(im) };
   return messages.map((m) => {
     if (!hasImages([m])) return m;
     return {

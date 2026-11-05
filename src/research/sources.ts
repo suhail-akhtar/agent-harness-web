@@ -31,11 +31,36 @@ export function normalizeUrl(raw: string): string {
   } catch { return raw.trim(); }
 }
 
+/**
+ * A URL exactly as it is requested, for the known set: http(s), no fragment (it is not sent), no user name or
+ * password; else undefined. Never normalizeUrl: that maps a changed query or port to the same page, and what
+ * changed is where data would ride.
+ */
+export function exactUrl(raw: string): string | undefined {
+  try {
+    const u = new URL(raw.trim());
+    if ((u.protocol !== 'http:' && u.protocol !== 'https:') || u.username || u.password) return undefined;
+    u.hash = '';
+    return u.href;
+  } catch { return undefined; }
+}
+
+const MAX_KNOWN = 20_000;
+/** How many links from a search hit or the person's words stay known: a page choosing what comes next can only signal so far. */
+const MAX_LINK_DEPTH = 2;
+
 export class SourceStore {
   readonly dir: string;
   private index?: SourceEntry[];
   private searches: { at: number; query: string; hits: SearchHit[] }[] = [];
   private queue: Promise<unknown> = Promise.resolve();
+  /**
+   * URLs that existed before the agent could put anything in them (search hits, the person's words, links of pages
+   * reached from those), with their distance from the first. Fetching one exactly carries nothing of the session's:
+   * the untrusted-content guard does not ask (permissions.ts). Written by the harness only, and in memory only: a
+   * bundle or a file cannot bring any in.
+   */
+  private known = new Map<string, number>();
 
   constructor(dir: string) { this.dir = dir; }
 
@@ -68,7 +93,33 @@ export class SourceStore {
     return next;
   }
 
+  /** Was this very URL seen (see `known`)? Exact: another query, port or path is another URL. */
+  knows(url: string): boolean {
+    const key = exactUrl(url);
+    return !!key && this.known.has(key);
+  }
+
+  learn(urls: Iterable<string>, depth = 0): void {
+    for (const u of urls) {
+      const key = exactUrl(u);
+      if (key && !this.known.has(key) && this.known.size < MAX_KNOWN) this.known.set(key, depth);
+    }
+  }
+
+  /**
+   * What a fetched page adds: its final address and its links, only when the request itself was known. A composed
+   * URL proves nothing about the page it reaches: a site that echoes its query would hand the agent's own URL
+   * back as a link.
+   */
+  learnPage(asked: string, finalUrl: string, links: readonly string[]): void {
+    const depth = this.known.get(exactUrl(asked) ?? '');
+    if (depth === undefined) return;
+    this.learn([finalUrl], depth);
+    if (depth < MAX_LINK_DEPTH) this.learn(links, depth + 1);
+  }
+
   recordSearch(query: string, hits: SearchHit[]): void {
+    this.learn(hits.map((h) => h.url));
     this.searches.push({ at: Date.now(), query, hits });
     fs.mkdir(this.dir, { recursive: true }).then(() => fs.appendFile(path.join(this.dir, 'searches.jsonl'), JSON.stringify({ at: Date.now(), query, hits }) + '\n')).catch(() => {});
   }

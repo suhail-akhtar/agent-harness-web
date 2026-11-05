@@ -121,6 +121,8 @@ export interface ToolServices {
 export interface ToolContext {
   host: ToolHost;
   signal: AbortSignal;
+  /** Has this agent read untrusted content? */
+  tainted?(): boolean;
   /** Files read this session with the mtime seen, so writes can refuse stale edits. */
   readFiles: Map<string, FileStamp>;
   todos: Todo[];
@@ -165,6 +167,10 @@ export interface Tool {
   untrusted?: boolean;
   /** The file a call changes (write, edit): checkpointed before it runs where the tool runs remotely (a companion). */
   writesPath?(input: Record<string, unknown>): string | undefined;
+  /** The URL this call requests: exactly a URL the session has seen, it carries nothing of the session's (SourceStore.known). */
+  fetches?(input: Record<string, unknown>): string;
+  /** Where this call goes, when its input's fields do not say (the guard reads them otherwise: provenance.ts). */
+  destinations?(input: Record<string, unknown>): string[];
   /** Whether a call can carry data out of the session (default: from its kinds; a function may answer undefined for that); confirmed after untrusted input. */
   sendsOut?: boolean | ((input: Record<string, unknown>, where?: { hostKind?: string }) => boolean | undefined);
   /** The permission kinds this call needs, when they depend on the input (default: [kind]). */

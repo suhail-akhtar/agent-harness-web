@@ -59,3 +59,24 @@ test('shell writes of file contents are steered to write/edit; ordinary commands
   assert.ok(r.is_error);
   assert.match(r.content, /Use the write tool/);
 });
+
+test('the shell-write guard reads shell words, not text', async () => {
+  const { shellFileWrite } = await import('../src/tools/exec.ts');
+  for (const c of [
+    'echo x | tee a.log b.py', 'echo x | tee --append notes.md', 'echo x | tee -a -i app.py', 'echo x | tee -- notes.md', 'echo x | tee "src/my app.ts"', 'echo x | tee Dockerfile',
+    "sed -E -i 's/a/b/' f.txt", "sed -e 's/a/b/' -i f.txt", "perl -0pi -e 's/a/b/' f.txt", "awk -i inplace '{print}' f.txt", 'echo x > .env', 'echo x >> .gitignore', '{ echo a; echo b; } > a.py', ': > src/core.py',
+    `python -c "open('src/a.py','w').write('x')"`, `node -e "require('fs').writeFileSync('src/a.js','x')"`, 'base64 -d <<< eD0x > a.py',
+  ]) assert.ok(shellFileWrite(c), c);
+  for (const c of [
+    './build.sh 2>&1 | tee build.sh.log', 'python train.py | tee logs/train.py.out', 'node app.js 2>&1 | tee -a app.js.log', 'echo ok > build.sh.log', 'echo "compiled a.ts -> a.js"', 'echo "see docs => guide.md"',
+    'git commit -m "use tee README.md and sed -i here"', 'grep -rn "sed -i" scripts/', "sed -i 's/a/b/' /tmp/scratch.txt", 'echo building\nnode build.js > dist/bundle.js', 'python - <<EOF > results.txt\nprint(1)\nEOF', 'wc -l <<< hello > count.txt',
+    "cat <<'EOF' | python -\nprint('tee README.md')\nEOF",
+  ]) assert.equal(shellFileWrite(c), undefined, c);
+});
+
+test('a timed-out command says what to do, and a kill of ours is not reported as something left running', async () => {
+  const r = await bashTool.run({ command: 'sleep 30', timeout_ms: 1000 }, await ctx());
+  assert.ok(r.is_error);
+  assert.match(r.content, /Timed out after 1s \(the command was killed\)\. For something longer, pass timeout_ms/);
+  assert.doesNotMatch(r.content, /left running in the background/);
+});

@@ -118,3 +118,28 @@ test('in a Docker session a script runs inside the sandbox, under its network po
     assert.match(r.content, /"node": "undefined"/, 'still no process object inside the script');
   } finally { await host.close(); }
 });
+
+test('a script that fails says why: an un-awaited tool call, a syntax error, a time-out, output past the limit, an empty throw', async () => {
+  const unawaited = (await scripted(`tools.read({ path: "no-such-file.txt" }); return "finished";`)).r;
+  assert.ok(unawaited.is_error, unawaited.content);
+  assert.match(unawaited.content, /never awaited or caught it \(a missing await\?\)/);
+
+  const syntax = (await scripted(`const a = 1;\nconst = 2;`)).r;
+  assert.ok(syntax.is_error);
+  assert.match(syntax.content, /SyntaxError/);
+  assert.match(syntax.content, /script\.js:2/, 'the line of what the model wrote');
+
+  const empty = (await scripted(`throw "";`)).r;
+  assert.match(empty.content, /threw an empty value/);
+
+  const big = (await scripted(`for (let i = 0; i < 40000; i++) console.log("x".repeat(20)); return "the summary";`)).r;
+  assert.match(big.content, /more line\(s\) not kept/, 'what was dropped is counted');
+  assert.match(big.content, /the summary/, 'the return value is always kept');
+
+  const h = await makeAgent([{ calls: [{ name: 'run_script', input: { code: `console.log("before the wait"); await new Promise(() => {});`, timeout_seconds: 2 } }] }, { text: 'done' }], { mode: 'bypass', tools });
+  await h.agent.run(new AbortController().signal);
+  const slow = results(h.persisted[1])[0]!;
+  assert.ok(slow.is_error);
+  assert.match(slow.content, /ran longer than/);
+  assert.match(slow.content, /before the wait/, 'what it printed comes back');
+});
