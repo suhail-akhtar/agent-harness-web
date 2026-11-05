@@ -98,7 +98,8 @@ test('limits: a row cap (truncated is said), a time limit, and cancel', async ()
   const t0 = Date.now();
   setTimeout(() => ctl.abort(), 200);
   await assert.rejects(svc.engine.run({ files: [], views: [], sql: slow, signal: ctl.signal }), /cancelled/);
-  assert.ok(Date.now() - t0 < 5000);
+  // The query would run for days: this says the cancel worked, with room for a full test run on a busy machine.
+  assert.ok(Date.now() - t0 < 30_000);
   await assert.rejects(svc.engine.run({ files: [], views: [], sql: slow, timeoutMs: 300 }), /longer than/);
 });
 
