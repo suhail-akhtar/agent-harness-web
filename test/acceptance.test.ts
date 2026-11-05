@@ -403,7 +403,7 @@ test('a verifier that changes files itself fails the verification, whatever it s
     c.t.ds.scripts.lead = [{ calls: [delegate('general', 'w', { verify: 'yes', max_fix_rounds: 0 })] }, { text: 'Done.' }];
     c.t.ds.scripts.w = [{ calls: [{ name: 'write', input: { path: 'a.js', content: 'export const a = 1;\n' } }] }, { text: 'Done. [[ver]]' }];
     // The scripted verifier writes a file (a real one would need bash for it), then approves.
-    c.t.ds.scripts.ver = [{ calls: [{ name: 'bash', input: { command: 'node -e "require(\'fs\').writeFileSync(\'a.js\', \'fixed by the verifier\')"' } }] }, { text: '{"verdict": "pass", "issues": []}' }];
+    c.t.ds.scripts.ver = [{ calls: [{ name: 'bash', input: { command: 'node -e "const f = \'a.js\'; require(\'fs\').writeFileSync(f, \'fixed by the verifier\')"' } }] }, { text: '{"verdict": "pass", "issues": []}' }];
     await c.turn('[[lead]] Go.');
     assert.match(c.agentResults()[0]!, /Verification by verifier-\d+ on [\w.-]+: FAIL \(overruled: the verifier changed files itself/);
   } finally { await c.t.close(); }
