@@ -33,6 +33,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { prodClosure, shipsFile, shipsSource } from '../../../scripts/prod-closure.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const desktop = path.resolve(here, '..');
@@ -76,8 +77,7 @@ copy(path.join(desktop, 'dist'), path.join(stage, 'dist'), (p) => !p.endsWith('.
 fs.writeFileSync(path.join(stage, 'package.json'), JSON.stringify({ name: 'harness-desktop', productName: product.name, version: pkg.version, description: product.description ?? pkg.description, author: pkg.author, main: 'dist/main.cjs' }, null, 2));
 
 step('staging the engine');
-// A skill's own tests/ ship with it (check_skill runs them); other test folders do not.
-const skip = (p) => { const r = path.relative(repo, p); return !/[\\/](\.harness-data|test|__tests__)([\\/]|$)/.test(r) && (!/[\\/]tests([\\/]|$)/.test(r) || /[\\/](skills|builtin)[\\/][^\\/]+[\\/]tests([\\/]|$)/.test(r)) && !p.endsWith('.map'); };
+const skip = shipsSource(repo);
 copy(path.join(repo, 'src'), path.join(engine, 'src'), skip);
 copy(path.join(repo, 'plugins'), path.join(engine, 'plugins'), skip);
 // The solutions this edition ships (solutions/<name>/plugins); the others are installed as bundles.
@@ -94,28 +94,8 @@ copy(path.join(repo, 'packages', 'plugin-ui', 'src'), path.join(engine, 'package
 copy(path.join(repo, 'packages', 'plugin-sdk', 'src'), path.join(engine, 'packages', 'plugin-sdk', 'src'), skip);
 const rootPkg = JSON.parse(fs.readFileSync(path.join(repo, 'package.json'), 'utf8'));
 fs.writeFileSync(path.join(engine, 'package.json'), JSON.stringify({ name: 'harness-engine', private: true, type: rootPkg.type ?? 'module', version: rootPkg.version }, null, 2));
-// The production dependency closure (dependencies, and the optional ones that are installed).
-const want = [...Object.keys(rootPkg.dependencies ?? {}), ...Object.keys(rootPkg.optionalDependencies ?? {})];
-const seen = new Set();
-
-const pkgDir = (name, from) => {
-  for (let d = from; ; d = path.dirname(d)) {
-    const p = path.join(d, 'node_modules', name, 'package.json');
-    if (fs.existsSync(p)) return path.dirname(p);
-    if (path.dirname(d) === d) return null;
-  }
-};
-const queue = want.map((n) => [n, repo]);
-while (queue.length) {
-  const [name, from] = queue.shift();
-  const dir = pkgDir(name, from);
-  if (!dir || seen.has(dir)) continue;
-  seen.add(dir);
-  const p = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
-  for (const dep of [...Object.keys(p.dependencies ?? {}), ...Object.keys(p.optionalDependencies ?? {})]) queue.push([dep, dir]);
-}
-
-for (const dir of seen) copy(dir, path.join(engine, path.relative(repo, dir)), (p) => !/[\\/](test|tests|docs|example|examples)[\\/]/.test(path.relative(dir, p)) && !p.endsWith('.map') && !p.endsWith('.md'));
+const seen = prodClosure(repo, rootPkg);
+for (const dir of seen) copy(dir, path.join(engine, path.relative(repo, dir)), (p) => shipsFile(dir, p));
 console.log(`  ${seen.size} packages`);
 
 step('electron-builder');

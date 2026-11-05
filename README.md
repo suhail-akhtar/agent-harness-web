@@ -103,7 +103,7 @@ npm run cli -- --output json --max-steps 60 --max-cost 0.50 --max-minutes 20 --d
 - **Exit codes** say how the run ended, with or without `--output json`: 0 done, 1 error, 2 bad arguments, 3 step limit, 4 spend limit, 5 time limit, 6 the model refused, 7 cut off at the output limit, 130 interrupted.
 - `--max-steps`, `--max-cost` (USD) and `--max-minutes` (per turn) set `HARNESS_MAX_STEPS`, `HARNESS_MAX_COST_USD` and `HARNESS_MAX_TURN_MINUTES` for the run; an operator settings file (`HARNESS_SETTINGS`) still wins.
 
-As a library:
+As a library, from the signed kit (`npm run kit`, see `kit/README.md`): `harness new my-agent` makes a project linked to it, with `import { createHarness } from '@harness/core'`. Or straight from a checkout:
 
 ```ts
 import { createHarness } from './harness-web/src/index.ts';
@@ -1242,7 +1242,7 @@ Global event topics added: `proposals` (`{type: added\|dismissed\|started\|expir
 
 ## Durability, checkpoints, trace
 
-- **History** is append-only JSONL. If the server stops mid-turn, every unfinished tool call gets a result saying so (the transcript stays valid). The session is idle again on restart, and with `HARNESS_AUTO_RESUME=1` it continues on its own.
+- **History** is append-only JSONL. If the server stops mid-turn, every unfinished tool call gets a result saying so (the transcript stays valid). The session is idle again on restart, and with `HARNESS_AUTO_RESUME=1` it continues on its own (a library embedding the harness calls `sessions.resumeInterrupted()` once it is ready).
 - **Checkpoints.** Before a tool first changes a file in a turn, the file is saved. **Rewind** (UI, or `POST /api/sessions/:id/rewind {turn}`) puts every file touched since back as it was, and removes files created since. The agent is told which files changed. As in Claude Code, changes made by shell commands are not tracked, which is one reason shell file writes are refused.
 - **Trace.** Every model call and tool call is recorded in `trace.jsonl`: model, time, uncached / cache read / cache write / output tokens, cost, stop reason, retries; tool, time, error. Shown in the UI under "Open trace", and as JSON at `GET /api/sessions/:id/trace`.
 - **Images.** `read` (and `render`, `browser`) show pictures to the model, for checking screenshots, renders and charts. Each provider gets its own format. If a provider rejects an image, it is replaced by a note in the live context and the request goes on.
@@ -1425,7 +1425,7 @@ The independent playtester found real bugs in DeepSeek's game over two rounds (r
 | `HARNESS_CACHE_ATTRIBUTION` | on | Cache misses named by the prompt section that changed (trace, `cache_miss` events, session stats, eval results; `efficiency.cacheAttribution`). |
 | `HARNESS_PREFIX_TTL` | auto | Claude's stable prefix (tools + system) cache TTL: `5m`, `1h`, or `auto` (1 hour once a tool call ran past 4 minutes or requests were more than 5 minutes apart; `promptCaching.prefixTtl`). |
 | `HARNESS_TRUST_PROJECT` | off | Let repository hooks and stdio MCP servers run outside the sandbox. |
-| `HARNESS_AUTO_RESUME` | off | Continue interrupted sessions after a restart. |
+| `HARNESS_AUTO_RESUME` | off | After a restart, interrupted turns start again and interrupted workflow runs pick up at their step, with nobody there. Each counts against `HARNESS_BACKGROUND_MAX_WAKES` and the account's caps. |
 | `HARNESS_GATES_ON_STOP` | off | Refuse to end a turn while a blocking quality gate fails. |
 | `HARNESS_BUNDLED_PLUGINS` | on | `off` skips the bundled `plugins/` (quality gates, SDLC, visual, documents, games3d, computer, devops, aiops, integrations). |
 | `HARNESS_INTEGRATIONS` | | The integrations plugin's configuration: channels, routing rules, approvers (JSON, `@<file>` or a file path; credentials only as Key Vault names `int-*`). See [Integrations](#integrations-pluginsintegrations). |

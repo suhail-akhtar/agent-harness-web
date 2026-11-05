@@ -801,6 +801,7 @@ export class Session {
    * append-only way: every tool call left without a result gets one saying
    * so, and the session is idle again (and can be resumed).
    */
+  private toolCutOff = false;
   async recoverInterrupted(): Promise<boolean> {
     if (!this.meta.running) return false;
     const ctx = this.history.slice(this.meta.contextStart);
@@ -808,6 +809,7 @@ export class Session {
     if (last?.role === 'assistant') {
       const dangling = last.content.filter((b): b is ToolUseBlock => b.type === 'tool_use');
       if (dangling.length) {
+        this.toolCutOff = true;
         await this.appendHistory({
           role: 'user',
           content: [
@@ -1448,6 +1450,16 @@ export class Session {
    * person's last message, and both stop at the account's caps.
    */
   private async autoWake(text: string, caps?: () => string | undefined, kind: 'linked' | 'background' = 'linked'): Promise<string> {
+    const blocked = await this.wakeBlocked(kind, caps);
+    if (blocked) return blocked;
+    if (this.status !== 'idle') return 'queued';
+    this.meta.autoContinues = (this.meta.autoContinues ?? 0) + 1;
+    try { await this.send(`<system-reminder>${text}</system-reminder>`, { origin: 'auto' }); } catch (e) { return (e as Error).message; }
+    return 'woken';
+  }
+
+  /** Why this session may not continue by itself: the wake limits and the account's caps. */
+  private async wakeBlocked(kind: 'linked' | 'background', caps?: () => string | undefined): Promise<string | undefined> {
     let max: number;
     if (kind === 'background') {
       if (process.env.HARNESS_BACKGROUND_WAKE === '0') return 'waking for background results is off (HARNESS_BACKGROUND_WAKE=0)';
@@ -1460,12 +1472,7 @@ export class Session {
       max = ls?.maxAutoContinues ?? Math.max(0, Number(process.env.HARNESS_LINKED_MAX_AUTO ?? 5) || 0);
       if ((this.meta.autoContinues ?? 0) >= max) return `it already continued ${max} time(s) without a message from the person (linkedSessions.maxAutoContinues)`;
     }
-    const cap = caps?.() ?? this.deps.mayRun?.(this.meta.owner) ?? this.deps.spend?.over(this.meta.owner);
-    if (cap) return cap;
-    if (this.status !== 'idle') return 'queued';
-    this.meta.autoContinues = (this.meta.autoContinues ?? 0) + 1;
-    try { await this.send(`<system-reminder>${text}</system-reminder>`, { origin: 'auto' }); } catch (e) { return (e as Error).message; }
-    return 'woken';
+    return caps?.() ?? this.deps.mayRun?.(this.meta.owner) ?? this.deps.spend?.over(this.meta.owner);
   }
 
   // ---------- delegation to other models ----------
@@ -3201,15 +3208,42 @@ export class Session {
     return next;
   }
 
-  /** Runs marked running when the server stopped become "interrupted" (resumable). */
-  async recoverRuns(): Promise<void> {
+  /** Runs marked running when the server stopped become "interrupted" (resumable). Returns their ids. */
+  async recoverRuns(): Promise<string[]> {
     let names: string[];
-    try { names = await fs.readdir(this.runsDir()); } catch { return; }
+    try { names = await fs.readdir(this.runsDir()); } catch { return []; }
+    const interrupted: string[] = [];
     for (const n of names.filter((x) => x.endsWith('.json'))) {
       const r = JSON.parse(await fs.readFile(path.join(this.runsDir(), n), 'utf8')) as RunRecord;
       // A run paused for a switched-off plugin keeps waiting (switching the plugin on carries it on).
-      if (r.status === 'running' || (r.status === 'waiting' && !r.paused)) { r.status = 'interrupted'; await this.saveRun(r); }
+      if (r.status === 'running' || (r.status === 'waiting' && !r.paused)) { r.status = 'interrupted'; await this.saveRun(r); interrupted.push(r.id); }
     }
+    return interrupted;
+  }
+
+  /**
+   * HARNESS_AUTO_RESUME=1: what a stopped server left open carries on with nobody there. An interrupted run picks
+   * up at the step it was in; a turn that was cut off starts again. Each counts as a wake, so a server
+   * in a crash loop cannot spend without end, and what stops it is said.
+   */
+  async resumeAfterRestart(runs: string[]): Promise<void> {
+    const stopped = (why: string) => this.emit({ kind: 'notice', level: 'warn', text: `Not carrying on after the restart (${why}). Send "continue" to resume.` });
+    // A run started inside a tool call goes back to the agent that called it; any other carries on by itself.
+    if (this.toolCutOff || !runs.length) {
+      const list = runs.length ? ` These workflow runs were interrupted too: ${runs.join(', ')}.` : '';
+      const why = await this.autoWake(`The server restarted while you were working. Continue the task from where you left off.${list}`, undefined, 'background');
+      if (why !== 'woken') stopped(why);
+      return;
+    }
+    const blocked = await this.wakeBlocked('background');
+    if (blocked) return stopped(blocked);
+    this.meta.autoContinues = (this.meta.autoContinues ?? 0) + 1;
+    const [id, ...others] = runs;
+    try {
+      await this.resumeRun(id!, (run) => this.deliver(`Workflow ${run.workflow} (${run.id}) carried on after a restart and ended: ${run.status}. Its steps:`, runSummary(run)));
+    } catch (e) { return stopped((e as Error).message); }
+    // A session runs one at a time.
+    if (others.length) this.emit({ kind: 'notice', level: 'warn', text: `Also interrupted, and left for you to resume from the runs list: ${others.join(', ')}.` });
   }
 
   /** `bg`: the signal of a run started in the background (its approvals outlive the turn); `parent`: the agent that started it. */
@@ -3311,7 +3345,7 @@ export class Session {
     });
   }
 
-  async resumeRun(runId: string): Promise<WorkflowRunView> {
+  async resumeRun(runId: string, ended?: (run: RunRecord) => void): Promise<WorkflowRunView> {
     return this.claimed('The session is busy.', async () => {
       const run = await this.readRun(runId);
       const paused = run.status === 'waiting' && !!run.paused;
@@ -3319,7 +3353,7 @@ export class Session {
       const w = (await this.workflows()).find((x) => x.name === run.workflow);
       if (!w) throw new Error(this.offWorkflow(run.workflow) ?? `Workflow ${run.workflow} is no longer available.`);
       run.error = undefined;
-      this.executeRun(w, run).catch(() => {});
+      this.executeRun(w, run).then(() => ended?.(run)).catch(() => {});
       return runView(run, w);
     });
   }

@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.2.6
+
+- **The Interruptions dialog kept what you typed.** It filled itself from the saved limits after it opened, which wiped anything typed by then, and a Save in that moment blanked them. It now stays shut until they arrive. An end-to-end test had been failing about three runs in five because of it.
+- **The harness as a signed local kit** (`npm run kit`). The engine, the core plugins and the SDK with their dependencies in one archive, to build on without this repository: `harness new` makes an app of your own, `harness plugin` makes plugins, `harness start` runs the server. Nothing is compiled, so what runs is what the suite tested. A project links to the kit, so `npm install` fetches nothing.
+  - The build stops on a dirty tree, a high or critical advisory in what ships, a secret file, a value from `.env`, a private key or a symbolic link.
+  - Every file is signed with the publisher's key. `harness verify` checks them, `--lock` makes them read-only, and `harness start` refuses a kit that differs from what was signed. `SECURITY.md` in the kit says what that does not prove.
+  - `scripts/check-kit.mjs` meets a kit with only its archive: tampering of each kind, an app and a plugin made offline, the server, a real model.
+- **Work carries on after a restart with nobody there** (`HARNESS_AUTO_RESUME=1`). Interrupted workflow runs now pick up at their step, which they did not before. A cut-off turn is a wake and no longer poses as the person, so it counts against `HARNESS_BACKGROUND_MAX_WAKES` and the account's caps, and a server in a crash loop cannot spend without end. What stops it is said. A library calls `sessions.resumeInterrupted()` once it is ready.
+- **Security updates.** `undici` 7.30.2 (8 advisories, among them TLS certificate validation) and `@azure/msal-node` 7.2.0. Five low advisories remain in the desktop's maths rendering (`katex` and what depends on it), which is not in the kit: their fixes are major versions.
 
 - **What the watch_opus run showed, fixed.** That project began in this harness, then moved to Claude Code for four
   days of autonomous research. Its sessions and the trust-layer research it produced showed these defects:

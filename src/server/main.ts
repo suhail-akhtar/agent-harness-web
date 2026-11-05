@@ -78,6 +78,7 @@ async function main() {
     console.log(`models: ${models.map((m) => `${m.id}${m.available ? '' : ' (no key)'}`).join(', ')}`);
     console.log(`plugins: ${harness.registry.plugins.map((x) => x.name).join(', ') || 'none'}`);
     console.log(`web search: ${harness.search ?? 'off'}`);
+    void harness.sessions.resumeInterrupted();
   });
   // A clean stop: turns end, SessionEnd hooks run (reason "shutdown"), MCP servers and plugins close.
   // A second signal, or 15 seconds, exits at once.

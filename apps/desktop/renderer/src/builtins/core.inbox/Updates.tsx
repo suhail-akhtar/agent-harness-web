@@ -110,10 +110,13 @@ const LOCAL_ZONE = (() => { try { return Intl.DateTimeFormat().resolvedOptions()
 export function InterruptionsDialog({ open, onClose }: { open: boolean; onClose: () => void }): React.ReactElement {
   const [f, setF] = useState({ quietFrom: '', quietTo: '', maxPerDay: '', digestAt: '' });
   const [error, setError] = useState('');
+  // Until the saved limits are here the form stays shut: what they replace would be lost, and a save would blank them.
+  const [loaded, setLoaded] = useState(false);
   useEffect(() => {
     if (!open) return;
     setError('');
-    client.inbox.settings().then((p) => setF({ quietFrom: p.quietFrom ?? '', quietTo: p.quietTo ?? '', maxPerDay: p.maxPerDay === undefined ? '' : String(p.maxPerDay), digestAt: p.digestAt ?? '' })).catch((e: Error) => setError(e.message));
+    setLoaded(false);
+    client.inbox.settings().then((p) => { setLoaded(true); setF({ quietFrom: p.quietFrom ?? '', quietTo: p.quietTo ?? '', maxPerDay: p.maxPerDay === undefined ? '' : String(p.maxPerDay), digestAt: p.digestAt ?? '' }); }).catch((e: Error) => setError(e.message));
   }, [open]);
   const save = async () => {
     setError('');
@@ -121,14 +124,14 @@ export function InterruptionsDialog({ open, onClose }: { open: boolean; onClose:
     try { await client.inbox.setSettings(body); toast('Saved', { kind: 'success' }); onClose(); } catch (e) { setError((e as Error).message); }
   };
   return (
-    <Modal open={open} onClose={onClose} title="When updates may interrupt you" size="md" footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" onClick={() => void save()} data-limits-save>Save</Button></>}>
+    <Modal open={open} onClose={onClose} title="When updates may interrupt you" size="md" footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" disabled={!loaded} onClick={() => void save()} data-limits-save>Save</Button></>}>
       <div data-limits>
         <p className="mb-4 text-small text-hx-secondary">Every update lands in your Inbox. These decide when one may also interrupt you with a notification. Each schedule can be quieter still (its "Tell me" setting).</p>
         <div className="grid gap-x-3 md:grid-cols-2">
-          <Field label="Quiet from" help="Nothing interrupts, not even errors"><Input type="time" value={f.quietFrom} onChange={(e) => setF({ ...f, quietFrom: e.target.value })} data-limits-quiet-from /></Field>
-          <Field label="Quiet until"><Input type="time" value={f.quietTo} onChange={(e) => setF({ ...f, quietTo: e.target.value })} data-limits-quiet-to /></Field>
-          <Field label="At most a day" help="Empty: no limit. Errors still interrupt"><Input type="number" min={0} value={f.maxPerDay} onChange={(e) => setF({ ...f, maxPerDay: e.target.value })} placeholder="No limit" data-limits-max /></Field>
-          <Field label="Daily digest at" help="What waited, in one update"><Input type="time" value={f.digestAt} onChange={(e) => setF({ ...f, digestAt: e.target.value })} data-limits-digest /></Field>
+          <Field label="Quiet from" help="Nothing interrupts, not even errors"><Input type="time" value={f.quietFrom} onChange={(e) => setF({ ...f, quietFrom: e.target.value })} disabled={!loaded} data-limits-quiet-from /></Field>
+          <Field label="Quiet until"><Input type="time" value={f.quietTo} onChange={(e) => setF({ ...f, quietTo: e.target.value })} disabled={!loaded} data-limits-quiet-to /></Field>
+          <Field label="At most a day" help="Empty: no limit. Errors still interrupt"><Input type="number" min={0} value={f.maxPerDay} onChange={(e) => setF({ ...f, maxPerDay: e.target.value })} placeholder="No limit" disabled={!loaded} data-limits-max /></Field>
+          <Field label="Daily digest at" help="What waited, in one update"><Input type="time" value={f.digestAt} onChange={(e) => setF({ ...f, digestAt: e.target.value })} disabled={!loaded} data-limits-digest /></Field>
         </div>
         <p className="text-small text-hx-muted">Times are on this computer's clock{LOCAL_ZONE ? ` (${LOCAL_ZONE})` : ''}.</p>
         {error && <Callout tone="danger" className="mt-2" data-limits-error>{error}</Callout>}

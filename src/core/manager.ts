@@ -11,6 +11,8 @@ export class SessionManager {
   private deps: SessionDeps;
   private idleTimer?: NodeJS.Timeout;
   private synced = 0;
+  /** What the last stop left open, until resumeInterrupted. */
+  private interrupted: { s: Session; runs: string[] }[] = [];
   private syncing?: Promise<void>;
 
   /** Linked sessions and proposals across this manager's sessions. */
@@ -27,7 +29,6 @@ export class SessionManager {
 
   async load(): Promise<void> {
     await fs.mkdir(this.dir, { recursive: true });
-    const resume: Session[] = [];
     for (const id of await fs.readdir(this.dir)) {
       try {
         const s = await Session.load(this.deps, id);
@@ -35,20 +36,25 @@ export class SessionManager {
         // Another server sharing the data folder is working on it: not ours to recover.
         if (await this.heldElsewhere(id)) continue;
         // Mid-turn when the server stopped: close the turn out cleanly.
-        if (await s.recoverInterrupted()) resume.push(s);
-        await s.recoverRuns();
+        const midTurn = await s.recoverInterrupted();
+        const runs = await s.recoverRuns();
+        if (midTurn || runs.length) this.interrupted.push({ s, runs });
       } catch { /* not a session */ }
     }
     this.synced = Date.now();
-    if (process.env.HARNESS_AUTO_RESUME === '1') {
-      for (const s of resume) s.send('The server restarted while you were working. Continue the task from where you left off.').catch(() => {});
-    }
     // Stop idle sandboxes; they restart on demand and the workspace persists.
     this.idleTimer = setInterval(() => {
       const cutoff = Date.now() - Number(process.env.HARNESS_SANDBOX_IDLE_MS ?? 30 * 60_000);
       for (const s of this.sessions.values()) if (s.status === 'idle' && s.meta.updatedAt < cutoff) s.stopSandbox().catch(() => {});
     }, 5 * 60_000);
     this.idleTimer.unref();
+  }
+
+  /** With HARNESS_AUTO_RESUME=1, what a stopped server left open carries on. Called once the server is up. */
+  async resumeInterrupted(): Promise<void> {
+    const left = this.interrupted.splice(0);
+    if (process.env.HARNESS_AUTO_RESUME !== '1') return;
+    await Promise.all(left.map((r) => r.s.resumeAfterRestart(r.runs).catch(() => {})));
   }
 
   /** The live lease another server holds on a session (several servers on one data folder), or undefined. */
