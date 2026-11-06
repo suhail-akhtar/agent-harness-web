@@ -229,7 +229,7 @@ What it does: a list of items the agent and the person keep together, shown on t
 
   files['ui/app.js'] = `// ${title}'s page: built from the UI kit (HarnessPluginUI.ui), so it looks like the app and follows its
 // theme. It reads and changes the items through the plugin's own routes and refreshes when the server
-// signals a change. docs/plugin-sdk/UI.md lists every component and call.
+// signals a change. PAGES.md in the build-a-plugin skill lists every component and call.
 const { ui } = HarnessPluginUI;
 const root = document.getElementById('root');
 

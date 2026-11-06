@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // The kit's one command. Runs the engine from its TypeScript sources, as scripts/run.mjs does in the repository.
 //   harness new <name> [--dir d]    an agent app of your own, linked to this kit
+//   harness example <name> [--dir d]  a copy of a worked example from docs/guide
 //   harness plugin <args>           new, test, check and bundle plugins (the SDK's tool)
 //   harness start                   the server (http://127.0.0.1:4310; prints an access token)
 //   harness run <args>              the command-line agent
@@ -33,6 +34,24 @@ function forward(entry) {
 const verified = () => process.env.HARNESS_KIT_VERIFY === 'off' || node('bin/verify.mjs', ['--quiet']) === 0;
 const usage = () => { console.error(fs.readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').filter((l) => /^\/\/ {3}harness /.test(l)).map((l) => l.slice(3)).join('\n')); return 2; };
 
+/** A copy out of the kit, writable: a locked kit's files are read-only, and a copy keeps that. */
+function copyOut(from, to) {
+  fs.cpSync(from, to, { recursive: true });
+  const open = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) open(p); else fs.chmodSync(p, 0o644); } };
+  open(to);
+}
+
+function example(name) {
+  const root = path.join(kit, 'examples', 'guide');
+  const names = fs.readdirSync(root);
+  if (!names.includes(name)) { console.error(`usage: harness example <${names.join('|')}> [--dir d]`); return 2; }
+  const dir = path.resolve(args.includes('--dir') ? args[args.indexOf('--dir') + 1] : name);
+  if (fs.existsSync(dir) && fs.readdirSync(dir).length) { console.error(`${dir} is not empty`); return 1; }
+  copyOut(path.join(root, name), dir);
+  console.log(`${name}: in ${dir}`);
+  return 0;
+}
+
 function create(target) {
   if (!target) return usage();
   const dir = path.resolve(args.includes('--dir') ? args[args.indexOf('--dir') + 1] : target);
@@ -40,7 +59,7 @@ function create(target) {
   if (fs.existsSync(dir) && fs.readdirSync(dir).length) { console.error(`${dir} is not empty`); return 1; }
   const from = path.join(kit, 'templates', 'app');
   const link = (p) => `file:${path.join(kit, p).split(path.sep).join('/')}`;
-  fs.cpSync(from, dir, { recursive: true });
+  copyOut(from, dir);
   // npm leaves dot-files of this name out of packages, so the template keeps them without the dot.
   for (const f of ['gitignore', 'env.example']) fs.renameSync(path.join(dir, f), path.join(dir, `.${f}`));
   for (const f of ['package.json', 'README.md']) {
@@ -54,6 +73,7 @@ function create(target) {
 let code;
 switch (cmd) {
   case 'new': code = create(args[0]); break;
+  case 'example': code = example(args[0]); break;
   case 'plugin': code = node('src/plugins/cli.ts', args); break;
   case 'users': code = node('src/server/users-cli.ts', args); break;
   case 'start': if (verified()) await forward('src/server/main.ts'); code = 1; break;

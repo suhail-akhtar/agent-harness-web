@@ -1,0 +1,29 @@
+{
+  "name": "expense-review",
+  "description": "Audit the pending expense claims against the policy, a person approves the decisions, then they are recorded.",
+  "start": "audit",
+  "maxAgentRuns": 4,
+  "nodes": {
+    "audit": {
+      "type": "agent",
+      "title": "Audit the claims",
+      "agent": "expense-auditor",
+      "prompt": "Audit the pending claims and propose a decision for each one. Decide nothing yet.",
+      "next": "approve"
+    },
+    "approve": {
+      "type": "approval",
+      "title": "Check the decisions",
+      "message": "Record these decisions?\n\n{{state.audit}}",
+      "next": { "on": { "approve": "record", "reject": "audit" } }
+    },
+    "record": {
+      "type": "agent",
+      "title": "Record the decisions",
+      "agent": "expense-auditor",
+      "prompt": "A person has now approved every decision proposed below, so the rule to decide nothing no longer applies. Call expense_decide once for each claim, now, exactly as proposed. You are finished only when every claim is decided.\n\nThe proposal:\n{{state.audit}}",
+      "next": "done"
+    },
+    "done": { "type": "end", "title": "Reviewed" }
+  }
+}

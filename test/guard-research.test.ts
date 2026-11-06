@@ -105,6 +105,20 @@ test('what enters the record: search hits, the person\'s URLs, and links only of
   assert.equal(new SourceStore(s.dir).knows('https://hit.example/1'), false);
 });
 
+test('an IPv4 address inside an IPv6 one is still that address, in every way of writing it', async () => {
+  for (const url of ['http://[::ffff:127.0.0.1]/', 'http://[::ffff:7f00:1]/', 'http://[::ffff:169.254.169.254]/latest/meta-data/', 'http://[0:0:0:0:0:ffff:a00:1]/', 'http://[::127.0.0.1]/', 'http://[64:ff9b::7f00:1]/', 'http://[::ffff:192.168.1.1]/', 'http://[fec0::1]/'])
+    await assert.rejects(web.assertPublicUrl(url), /private address/, url);
+  for (const ip of ['::ffff:8.8.8.8', '::ffff:808:808', '64:ff9b::808:808', '2606:4700:4700::1111']) assert.equal(web.isPrivateAddress(ip), false, ip);
+});
+
+test('a read-only command is read-only: the options that write or run something are not', async () => {
+  const { isReadOnlyCommand } = await import('../src/core/permissions.ts');
+  for (const c of ['git status', 'git branch', 'git branch -a', 'git branch -vv --all', 'git branch --show-current', 'git log -5', 'git diff HEAD~1', 'rg TODO src', 'find . -name "*.ts"', 'ls -la'])
+    assert.equal(isReadOnlyCommand(c), true, c);
+  for (const c of ['git branch -D main', 'git branch -d old', 'git branch -m a b', 'git branch new-one', 'git branch -f main HEAD~3', 'git diff --output=a.txt', 'git log --output=b.txt', 'rg --pre ./run.sh x', 'find . -delete', 'find . -fls out.txt', 'find . -exec rm {} ;'])
+    assert.equal(isReadOnlyCommand(c), false, c);
+});
+
 test('page links: absolute, http(s), any quoting, capped, and linear on a hostile page', () => {
   const base = 'https://site.example/dir/page';
   const html = `<A HREF="/a?x=1&amp;y=2">a</A> <a class="c" href='b.html'>b</a> <a href=https://other.example/c>c</a> <a href="#top">t</a> <a href="javascript:alert(1)">j</a> <a href="mailto:a@b.example">m</a> <abbr href="https://no.example/">x</abbr> <a>none</a>`;

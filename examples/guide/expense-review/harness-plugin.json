@@ -1,0 +1,73 @@
+{
+  "name": "expense-review",
+  "version": "0.1.0",
+  "description": "Expense review: claims an agent audits against a policy, and a person approves. The worked example of docs/guide/04-build-your-system.md.",
+  "displayName": "Expense review",
+  "icon": "icon.svg",
+  "category": "Examples",
+  "tags": [
+    "example",
+    "finance"
+  ],
+  "publisher": {
+    "name": "Harness examples",
+    "url": "https://github.com/suhail-akhtar/agent-harness-web"
+  },
+  "license": "MIT",
+  "links": {
+    "homepage": "https://github.com/suhail-akhtar/agent-harness-web",
+    "support": "https://github.com/suhail-akhtar/agent-harness-web/issues"
+  },
+  "changelog": "CHANGELOG.md",
+  "engines": {
+    "harness": ">=0.2.6"
+  },
+  "main": "index.ts",
+  "skills": "skills",
+  "permissions": {
+    "routes": true
+  },
+  "ui": {
+    "apiVersion": 1,
+    "displayName": "Expense review",
+    "icon": "list",
+    "guide": "GUIDE.md",
+    "capabilities": [
+      "routes.call",
+      "events.subscribe"
+    ],
+    "contributes": {
+      "navItems": [
+        {
+          "id": "expense-review",
+          "title": "Expense review",
+          "icon": "list",
+          "view": "home"
+        }
+      ],
+      "views": [
+        {
+          "id": "home",
+          "title": "Expense review",
+          "icon": "list",
+          "kind": "frame",
+          "entry": "ui/index.html",
+          "description": "The claims and which break the policy"
+        }
+      ],
+      "commands": [
+        {
+          "id": "open",
+          "title": "Open Expense review",
+          "icon": "list",
+          "action": {
+            "type": "open-view",
+            "view": "home"
+          }
+        }
+      ]
+    }
+  },
+  "agents": "agents",
+  "workflows": "workflows"
+}

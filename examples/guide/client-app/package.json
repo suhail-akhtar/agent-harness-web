@@ -1,0 +1,7 @@
+{
+  "name": "expense-review-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A program of your own driving a harness server: see docs/guide/04-build-your-system.md."
+}

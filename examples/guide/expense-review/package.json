@@ -1,0 +1,7 @@
+{
+  "name": "expense-review",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A harness plugin (see harness-plugin.json)."
+}

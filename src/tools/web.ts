@@ -19,8 +19,16 @@ export function isPrivateAddress(ip: string): boolean {
       || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 198 && (b === 18 || b === 19)) || a >= 224;
   }
   const v = ip.toLowerCase();
-  if (v.startsWith('::ffff:')) return isPrivateAddress(v.slice(7));
-  return v === '::' || v === '::1' || v.startsWith('fc') || v.startsWith('fd') || v.startsWith('fe8') || v.startsWith('fe9') || v.startsWith('fea') || v.startsWith('feb') || v.startsWith('ff');
+  // An IPv4 address inside an IPv6 one: mapped, compatible or NAT64, dotted or in hex (the URL parser writes
+  // [::ffff:127.0.0.1] as [::ffff:7f00:1], and it reaches the same machine).
+  const dotted = /^(?:::ffff:|::|64:ff9b::)(\d+\.\d+\.\d+\.\d+)$/.exec(v);
+  if (dotted) return isPrivateAddress(dotted[1]!);
+  const hex = /^(?:::ffff:|::|64:ff9b::)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(v);
+  if (hex) {
+    const [a, b] = [parseInt(hex[1]!, 16), parseInt(hex[2]!, 16)];
+    return isPrivateAddress(`${a >> 8}.${a & 255}.${b >> 8}.${b & 255}`);
+  }
+  return v === '::' || v === '::1' || /^f[cd]|^fe[89a-f]|^ff/.test(v);
 }
 
 /** How host names are resolved for outside requests (replaceable in tests). */

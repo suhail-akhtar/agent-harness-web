@@ -124,7 +124,12 @@ const READ_ONLY_COMMANDS = /^(ls|pwd|cat|head|tail|wc|file|stat|du|df|which|echo
 export function isReadOnlyCommand(cmd: string): boolean {
   const c = cmd.trim();
   if (hasShellControl(c)) return false;
-  if (/^find\b/.test(c) && /\s-(exec|execdir|delete|ok|fprint)/.test(c)) return false;
+  if (/^find\b/.test(c) && /\s-(exec|execdir|delete|ok|fprint|fls)/.test(c)) return false;
+  // These read by default, and an option makes them write or run something.
+  if (/^rg\b/.test(c) && /\s--pre\b/.test(c)) return false;
+  if (/^git\b/.test(c) && /\s--output\b/.test(c)) return false;
+  // Listing only: `git branch x`, -d, -D, -m and the rest change the repository.
+  if (/^git branch\b/.test(c) && !/^git branch(\s+(-a|-r|-v|-vv|-l|--all|--remotes|--verbose|--list|--show-current))*$/.test(c)) return false;
   return READ_ONLY_COMMANDS.test(c);
 }
 

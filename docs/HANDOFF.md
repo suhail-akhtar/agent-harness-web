@@ -1,5 +1,7 @@
 # Harness Web - handoff guide
 
+> **Historical.** This page describes the project as it stood in October 2026. For how it works and how to use it now, read [the guide](guide/README.md).
+
 Where the framework stands on 2026-10-21, how to pick it up on your own machine, and what comes next.
 The README is the reference for every feature; this page is the map. The browser UI in `ui/` is a working console over the API; the focus is the framework.
 

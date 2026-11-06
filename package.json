@@ -1,6 +1,6 @@
 {
   "name": "harness-web",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "private": true,
   "description": "A browser-based agent harness: one model-driven loop, cache-first context, sandboxed tools.",
   "license": "MIT",
@@ -35,6 +35,7 @@
     "desktop:build": "node apps/desktop/scripts/package.mjs",
     "desktop:test": "npm run test:e2e -w @harness/desktop",
     "kit": "node --disable-warning=ExperimentalWarning scripts/pack-kit.mjs",
+    "docs": "node --disable-warning=ExperimentalWarning scripts/docs-facts.mjs",
     "postinstall": "node scripts/ensure-electron.mjs && node scripts/ensure-duckdb.mjs"
   },
   "dependencies": {

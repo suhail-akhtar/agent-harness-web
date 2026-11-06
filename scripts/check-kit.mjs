@@ -151,6 +151,8 @@ try { fs.appendFileSync(target, 'x'); } catch { wrote = false; }
 check(!wrote, 'a locked file cannot be written');
 r = sh('npm', ['test'], { cwd: app, timeout: 120000 });
 check(r.code === 0 && /pass 1/.test(r.out), 'the app still works on a locked kit', r.out);
+r = harness(['new', 'after-lock'], { cwd: root });
+check(r.code === 0, 'a locked kit still makes a new app', r.out);
 
 if (liveModel) {
   const keys = Object.fromEntries(Object.entries(process.env).filter(([k]) => /_API_KEY$/.test(k)));

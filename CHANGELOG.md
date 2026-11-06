@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.7
+
+- **The guide** (`docs/guide`): overview, architecture, getting started, building your own system with a full worked example (`examples/guide`), the security model, operating, and a reference generated from the code (`npm run docs`). `test/docs.test.ts` fails on a stale reference, a broken link or a file that does not exist, and `scripts/check-guide.mjs` follows the guides on a real kit and a real model. The kit ships them, and `harness example` copies out the examples.
+- **A locked kit could not make an app**: `harness new` copied the template's read-only files and failed, right after the step the kit's README tells you to take. Found by following the guide.
+- **Security: IPv4 inside IPv6.** `http://[::ffff:127.0.0.1]/` and the same form of a metadata address passed the fetch guard, because the URL parser rewrites them to hex. The guard now unpacks mapped, compatible and NAT64 forms. **Read-only commands are read-only:** `git branch -D`, `git branch <name>`, `--output` on `git` and `--pre` on `rg` ran without a question. Found by the writers of the security guide.
+
 ## 0.2.6
 
 - **Research works outside bypass.** After the first search or page, every search and every fetch to a site the person had not typed was a question, so research ran only in bypass. A URL the session has already seen, exactly, and a plain search query are now decided as if no outside content had been read, because neither can carry the session's data to a host a page chose. Anything the agent composed is still the guard's question. Also closed: `allowed_domains` could pass a search whatever its query held, a composed URL on a named site could reach any site through that site's redirect, and the guard's questions offered an "always allow" that did nothing.
