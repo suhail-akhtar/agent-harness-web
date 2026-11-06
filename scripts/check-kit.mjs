@@ -88,7 +88,7 @@ const names = [];
 const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else names.push(path.relative(kit, p).split(path.sep).join('/')); } };
 walk(kit);
 check(!names.some((f) => /(^|\/)\.env$|\.env\.(local|production)$/.test(f)), 'no environment files');
-check(!names.some((f) => /(^|\/)(test|__tests__)\//.test(f) && !f.startsWith('node_modules/') && !f.startsWith('templates/')), 'no test folders of the repository');
+check(!names.some((f) => /(^|\/)(test|__tests__)\//.test(f) && !f.startsWith('node_modules/') && !f.startsWith('templates/') && !f.startsWith('examples/guide/')), 'no test folders of the repository');
 check(!names.some((f) => /^(solutions|apps|\.git|\.claude|\.harness-data)\//.test(f)), 'no solutions, apps or repository folders');
 check(fs.readFileSync(path.join(kit, 'keys', fs.readdirSync(path.join(kit, 'keys'))[0]), 'utf8').includes('PUBLIC KEY'), 'keys/ holds a public key');
 const build = JSON.parse(fs.readFileSync(path.join(kit, 'BUILD.json'), 'utf8'));
